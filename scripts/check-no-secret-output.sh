@@ -13,6 +13,7 @@ check_file() {
 
     while IFS=$'\t' read -r category pattern; do
         if LC_ALL=C AUTHSIA_SECRET_PATTERN="$pattern" perl -ne '
+            next if /^\s*\d+\s+\|\s/;
             $matched = 1 if /$ENV{AUTHSIA_SECRET_PATTERN}/;
             END { exit($matched ? 0 : 1) }
         ' "$file"; then
@@ -38,6 +39,7 @@ self_test() {
         'API_KEY=set' \
         'PASSWORD=unset' \
         'secret=<concealed by authsia>' \
+        ' 31 | let script = make(passphrase: "AUTHSIA_FAKE_PASSPHRASE_83a1")' \
         'All security tests passed' \
         > "$tmp_dir/safe.log"
     check_file "$tmp_dir/safe.log" || {
