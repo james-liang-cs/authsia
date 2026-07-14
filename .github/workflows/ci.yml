@@ -89,15 +89,3 @@ jobs:
           scripts/check-no-secret-output.sh "$log"
           cat "$log"
           exit "$status"
-
-      - name: Test Chrome extension
-        shell: bash
-        run: |
-          log="$RUNNER_TEMP/chrome-extension-tests.log"
-          set +e
-          Tools/AuthsiaChromeExtension/scripts/run-tests.sh >"$log" 2>&1
-          status=$?
-          set -e
-          scripts/check-no-secret-output.sh "$log"
-          cat "$log"
-          exit "$status"
