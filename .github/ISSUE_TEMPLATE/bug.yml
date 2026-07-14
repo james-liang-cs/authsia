@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a reproducible non-security defect with redacted data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities or include passwords, API keys, OTP data,
+        private keys, passphrases, tokens, personal paths, or private endpoints.
+        Follow SECURITY.md for private vulnerability reporting.
+
+  - type: input
+    id: source-version
+    attributes:
+      label: Source version
+      description: Commit SHA or release tag that reproduces the issue.
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: macOS version, architecture, and Swift/Xcode version.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Use only synthetic fixtures and redact local paths.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Redacted observed result
+      description: Do not paste raw vault, environment, audit, or CLI output.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I used only synthetic fixtures and removed secrets and personal data.
+          required: true
+        - label: This is not a vulnerability report.
+          required: true
