@@ -10,7 +10,8 @@ git clone --quiet --no-local --no-hardlinks "$source_root" "$tmp_dir/repository"
 cd "$tmp_dir/repository"
 git remote remove origin
 
-if rg -n '/Users/[^/]+/PlayGround/Authenticator|AuthenticatorUI|R2_|sparkle-private' .; then
+private_pattern='/Users/[^/]+/PlayGround/Auth''enticator|Authenticator''UI|R2''_|sparkle''-private'
+if rg -n "$private_pattern" .; then
     echo "Clean clone contains a private source reference" >&2
     exit 1
 fi
