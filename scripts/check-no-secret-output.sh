@@ -12,7 +12,10 @@ check_file() {
     }
 
     while IFS=$'\t' read -r category pattern; do
-        if LC_ALL=C rg --pcre2 -q -- "$pattern" "$file"; then
+        if LC_ALL=C AUTHSIA_SECRET_PATTERN="$pattern" perl -ne '
+            $matched = 1 if /$ENV{AUTHSIA_SECRET_PATTERN}/;
+            END { exit($matched ? 0 : 1) }
+        ' "$file"; then
             echo "Potential secret output detected: $category" >&2
             return 1
         fi

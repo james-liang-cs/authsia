@@ -35,7 +35,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-swiftpm-
 
-      - name: Verify output scanner
+      - name: Verify output scanner without optional developer tools
+        env:
+          PATH: /usr/bin:/bin
         run: scripts/check-no-secret-output.sh --self-test
 
       - name: Test root package
