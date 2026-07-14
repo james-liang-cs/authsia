@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Authsia Autofill",
+  "version": "1.0.0",
+  "description": "Pro-tier autofill with inline menu using the local Authsia native host.",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "heuristics.js",
+        "host_matching.js",
+        "native_client.js",
+        "content_script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "popup/menu.html",
+        "popup/menu.css",
+        "popup/menu.js"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
+    }
+  ],
+  "action": {
+    "default_title": "Authsia Autofill"
+  }
+}

@@ -1,0 +1,438 @@
+/**
+ * Authsia Popup Menu Styles
+ * Apple Passwords-inspired native credential picker.
+ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
+               Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  background: transparent;
+  color: #1d1d1f;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Menu Container ── */
+
+.authsia-menu {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.12),
+    0 1px 3px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  min-width: 280px;
+  max-width: 320px;
+  height: 300px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Credential List ── */
+
+.authsia-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+  padding: 6px 0;
+}
+
+.authsia-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.authsia-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.authsia-list::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+
+/* ── Credential Item ── */
+
+.authsia-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background-color 100ms ease, box-shadow 100ms ease;
+  outline: none;
+  border: none;
+  background: transparent;
+  position: relative;
+}
+
+.authsia-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.authsia-item:focus {
+  background: rgba(0, 122, 255, 0.12);
+  box-shadow: inset 3px 0 0 rgba(0, 122, 255, 0.8);
+}
+
+.authsia-item:active {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+/* ── Item Icon ── */
+
+.authsia-item-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  user-select: none;
+}
+
+/* ── Item Info ── */
+
+.authsia-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.authsia-item-name {
+  font-weight: 500;
+  font-size: 13px;
+  color: #1d1d1f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+}
+
+.authsia-item-username {
+  font-weight: 400;
+  font-size: 11px;
+  color: #86868b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+}
+
+/* ── Fill Indicator (hidden — Apple style has no chevron) ── */
+
+.authsia-item-fill {
+  display: none;
+}
+
+/* ── Focus Visible ── */
+
+.authsia-item:focus-visible {
+  outline: 2px solid rgba(0, 122, 255, 0.6);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* ── Empty State ── */
+
+.authsia-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.authsia-empty-icon {
+  color: #86868b;
+  opacity: 0.5;
+}
+
+.authsia-empty-text {
+  font-size: 12px;
+  color: #86868b;
+  font-weight: 400;
+}
+
+/* ── Loading State (Skeleton Shimmer) ── */
+
+.authsia-loading {
+  padding: 4px 0;
+}
+
+.authsia-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+}
+
+.authsia-skeleton-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.04) 0%,
+    rgba(0, 0, 0, 0.08) 50%,
+    rgba(0, 0, 0, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: authsia-shimmer 1.4s ease-in-out infinite;
+}
+
+.authsia-skeleton-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.authsia-skeleton-line {
+  height: 10px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.04) 0%,
+    rgba(0, 0, 0, 0.08) 50%,
+    rgba(0, 0, 0, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: authsia-shimmer 1.4s ease-in-out infinite;
+}
+
+.authsia-skeleton-line--name {
+  width: 55%;
+}
+
+.authsia-skeleton-line--username {
+  width: 35%;
+  height: 8px;
+}
+
+.authsia-skeleton-row:nth-child(2) .authsia-skeleton-avatar,
+.authsia-skeleton-row:nth-child(2) .authsia-skeleton-line {
+  animation-delay: 0.15s;
+}
+
+.authsia-skeleton-row:nth-child(3) .authsia-skeleton-avatar,
+.authsia-skeleton-row:nth-child(3) .authsia-skeleton-line {
+  animation-delay: 0.3s;
+}
+
+@keyframes authsia-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ── Error State ── */
+
+.authsia-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 20px 20px;
+  text-align: center;
+}
+
+.authsia-error-icon {
+  color: #86868b;
+  margin-bottom: 4px;
+}
+
+.authsia-error-text {
+  font-size: 12px;
+  color: #1d1d1f;
+  font-weight: 500;
+}
+
+.authsia-error-hint {
+  font-size: 11px;
+  color: #86868b;
+  font-weight: 400;
+}
+
+/* ── Footer ── */
+
+.authsia-footer {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.authsia-footer-link {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  color: #86868b;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 0;
+  transition: color 100ms ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.authsia-footer-link:hover {
+  color: #1d1d1f;
+}
+
+.authsia-footer-link:focus-visible {
+  outline: 2px solid rgba(0, 122, 255, 0.6);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+.authsia-footer-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.5;
+}
+
+/* ── Dark Mode ── */
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #f5f5f7;
+  }
+
+  .authsia-menu {
+    background: #2c2c2e;
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow:
+      0 4px 20px rgba(0, 0, 0, 0.35),
+      0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+
+  .authsia-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .authsia-item:focus {
+    background: rgba(10, 132, 255, 0.2);
+    box-shadow: inset 3px 0 0 rgba(10, 132, 255, 0.95);
+  }
+
+  .authsia-item:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .authsia-item-name {
+    color: #f5f5f7;
+  }
+
+  .authsia-item-username {
+    color: #98989d;
+  }
+
+  .authsia-item:focus-visible {
+    outline-color: rgba(10, 132, 255, 0.8);
+  }
+
+  .authsia-empty-icon {
+    color: #98989d;
+  }
+
+  .authsia-empty-text {
+    color: #98989d;
+  }
+
+  .authsia-skeleton-avatar,
+  .authsia-skeleton-line {
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.04) 0%,
+      rgba(255, 255, 255, 0.08) 50%,
+      rgba(255, 255, 255, 0.04) 100%
+    );
+    background-size: 200% 100%;
+  }
+
+  .authsia-error-icon {
+    color: #98989d;
+  }
+
+  .authsia-error-text {
+    color: #f5f5f7;
+  }
+
+  .authsia-error-hint {
+    color: #98989d;
+  }
+
+  .authsia-footer {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .authsia-footer-link {
+    color: #98989d;
+  }
+
+  .authsia-footer-link:hover {
+    color: #f5f5f7;
+  }
+
+  .authsia-footer-link:focus-visible {
+    outline-color: rgba(10, 132, 255, 0.8);
+  }
+
+  .authsia-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+  }
+}
+
+/* ── Reduced Motion ── */
+
+@media (prefers-reduced-motion: reduce) {
+  .authsia-item {
+    transition: none;
+  }
+
+  .authsia-skeleton-avatar,
+  .authsia-skeleton-line {
+    animation: none;
+    background: rgba(0, 0, 0, 0.06);
+  }
+
+  .authsia-footer-link {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) and (prefers-color-scheme: dark) {
+  .authsia-skeleton-avatar,
+  .authsia-skeleton-line {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
