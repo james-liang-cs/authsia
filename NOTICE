@@ -1,0 +1,6 @@
+Authsia Security Core
+Copyright 2026 Authsia contributors
+
+This distribution depends on Swift Argument Parser, available under the
+Apache License 2.0:
+https://github.com/apple/swift-argument-parser
