@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache SwiftPM build artifacts
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            .build
+            Tools/AuthsiaNativeHost/.build
+          key: ${{ runner.os }}-${{ runner.arch }}-swiftpm-${{ hashFiles('Package.swift', 'Package.resolved', 'Tools/AuthsiaNativeHost/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-swiftpm-
+
+      - name: Verify output scanner
+        run: scripts/check-no-secret-output.sh --self-test
+
+      - name: Test root package
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/root-tests.log"
+          set +e
+          swift test >"$log" 2>&1
+          status=$?
+          set -e
+          scripts/check-no-secret-output.sh "$log"
+          cat "$log"
+          exit "$status"
+
+      - name: Build authsia release product
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/authsia-release-build.log"
+          set +e
+          swift build -c release --product authsia >"$log" 2>&1
+          status=$?
+          set -e
+          scripts/check-no-secret-output.sh "$log"
+          cat "$log"
+          exit "$status"
+
+      - name: Test native host
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/native-host-tests.log"
+          set +e
+          swift test --package-path Tools/AuthsiaNativeHost >"$log" 2>&1
+          status=$?
+          set -e
+          scripts/check-no-secret-output.sh "$log"
+          cat "$log"
+          exit "$status"
+
+      - name: Build native host release product
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/native-host-release-build.log"
+          set +e
+          swift build -c release \
+            --package-path Tools/AuthsiaNativeHost \
+            --product AuthsiaNativeHost >"$log" 2>&1
+          status=$?
+          set -e
+          scripts/check-no-secret-output.sh "$log"
+          cat "$log"
+          exit "$status"
+
+      - name: Test Chrome extension
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/chrome-extension-tests.log"
+          set +e
+          Tools/AuthsiaChromeExtension/scripts/run-tests.sh >"$log" 2>&1
+          status=$?
+          set -e
+          scripts/check-no-secret-output.sh "$log"
+          cat "$log"
+          exit "$status"
