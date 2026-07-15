@@ -5,9 +5,7 @@ headless bridge, SSH agent, and just-in-time (JIT) agent grants. It focuses on
 who can ask Authsia for secrets, which gates are applied, and what the design
 does not try to protect against.
 
-For process layout and launchd repair details, see
-`Doc/ops/macos-runtime-architecture.md`. For detailed JIT grant behavior, see
-`Doc/ops/jit-agent-grants.md`.
+For detailed JIT grant behavior, see `Doc/ops/jit-agent-grants.md`.
 
 ## Security Goals
 
@@ -280,13 +278,3 @@ For non-leaking secret-read validation:
 ```sh
 authsia exec password SERVICE_ENDPOINT --shell 'test -n "$SERVICE_ENDPOINT" && echo SERVICE_ENDPOINT=set'
 ```
-
-## Hardening Notes
-
-Future hardening should prefer server-side facts over client-supplied context
-where practical. Two useful improvements would be:
-
-- narrow bridge client acceptance from same Team ID to a stricter CLI code
-  requirement
-- move more agent/session classification to bridge-observed process ancestry
-  instead of trusting request context fields

@@ -13,6 +13,12 @@ The following are not included or licensed by this repository:
 - signing, notarization, app-update, upload, and private release operations;
 - credentials, private endpoints, commercial plans, and private roadmap work.
 
+Public documentation may describe released CLI behavior, public authorization
+policy, storage semantics, trust boundaries, and verification against the
+public source. Keep private SwiftUI source maps, private app lifecycle and
+build/signing/release operations, internal incident notes, and unreleased
+product plans in the private application repository.
+
 The private application supplies presentation and lifecycle adapters through
 narrow public protocols. Authorization decisions remain in the public host
 package. Official app builds pin one exact commit of this repository; they do

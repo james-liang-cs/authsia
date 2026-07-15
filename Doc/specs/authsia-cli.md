@@ -39,7 +39,6 @@
 - [CLI Request Flow (Current Behavior)](#cli-request-flow-current-behavior)
 - [Session Model (CLI Unlock)](#session-model-cli-unlock)
   - [Implicit Session Creation](#implicit-session-creation)
-- [App Lock &amp; Auto-Lock (GUI)](#app-lock-auto-lock-gui)
 - [Limitations &amp; Constraints (Current)](#limitations-constraints-current)
 - [Output Formats](#output-formats)
 - [File Structure](#file-structure)
@@ -50,7 +49,6 @@
 - [Security Model](#security-model)
 - [Testing Strategy](#testing-strategy)
 - [Verification Steps](#verification-steps)
-- [Future Enhancements](#future-enhancements)
 
 ## Overview
 
@@ -1915,7 +1913,6 @@ Authsia setup status:
 | Symptom | Meaning | Fix |
 |---|---|---|
 | `authsia status` shows `Bridge: Disconnected` after install | The LaunchAgent is not registered/running, or launchd cannot exec the bridge role | Open `/Applications/Authsia.app` once, then check `launchctl print "gui/$(id -u)/Authsia.Bridge"` and verify the plist points to `/Applications/Authsia.app/Contents/Helpers/AuthsiaHeadless.app/Contents/MacOS/authsia-headless`. |
-| `launchctl` shows `Authsia.Bridge` repeatedly scheduled or exiting | Signing/AMFI or plist path issue before the Mach service starts | Verify `codesign --verify --verbose=4 /Applications/Authsia.app`; inspect unified logs for `Authsia.Bridge` and `No matching profile found`. Do not add Keychain entitlements to copied helper binaries. |
 | `authsia list passwords` is empty but vault rows are visible in the app | The bridge is not seeing live vault metadata, or automatic CLI metadata snapshot refresh did not run | Verify `authsia status`, relaunch the current Authsia app build once to force a vault load and snapshot refresh, then retry `authsia list passwords --format table --all-machines`. |
 | `authsia list passwords` shows rows but `authsia load password --folder ...` reports `Keychain item not found` | Metadata lookup succeeded, but the bridge could not read the matching secret from the current or legacy vault Keychain service | Verify `authsia status` is connected and reinstall the current app build so launchd runs the entitled nested headless helper in bridge mode. |
 
@@ -2258,27 +2255,6 @@ authsia scrape --path .env --dry-run
 authsia scrape --path .env --replace-all --folder Team/API
 ```
 
-For one-off snippets, use the macOS menu-bar action **Store Clipboard in Authsia...** after copying the
-selected secret text. The importer recognizes:
-
-- `export NAME=value`
-- `NAME=value`
-- `name: value` pairs, including names with dots or hyphens
-- JSON objects, stored as secure notes
-- Plain fallback text, stored as a secure note
-
-Clipboard imports default to per-item CLI access on. The import panel can choose a vault folder, disable
-CLI access for the imported items, and clear the clipboard only if it still contains the imported text.
-When storing into a workspace, **Environment association** defaults to its active named environment or
-the **Default environment** when no named environment is active. The user can associate the item with multiple named
-environments; the Default environment remains the empty-tag tier and is exclusive. Same-name items in the exact same folder
-are duplicates only when both use the Default environment or their named tag sets overlap. Updating an existing item
-preserves its tags, and generated `authsia://` references do not gain an environment component.
-When the active project is an Authsia workspace with no managed env file, the import panel offers
-**Add to workspace env** after storing. Applying that preview writes `NAME=authsia://...` bindings to
-`.authsia/workspace.json`, so future commands can use `authsia workspace run -- <command>` without a
-temporary env file or one `workspace env add` command per secret.
-
 ---
 
 ## CLI Request Flow (Current Behavior)
@@ -2299,10 +2275,8 @@ temporary env file or one `workspace env add` command per secret.
 7. Session and anti-replay validation:
    - The handler calls `validateSessionAndRequest()` which checks that the session token belongs to the same terminal scope and that the request ID has not been used before.
    - If the scoped session is valid and the request ID is fresh, approval is **skipped** (no biometric prompt).
-   - Otherwise: a biometric prompt (`deviceOwnerAuthentication`) is presented. The app activates
-     itself first so the prompt appears even when the bridge is running headless (launchd-spawned),
-     and suppresses its main window (`BridgeApprovalCoordinator.isApprovalInProgress`) so only the
-     approval prompt is shown — never the app window.
+   - Otherwise: a biometric prompt (`deviceOwnerAuthentication`) is presented through the private
+     app's approval adapter, including when the bridge is running headless.
    - If biometric is unavailable or denied, the request is rejected (`notAuthorized`). CLI approval is
      biometric-only; there is no terminal y/n fallback.
 8. On successful biometric/approval, a **new scoped session is created** server-side and the new session token is returned in `BridgeResponse.sessionToken`.
@@ -2350,26 +2324,6 @@ When a non-unlock command (e.g., `list`, `get password`, `get api-key`) triggers
 - The user does not need to run `authsia unlock` explicitly.
 - Any command that triggers biometric will establish a session for subsequent commands.
 - The CLI caches this token identically to an explicit `unlock` only when the process is eligible for the interactive terminal cache.
-
-## App Lock & Auto-Lock (GUI)
-
-Current behavior (as implemented by AppLockService):
-- App starts locked by default (isLocked = true).
-- Lock UI is only shown when shouldShowLockUI becomes true.
-- shouldShowLockUI is set on:
-  - Returning from background or deminiaturizing a window when the app decides to lock.
-  - Foreground inactivity timer expiry (timeout > 0).
-- Activity is tracked continuously; any interaction resets the inactivity timer.
-
-Auto-lock logic (appAutoLockTimeout):
-- -1: never auto-lock.
-- 0: lock immediately when returning from background.
-- >0: lock when inactivity exceeds the timeout; timer checks every second.
-- On macOS, minimize/restore uses a separate path; background transitions are not always triggered.
-
-Initial launch behavior:
-- On initial app launch (first active foreground without backgrounding), the lock UI is shown immediately when locked.
-- The lock overlay triggers biometric authentication on appearance.
 
 ## Limitations & Constraints (Current)
 
@@ -2435,9 +2389,6 @@ Write commands (`add`, `edit`, `delete`) only support `--format json`. Using `--
 
 ```
 Packages/AuthsiaCLI/
-├── Package.swift
-├── Signing/
-│   └── authsia.entitlements.template
 ├── Sources/authsia/
 │   ├── AuthsiaCLI.swift              # @main entry point, subcommand routing
 │   ├── CodeService.swift             # OTP generation service
@@ -2515,11 +2466,6 @@ Packages/AuthsiaBridgeHost/Sources/           # macOS host runtime and authoriza
 ├── BridgeSessionManager.swift               # Server-side session + anti-replay tracking
 └── SSHAgentListener.swift                   # OpenSSH agent protocol and signing authorization
 
-Authenticator/Authenticator/Bridge/          # Private approval UI and runtime adapters
-├── BridgeHostRuntime.swift                  # XPC host composition
-├── BridgeApprover.swift                     # LocalAuthentication/AppKit approval adapter
-└── SSHAgentRuntime.swift                    # SSH host composition
-
 Packages/AuthenticatorBridge/Sources/        # Shared protocol + models (used by both app and CLI)
 ├── AuthsiaBridgeXPCProtocol.swift           # @objc XPC protocol
 ├── FolderPathSupport.swift              # Shared folder path normalization and matching
@@ -2529,7 +2475,13 @@ Packages/AuthenticatorBridge/Sources/        # Shared protocol + models (used by
 └── BridgePolicy.swift                       # BridgeSession (32-byte token), BridgePolicyDecision
 ```
 
-**Build & Installation:**
+**Build and installation:**
+- Build the public CLI from source:
+  ```bash
+  swift build --product authsia
+  ```
+- A public source build produces an unsigned CLI and does not install or sign
+  the private Authsia app.
 - Homebrew installs the released app and symlinks the bundled CLI:
   ```bash
   brew install --cask james-liang-cs/authsia/authsia
@@ -2538,23 +2490,9 @@ Packages/AuthenticatorBridge/Sources/        # Shared protocol + models (used by
   ```bash
   brew install --cask --adopt james-liang-cs/authsia/authsia
   ```
-- `scripts/build_and_install.sh` runs `xcodebuild` which triggers the "Copy CLI Binary" build phase.
-- The build phase runs `scripts/copy-cli.sh` which:
-  1. Runs `swift build -c release` in `Packages/AuthsiaCLI/` (compiles CLI from source).
-  2. Copies the binary to `$BUILT_PRODUCTS_DIR/Authsia.app/Contents/Helpers/authsia`.
-  3. Signs the CLI binary with hardened runtime and no Keychain entitlements.
-- The bridge LaunchAgent runs
-  `/Applications/Authsia.app/Contents/Helpers/AuthsiaHeadless.app/Contents/MacOS/authsia-headless`
-  with `AUTHSIA_ROLE=bridge`; the SSH agent LaunchAgent runs the same nested
-  helper with `AUTHSIA_ROLE=ssh-agent`.
-- Do not copy/sign `authsia-bridge` or `authsia-ssh-agent` helper binaries with
-  Keychain entitlements. Bare helper executables are not covered by the app
-  bundle's provisioning profile and can be rejected by launchd/AMFI before they
-  register their Mach/socket services.
 - Installed in app bundle: `/Applications/Authsia.app/Contents/Helpers/authsia`
-- Homebrew symlinks the released CLI to `$(brew --prefix)/bin/authsia`; local
-  app setup can also manage `~/.local/bin/authsia`.
-- CLI is **always rebuilt from source** as part of the Xcode build — no separate build step needed.
+- Homebrew symlinks the released CLI to `$(brew --prefix)/bin/authsia`; app
+  setup can also manage `~/.local/bin/authsia`.
 
 ---
 
@@ -2630,17 +2568,11 @@ Mac vault context menus also provide bulk enable/disable:
 ## Verification Steps
 
 ```bash
-# Build (standalone CLI)
-cd Packages/AuthsiaCLI && swift build
-
-# Build + install (full app + CLI via Xcode)
-./scripts/build_and_install.sh
-
-# Run tests
-cd Packages/AuthenticatorBridge && swift test   # 10 tests (shared models)
-cd Packages/AuthsiaBridgeHost && swift test     # host authorization and runtime tests
-cd Packages/AuthenticatorCore && swift test     # 18 tests (TOTP/HOTP)
-cd Packages/AuthsiaCLI && swift test            # 315 tests (commands, matching, SSH adoption, scrape detection)
+# Build and test the public source tree
+swift build -c release --product authsia
+swift test
+swift test --package-path Tools/AuthsiaNativeHost
+Tools/AuthsiaChromeExtension/scripts/run-tests.sh
 
 # Manual verification
 authsia --help                          # Shows all commands with examples
@@ -2681,11 +2613,3 @@ authsia status --format json            # Shows this terminal's scoped session s
 authsia list otp                        # Uses this terminal's cached session
 authsia list passwords                  # Within TTL: no biometric prompt
 ```
-
----
-
-## Future Enhancements
-
-- Stdout secret protection (require `--reveal` flag)
-- SSH agent integration for certificates
-- Rate limiting and brute force protection

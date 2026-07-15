@@ -407,9 +407,6 @@ swift test --filter AgenticProcessDetectorTests
 
 cd ../AuthsiaCLI
 swift test --filter AgentJITPreflightTests
-
-cd ../../Authenticator
-xcodebuild test -project Authenticator.xcodeproj -scheme Authenticator -destination 'platform=macOS' -only-testing:AuthenticatorTests/XPCRequestHandlerJITGrantTests
 ```
 
 For runtime triage, first verify the installed app/helper has the current build.
@@ -453,7 +450,3 @@ If JIT does not prompt, check:
   `Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost/BridgeListPayloadFactory.swift`
 - Grant persistence and closed-terminal revocation:
   `Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost/AgentJITGrantStore.swift`
-- Access Center display and manual revocation:
-  `Authenticator/Authenticator/AccessCenterView.swift`
-- Global Access Center insight aggregation:
-  `Authenticator/Authenticator/AccessInsightSummary.swift`
