@@ -40,3 +40,24 @@ Tools/AuthsiaChromeExtension/scripts/run-tests.sh
 These source builds do not install or sign the private Authsia app. For
 security reports, follow [SECURITY.md](SECURITY.md) and never include a real
 secret in an issue or reproduction.
+
+## Release artifacts and verification
+
+Each `v<app-version>` source tag publishes a source archive, public macOS CLI,
+SPDX 2.3 JSON SBOM, and SHA-256 checksums. GitHub artifact attestations bind the
+public CLI and SBOM to the tag workflow that built them.
+
+The private macOS app release publishes a separate provenance JSON file. Use
+[`scripts/verify-release.sh`](scripts/verify-release.sh) with the DMG and that
+provenance file to check the outer hash before mounting, Apple Developer ID
+authority, Team ID `33M8QU65SP`, notarization, Gatekeeper, bundled CLI hash,
+public source tag/SHA, and SBOM hash:
+
+```bash
+scripts/verify-release.sh Authsia-<version>.dmg Authsia-<version>.provenance.json
+gh attestation verify authsia-v<version>-macos-<architecture> \
+  --repo james-liang-cs/authsia
+```
+
+This repository attests its public artifacts only. It does not claim that the
+private Authsia application is reproducibly built from public source.
