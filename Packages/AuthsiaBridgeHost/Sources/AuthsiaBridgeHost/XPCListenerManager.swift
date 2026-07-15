@@ -9,12 +9,18 @@ import Darwin
 public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
     private let serviceName = "Authsia.Bridge"
     private let bundledCLIPath: String
+    private let trustedDevelopmentBuildRoots: [String]
     private var listener: NSXPCListener?
     private let handler: XPCRequestHandler
 
-    public init(handler: XPCRequestHandler, bundledCLIPath: String) {
+    public init(
+        handler: XPCRequestHandler,
+        bundledCLIPath: String,
+        trustedDevelopmentBuildRoots: [String] = []
+    ) {
         self.handler = handler
         self.bundledCLIPath = bundledCLIPath
+        self.trustedDevelopmentBuildRoots = trustedDevelopmentBuildRoots
         super.init()
     }
 
@@ -170,7 +176,8 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
 
         let trusted = Self.isTrustedCLIExecutablePath(
             guestExecutablePath,
-            bundledCLIPath: bundledCLIPath
+            bundledCLIPath: bundledCLIPath,
+            trustedDevelopmentBuildRoots: trustedDevelopmentBuildRoots
         )
         if trusted {
             #if DEBUG
@@ -194,7 +201,11 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
         return String(cString: pathBuffer)
     }
 
-    public static func isTrustedCLIExecutablePath(_ executablePath: String, bundledCLIPath: String) -> Bool {
+    public static func isTrustedCLIExecutablePath(
+        _ executablePath: String,
+        bundledCLIPath: String,
+        trustedDevelopmentBuildRoots: [String] = []
+    ) -> Bool {
         let resolvedExecutablePath = URL(fileURLWithPath: executablePath)
             .resolvingSymlinksInPath()
             .standardizedFileURL
@@ -208,16 +219,17 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
             return true
         }
 
-        let isDevelopmentCLI = (
-            resolvedExecutablePath.contains("/Packages/AuthsiaCLI/.build/") ||
-            resolvedExecutablePath.contains("/Dependencies/Authsia/.build/")
-        )
-            && resolvedExecutablePath.hasSuffix("/authsia")
-        if isDevelopmentCLI {
-            return true
+        guard URL(fileURLWithPath: resolvedExecutablePath).lastPathComponent == "authsia" else {
+            return false
         }
 
-        return false
+        return trustedDevelopmentBuildRoots.contains { buildRoot in
+            let resolvedBuildRoot = URL(fileURLWithPath: buildRoot)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+                .path
+            return resolvedExecutablePath.hasPrefix(resolvedBuildRoot + "/")
+        }
     }
     
     /// Retrieves the team identifier of the current process
