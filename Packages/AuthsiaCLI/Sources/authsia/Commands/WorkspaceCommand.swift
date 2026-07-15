@@ -455,7 +455,7 @@ struct Workspace: AsyncParsableCommand {
             print("")
             print("Apply workspace setup?")
             print("- Create/update \(WorkspaceConfigStore.relativeConfigPath)")
-            print("- Ensure Authsia folder \(plan.config.workspace.authsiaFolder)")
+            print("- Target Authsia folder \(plan.config.workspace.authsiaFolder)")
             let writeCount = selectedSecrets.filter { $0.action == .create || $0.action == .update }.count
             let reuseCount = selectedSecrets.filter { $0.action == .reuse }.count
             print("- Store/update \(writeCount) Authsia item(s)")
@@ -478,8 +478,6 @@ struct Workspace: AsyncParsableCommand {
             vaultClient: WorkspaceSetupVaultClient = AuthsiaBridgeClient.shared
         ) async throws {
             try validateNoMissingReferences(plan: plan, selectedEnvFiles: selectedEnvFiles)
-            try vaultClient.ensureVaultFolder(path: plan.config.workspace.authsiaFolder)
-
             let vaultSecretSelections = selectedSecrets.filter { isWorkspaceMigratableSecret($0.secret) }
             let secretsToRewrite = vaultSecretSelections.map(\.secret)
             if !vaultSecretSelections.isEmpty {

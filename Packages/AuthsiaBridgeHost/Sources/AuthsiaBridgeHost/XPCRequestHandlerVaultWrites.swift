@@ -117,25 +117,16 @@ extension XPCRequestHandler {
                     return
                 }
 
-                do {
-                    try repository.addFolder(path, type: .password)
-                    try repository.addFolder(path, type: .apiKey)
-                    let result = WriteResultPayload(id: path, message: "Vault folder ready")
-                    replyWriteSuccess(
-                        id: bridgeRequest.id,
-                        payload: result,
-                        sessionToken: approval.newSessionToken,
-                        sessionExpiresAt: approval.sessionExpiresAt,
-                        reply: reply
-                    )
-                } catch {
-                    replyError(
-                        id: bridgeRequest.id,
-                        code: .invalidRequest,
-                        message: "Failed to create vault folder: \(error.localizedDescription)",
-                        reply: reply
-                    )
-                }
+                // Compatibility no-op for older CLIs. Workspace item writes register
+                // their own typed folder, so an untyped request must not create both.
+                let result = WriteResultPayload(id: path, message: "Vault folder ready")
+                replyWriteSuccess(
+                    id: bridgeRequest.id,
+                    payload: result,
+                    sessionToken: approval.newSessionToken,
+                    sessionExpiresAt: approval.sessionExpiresAt,
+                    reply: reply
+                )
 
             case .addPassword:
                 guard let payload = try? BridgeCoder.decode(PasswordWritePayload.self, from: body) else {

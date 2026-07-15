@@ -88,7 +88,7 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         XCTAssertEqual(approver.requests.first?.command, .createAccess)
     }
 
-    func testEnsureVaultFolderPersistsPasswordAndAPIKeyFoldersAfterApproval() async throws {
+    func testLegacyEnsureVaultFolderDoesNotMaterializeTypedFolders() async throws {
         let previousValue = UserDefaults.standard.bool(forKey: "cliAccessEnabled")
         UserDefaults.standard.set(true, forKey: "cliAccessEnabled")
         defer { UserDefaults.standard.set(previousValue, forKey: "cliAccessEnabled") }
@@ -116,11 +116,7 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         }
         await fulfillment(of: [expectation], timeout: 1)
 
-        XCTAssertEqual(repository.folders[.password], ["Workspaces/docflow"])
-        XCTAssertEqual(repository.folders[.apiKey], ["Workspaces/docflow"])
-        for type in VaultItemType.allCases where type != .password && type != .apiKey {
-            XCTAssertNil(repository.folders[type])
-        }
+        XCTAssertTrue(repository.folders.isEmpty)
         XCTAssertEqual(approver.requests.count, 1)
         XCTAssertEqual(approver.requests.first?.command, .ensureVaultFolder)
         XCTAssertEqual(approver.requests.first?.itemLabel, "Workspaces/docflow")

@@ -1214,9 +1214,11 @@ JSON containing env files, password/API-key rows, conflict state, generated refe
 options. Add `--local-preview` when the preview must not contact the bridge or ask for approval; this
 local-only mode skips live vault conflict and reference checks, and the native app uses it for setup
 preview. `--apply-json <path>` reads the app's selected env files, selected rows, conflict actions,
-and selected agent rules, then stores/reuses secrets, rewrites env files, installs agent rules, ensures
-the workspace vault folder exists, and writes commit-safe config through the same Workspace apply
-logic. The JSON plan and selection never contain raw secret values. Native update treats selected agent
+and selected agent rules, then stores/reuses secrets, rewrites env files, installs agent rules, records
+the configured workspace folder, and writes commit-safe config through the same Workspace apply logic.
+The typed Password or API Key folder is materialized only when an item is stored there, so setup with
+no selected vault rows does not recreate a deleted empty folder. The JSON plan and selection never
+contain raw secret values. Native update treats selected agent
 rules as exact: unchecked existing rules are removed from Authsia-managed artifacts, and generated
 prompt markers match the selected tools only.
 
