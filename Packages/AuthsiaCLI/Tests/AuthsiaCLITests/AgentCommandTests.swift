@@ -23,8 +23,8 @@ struct AgentCommandTests {
         #expect(shared.contains("Always run every `authsia ...` CLI command outside the sandbox."))
         #expect(claudeRules.contains(AgentRuleInstaller.managedStartMarker))
         #expect(claudeRules.contains("Authsia Secret Handling"))
-        #expect(settings.contains("Authsia.Bridge"))
-        #expect(settings.contains("Authsia.SSHAgent"))
+        #expect(!settings.contains("Authsia.Bridge"))
+        #expect(!settings.contains("Authsia.SSHAgent"))
         #expect(settings.contains("~/.authsia/agent.sock"))
         #expect(settings.contains("\"hooks\""))
         #expect(settings.contains("\"PreToolUse\""))
@@ -405,7 +405,7 @@ struct AgentCommandTests {
         #expect(event.confidence == .direct)
     }
 
-    @Test("existing Claude local settings merge Authsia hooks and sandbox permissions")
+    @Test("existing Claude local settings merge Authsia hooks and socket permission")
     func existingClaudeSettingsMergeAuthsiaHooksAndSandboxPermissions() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -461,11 +461,7 @@ struct AgentCommandTests {
         #expect((permissions["allow"] as? [String]) == ["Bash(uv sync)"])
         let sandbox = try #require(object["sandbox"] as? [String: Any])
         let network = try #require(sandbox["network"] as? [String: Any])
-        #expect((network["allowMachLookup"] as? [String]) == [
-            "Custom.Service",
-            "Authsia.Bridge",
-            "Authsia.SSHAgent",
-        ])
+        #expect((network["allowMachLookup"] as? [String]) == ["Custom.Service"])
         #expect((network["allowUnixSockets"] as? [String]) == [
             "~/custom.sock",
             "~/.authsia/agent.sock",
@@ -480,6 +476,67 @@ struct AgentCommandTests {
         #expect(preToolUse.contains { $0["matcher"] as? String == "Notebook" })
         #expect(result.updated.contains(".claude/settings.local.json"))
         #expect(result.manualSteps.isEmpty)
+    }
+
+    @Test("Claude install removes legacy Authsia Mach lookups and preserves custom services")
+    func claudeInstallMigratesLegacyMachLookups() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("""
+        {
+          "sandbox": {
+            "network": {
+              "allowMachLookup": [
+                "Custom.Service",
+                "Authsia.Bridge",
+                "Authsia.SSHAgent"
+              ],
+              "allowUnixSockets": [
+                "~/custom.sock"
+              ]
+            }
+          }
+        }
+        """, to: ".claude/settings.local.json", in: root)
+
+        let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.claudeCode])
+
+        let object = try expectJSONObject(try read(".claude/settings.local.json", in: root))
+        let sandbox = try #require(object["sandbox"] as? [String: Any])
+        let network = try #require(sandbox["network"] as? [String: Any])
+        #expect((network["allowMachLookup"] as? [String]) == ["Custom.Service"])
+        #expect((network["allowUnixSockets"] as? [String]) == [
+            "~/custom.sock",
+            "~/.authsia/agent.sock",
+        ])
+        #expect(result.updated.contains(".claude/settings.local.json"))
+        #expect(result.manualSteps.isEmpty)
+    }
+
+    @Test("Claude install removes an allowMachLookup key containing only legacy Authsia services")
+    func claudeInstallRemovesLegacyOnlyMachLookupKey() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("""
+        {
+          "sandbox": {
+            "network": {
+              "allowMachLookup": [
+                "Authsia.Bridge",
+                "Authsia.SSHAgent"
+              ]
+            }
+          }
+        }
+        """, to: ".claude/settings.local.json", in: root)
+
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.claudeCode])
+
+        let object = try expectJSONObject(try read(".claude/settings.local.json", in: root))
+        let sandbox = try #require(object["sandbox"] as? [String: Any])
+        let network = try #require(sandbox["network"] as? [String: Any])
+        #expect(network["allowMachLookup"] == nil)
+        #expect((network["allowUnixSockets"] as? [String]) == ["~/.authsia/agent.sock"])
     }
 
     @Test("invalid existing Claude local settings are not mutated and print a manual merge block")
@@ -695,6 +752,28 @@ struct AgentCommandTests {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.claudeCode])
+
+        let result = try AgentRuleInstaller.uninstall(projectRoot: root, agents: [.claudeCode])
+
+        #expect(!fileExists(".claude/settings.local.json", in: root))
+        #expect(result.removed.contains(".claude/settings.local.json"))
+        #expect(result.manualSteps.isEmpty)
+    }
+
+    @Test("Claude uninstall deletes a legacy generated settings file")
+    func claudeUninstallDeletesLegacyGeneratedSettings() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.claudeCode])
+        let settingsURL = root.appendingPathComponent(".claude/settings.local.json")
+        var settings = try expectJSONObject(try String(contentsOf: settingsURL, encoding: .utf8))
+        var sandbox = try #require(settings["sandbox"] as? [String: Any])
+        var network = try #require(sandbox["network"] as? [String: Any])
+        network["allowMachLookup"] = ["Authsia.Bridge", "Authsia.SSHAgent"]
+        sandbox["network"] = network
+        settings["sandbox"] = sandbox
+        let legacyData = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+        try legacyData.write(to: settingsURL)
 
         let result = try AgentRuleInstaller.uninstall(projectRoot: root, agents: [.claudeCode])
 
@@ -1169,9 +1248,9 @@ struct AgentCommandTests {
         #expect(!object.keys.contains("network"))
         let sandbox = try #require(object["sandbox"] as? [String: Any])
         let network = try #require(sandbox["network"] as? [String: Any])
-        let allowMachLookup = try #require(network["allowMachLookup"] as? [String])
-        #expect(allowMachLookup.contains("Authsia.Bridge"))
-        #expect(allowMachLookup.contains("Authsia.SSHAgent"))
+        let allowMachLookup = (network["allowMachLookup"] as? [String]) ?? []
+        #expect(!allowMachLookup.contains("Authsia.Bridge"))
+        #expect(!allowMachLookup.contains("Authsia.SSHAgent"))
         let allowUnixSockets = try #require(network["allowUnixSockets"] as? [String])
         #expect(allowUnixSockets.contains("~/.authsia/agent.sock"))
     }
