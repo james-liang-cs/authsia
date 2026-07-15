@@ -3222,6 +3222,18 @@ struct WorkspaceRunPlannerTests {
             ["/usr/local/bin/npm", "view", "@anthropic-ai/claude-code@latest", "version", "--prefer-online"],
             ["npm", "config", "get", "registry"],
             ["pnpm", "outdated"],
+            ["pip", "list"],
+            ["pip3", "show", "requests"],
+            ["kubectl", "version", "--client"],
+            ["kubectl", "version"],
+            ["terraform", "version"],
+            ["tofu", "version"],
+            ["go", "version"],
+            ["cargo", "metadata", "--no-deps"],
+            ["cargo", "tree"],
+            ["gcloud", "version"],
+            ["gcloud", "config", "list"],
+            ["gcloud", "config", "get-value", "project"],
         ]
         for argv in probes {
             let plan = try WorkspaceRunPlan.build(startingAt: root, extraEnvFiles: [], commandArgs: argv)
@@ -3259,6 +3271,15 @@ struct WorkspaceRunPlannerTests {
             ["node", "scripts/deploy.js"],
             ["python3", "app.py"],
             ["printf", "ok"],
+            ["pip", "install", "requests"],
+            ["pip3", "download", "requests"],
+            ["kubectl", "apply", "-f", "deploy.yaml"],
+            ["terraform", "apply"],
+            ["tofu", "plan"],
+            ["go", "run", "main.go"],
+            ["cargo", "run"],
+            ["gcloud", "config", "set", "project", "demo"],
+            ["gcloud", "auth", "login"],
         ]
         for argv in nonProbes {
             let plan = try WorkspaceRunPlan.build(startingAt: root, extraEnvFiles: [], commandArgs: argv)
@@ -3288,6 +3309,249 @@ struct WorkspaceRunPlannerTests {
         )
         #expect(plan.usesShell)
         #expect(!Workspace.Run.isSecretFreeProbe(plan: plan))
+    }
+
+    private func makeBindingWorkspaceRoot(
+        bindingNames: [String] = ["DATABASE_URL"]
+    ) throws -> URL {
+        let root = try makeWorkspaceRoot()
+        let config = WorkspaceConfig(
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil,
+            envBindings: bindingNames.map {
+                WorkspaceConfig.EnvBinding(
+                    name: $0,
+                    reference: "authsia://password/\($0)/password?folder=Workspaces%2Fapi"
+                )
+            }
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        return root
+    }
+
+    @Test("inline python that references no workspace binding passes through")
+    func inlinePythonWithoutBindingReferencePassesThrough() throws {
+        let root = try makeBindingWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bindingFree: [[String]] = [
+            ["python3", "-c", "print(\"ok\")"],
+            ["python3", "-c", "import os; print(os.environ[\"DEMO_MASK\"])"],
+            ["/usr/bin/python3", "-c", "import json; print(json.dumps({}))"],
+            ["python", "-c", "print(1)"],
+            // Identifier boundaries: neither DATABASE_URL_V2 nor XDATABASE_URL is the binding.
+            ["python3", "-c", "import os; os.environ[\"DATABASE_URL_V2\"]"],
+            ["python3", "-c", "x = \"XDATABASE_URL\""],
+        ]
+        for argv in bindingFree {
+            let plan = try WorkspaceRunPlan.build(startingAt: root, extraEnvFiles: [], commandArgs: argv)
+            let names = try Workspace.Run.workspaceBindingNames(
+                plan: plan,
+                parentEnvironment: ["PATH": "/usr/bin"]
+            )
+            #expect(names == ["DATABASE_URL"])
+            #expect(
+                Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names),
+                "expected passthrough: \(argv.joined(separator: " "))"
+            )
+            // Bindings make shouldDelegateToExec true; the binding-free check overrides it.
+            #expect(Workspace.Run.shouldDelegateToExec(plan: plan, parentEnvironment: ["PATH": "/usr/bin"]))
+        }
+    }
+
+    @Test("inline python referencing a workspace binding delegates to exec")
+    func inlinePythonReferencingBindingDelegates() throws {
+        let root = try makeBindingWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let referencing: [[String]] = [
+            ["python3", "-c", "import os; connect(os.environ[\"DATABASE_URL\"])"],
+            ["python3", "-c", "print(\"DATABASE_URL\")"],
+            ["python3", "-c", "import os", "DATABASE_URL"],
+        ]
+        for argv in referencing {
+            let plan = try WorkspaceRunPlan.build(startingAt: root, extraEnvFiles: [], commandArgs: argv)
+            let names = try Workspace.Run.workspaceBindingNames(
+                plan: plan,
+                parentEnvironment: ["PATH": "/usr/bin"]
+            )
+            #expect(
+                !Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names),
+                "expected delegate: \(argv.joined(separator: " "))"
+            )
+        }
+    }
+
+    @Test("ambiguous python invocations keep delegating")
+    func ambiguousPythonInvocationsKeepDelegating() throws {
+        let root = try makeBindingWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Code outside argv may read any env name, so only a leading `-c` is classifiable.
+        let ambiguous: [[String]] = [
+            ["python3", "app.py"],
+            ["python3", "-m", "http.server"],
+            ["python3"],
+            ["python3", "-i", "-c", "print(1)"],
+            ["python3", "-B", "-c", "print(1)"],
+        ]
+        for argv in ambiguous {
+            let plan = try WorkspaceRunPlan.build(startingAt: root, extraEnvFiles: [], commandArgs: argv)
+            let names = try Workspace.Run.workspaceBindingNames(
+                plan: plan,
+                parentEnvironment: ["PATH": "/usr/bin"]
+            )
+            #expect(
+                !Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names),
+                "expected delegate: \(argv.joined(separator: " "))"
+            )
+        }
+    }
+
+    @Test("python delegates when a binding lives in python's implicit env namespace")
+    func pythonDelegatesForImplicitEnvNamespaceBindings() throws {
+        let root = try makeBindingWorkspaceRoot(bindingNames: ["PYTHONSTARTUP"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let plan = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["python3", "-c", "print(1)"]
+        )
+        let names = try Workspace.Run.workspaceBindingNames(
+            plan: plan,
+            parentEnvironment: ["PATH": "/usr/bin"]
+        )
+        #expect(!Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names))
+    }
+
+    @Test("docker invocations without explicit env forwarding pass through")
+    func dockerInvocationsWithoutEnvForwardingPassThrough() throws {
+        let root = try makeBindingWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Containers only receive env that is explicitly forwarded, so a run
+        // without -e/--env/--env-file cannot consume workspace bindings.
+        let bindingFree: [[String]] = [
+            ["docker", "run", "--rm", "alpine", "env"],
+            ["docker", "ps"],
+            ["docker", "build", "-t", "img", "."],
+        ]
+        for argv in bindingFree {
+            let plan = try WorkspaceRunPlan.build(startingAt: root, extraEnvFiles: [], commandArgs: argv)
+            let names = try Workspace.Run.workspaceBindingNames(
+                plan: plan,
+                parentEnvironment: ["PATH": "/usr/bin"]
+            )
+            #expect(
+                Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names),
+                "expected passthrough: \(argv.joined(separator: " "))"
+            )
+        }
+    }
+
+    @Test("docker env forwarding, env files, and compose delegate to exec")
+    func dockerEnvForwardingEnvFilesAndComposeDelegate() throws {
+        let root = try makeBindingWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let delegating: [[String]] = [
+            ["docker", "run", "-e", "DATABASE_URL", "alpine"],
+            ["docker", "run", "--env", "DATABASE_URL=x", "alpine"],
+            ["docker", "build", "--build-arg", "DATABASE_URL", "."],
+            ["docker", "run", "--env-file", ".env", "alpine"],
+            ["docker", "run", "--env-file=.env", "alpine"],
+            ["docker", "compose", "up"],
+        ]
+        for argv in delegating {
+            let plan = try WorkspaceRunPlan.build(startingAt: root, extraEnvFiles: [], commandArgs: argv)
+            let names = try Workspace.Run.workspaceBindingNames(
+                plan: plan,
+                parentEnvironment: ["PATH": "/usr/bin"]
+            )
+            #expect(
+                !Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names),
+                "expected delegate: \(argv.joined(separator: " "))"
+            )
+        }
+    }
+
+    @Test("docker delegates when a binding lives in docker's implicit env namespace")
+    func dockerDelegatesForImplicitEnvNamespaceBindings() throws {
+        let root = try makeBindingWorkspaceRoot(bindingNames: ["DOCKER_HOST"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let plan = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["docker", "ps"]
+        )
+        let names = try Workspace.Run.workspaceBindingNames(
+            plan: plan,
+            parentEnvironment: ["PATH": "/usr/bin"]
+        )
+        #expect(!Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names))
+    }
+
+    @Test("shell commands are never binding-free invocations")
+    func shellCommandsAreNeverBindingFreeInvocations() throws {
+        let root = try makeBindingWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let plan = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: [],
+            shellCommandParts: ["--", "python3", "-c", "print(1)"]
+        )
+        #expect(plan.usesShell)
+        let names = try Workspace.Run.workspaceBindingNames(
+            plan: plan,
+            parentEnvironment: ["PATH": "/usr/bin"]
+        )
+        #expect(!Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names))
+    }
+
+    @Test("binding names include parent environment authsia references")
+    func bindingNamesIncludeParentEnvironmentAuthsiaReferences() throws {
+        let root = try makeBindingWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let plan = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["python3", "-c", "import os; os.environ[\"API_KEY\"]"]
+        )
+        let names = try Workspace.Run.workspaceBindingNames(
+            plan: plan,
+            parentEnvironment: [
+                "PATH": "/usr/bin",
+                "API_KEY": "authsia://password/API_KEY/password?folder=Workspaces%2Fapi",
+            ]
+        )
+        #expect(names == ["DATABASE_URL", "API_KEY"])
+        #expect(!Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names))
+    }
+
+    @Test("workspace run dry-run names binding-free passthrough")
+    func workspaceRunDryRunNamesBindingFreePassthrough() throws {
+        let root = try makeBindingWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let plan = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["python3", "-c", "print(\"ok\")"]
+        )
+        let output = Workspace.Run.renderDryRun(
+            plan,
+            parentEnvironment: ["PATH": "/usr/bin"],
+            processAncestry: Self.humanShimAncestry
+        )
+        #expect(output.contains(
+            "Execution: direct passthrough (command references no workspace binding; secrets not injected)"
+        ))
     }
 
     @Test("direct passthrough scrubs automation credentials")
