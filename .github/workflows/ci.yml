@@ -40,6 +40,9 @@ jobs:
           PATH: /usr/bin:/bin
         run: scripts/check-no-secret-output.sh --self-test
 
+      - name: Verify release workflow contracts
+        run: scripts/test-release-source-workflow.sh
+
       - name: Test root package
         shell: bash
         run: |
