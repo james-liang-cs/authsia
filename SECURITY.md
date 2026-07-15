@@ -9,12 +9,11 @@ Older versions may be asked to upgrade before a fix is evaluated.
 ## Private reporting
 
 Do not open a public issue for a suspected vulnerability. Private vulnerability
-reporting will be enabled before this repository is published at:
+reporting is available at:
 
 `https://github.com/james-liang-cs/authsia/security/advisories/new`
 
-This URL is provisional until the repository security setting is enabled. Do
-not send a report until the private advisory form is available.
+Submit suspected vulnerabilities through that private advisory form.
 
 We aim to acknowledge a report within three business days, provide an initial
 triage within seven business days, and send a status update at least every 14
