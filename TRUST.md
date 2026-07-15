@@ -14,7 +14,12 @@ behind each security claim.
 | Native messaging validates request shape and host matching | `Tools/AuthsiaNativeHost/Sources/AuthsiaNativeHostCore/NativeMessaging.swift`, `HostMatching.swift`, `CredentialResolver.swift` | `Tools/AuthsiaNativeHost/Tests/AuthsiaNativeHostCoreTests/NativeHostCoreTests.swift`, `HostMatchingTests.swift` |
 | SSH signing applies host, automation, item-access, and approval policy | `Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost/SSHAgentListener.swift`, `SSHAgentAutomationAuthorization.swift` | `Packages/AuthsiaBridgeHost/Tests/AuthsiaBridgeHostTests/SSHAgentListenerAuthorizationTests.swift`, `SSHAgentAutomationAuthorizationTests.swift` |
 | Audit and command output omit resolved secret values | `Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost/BridgeAuditLogger.swift`, `Packages/AuthsiaCLI/Sources/authsia/Services/OutputMasker.swift` | `Packages/AuthsiaBridgeHost/Tests/AuthsiaBridgeHostTests/BridgeAuditLoggerTests.swift`, `Packages/AuthsiaCLI/Tests/AuthsiaCLITests/OutputMaskerTests.swift` |
-| Official releases pin and verify one public source commit | No binary-release claim is active in this initial source seed | Before the first release, `scripts/verify-release.sh`, `scripts/generate-sbom.sh`, and `.github/workflows/release-source.yml` must implement and test this contract |
+| Official releases pin and verify one public source commit | `scripts/verify-release.sh`, `scripts/generate-sbom.sh`, `.github/workflows/release-source.yml` | `scripts/verify-release.sh --self-test`, tag workflow source/CLI/SBOM checksums, and GitHub artifact attestations |
 
 The private app owns only presentation and lifecycle adapters. A private adapter
 cannot grant access by itself; public authorization must succeed first.
+
+Official app provenance names the public `v<app-version>` tag and full commit
+SHA pinned by the private app's gitlink. The public workflow attests only the
+public CLI and SBOM; it does not claim that the private SwiftUI app is
+reproducible from this repository.
