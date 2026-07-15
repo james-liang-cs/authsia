@@ -3534,6 +3534,45 @@ struct WorkspaceRunPlannerTests {
         #expect(!Workspace.Run.isBindingFreeInvocation(plan: plan, bindingNames: names))
     }
 
+    @Test("managed env file authsia references count as bindings, not just workspace env bind entries")
+    func managedEnvFileAuthsiaReferencesCountAsBindings() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = WorkspaceConfig(
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [".env"],
+            agents: nil
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        try """
+        PLAIN=value
+        API_KEY=authsia://password/API_KEY/password?folder=Workspaces%2Fapi
+        """.write(to: root.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+
+        let unreferencing = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["python3", "-c", "print(\"ok\")"]
+        )
+        let unreferencingNames = try Workspace.Run.workspaceBindingNames(
+            plan: unreferencing,
+            parentEnvironment: ["PATH": "/usr/bin"]
+        )
+        #expect(unreferencingNames == ["API_KEY"])
+        #expect(Workspace.Run.isBindingFreeInvocation(plan: unreferencing, bindingNames: unreferencingNames))
+
+        let referencing = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["python3", "-c", "import os; connect(os.environ[\"API_KEY\"])"]
+        )
+        let referencingNames = try Workspace.Run.workspaceBindingNames(
+            plan: referencing,
+            parentEnvironment: ["PATH": "/usr/bin"]
+        )
+        #expect(!Workspace.Run.isBindingFreeInvocation(plan: referencing, bindingNames: referencingNames))
+    }
+
     @Test("workspace run dry-run names binding-free passthrough")
     func workspaceRunDryRunNamesBindingFreePassthrough() throws {
         let root = try makeBindingWorkspaceRoot()
