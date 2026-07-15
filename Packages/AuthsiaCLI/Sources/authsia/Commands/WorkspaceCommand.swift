@@ -1119,7 +1119,12 @@ struct Workspace: AsyncParsableCommand {
 
             try Exec.validateCommand(plan.commandArgs)
             let parentEnvironment = ProcessInfo.processInfo.environment
+            let bindingNames = try Self.workspaceBindingNames(
+                plan: plan,
+                parentEnvironment: parentEnvironment
+            )
             if Self.isSecretFreeProbe(plan: plan) ||
+                Self.isBindingFreeInvocation(plan: plan, bindingNames: bindingNames) ||
                 Self.isAgentShimInvocation(parentEnvironment: parentEnvironment) ||
                 !Self.shouldDelegateToExec(plan: plan, parentEnvironment: parentEnvironment) {
                 let exitCode = Exec.runChildProcess(
@@ -1333,9 +1338,107 @@ struct Workspace: AsyncParsableCommand {
                 }
                 let configCommand = tokens.dropFirst().first
                 return subcommand == "config" && (configCommand == "get" || configCommand == "list")
+            case "pip", "pip3":
+                return ["list", "show"].contains(subcommand)
+            case "kubectl", "terraform", "tofu", "go":
+                return subcommand == "version"
+            case "cargo":
+                return ["metadata", "tree"].contains(subcommand)
+            case "gcloud":
+                if subcommand == "version" {
+                    return true
+                }
+                let configCommand = tokens.dropFirst().first
+                return subcommand == "config" && (configCommand == "list" || configCommand == "get-value")
             default:
                 return false
             }
+        }
+
+        /// Workspace-managed env names a delegated run would resolve: configured
+        /// env bindings, Authsia references in managed env files, and parent-env
+        /// entries whose value is an Authsia reference (guarded terminals keep those).
+        static func workspaceBindingNames(
+            plan: WorkspaceRunPlan,
+            parentEnvironment: [String: String]
+        ) throws -> Set<String> {
+            var names = Set(plan.envBindings.keys)
+            names.formUnion(try authsiaReferencedEnvNames(from: plan.envFiles))
+            for (key, value) in parentEnvironment where SecretReference.isSecretReference(value) {
+                names.insert(key)
+            }
+            return names
+        }
+
+        /// Command shapes whose workspace-env consumption is fully visible in argv:
+        /// inline interpreter code (`python3 -c`) and docker's explicit env
+        /// forwarding (`-e`/`--env`/`--build-arg`). When no configured binding name
+        /// appears in argv, run inside the workspace boundary WITHOUT resolving
+        /// secrets, so no approval fires. Like the probe check above, this is not a
+        /// security boundary: the guarded parent env holds no secret values, so a
+        /// misclassification only means a command that did want a secret runs
+        /// without it and fails loudly; it never leaks a secret or grants access.
+        static func isBindingFreeInvocation(plan: WorkspaceRunPlan, bindingNames: Set<String>) -> Bool {
+            guard !plan.usesShell, let rawProgram = plan.commandArgs.first else { return false }
+            let program = (rawProgram as NSString).lastPathComponent
+            let arguments = Array(plan.commandArgs.dropFirst())
+            switch program {
+            case "python", "python3":
+                // Only a leading `-c` is classifiable: the inline string is the whole
+                // top-level program. Scripts, modules, and REPLs run code outside argv.
+                guard arguments.first == "-c" else { return false }
+                return referencesNoBinding(
+                    arguments: arguments,
+                    bindingNames: bindingNames,
+                    implicitEnvPrefix: "PYTHON"
+                )
+            case "docker":
+                // Containers only see explicitly forwarded env. Compose interpolates
+                // opaque files and --env-file contents are not in argv, so both delegate.
+                let subcommand = arguments.first { !$0.hasPrefix("-") }?.lowercased()
+                guard subcommand != nil, subcommand != "compose" else { return false }
+                guard !arguments.contains(where: { $0 == "--env-file" || $0.hasPrefix("--env-file=") }) else {
+                    return false
+                }
+                return referencesNoBinding(
+                    arguments: arguments,
+                    bindingNames: bindingNames,
+                    implicitEnvPrefix: "DOCKER_"
+                )
+            default:
+                return false
+            }
+        }
+
+        /// A binding inside the tool's own env namespace (PYTHONSTARTUP, DOCKER_HOST)
+        /// changes tool behavior without ever appearing in argv, so it always delegates.
+        private static func referencesNoBinding(
+            arguments: [String],
+            bindingNames: Set<String>,
+            implicitEnvPrefix: String
+        ) -> Bool {
+            !bindingNames.contains { name in
+                name.hasPrefix(implicitEnvPrefix) ||
+                    arguments.contains { containsIdentifier(name, in: $0) }
+            }
+        }
+
+        private static func containsIdentifier(_ name: String, in text: String) -> Bool {
+            guard !name.isEmpty else { return false }
+            var searchRange = text.startIndex..<text.endIndex
+            while let range = text.range(of: name, range: searchRange) {
+                let boundedBefore = range.lowerBound == text.startIndex ||
+                    !isIdentifierCharacter(text[text.index(before: range.lowerBound)])
+                let boundedAfter = range.upperBound == text.endIndex ||
+                    !isIdentifierCharacter(text[range.upperBound])
+                if boundedBefore && boundedAfter { return true }
+                searchRange = text.index(after: range.lowerBound)..<text.endIndex
+            }
+            return false
+        }
+
+        private static func isIdentifierCharacter(_ character: Character) -> Bool {
+            character == "_" || character.isLetter || character.isNumber
         }
 
         static func configuredExec(for plan: WorkspaceRunPlan) -> Exec {
@@ -1381,6 +1484,10 @@ struct Workspace: AsyncParsableCommand {
         ) -> String {
             if isSecretFreeProbe(plan: plan) {
                 return "direct passthrough (read-only probe; workspace secrets not injected)"
+            }
+            if let bindingNames = try? workspaceBindingNames(plan: plan, parentEnvironment: parentEnvironment),
+               isBindingFreeInvocation(plan: plan, bindingNames: bindingNames) {
+                return "direct passthrough (command references no workspace binding; secrets not injected)"
             }
             if isAgentShimInvocation(parentEnvironment: parentEnvironment, processAncestry: processAncestry) {
                 return "direct passthrough (guarded shim under agent; literal env kept, Authsia refs not resolved)"

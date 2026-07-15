@@ -130,7 +130,7 @@ Key properties:
 | `authsia workspace update` | Re-scan configured env files, add explicit env files, refresh agent rules, and guide missing refs | `authsia workspace update --env-file .env.local` |
 | `authsia workspace reset` | Preview managed env restore, warn when refs would remain unusable without a scrape backup, and remove repo-local workspace metadata plus Authsia-managed agent rules; `--yes` is for externally confirmed callers | `authsia workspace reset --dry-run` |
 | `authsia workspace sync` | Compare managed env-file references and workspace env bindings with the vault workspace folder, then preview missing, extra, or mismatched refs without printing secrets | `authsia workspace sync --dry-run` |
-| `authsia workspace run` | Run explicit workspace commands; secret-bearing runs use `exec`, no-secret runs and read-only infra probes pass through without JIT | `authsia workspace run -- npm start` |
+| `authsia workspace run` | Run explicit workspace commands; secret-bearing runs use `exec`, while no-secret runs, read-only infra probes, and binding-free commands pass through without JIT | `authsia workspace run -- npm start` |
 | `authsia workspace run --environment <name>` | Use one tagged environment plus default-environment items for this run without changing the saved selection | `authsia workspace run --environment Production -- npm start` |
 | `authsia workspace run --default-only` | Ignore the saved selection for one run and resolve only default-environment items | `authsia workspace run --default-only -- npm test` |
 | `authsia workspace status` | Show non-secret workspace health, env references, rule state, and recovery guidance | `authsia workspace status --format json` |
@@ -1379,10 +1379,19 @@ credential stripping, and agent JIT behavior as `authsia exec`. If the workspace
 passthrough instead of blocking on `exec`'s secret-input guard. Known read-only infrastructure
 probes that agent and IDE harnesses spawn automatically — `docker context ls`/`inspect`, `docker`
 `version`/`info`/`ps`/`images`, `npm`/`pnpm`/`yarn` `view`/`info`/`ls`/`list`/`outdated`,
-`config get`/`list`, `npm ping`, and bare `--version`/`--help`
+`config get`/`list`, `npm ping`, `pip`/`pip3` `list`/`show`, `kubectl`/`terraform`/`tofu`/`go`
+`version`, `cargo` `metadata`/`tree`, `gcloud` `version`/`config list`/`config get-value`, and bare
+`--version`/`--help`
 invocations — also pass through without injecting secrets, forwarding automation credential markers,
 or firing a JIT preflight, so launching an agent tool does not request approval until a command
-actually consumes a secret. This skip only
+actually consumes a secret. Binding-free invocations pass through the same way: inline interpreter
+code (`python3 -c '…'`) and `docker` commands, whose env consumption is explicit in the command
+line, run without secret resolution when no configured binding name (workspace env bindings,
+managed-file `authsia://` names, or parent-env `authsia://` reference names) appears in the
+arguments. Referencing a binding name, `docker` `--env-file` or `compose`, python script/module/REPL
+forms, and bindings inside the tool's own env namespace (`PYTHON*`, `DOCKER_*`) still delegate to
+`exec`. A misclassified passthrough runs without the secret and fails loudly; the guarded parent env
+holds no secret values, so nothing can leak. This skip only
 applies to explicit `--` command vectors; a `--shell` string always delegates. `--dry-run` names which execution
 path would be used before the command starts, and distinguishes plain managed env files from
 `authsia://` references that can trigger biometric or JIT approval unless an active session, grant,
