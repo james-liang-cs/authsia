@@ -45,11 +45,14 @@ jobs:
           scripts/generate-sbom.sh dist/authsia.spdx.json
           git archive --format=tar --prefix="authsia-${tag}/" HEAD \
             | gzip -n > "dist/authsia-${tag}-source.tar.gz"
-          shasum -a 256 \
-            "dist/authsia-${tag}-macos-${architecture}" \
-            dist/authsia.spdx.json \
-            "dist/authsia-${tag}-source.tar.gz" \
-            > dist/SHA256SUMS
+          (
+            cd dist
+            shasum -a 256 \
+              "authsia-${tag}-macos-${architecture}" \
+              authsia.spdx.json \
+              "authsia-${tag}-source.tar.gz" \
+              > SHA256SUMS
+          )
           scripts/verify-release.sh --self-test
 
       - name: Attest public CLI and SBOM provenance
