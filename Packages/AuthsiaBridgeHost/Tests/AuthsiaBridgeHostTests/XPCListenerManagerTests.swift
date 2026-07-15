@@ -13,11 +13,11 @@ final class XPCListenerManagerTests: XCTestCase {
         )
     }
 
-    func testIsTrustedCLIExecutablePath_AllowsCurrentDevelopmentCLIPath() {
+    func testIsTrustedCLIExecutablePath_RejectsUnconfiguredLegacyDevelopmentCLIPath() {
         let bundled = "/Applications/Authsia.app/Contents/Helpers/authsia"
         let developmentCLI = "/Users/demo/Projects/Authsia/Packages/AuthsiaCLI/.build/debug/authsia"
 
-        XCTAssertTrue(
+        XCTAssertFalse(
             XPCListenerManager.isTrustedCLIExecutablePath(
                 developmentCLI,
                 bundledCLIPath: bundled
@@ -25,14 +25,68 @@ final class XPCListenerManagerTests: XCTestCase {
         )
     }
 
-    func testIsTrustedCLIExecutablePath_AllowsPublicDependencyDevelopmentCLIPath() {
+    func testIsTrustedCLIExecutablePath_RejectsUnconfiguredPublicDependencyDevelopmentCLIPath() {
         let bundled = "/Applications/Authsia.app/Contents/Helpers/authsia"
         let developmentCLI = "/Users/demo/Projects/Authsia/Dependencies/Authsia/.build/debug/authsia"
+
+        XCTAssertFalse(
+            XPCListenerManager.isTrustedCLIExecutablePath(
+                developmentCLI,
+                bundledCLIPath: bundled
+            )
+        )
+    }
+
+    func testIsTrustedCLIExecutablePath_AllowsConfiguredPublicDependencyDevelopmentCLIPath() {
+        let bundled = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        let developmentRoot = "/Users/demo/Projects/Authsia/Dependencies/Authsia/.build"
+        let developmentCLI = "\(developmentRoot)/arm64-apple-macosx/debug/authsia"
 
         XCTAssertTrue(
             XPCListenerManager.isTrustedCLIExecutablePath(
                 developmentCLI,
-                bundledCLIPath: bundled
+                bundledCLIPath: bundled,
+                trustedDevelopmentBuildRoots: [developmentRoot]
+            )
+        )
+    }
+
+    func testIsTrustedCLIExecutablePath_RejectsCLIOutsideConfiguredDevelopmentRoot() {
+        let bundled = "/Applications/Authsia.app/Contents/Helpers/authsia"
+
+        XCTAssertFalse(
+            XPCListenerManager.isTrustedCLIExecutablePath(
+                "/Users/demo/Other/Authsia/.build/debug/authsia",
+                bundledCLIPath: bundled,
+                trustedDevelopmentBuildRoots: [
+                    "/Users/demo/Projects/Authsia/Dependencies/Authsia/.build"
+                ]
+            )
+        )
+    }
+
+    func testIsTrustedCLIExecutablePath_RejectsLookalikeConfiguredDevelopmentRoot() {
+        let bundled = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        let developmentRoot = "/Users/demo/Projects/Authsia/Dependencies/Authsia/.build"
+
+        XCTAssertFalse(
+            XPCListenerManager.isTrustedCLIExecutablePath(
+                "\(developmentRoot)-malicious/debug/authsia",
+                bundledCLIPath: bundled,
+                trustedDevelopmentBuildRoots: [developmentRoot]
+            )
+        )
+    }
+
+    func testIsTrustedCLIExecutablePath_RejectsDifferentExecutableNameWithinConfiguredDevelopmentRoot() {
+        let bundled = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        let developmentRoot = "/Users/demo/Projects/Authsia/Dependencies/Authsia/.build"
+
+        XCTAssertFalse(
+            XPCListenerManager.isTrustedCLIExecutablePath(
+                "\(developmentRoot)/debug/authsia-helper",
+                bundledCLIPath: bundled,
+                trustedDevelopmentBuildRoots: [developmentRoot]
             )
         )
     }
