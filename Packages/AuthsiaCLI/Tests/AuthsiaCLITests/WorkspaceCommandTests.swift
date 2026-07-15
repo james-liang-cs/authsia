@@ -969,8 +969,8 @@ struct WorkspaceInitPlannerTests {
         #expect(selected.contains(.claudeCode))
     }
 
-    @Test("workspace setup apply creates the workspace vault folder without selected secrets")
-    func workspaceSetupApplyCreatesWorkspaceVaultFolderWithoutSelectedSecrets() async throws {
+    @Test("workspace setup apply does not materialize a vault folder without selected secrets")
+    func workspaceSetupApplyDoesNotCreateVaultFolderWithoutSelectedSecrets() async throws {
         let root = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let envDirectory = root.appendingPathComponent("web", isDirectory: true)
@@ -995,7 +995,7 @@ struct WorkspaceInitPlannerTests {
             vaultClient: vaultClient
         )
 
-        #expect(vaultClient.ensuredFolders == [plan.config.workspace.authsiaFolder])
+        #expect(vaultClient.ensuredFolders.isEmpty)
         let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
         #expect(config.workspace.authsiaFolder == plan.config.workspace.authsiaFolder)
     }
@@ -1036,7 +1036,7 @@ struct WorkspaceInitPlannerTests {
         #expect(vaultClient.addedAPIKeys.isEmpty)
         #expect(vaultClient.addedCertificates.isEmpty)
         #expect(vaultClient.addedNotes.isEmpty)
-        #expect(vaultClient.ensuredFolders == [plan.config.workspace.authsiaFolder])
+        #expect(vaultClient.ensuredFolders.isEmpty)
     }
 
     @Test("workspace setup apply stores selected passwords in the workspace folder before rewriting env files")
@@ -1065,7 +1065,7 @@ struct WorkspaceInitPlannerTests {
             vaultClient: vaultClient
         )
 
-        #expect(vaultClient.ensuredFolders == [plan.config.workspace.authsiaFolder])
+        #expect(vaultClient.ensuredFolders.isEmpty)
         #expect(vaultClient.addedPasswords == ["DB_PASSWORD"])
         #expect(vaultClient.addedPasswordFolders == [plan.config.workspace.authsiaFolder])
         #expect(try read(".env", in: root).contains("DB_PASSWORD=authsia://password/DB_PASSWORD/password?folder="))
@@ -1146,8 +1146,8 @@ struct WorkspaceInitPlannerTests {
         ))
     }
 
-    @Test("workspace setup creates the vault folder before rewriting env files")
-    func workspaceSetupCreatesVaultFolderBeforeRewritingEnvFiles() async throws {
+    @Test("workspace setup does not depend on legacy vault folder precreation")
+    func workspaceSetupDoesNotDependOnLegacyVaultFolderPrecreation() async throws {
         let root = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let originalEnv = "DB_PASSWORD=plain_password_abcdefghijklmnopqrstuvwxyz123456\n"
@@ -1168,21 +1168,18 @@ struct WorkspaceInitPlannerTests {
         )
         let secret = try #require(plan.envFiles.first?.secrets.first)
 
-        do {
-            try await Workspace.Init.apply(
-                plan: plan,
-                selectedEnvFiles: plan.envFiles,
-                selectedSecrets: [WorkspaceSecretSelection(secret: secret.secret, action: .create)],
-                vaultClient: vaultClient
-            )
-            Issue.record("Expected workspace setup to fail when vault folder creation fails")
-        } catch {
-            #expect(String(describing: error).contains("denied"))
-        }
+        try await Workspace.Init.apply(
+            plan: plan,
+            selectedEnvFiles: plan.envFiles,
+            selectedSecrets: [WorkspaceSecretSelection(secret: secret.secret, action: .create)],
+            backupService: BackupService(bridgeClient: WorkspaceResetBackupVaultClient()),
+            vaultClient: vaultClient
+        )
 
-        #expect(vaultClient.ensuredFolders == [plan.config.workspace.authsiaFolder])
-        #expect(try read(".env", in: root) == originalEnv)
-        #expect(!FileManager.default.fileExists(
+        #expect(vaultClient.ensuredFolders.isEmpty)
+        #expect(vaultClient.addedPasswords == ["DB_PASSWORD"])
+        #expect(try read(".env", in: root) != originalEnv)
+        #expect(FileManager.default.fileExists(
             atPath: root.appendingPathComponent(WorkspaceConfigStore.relativeConfigPath).path
         ))
     }
