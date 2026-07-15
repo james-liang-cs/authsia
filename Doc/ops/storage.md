@@ -53,9 +53,7 @@ Application Support unless noted otherwise.
 
 | Path | Owner | Purpose |
 |---|---|---|
-| `Authenticator/Authenticator/Resources/Authsia.Bridge.plist` | Repository source | Source plist for the bridge LaunchAgent. |
 | `/Applications/Authsia.app/Contents/Library/LaunchAgents/Authsia.Bridge.plist` | App bundle | Signed bundled bridge plist registered by `SMAppService.agent(plistName:)`. It declares label and Mach service `Authsia.Bridge`, sets `AUTHSIA_ROLE=bridge`, and runs `authsia-headless`. |
-| `~/Library/LaunchAgents/Authsia.Bridge.plist` | Local install scripts | Development/install-script copy of the bridge plist. Clean-install scripts remove this path. The signed app runtime should register the bundled plist above. |
 | `~/Library/LaunchAgents/Authsia.SSHAgent.plist` | App runtime | Per-user generated SSH-agent LaunchAgent. It is written only when the SSH agent is enabled, because its socket path must include the current user's home directory. It sets `AUTHSIA_ROLE=ssh-agent`, runs `authsia-headless`, and owns `~/.authsia/agent.sock` through launchd socket activation. There is no checked-in source plist for this generated file. |
 
 ### Application Support, Preferences, and Logs
@@ -66,10 +64,7 @@ Application Support unless noted otherwise.
 | `~/Library/Application Support/Authsia/bridge_audit.log` | Bridge / SSH agent | HMAC-chained audit log for sensitive bridge requests and SSH signing. |
 | `~/Library/Application Support/Authsia/agent-jit-grants.json` | App bridge | Agent JIT grants approved in Access Center. |
 | `~/Library/Application Support/Authsia/AgentRuntimeContext/events.jsonl` | Optional agent hook scripts / CLI | Short-lived agent attribution events read by the CLI when building bridge request context. |
-| `~/Library/Application Support/Authsia/native-host/AuthsiaNativeHost` | Optional Chrome native-host installer | Native messaging host binary installed by `Tools/AuthsiaNativeHost/scripts/install-chrome-native-host.sh`. |
-| `~/Library/Application Support/Authsia/InstallBackups/` | Local install script | Backups created by `scripts/build_and_install.sh` during local development installs. |
 | `~/Library/Preferences/app.authsia.plist` | UserDefaults | App preferences domain for CLI access, CLI and SSH session TTLs, SSH-agent opt-in state, iCloud Keychain sync preference, interface settings, and registration identities. macOS may cache this through `cfprefsd`. |
-| `~/Documents/authsia_reset_trigger` | Cleanup scripts / app launch | Reset trigger used by clean-install scripts; the app removes it after unregistering stale background activity. |
 
 ### `~/.authsia` Runtime State
 
@@ -89,7 +84,6 @@ Application Support unless noted otherwise.
 | Path | Owner | Purpose |
 |---|---|---|
 | `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.authsia.nativehost.json` | Optional native-host installer | Chrome native messaging manifest for `com.authsia.nativehost`. |
-| `/usr/local/bin/AuthsiaNativeHost` | Legacy native-host installer | Older native-host install location used by `Tools/AuthsiaNativeHost/install_native_host.sh`. |
 | `/tmp/authsia-native.log` | Native host debug mode | Debug-only native-host log written only when `AUTHSIA_DEBUG` is set. |
 | `${TMPDIR}/authsia-askpass-<UUID>.sh` | CLI `authsia load ssh --system-agent` flow | Transient `SSH_ASKPASS` helper script. It contains no passphrase and is removed after `ssh-add` exits. |
 
@@ -404,10 +398,6 @@ HMAC chain using the Keychain-stored HMAC key.
   folder delete, and Delete All Data.
 - Do not reset data with `security delete-generic-password` alone; it can miss
   synchronizable iCloud copies.
-- After storage namespace, access group, entitlement, or bundle ID changes,
-  smoke-test launch, bridge status, the `AuthsiaHeadless.app` signature and
-  LaunchAgent path, vault list, password load with stdout discarded, OTP list,
-  and SSH signing.
 - Do not add vault Keychain entitlements to the standalone CLI helper or a bare
   helper executable. Keychain-backed CLI and SSH access must run through the
   signed app or nested headless app bundle.

@@ -11,7 +11,6 @@
   - [User Experience](#user-experience)
 - [Setup](#setup)
   - [Prerequisites](#prerequisites)
-  - [Installation Steps](#installation-steps)
   - [Preparing Credentials](#preparing-credentials)
 - [Security](#security)
   - [Trust Boundaries](#trust-boundaries)
@@ -23,9 +22,6 @@
 - [Troubleshooting](#troubleshooting)
   - [Common Issues](#common-issues)
   - [Debug Steps](#debug-steps)
-- [Future Enhancements](#future-enhancements)
-  - [Planned](#planned)
-  - [Under Consideration](#under-consideration)
 - [References](#references)
 
 **Status:** ✅ **Production Ready**
@@ -99,26 +95,9 @@ Chrome Extension ←→ Native Host ←→ Authsia CLI ←→ Keychain/App
 - Google Chrome
 - Authsia app installed
 
-### Installation Steps
-
-1. **Build and Install Native Host**
-   ```bash
-   cd Tools/AuthsiaNativeHost
-   ./install_native_host.sh
-   ```
-
-2. **Load Chrome Extension**
-   - Open `chrome://extensions`
-   - Enable Developer mode
-   - Click "Load unpacked"
-   - Select `Tools/AuthsiaChromeExtension`
-
-3. **Configure Extension ID**
-   ```bash
-   ./install_native_host.sh --extension-id YOUR_EXTENSION_ID
-   ```
-
-4. **Restart Chrome**
+Official app packaging owns native-host installation and browser registration.
+This public repository provides the extension/native-host source and tests, not
+the private app installation workflow.
 
 ### Preparing Credentials
 
@@ -181,7 +160,6 @@ Tools/
 │   │   ├── CredentialResolver.swift
 │   │   └── ...
 │   └── Tests/
-└── authsia_cli_install/       # CLI installer
 ```
 
 ### Running Tests
@@ -239,29 +217,12 @@ swift test
 ### Debug Steps
 
 1. Check Chrome DevTools Console for errors
-2. Verify native host binary exists: `ls -la /usr/local/bin/AuthsiaNativeHost`
-3. Check manifest: `cat ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.authsia.nativehost.json`
-4. Run CLI manually: `authsia list`
-
-## Future Enhancements
-
-### Planned
-
-- [ ] Firefox extension support
-- [ ] Safari extension support
-- [ ] TOTP code autofill (2FA fields)
-- [ ] Automatic form submission option
-- [ ] Password generation in browser
-
-### Under Consideration
-
-- iCloud Keychain integration hints
-- Biometric approval for sensitive sites
-- Site-specific autofill preferences
+2. Check the installed native-messaging manifest and host path.
+3. Run CLI manually: `authsia list`
 
 ## References
 
-- [Testing Guide](./TESTING_GUIDE.md) - Detailed setup and verification
+- [Testing Guide](../../Tools/AuthsiaChromeExtension/TESTING_GUIDE.md) - Detailed setup and verification
 - [SECURITY.md](../../SECURITY.md) - Security properties and guidelines
 - [Chrome Native Messaging Docs](https://developer.chrome.com/docs/apps/nativeMessaging/)
 
