@@ -197,6 +197,10 @@ printf '%s\n' "$SIGNING_INFO" | grep -Fq "Authority=$EXPECTED_AUTHORITY" || {
     echo "error: DMG signing authority does not match Authsia's published identity" >&2
     exit 1
 }
+printf '%s\n' "$SIGNING_INFO" | grep -Fq "TeamIdentifier=$EXPECTED_TEAM_ID" || {
+    echo "error: DMG Team ID does not match Authsia's published identity" >&2
+    exit 1
+}
 xcrun stapler validate "$DMG_PATH"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG_PATH"
 
