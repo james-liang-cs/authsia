@@ -87,6 +87,7 @@ struct AgentRuleRemovalResult: Equatable {
 enum AgentRuleInstaller {
     static let managedStartMarker = "<!-- >>> Authsia agent rules >>> -->"
     static let managedEndMarker = "<!-- <<< Authsia agent rules <<< -->"
+    private static let legacyClaudeMachLookupValues = ["Authsia.Bridge", "Authsia.SSHAgent"]
     private static let agentShimWorkspaceGuidanceLine =
         "- Implicit guarded-terminal shims under agents do not resolve `authsia://` refs; use explicit " +
         "`authsia workspace run -- <command>` or `authsia exec` for any command that needs workspace secrets."
@@ -416,13 +417,28 @@ enum AgentRuleInstaller {
         }
         guard var sandbox = existingObject(settings["sandbox"]) else { return false }
         guard var network = existingObject(sandbox["network"]) else { return false }
-        for key in ["allowMachLookup", "allowUnixSockets"] {
-            guard let generatedValues = generatedNetwork[key] as? [String] else { continue }
-            guard let existingValues = existingStringArray(network[key]) else { return false }
-            network[key] = appendMissingValues(generatedValues, to: existingValues)
+        if let generatedValues = generatedNetwork["allowUnixSockets"] as? [String] {
+            guard let existingValues = existingStringArray(network["allowUnixSockets"]) else { return false }
+            network["allowUnixSockets"] = appendMissingValues(generatedValues, to: existingValues)
         }
+        guard removeLegacyClaudeMachLookups(from: &network) else { return false }
         sandbox["network"] = network
         settings["sandbox"] = sandbox
+        return true
+    }
+
+    private static func removeLegacyClaudeMachLookups(from network: inout [String: Any]) -> Bool {
+        guard let existingValue = network["allowMachLookup"], !(existingValue is NSNull) else {
+            return true
+        }
+        guard let existingValues = existingValue as? [String] else { return false }
+        let filteredValues = existingValues.filter { !legacyClaudeMachLookupValues.contains($0) }
+        guard filteredValues.count != existingValues.count else { return true }
+        if filteredValues.isEmpty {
+            network.removeValue(forKey: "allowMachLookup")
+        } else {
+            network["allowMachLookup"] = filteredValues
+        }
         return true
     }
 
@@ -587,14 +603,17 @@ enum AgentRuleInstaller {
             result.removed.append(relativePath)
             return
         }
-        if let existingObject = jsonObject(from: existing),
-           let generatedObject = jsonObject(from: claudeSettingsJSON),
-           jsonObjectsAreEqual(existingObject, generatedObject) {
-            if !dryRun {
-                try fileManager.removeItem(at: url)
+        if let generatedObject = jsonObject(from: claudeSettingsJSON) {
+            let existingObject = jsonObject(from: existing)
+            let migratedObject = mergedClaudeSettingsJSON(existing).flatMap(jsonObject(from:))
+            if existingObject.map({ jsonObjectsAreEqual($0, generatedObject) }) == true ||
+                migratedObject.map({ jsonObjectsAreEqual($0, generatedObject) }) == true {
+                if !dryRun {
+                    try fileManager.removeItem(at: url)
+                }
+                result.removed.append(relativePath)
+                return
             }
-            result.removed.append(relativePath)
-            return
         }
 
         guard let updated = removingClaudeSettingsJSON(existing) else {
@@ -705,19 +724,45 @@ enum AgentRuleInstaller {
         guard let networkValue = sandbox["network"], !(networkValue is NSNull) else { return true }
         guard var network = networkValue as? [String: Any] else { return false }
 
-        for key in ["allowMachLookup", "allowUnixSockets"] {
-            guard let generatedValue = generatedNetwork[key], !(generatedValue is NSNull) else { continue }
-            guard let generatedValues = generatedValue as? [String] else { return false }
-            guard let existingValue = network[key], !(existingValue is NSNull) else { continue }
-            guard let existingValues = existingValue as? [String] else { return false }
-            let filteredValues = existingValues.filter { !generatedValues.contains($0) }
-            if filteredValues.count != existingValues.count {
-                network[key] = filteredValues
-                didRemove = true
-            }
+        guard let generatedUnixSocketValue = generatedNetwork["allowUnixSockets"],
+              !(generatedUnixSocketValue is NSNull),
+              let generatedUnixSocketValues = generatedUnixSocketValue as? [String] else {
+            return false
+        }
+        guard removeClaudeSandboxNetworkValues(
+            generatedUnixSocketValues,
+            forKey: "allowUnixSockets",
+            from: &network,
+            didRemove: &didRemove
+        ), removeClaudeSandboxNetworkValues(
+            legacyClaudeMachLookupValues,
+            forKey: "allowMachLookup",
+            from: &network,
+            didRemove: &didRemove
+        ) else {
+            return false
         }
         sandbox["network"] = network
         settings["sandbox"] = sandbox
+        return true
+    }
+
+    private static func removeClaudeSandboxNetworkValues(
+        _ generatedValues: [String],
+        forKey key: String,
+        from network: inout [String: Any],
+        didRemove: inout Bool
+    ) -> Bool {
+        guard let existingValue = network[key], !(existingValue is NSNull) else { return true }
+        guard let existingValues = existingValue as? [String] else { return false }
+        let filteredValues = existingValues.filter { !generatedValues.contains($0) }
+        guard filteredValues.count != existingValues.count else { return true }
+        if filteredValues.isEmpty {
+            network.removeValue(forKey: key)
+        } else {
+            network[key] = filteredValues
+        }
+        didRemove = true
         return true
     }
 
@@ -1141,10 +1186,6 @@ enum AgentRuleInstaller {
       },
       "sandbox": {
         "network": {
-          "allowMachLookup": [
-            "Authsia.Bridge",
-            "Authsia.SSHAgent"
-          ],
           "allowUnixSockets": [
             "~/.authsia/agent.sock"
           ]
@@ -1307,10 +1348,6 @@ enum AgentRuleInstaller {
       },
       "sandbox": {
         "network": {
-          "allowMachLookup": [
-            "Authsia.Bridge",
-            "Authsia.SSHAgent"
-          ],
           "allowUnixSockets": [
             "~/.authsia/agent.sock"
           ]

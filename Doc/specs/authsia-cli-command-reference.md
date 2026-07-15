@@ -297,7 +297,7 @@ grant secret access.
 | Step | Activity | Test Payload | Command | Notes |
 |------|---------|--------------|---------|-------|
 | 1 | Claude Code rules | N/A | `authsia agent init --agent claude-code` | Creates `.authsia/agent-rules.md`, `CLAUDE.md`, and `.claude/settings.local.json` if absent |
-| 2 | Compatible existing Claude settings | parseable `.claude/settings.local.json` with custom content and compatible or absent/`null` containers | `authsia agent init --agent claude-code` | Structurally adds every exact Authsia hook and bridge/socket network value while preserving custom content; absent and `null` containers are safe empty containers |
+| 2 | Compatible existing Claude settings | parseable `.claude/settings.local.json` with custom content and compatible or absent/`null` containers | `authsia agent init --agent claude-code` | Structurally adds every exact Authsia hook and the SSH-agent socket value, removes legacy Authsia Mach lookup values, and preserves custom content; absent and `null` containers are safe empty containers |
 | 3 | Repeat Claude setup | settings produced or merged by step 1 or 2 | `authsia agent init --agent claude-code` | Idempotent: reports the settings unchanged and does not duplicate hooks or network values |
 | 4 | Incompatible Claude settings | parseable JSON with an incompatible non-null hooks, sandbox, network, or value shape | `authsia agent init --agent claude-code` | Leaves the file byte-identical and prints manual merge guidance |
 | 5 | Codex rules | N/A | `authsia agent init --agent codex` | Creates or updates `.authsia/agent-rules.md` and `AGENTS.md`; Codex rule prompts before outside-sandbox `authsia` commands |
@@ -309,8 +309,8 @@ grant secret access.
 Claude settings removal is structural whether invoked by agent removal,
 uninstall, or workspace reset. A structurally generated-only settings file is
 deleted. A merged file keeps custom content while removing every exact Authsia
-hook and exact `Authsia.Bridge`, `Authsia.SSHAgent`, and
-`~/.authsia/agent.sock` network value across duplicate entries and matchers. If
+hook, exact `~/.authsia/agent.sock` network value, and legacy `Authsia.Bridge`
+and `Authsia.SSHAgent` Mach lookup values across duplicate entries and matchers. If
 the shape cannot be removed safely, Authsia leaves the file unchanged and
 prints manual cleanup guidance. A custom-only file is a byte-identical no-op.
 
