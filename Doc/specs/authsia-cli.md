@@ -1441,6 +1441,9 @@ are saved in the workspace's `guard.tools` settings for future guarded terminals
 are printed, all shimmed tool names are unaliased so a user alias cannot bypass the PATH shim.
 Generated shims preserve the caller's current working directory so nested package and build tools
 still discover package-local config while Authsia resolves workspace metadata from the project tree.
+If that working directory is outside every Authsia workspace, a shimmed invocation passes directly
+to the real tool after Authsia removes automation credentials and unresolved `authsia://` parent-env
+references. Explicit `authsia workspace run` calls still require `.authsia/workspace.json`.
 Shell-expanded commands such as `curl $API_KEY` and
 `curl ${API_KEY}` are not made safe by shims because expansion happens before the shim receives
 arguments; use `authsia workspace run --shell -- 'curl "$API_KEY"'` for those cases. Third-party

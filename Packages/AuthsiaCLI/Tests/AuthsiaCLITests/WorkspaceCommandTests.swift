@@ -2748,6 +2748,82 @@ struct WorkspaceRunPlannerTests {
         AgenticProcessReference(processName: "codex", bundleIdentifier: nil),
     ]
 
+    @Test("guarded shim passes through outside any Authsia workspace")
+    func guardedShimPassesThroughOutsideWorkspace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-outside-workspace-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var environment = ProcessInfo.processInfo.environment
+        environment[WorkspaceGuardedTerminal.shimInvocationEnvironmentName] = "1"
+        environment["AUTHSIA_WORKSPACE_GUARD"] = "1"
+        environment["AUTHSIA_WORKSPACE_ROOT"] = directory.appendingPathComponent("guard-origin").path
+        environment["AUTHSIA_FIXTURE_REF"] = "authsia://password/Fixture/password"
+
+        let result = try runBuiltAuthsia(
+            arguments: [
+                "workspace", "run", "--", "/usr/bin/python3", "-c",
+                #"import os; assert "AUTHSIA_FIXTURE_REF" not in os.environ; print("YAML OK")"#,
+            ],
+            currentDirectory: directory,
+            environment: environment
+        )
+
+        #expect(result.status == 0)
+        #expect(result.stdout == "YAML OK\n")
+        #expect(!result.stderr.contains("No Authsia workspace"))
+    }
+
+    @Test("explicit workspace run remains fail closed outside a workspace")
+    func explicitWorkspaceRunOutsideWorkspaceStillFails() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-explicit-outside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: WorkspaceGuardedTerminal.shimInvocationEnvironmentName)
+        environment.removeValue(forKey: "AUTHSIA_WORKSPACE_GUARD")
+        environment.removeValue(forKey: "AUTHSIA_WORKSPACE_ROOT")
+
+        let result = try runBuiltAuthsia(
+            arguments: ["workspace", "run", "--", "/usr/bin/python3", "--version"],
+            currentDirectory: directory,
+            environment: environment
+        )
+
+        #expect(result.status != 0)
+        #expect(result.stderr.contains("No Authsia workspace"))
+    }
+
+    private func runBuiltAuthsia(
+        arguments: [String],
+        currentDirectory: URL,
+        environment: [String: String]
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
+        var packageRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 {
+            packageRoot.deleteLastPathComponent()
+        }
+        let process = Process()
+        process.executableURL = packageRoot.appendingPathComponent(".build/debug/authsia")
+        process.arguments = arguments
+        process.currentDirectoryURL = currentDirectory
+        process.environment = environment
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+
+        try process.run()
+        process.waitUntilExit()
+
+        return (
+            process.terminationStatus,
+            String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+            String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        )
+    }
+
     @Test("managed env files become absolute exec env files")
     func managedEnvFilesBecomeAbsoluteExecEnvFiles() throws {
         let root = try makeWorkspaceRoot()

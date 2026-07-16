@@ -137,6 +137,13 @@ public enum SecretTextImportParser {
     }
 
     private static func parseEnv(_ text: String) -> [SecretTextImportCandidate]? {
+        // A single bare padded value such as "TOKEN==" is ambiguous with an
+        // assignment whose value is "=". Prefer preserving the clipboard value.
+        if !text.contains("\n"), !text.contains("\r"), text.hasSuffix("=="),
+           isValidEnvKey(String(text.dropLast(2))) {
+            return nil
+        }
+
         var candidates: [SecretTextImportCandidate] = []
 
         for line in text.components(separatedBy: .newlines) {
