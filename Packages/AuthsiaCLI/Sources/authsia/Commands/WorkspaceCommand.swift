@@ -1078,8 +1078,26 @@ struct Workspace: AsyncParsableCommand {
             if environment != nil && defaultOnly {
                 throw ValidationError("Use either --environment or --default-only, not both.")
             }
+            let startingURL = URL(
+                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                isDirectory: true
+            )
+            let parentEnvironment = ProcessInfo.processInfo.environment
+            if shellCommandParts.isEmpty,
+               parentEnvironment[WorkspaceGuardedTerminal.shimInvocationEnvironmentName] == "1",
+               WorkspaceRootResolver.findWorkspaceRoot(startingAt: startingURL) == nil {
+                try Exec.validateCommand(commandArgs)
+                let exitCode = Exec.runChildProcess(
+                    command: Exec.childCommandArguments(command: commandArgs, shell: false),
+                    environment: Self.guardedPassthroughEnvironmentOutsideWorkspace(
+                        parentEnvironment: parentEnvironment
+                    ),
+                    masker: OutputMasker(secrets: [])
+                )
+                Darwin.exit(exitCode)
+            }
             let builtPlan = try WorkspaceRunPlan.build(
-                startingAt: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true),
+                startingAt: startingURL,
                 extraEnvFiles: envFile,
                 commandArgs: commandArgs,
                 shellCommandParts: shellCommandParts
@@ -1116,7 +1134,6 @@ struct Workspace: AsyncParsableCommand {
             }
 
             try Exec.validateCommand(plan.commandArgs)
-            let parentEnvironment = ProcessInfo.processInfo.environment
             let bindingNames = try Self.workspaceBindingNames(
                 plan: plan,
                 parentEnvironment: parentEnvironment
@@ -1236,6 +1253,13 @@ struct Workspace: AsyncParsableCommand {
             Exec.removeAutomationCredentials(from: &environment)
             environment.removeValue(forKey: WorkspaceGuardedTerminal.shimInvocationEnvironmentName)
             return environment
+        }
+
+        static func guardedPassthroughEnvironmentOutsideWorkspace(
+            parentEnvironment: [String: String]
+        ) -> [String: String] {
+            directPassthroughEnvironment(parentEnvironment: parentEnvironment)
+                .filter { !SecretReference.isSecretReference($0.value) }
         }
 
         static func directPassthroughEnvironment(

@@ -22,6 +22,15 @@ final class SecretTextImportParserTests: XCTestCase {
         XCTAssertEqual(result.candidates[0].secret, "tok_live_123456789")
     }
 
+    func testEnvAssignmentPreservesDoubleEqualsPadding() throws {
+        let result = try SecretTextImportParser.parse(
+            "SERVICE_TOKEN=AUTHSIA_FIXTURE_PADDED=="
+        )
+
+        XCTAssertEqual(result.candidates.map(\.name), ["SERVICE_TOKEN"])
+        XCTAssertEqual(result.candidates.map(\.secret), ["AUTHSIA_FIXTURE_PADDED=="])
+    }
+
     func testParsesBareAssignmentAsPasswordCandidate() throws {
         let result = try SecretTextImportParser.parse("DATABASE_URL=postgres://user:pass@example/db")
 
@@ -93,6 +102,17 @@ final class SecretTextImportParserTests: XCTestCase {
         XCTAssertTrue(result.candidates[0].requiresName)
         // "Show prefix only": reveal up to 8 leading chars, mask the rest.
         XCTAssertEqual(result.candidates[0].redactedSecret, "plain-se••••")
+    }
+
+    func testBareSecretWithDoubleEqualsPaddingRemainsWhole() throws {
+        let secret = "AUTHSIA_FIXTURE_PADDED=="
+
+        let result = try SecretTextImportParser.parse(secret)
+
+        XCTAssertEqual(result.candidates.count, 1)
+        XCTAssertEqual(result.candidates[0].name, "")
+        XCTAssertEqual(result.candidates[0].secret, secret)
+        XCTAssertTrue(result.candidates[0].requiresName)
     }
 
     func testRejectsEmptyAndOversizedInput() {
