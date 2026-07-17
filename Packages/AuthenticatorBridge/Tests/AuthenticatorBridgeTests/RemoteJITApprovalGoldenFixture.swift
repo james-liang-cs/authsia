@@ -1,5 +1,7 @@
+import CryptoKit
 import Foundation
 import XCTest
+@testable import AuthenticatorBridge
 
 struct RemoteJITApprovalGoldenFixture: Decodable {
     struct Input: Decodable {
@@ -66,6 +68,105 @@ struct RemoteJITApprovalGoldenFixture: Decodable {
         )
         return try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
     }
+
+    func makeDescriptor() throws -> RemoteJITApprovalDescriptor {
+        let requestPublicKey = try Data(hexadecimal: expected.requestPublicKeyX963Hex)
+        let decisionPublicKey = try Data(hexadecimal: expected.decisionPublicKeyX963Hex)
+        return try RemoteJITApprovalDescriptor(
+            approvalID: input.approvalID,
+            approvalNonce: Data(hexadecimal: input.approvalNonceHex),
+            bridgeRequestID: input.bridgeRequestID,
+            pairingGenerationID: input.pairingGenerationID,
+            macDeviceID: input.macDeviceID,
+            iphoneDeviceID: input.iphoneDeviceID,
+            macSigningKeyFingerprint: Data(SHA256.hash(data: requestPublicKey)),
+            iphoneSigningKeyFingerprint: Data(SHA256.hash(data: decisionPublicKey)),
+            requestIssuedAtMilliseconds: input.requestIssuedAtMilliseconds,
+            requestExpiresAtMilliseconds: input.requestExpiresAtMilliseconds,
+            callerFingerprint: AgentJITCallerFingerprint(
+                processName: input.caller.processName,
+                bundleIdentifier: input.caller.bundleIdentifier,
+                signingTeamId: input.caller.signingTeamIdentifier,
+                signingIdentity: input.caller.signingIdentity,
+                parentProcessName: input.caller.parentProcessName,
+                parentBundleIdentifier: input.caller.parentBundleIdentifier,
+                hostProcessName: input.caller.hostProcessName,
+                hostBundleIdentifier: input.caller.hostBundleIdentifier,
+                sessionScope: input.caller.sessionScope,
+                workingDirectory: input.caller.workingDirectory
+            ),
+            capabilities: try input.capabilities.map(Self.capability),
+            folderScope: .folder(input.folderScope),
+            environmentScope: input.environmentScope.map(EnvironmentAccessScope.named),
+            requestedItems: try input.items.map { item in
+                try RemoteJITApprovalItemReference(
+                    id: item.id,
+                    kind: Self.itemKind(item.kind),
+                    folderPath: item.folderPath
+                )
+            },
+            grantIssuedAtMilliseconds: input.grantIssuedAtMilliseconds,
+            grantExpiresAtMilliseconds: input.grantExpiresAtMilliseconds
+        )
+    }
+
+    func makeApprovePayload() throws -> RemoteJITApprovalDecisionPayload {
+        try makeDecisionPayload(value: .approve)
+    }
+
+    func makeDenyPayload() throws -> RemoteJITApprovalDecisionPayload {
+        try makeDecisionPayload(value: .deny)
+    }
+
+    func makePairingBinding() throws -> RemoteJITApprovalPairingBinding {
+        let requestPublicKey = try Data(hexadecimal: expected.requestPublicKeyX963Hex)
+        let decisionPublicKey = try Data(hexadecimal: expected.decisionPublicKeyX963Hex)
+        return try RemoteJITApprovalPairingBinding(
+            pairingGenerationID: input.pairingGenerationID,
+            macDeviceID: input.macDeviceID,
+            iphoneDeviceID: input.iphoneDeviceID,
+            macSigningKeyFingerprint: Data(SHA256.hash(data: requestPublicKey)),
+            iphoneSigningKeyFingerprint: Data(SHA256.hash(data: decisionPublicKey))
+        )
+    }
+
+    private func makeDecisionPayload(
+        value: RemoteJITApprovalDecisionValue
+    ) throws -> RemoteJITApprovalDecisionPayload {
+        try RemoteJITApprovalDecisionPayload(
+            approvalID: input.approvalID,
+            approvalNonce: Data(hexadecimal: input.approvalNonceHex),
+            requestDigest: Data(hexadecimal: expected.requestDigestHex),
+            pairingGenerationID: input.pairingGenerationID,
+            macDeviceID: input.macDeviceID,
+            iphoneDeviceID: input.iphoneDeviceID,
+            value: value,
+            requestExpiresAtMilliseconds: input.requestExpiresAtMilliseconds
+        )
+    }
+
+    private static func capability(_ value: String) throws -> AgentJITCapability {
+        guard let capability = AgentJITCapability(rawValue: value) else {
+            throw FixtureModelError.invalidCapability(value)
+        }
+        return capability
+    }
+
+    private static func itemKind(_ value: String) throws -> RemoteJITApprovalItemKind {
+        switch value {
+        case "password": .password
+        case "apiKey": .apiKey
+        case "certificate": .certificate
+        case "note": .note
+        case "ssh": .ssh
+        default: throw FixtureModelError.invalidItemKind(value)
+        }
+    }
+}
+
+private enum FixtureModelError: Error {
+    case invalidCapability(String)
+    case invalidItemKind(String)
 }
 
 enum HexadecimalDecodingError: Error {
