@@ -48,7 +48,8 @@ let package = Package(
         .testTarget(
             name: "AuthenticatorBridgeTests",
             dependencies: ["AuthenticatorBridge"],
-            path: "Packages/AuthenticatorBridge/Tests/AuthenticatorBridgeTests"
+            path: "Packages/AuthenticatorBridge/Tests/AuthenticatorBridgeTests",
+            resources: [.process("Fixtures")]
         ),
         .target(
             name: "AuthsiaBridgeHost",
