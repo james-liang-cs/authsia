@@ -5,7 +5,88 @@ import Security
 import AuthenticatorData
 import AuthenticatorCore
 
+struct AgentJITFixedApprovalTiming: Equatable {
+    let issuedAtMilliseconds: Int64
+    let requestExpiresAtMilliseconds: Int64
+    let grantExpiresAtMilliseconds: Int64
+
+    var issuedAt: Date {
+        Date(timeIntervalSince1970: Double(issuedAtMilliseconds) / 1_000)
+    }
+
+    var grantExpiresAt: Date {
+        Date(timeIntervalSince1970: Double(grantExpiresAtMilliseconds) / 1_000)
+    }
+}
+
+private struct AgentJITLocalItemAuthority: Equatable {
+    let type: String
+    let id: String
+    let folderPath: String?
+}
+
+private struct AgentJITLocalResolutionAuthority: Equatable {
+    let scope: AgentJITFolderScope
+    let requestedItems: [AgentJITLocalItemAuthority]
+}
+
+private struct AgentJITLocalAuthoritySnapshot: Equatable {
+    let bridgeRequestID: UUID
+    let requestIssuedAtMilliseconds: Int64
+    let callerFingerprint: AgentJITCallerFingerprint
+    let capabilities: [AgentJITCapability]
+    let environmentScope: EnvironmentAccessScope?
+    let grantExpiresAtMilliseconds: Int64
+    let pendingResolutions: [AgentJITLocalResolutionAuthority]
+}
+
+private struct AgentJITApprovedResolution {
+    let resolution: AgentJITScopeResolution
+    let source: RemoteJITApprovalSource
+    let attribution: String
+    let remoteRequest: RemoteJITApprovalRequest?
+}
+
 extension XPCRequestHandler {
+    static func checkedAgentJITMilliseconds(_ date: Date) -> Int64? {
+        let unixSeconds = date.timeIntervalSince1970
+        guard unixSeconds.isFinite, unixSeconds >= 0 else { return nil }
+        let millisecondsValue = unixSeconds * 1_000
+        guard millisecondsValue.isFinite else { return nil }
+        let truncatedMilliseconds = millisecondsValue.rounded(.towardZero)
+        guard truncatedMilliseconds <= 253_402_300_799_999 else { return nil }
+        return Int64(truncatedMilliseconds)
+    }
+
+    static func fixedAgentJITApprovalTiming(
+        now: Date,
+        ttl: TimeInterval
+    ) -> AgentJITFixedApprovalTiming? {
+        guard let issuedMilliseconds = checkedAgentJITMilliseconds(now) else { return nil }
+
+        guard ttl.isFinite, ttl >= 0 else { return nil }
+        let ttlMillisecondsValue = ttl * 1_000
+        guard ttlMillisecondsValue.isFinite else { return nil }
+        let truncatedTTLMilliseconds = ttlMillisecondsValue.rounded(.towardZero)
+        guard truncatedTTLMilliseconds >= 1,
+              truncatedTTLMilliseconds <= 86_400_000 else { return nil }
+        let ttlMilliseconds = Int64(truncatedTTLMilliseconds)
+
+        let (requestExpiry, requestOverflow) = issuedMilliseconds.addingReportingOverflow(
+            RemoteJITApprovalDescriptor.requestLifetimeMilliseconds
+        )
+        let (grantExpiry, grantOverflow) = issuedMilliseconds.addingReportingOverflow(ttlMilliseconds)
+        guard !requestOverflow,
+              !grantOverflow,
+              requestExpiry <= 253_402_300_799_999,
+              grantExpiry <= 253_402_300_799_999 else { return nil }
+        return AgentJITFixedApprovalTiming(
+            issuedAtMilliseconds: issuedMilliseconds,
+            requestExpiresAtMilliseconds: requestExpiry,
+            grantExpiresAtMilliseconds: grantExpiry
+        )
+    }
+
     @MainActor
     func handleAgentJITPreflight(
         _ bridgeRequest: BridgeRequest,
@@ -48,7 +129,15 @@ extension XPCRequestHandler {
             return
         }
         let capability: AgentJITCapability = requestedCommand == "list" ? .list : .exec
-        let grantCapabilities: Set<AgentJITCapability> = requestedCommand == "list" ? [.list] : [.exec, .list]
+
+        let ttl = Self.configuredSessionTTL
+        guard let timing = Self.fixedAgentJITApprovalTiming(
+            now: agentJITApprovalClock(),
+            ttl: ttl
+        ) else {
+            replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
+            return
+        }
 
         let scopes: [AgentJITScopeResolution]
         do {
@@ -66,41 +155,74 @@ extension XPCRequestHandler {
             return
         }
 
-        let ttl = Self.configuredSessionTTL
-        let now = Date()
-        let promptGrantSnapshot = ((try? agentJITGrantStore.loadAll()) ?? []).filter {
-            $0.status(asOf: now) == .active && $0.callerFingerprint.matches(caller)
+        let promptGrants: [AgentJITGrant]
+        do {
+            promptGrants = try agentJITGrantStore.loadAll()
+        } catch {
+            replyError(
+                id: bridgeRequest.id,
+                code: .appUnavailable,
+                message: "Failed to load JIT grants: \(error.localizedDescription)",
+                reply: reply
+            )
+            return
         }
-        let expiresAt = now.addingTimeInterval(ttl)
+        let promptGrantSnapshot = promptGrants.filter {
+            $0.status(asOf: timing.issuedAt) == .active && $0.callerFingerprint.matches(caller)
+        }
         let duration = durationDescription(for: ttl)
         var grantIDs: [UUID] = []
-        var pendingGrants: [AgentJITGrant] = []
         var pendingResolutions: [AgentJITScopeResolution] = []
 
         for resolution in scopes {
-            let scope = resolution.scope
-            if let existing = try? agentJITGrantAuthorizer.activeGrant(
-                capability: capability,
-                itemFolderPath: scope.storageValue,
-                itemEnvironments: payload.environmentScope.map {
-                    if case .named(let name) = $0 { return [name] }
-                    return []
-                } ?? [],
-                caller: caller,
-                now: now
-            ) {
-                let merged = grant(existing, adding: resolution.requestedItems)
-                if merged.requestedItems != existing.requestedItems {
-                    try? agentJITGrantStore.save(merged)
+            do {
+                if let existing = try agentJITGrantAuthorizer.activeGrant(
+                    capability: capability,
+                    itemFolderPath: resolution.scope.storageValue,
+                    itemEnvironments: agentJITItemEnvironments(payload.environmentScope),
+                    caller: caller,
+                    now: timing.issuedAt
+                ) {
+                    let merged = grant(existing, adding: resolution.requestedItems)
+                    if merged.requestedItems != existing.requestedItems {
+                        try? agentJITGrantStore.save(merged)
+                    }
+                    grantIDs.append(existing.id)
+                    continue
                 }
-                grantIDs.append(existing.id)
-                continue
+            } catch {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .appUnavailable,
+                    message: "Failed to check JIT grants: \(error.localizedDescription)",
+                    reply: reply
+                )
+                return
             }
 
             pendingResolutions.append(resolution)
         }
 
+        let grantCapabilities: [AgentJITCapability] = requestedCommand == "list" ? [.list] : [.exec, .list]
+        let approvedSnapshot = localAgentJITAuthoritySnapshot(
+            bridgeRequestID: bridgeRequest.id,
+            timing: timing,
+            caller: caller,
+            capabilities: grantCapabilities,
+            environmentScope: payload.environmentScope,
+            pendingResolutions: pendingResolutions
+        )
+        var approvedResolutions: [AgentJITApprovedResolution] = []
+
         if shouldBatchAgentJITListApproval(payload) && !pendingResolutions.isEmpty {
+            let remoteRequests = await remoteAgentJITApprovalRequests(
+                bridgeRequestID: bridgeRequest.id,
+                timing: timing,
+                caller: caller,
+                capabilities: grantCapabilities,
+                environmentScope: payload.environmentScope,
+                resolutions: pendingResolutions
+            )
             let outcome = await approver.requestApproval(
                 prompt: agentJITBroadListPreflightPrompt(
                     caller: caller,
@@ -112,14 +234,15 @@ extension XPCRequestHandler {
                 command: .agentJITPreflight,
                 itemLabel: "All folders",
                 field: nil,
-                callback: callback
+                callback: callback,
+                remoteRequests: remoteRequests
             )
             let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
                 outcome: outcome,
                 command: .agentJITPreflight,
-                remoteRequests: []
+                remoteRequests: remoteRequests
             )
-            guard case .allowed(_, let approvalAttribution) = authorization else {
+            guard case .allowed(let source, let approvalAttribution) = authorization else {
                 recordAudit(
                     command: .agentJITPreflight,
                     itemId: "All folders",
@@ -136,24 +259,27 @@ extension XPCRequestHandler {
                 return
             }
 
-            for resolution in pendingResolutions {
-                pendingGrants.append(
-                    makeAgentJITGrant(
-                        caller: caller,
-                        scope: resolution.scope,
-                        capabilities: grantCapabilities,
-                        createdAt: now,
-                        expiresAt: expiresAt,
-                        requestedItems: resolution.requestedItems,
-                        agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
-                        environmentScope: payload.environmentScope,
-                        approvedBy: approvalAttribution
+            for (index, resolution) in pendingResolutions.enumerated() {
+                approvedResolutions.append(
+                    AgentJITApprovedResolution(
+                        resolution: resolution,
+                        source: source,
+                        attribution: approvalAttribution,
+                        remoteRequest: remoteRequests.indices.contains(index) ? remoteRequests[index] : nil
                     )
                 )
             }
         } else {
             for resolution in pendingResolutions {
                 let scope = resolution.scope
+                let remoteRequests = await remoteAgentJITApprovalRequests(
+                    bridgeRequestID: bridgeRequest.id,
+                    timing: timing,
+                    caller: caller,
+                    capabilities: grantCapabilities,
+                    environmentScope: payload.environmentScope,
+                    resolutions: [resolution]
+                )
                 let outcome = await approver.requestApproval(
                     prompt: agentJITPreflightPrompt(
                         caller: caller,
@@ -166,14 +292,15 @@ extension XPCRequestHandler {
                     command: .agentJITPreflight,
                     itemLabel: scope.displayName,
                     field: nil,
-                    callback: callback
+                    callback: callback,
+                    remoteRequests: remoteRequests
                 )
                 let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
                     outcome: outcome,
                     command: .agentJITPreflight,
-                    remoteRequests: []
+                    remoteRequests: remoteRequests
                 )
-                guard case .allowed(_, let approvalAttribution) = authorization else {
+                guard case .allowed(let source, let approvalAttribution) = authorization else {
                     recordAudit(
                         command: .agentJITPreflight,
                         itemId: scope.displayName,
@@ -190,47 +317,124 @@ extension XPCRequestHandler {
                     return
                 }
 
-                let grant = makeAgentJITGrant(
-                    caller: caller,
-                    scope: scope,
-                    capabilities: grantCapabilities,
-                    createdAt: now,
-                    expiresAt: expiresAt,
-                    requestedItems: resolution.requestedItems,
-                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
-                    environmentScope: payload.environmentScope,
-                    approvedBy: approvalAttribution
+                approvedResolutions.append(
+                    AgentJITApprovedResolution(
+                        resolution: resolution,
+                        source: source,
+                        attribution: approvalAttribution,
+                        remoteRequest: remoteRequests.first
+                    )
                 )
-                pendingGrants.append(grant)
             }
         }
 
-        for grant in pendingGrants {
+        if !approvedResolutions.isEmpty {
+            guard let revalidationMilliseconds = Self.checkedAgentJITMilliseconds(agentJITApprovalClock()),
+                  revalidationMilliseconds >= timing.issuedAtMilliseconds,
+                  revalidationMilliseconds < timing.requestExpiresAtMilliseconds,
+                  revalidationMilliseconds < timing.grantExpiresAtMilliseconds,
+                  let originalCallerIdentity = callerIdentity,
+                  let freshCallerIdentity = callerIdentityRevalidationProvider(originalCallerIdentity),
+                  let freshCaller = AgentJITCallerContext.fingerprint(
+                    for: bridgeRequest,
+                    caller: freshCallerIdentity
+                  ),
+                  freshCaller == caller,
+                  Self.isCliAccessEnabled else {
+                replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
+                return
+            }
+
+            let freshScopes: [AgentJITScopeResolution]
+            var freshPendingResolutions: [AgentJITScopeResolution] = []
             do {
-                try agentJITGrantStore.save(grant)
+                freshScopes = try AgentJITPreflightResolver().resolvedScopes(
+                    from: payload,
+                    list: currentListPayload()
+                )
+                _ = try agentJITGrantStore.loadAll()
+                let revalidationDate = Date(
+                    timeIntervalSince1970: Double(revalidationMilliseconds) / 1_000
+                )
+                for resolution in freshScopes {
+                    let activeGrant = try agentJITGrantAuthorizer.activeGrant(
+                        capability: capability,
+                        itemFolderPath: resolution.scope.storageValue,
+                        itemEnvironments: agentJITItemEnvironments(payload.environmentScope),
+                        caller: freshCaller,
+                        now: revalidationDate
+                    )
+                    if activeGrant == nil {
+                        freshPendingResolutions.append(resolution)
+                    }
+                }
+            } catch {
+                replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
+                return
+            }
+            let freshSnapshot = localAgentJITAuthoritySnapshot(
+                bridgeRequestID: bridgeRequest.id,
+                timing: timing,
+                caller: freshCaller,
+                capabilities: grantCapabilities,
+                environmentScope: payload.environmentScope,
+                pendingResolutions: freshPendingResolutions
+            )
+            guard freshSnapshot == approvedSnapshot,
+                  pairedRemoteAuthorityStillMatches(
+                    approvedResolutions,
+                    bridgeRequestID: bridgeRequest.id,
+                    timing: timing,
+                    caller: freshCaller,
+                    capabilities: grantCapabilities,
+                    environmentScope: payload.environmentScope,
+                    freshResolutions: freshPendingResolutions
+                  ) else {
+                replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
+                return
+            }
+
+            let pendingGrants = approvedResolutions.map { approved in
+                makeAgentJITGrant(
+                    caller: freshCaller,
+                    scope: approved.resolution.scope,
+                    capabilities: Set(grantCapabilities),
+                    createdAt: timing.issuedAt,
+                    expiresAt: timing.grantExpiresAt,
+                    requestedItems: approved.resolution.requestedItems,
+                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                    environmentScope: payload.environmentScope,
+                    approvedBy: approved.attribution
+                )
+            }
+            do {
+                try agentJITGrantStore.saveAll(pendingGrants)
             } catch {
                 replyError(
                     id: bridgeRequest.id,
                     code: .appUnavailable,
-                    message: "Failed to save JIT grant: \(error.localizedDescription)",
+                    message: "Failed to save JIT grants: \(error.localizedDescription)",
                     reply: reply
                 )
                 return
             }
-            recordAudit(
-                command: .agentJITPreflight,
-                itemId: grant.id.uuidString,
-                itemName: grant.folderScope.displayName,
-                approvedBy: grant.approvedBy,
-                caller: callerIdentity,
-                requestedCommand: bridgeRequest.context.requestedCommand,
-                fullCommand: bridgeRequest.context.fullCommand,
-                agentJITGrantID: grant.id,
-                agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
-                workspaceContext: bridgeRequest.context.workspaceContext,
-                environmentScope: grant.environmentScope
-            )
-            grantIDs.append(grant.id)
+
+            for grant in pendingGrants {
+                recordAudit(
+                    command: .agentJITPreflight,
+                    itemId: grant.id.uuidString,
+                    itemName: grant.folderScope.displayName,
+                    approvedBy: grant.approvedBy,
+                    caller: callerIdentity,
+                    requestedCommand: bridgeRequest.context.requestedCommand,
+                    fullCommand: bridgeRequest.context.fullCommand,
+                    agentJITGrantID: grant.id,
+                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                    workspaceContext: bridgeRequest.context.workspaceContext,
+                    environmentScope: grant.environmentScope
+                )
+                grantIDs.append(grant.id)
+            }
         }
 
         let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
@@ -238,6 +442,150 @@ extension XPCRequestHandler {
             payload: AgentJITPreflightResultPayload(grantIDs: grantIDs)
         )
         reply(encodeResponse(response), nil)
+    }
+
+    private func localAgentJITAuthoritySnapshot(
+        bridgeRequestID: UUID,
+        timing: AgentJITFixedApprovalTiming,
+        caller: AgentJITCallerFingerprint,
+        capabilities: [AgentJITCapability],
+        environmentScope: EnvironmentAccessScope?,
+        pendingResolutions: [AgentJITScopeResolution]
+    ) -> AgentJITLocalAuthoritySnapshot {
+        AgentJITLocalAuthoritySnapshot(
+            bridgeRequestID: bridgeRequestID,
+            requestIssuedAtMilliseconds: timing.issuedAtMilliseconds,
+            callerFingerprint: caller,
+            capabilities: capabilities,
+            environmentScope: environmentScope,
+            grantExpiresAtMilliseconds: timing.grantExpiresAtMilliseconds,
+            pendingResolutions: pendingResolutions.map { resolution in
+                AgentJITLocalResolutionAuthority(
+                    scope: resolution.scope,
+                    requestedItems: resolution.requestedItems.map {
+                        AgentJITLocalItemAuthority(
+                            type: $0.type,
+                            id: $0.id,
+                            folderPath: $0.folderPath
+                        )
+                    }
+                )
+            }
+        )
+    }
+
+    private func agentJITItemEnvironments(_ environmentScope: EnvironmentAccessScope?) -> [String] {
+        if case .named(let name) = environmentScope {
+            return [name]
+        }
+        return []
+    }
+
+    @MainActor
+    private func remoteAgentJITApprovalRequests(
+        bridgeRequestID: UUID,
+        timing: AgentJITFixedApprovalTiming,
+        caller: AgentJITCallerFingerprint,
+        capabilities: [AgentJITCapability],
+        environmentScope: EnvironmentAccessScope?,
+        resolutions: [AgentJITScopeResolution]
+    ) async -> [RemoteJITApprovalRequest] {
+        guard let remoteJITApprovalRequestBuilder else { return [] }
+        do {
+            let inputs = try remoteAgentJITApprovalInputs(
+                bridgeRequestID: bridgeRequestID,
+                timing: timing,
+                caller: caller,
+                capabilities: capabilities,
+                environmentScope: environmentScope,
+                resolutions: resolutions
+            )
+            let requests = try await remoteJITApprovalRequestBuilder.buildRequests(for: inputs)
+            guard requests.count == inputs.count,
+                  zip(requests, inputs).allSatisfy({ request, input in
+                      request.descriptor.input == input
+                  }) else {
+                return []
+            }
+            return requests
+        } catch {
+            return []
+        }
+    }
+
+    private func remoteAgentJITApprovalInputs(
+        bridgeRequestID: UUID,
+        timing: AgentJITFixedApprovalTiming,
+        caller: AgentJITCallerFingerprint,
+        capabilities: [AgentJITCapability],
+        environmentScope: EnvironmentAccessScope?,
+        resolutions: [AgentJITScopeResolution]
+    ) throws -> [RemoteJITApprovalDescriptorInput] {
+        try resolutions.map { resolution in
+            let requestedItems = try resolution.requestedItems.map { item in
+                let kind: RemoteJITApprovalItemKind
+                switch item.type {
+                case "password":
+                    kind = .password
+                case "api-key":
+                    kind = .apiKey
+                case "certificate":
+                    kind = .certificate
+                case "note":
+                    kind = .note
+                case "ssh":
+                    kind = .ssh
+                default:
+                    throw RemoteJITApprovalValidationError.invalidItems
+                }
+                guard let id = UUID(uuidString: item.id) else {
+                    throw RemoteJITApprovalValidationError.invalidItems
+                }
+                return try RemoteJITApprovalItemReference(
+                    id: id,
+                    kind: kind,
+                    folderPath: item.folderPath
+                )
+            }
+            return try RemoteJITApprovalDescriptorInput(
+                bridgeRequestID: bridgeRequestID,
+                requestIssuedAtMilliseconds: timing.issuedAtMilliseconds,
+                callerFingerprint: caller,
+                capabilities: capabilities,
+                folderScope: resolution.scope,
+                environmentScope: environmentScope,
+                requestedItems: requestedItems,
+                grantExpiresAtMilliseconds: timing.grantExpiresAtMilliseconds
+            )
+        }
+    }
+
+    private func pairedRemoteAuthorityStillMatches(
+        _ approvedResolutions: [AgentJITApprovedResolution],
+        bridgeRequestID: UUID,
+        timing: AgentJITFixedApprovalTiming,
+        caller: AgentJITCallerFingerprint,
+        capabilities: [AgentJITCapability],
+        environmentScope: EnvironmentAccessScope?,
+        freshResolutions: [AgentJITScopeResolution]
+    ) -> Bool {
+        guard approvedResolutions.count == freshResolutions.count else { return false }
+        for (approved, freshResolution) in zip(approvedResolutions, freshResolutions) {
+            guard case .pairedIPhone = approved.source else { continue }
+            guard let remoteRequest = approved.remoteRequest,
+                  let freshInput = try? remoteAgentJITApprovalInputs(
+                    bridgeRequestID: bridgeRequestID,
+                    timing: timing,
+                    caller: caller,
+                    capabilities: capabilities,
+                    environmentScope: environmentScope,
+                    resolutions: [freshResolution]
+                  ).first,
+                  remoteRequest.descriptor.input == freshInput else {
+                return false
+            }
+        }
+        return true
     }
 
     private func makeAgentJITGrant(

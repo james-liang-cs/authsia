@@ -4,6 +4,10 @@ import XCTest
 import AuthenticatorBridge
 
 final class AgentJITCallerContextTests: XCTestCase {
+    func testExtractFromNonexistentPIDReturnsNil() {
+        XCTAssertNil(CallerIdentityExtractor.extract(fromPID: pid_t.max))
+    }
+
     func testDoesNotFlagHumanTerminalCaller() {
         XCTAssertFalse(AgentJITCallerContext.hasAgenticCaller(humanTerminalCaller()))
     }

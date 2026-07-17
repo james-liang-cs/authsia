@@ -86,6 +86,939 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    func testRemoteBuilderReceivesExactMappedAuthorityAndFixedTiming() async throws {
+        let restoreTTL = setCLIApprovalTTL(15)
+        defer { restoreTTL() }
+        let issued = Date(timeIntervalSince1970: 1_700_000_000.1239)
+        let clock = AgentJITApprovalClockSpy([issued, issued.addingTimeInterval(1)])
+        let builder = RemoteRequestBuilderSpy()
+        let approver = JITApprovalTracker(result: true)
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            requestBuilder: builder,
+            clock: clock.callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+            ],
+            environmentScope: .named("Production")
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertNil(response.error)
+        let input = try XCTUnwrap(builder.inputBatches.first?.first)
+        XCTAssertEqual(builder.inputBatches.map(\.count), [1])
+        XCTAssertEqual(input.requestIssuedAtMilliseconds, 1_700_000_000_123)
+        XCTAssertEqual(input.grantExpiresAtMilliseconds, 1_700_000_015_123)
+        XCTAssertEqual(input.capabilities, [.exec, .list])
+        XCTAssertEqual(input.folderScope, .folder("Team/API"))
+        XCTAssertEqual(input.environmentScope, .named("Production"))
+        XCTAssertEqual(input.requestedItems.count, 1)
+        XCTAssertEqual(input.requestedItems.first?.kind, .password)
+        XCTAssertEqual(input.requestedItems.first?.id, stableUUID("password:API:Team/API"))
+        XCTAssertEqual(input.requestedItems.first?.folderPath, "Team/API")
+        XCTAssertEqual(approver.requests.first?.remoteRequests.map(\.descriptor.input), [input])
+        XCTAssertEqual(store.grants.first?.createdAt, Date(timeIntervalSince1970: 1_700_000_000.123))
+        XCTAssertEqual(store.grants.first?.expiresAt, Date(timeIntervalSince1970: 1_700_000_015.123))
+        XCTAssertEqual(clock.callCount, 2)
+    }
+
+    func testBroadRemoteApprovalBuildsAndPassesAllRequestsInResolverOrder() async throws {
+        let builder = RemoteRequestBuilderSpy()
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(
+            store: MemoryAgentJITGrantStore(),
+            approver: approver,
+            requestBuilder: builder,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "list",
+            references: [AgentJITPreflightReference(
+                type: "password",
+                query: "",
+                folderPath: nil,
+                isFolderScoped: false
+            )]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            requestedCommand: "list"
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(builder.inputBatches.count, 1)
+        XCTAssertEqual(builder.inputBatches[0].map(\.folderScope), [
+            .root, .folder("Team/API"), .folder("Team/Web"),
+        ])
+        XCTAssertEqual(builder.inputBatches[0].map(\.capabilities), Array(repeating: [.list], count: 3))
+        XCTAssertEqual(approver.requests.count, 1)
+        XCTAssertEqual(approver.requests[0].remoteRequests.count, 3)
+    }
+
+    func testBroadPairedIPhoneApprovalAttributesEveryResolutionAndAuditRecord() async throws {
+        let builder = RemoteRequestBuilderSpy()
+        let remoteSource = try RemoteJITApprovalPairedIPhoneSource(
+            pairingGenerationID: builder.pairing.pairingGenerationID,
+            signingKeyFingerprint: builder.pairing.iphoneSigningKeyFingerprint
+        )
+        let store = MemoryAgentJITGrantStore()
+        let (auditLogger, auditURL, tempDir) = try makeAuditLogger()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let handler = makeHandler(
+            store: store,
+            approver: JITApprovalTracker(outcome: .approved(source: .pairedIPhone(remoteSource))),
+            auditLogger: auditLogger,
+            requestBuilder: builder,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "list",
+            references: [AgentJITPreflightReference(
+                type: "password",
+                query: "",
+                folderPath: nil,
+                isFolderScoped: false
+            )]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            requestedCommand: "list"
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(store.grants.count, 3)
+        XCTAssertEqual(store.grants.map(\.approvedBy), Array(repeating: builder.remoteAttribution, count: 3))
+        XCTAssertEqual(
+            try auditRecords(at: auditURL).map(\.approvedBy),
+            Array(repeating: builder.remoteAttribution, count: 3)
+        )
+    }
+
+    func testPerScopeRemoteApprovalBuildsOneRequestAtATimeAndKeepsMixedAttribution() async throws {
+        let builder = RemoteRequestBuilderSpy()
+        let remoteSource = try RemoteJITApprovalPairedIPhoneSource(
+            pairingGenerationID: builder.pairing.pairingGenerationID,
+            signingKeyFingerprint: builder.pairing.iphoneSigningKeyFingerprint
+        )
+        let approver = JITApprovalTracker(outcomes: [
+            .approved(source: .macPanel),
+            .approved(source: .pairedIPhone(remoteSource)),
+        ])
+        let store = MemoryAgentJITGrantStore()
+        let (auditLogger, auditURL, tempDir) = try makeAuditLogger()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            auditLogger: auditLogger,
+            requestBuilder: builder,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "cert", query: "Web Cert", folderPath: "Team/Web"),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(builder.inputBatches.map(\.count), [1, 1])
+        XCTAssertEqual(builder.inputBatches.compactMap(\.first).map(\.folderScope), [
+            .folder("Team/API"), .folder("Team/Web"),
+        ])
+        XCTAssertEqual(approver.requests.map(\.remoteRequests).map(\.count), [1, 1])
+        XCTAssertEqual(store.grants.map(\.approvedBy), ["mac-panel", builder.remoteAttribution])
+        XCTAssertEqual(try auditRecords(at: auditURL).map(\.approvedBy), [
+            "mac-panel", builder.remoteAttribution,
+        ])
+        XCTAssertEqual(store.saveAllCallCount, 1)
+        XCTAssertEqual(store.savedBatches.map(\.count), [2])
+    }
+
+    func testHostDeniesPairedIPhoneApprovalWithWrongGenerationOrFingerprint() async throws {
+        let builder = RemoteRequestBuilderSpy()
+        let invalidSources = [
+            try RemoteJITApprovalPairedIPhoneSource(
+                pairingGenerationID: UUID(uuidString: "dddddddd-dddd-dddd-dddd-dddddddddddd")!,
+                signingKeyFingerprint: builder.pairing.iphoneSigningKeyFingerprint
+            ),
+            try RemoteJITApprovalPairedIPhoneSource(
+                pairingGenerationID: builder.pairing.pairingGenerationID,
+                signingKeyFingerprint: Data(repeating: 0x99, count: 32)
+            ),
+        ]
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+            ]
+        )
+
+        for source in invalidSources {
+            let store = MemoryAgentJITGrantStore()
+            let handler = makeHandler(
+                store: store,
+                approver: JITApprovalTracker(outcome: .approved(source: .pairedIPhone(source))),
+                requestBuilder: builder,
+                clock: AgentJITApprovalClockSpy([now]).callAsFunction
+            )
+
+            let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+                handler,
+                body: payload
+            )
+
+            XCTAssertEqual(response.error?.code, .notAuthorized)
+            XCTAssertEqual(store.grants, [])
+        }
+    }
+
+    func testInvalidBuilderOutputsFallBackToMacApprovalWithoutPartialRemoteRequests() async throws {
+        let modes: [RemoteRequestBuilderSpy.Mode] = [.throwError, .wrongCount, .reversed, .mismatchedAuthority]
+        for mode in modes {
+            let builder = RemoteRequestBuilderSpy(mode: mode)
+            let approver = JITApprovalTracker(result: true)
+            let store = MemoryAgentJITGrantStore()
+            let handler = makeHandler(
+                store: store,
+                approver: approver,
+                requestBuilder: builder,
+                clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+            )
+            let payload = AgentJITPreflightPayload(
+                requestedCommand: "list",
+                references: [AgentJITPreflightReference(
+                    type: "password",
+                    query: "",
+                    folderPath: nil,
+                    isFolderScoped: false
+                )]
+            )
+
+            let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+                handler,
+                body: payload,
+                requestedCommand: "list"
+            )
+
+            XCTAssertNil(response.error, "mode: \(mode)")
+            XCTAssertEqual(approver.requests.first?.remoteRequests, [], "mode: \(mode)")
+            XCTAssertEqual(store.grants.count, 3, "mode: \(mode)")
+        }
+    }
+
+    func testCheckedTimingRejectsInvalidClockAndTTLAndTruncatesTowardZero() throws {
+        XCTAssertNil(XPCRequestHandler.fixedAgentJITApprovalTiming(
+            now: Date(timeIntervalSince1970: .nan),
+            ttl: 15
+        ))
+        XCTAssertNil(XPCRequestHandler.fixedAgentJITApprovalTiming(
+            now: Date(timeIntervalSince1970: -0.001),
+            ttl: 15
+        ))
+        XCTAssertNil(XPCRequestHandler.fixedAgentJITApprovalTiming(
+            now: Date(timeIntervalSince1970: 253_402_300_800),
+            ttl: 15
+        ))
+        XCTAssertNil(XPCRequestHandler.fixedAgentJITApprovalTiming(now: now, ttl: .infinity))
+        XCTAssertNil(XPCRequestHandler.fixedAgentJITApprovalTiming(now: now, ttl: .greatestFiniteMagnitude))
+        XCTAssertNil(XPCRequestHandler.fixedAgentJITApprovalTiming(
+            now: now,
+            ttl: Double(Int64.max) / 1_000
+        ))
+        XCTAssertNil(XPCRequestHandler.fixedAgentJITApprovalTiming(now: now, ttl: 0.0009))
+        XCTAssertNil(XPCRequestHandler.fixedAgentJITApprovalTiming(now: now, ttl: 86_400.001))
+        XCTAssertEqual(
+            XPCRequestHandler.checkedAgentJITMilliseconds(
+                Date(timeIntervalSince1970: 253_402_300_799.9995)
+            ),
+            253_402_300_799_999
+        )
+
+        let maximumTTLTiming = try XCTUnwrap(XPCRequestHandler.fixedAgentJITApprovalTiming(
+            now: now,
+            ttl: 86_400.0009
+        ))
+        XCTAssertEqual(
+            maximumTTLTiming.grantExpiresAtMilliseconds - maximumTTLTiming.issuedAtMilliseconds,
+            86_400_000
+        )
+
+        let timing = try XCTUnwrap(XPCRequestHandler.fixedAgentJITApprovalTiming(
+            now: Date(timeIntervalSince1970: 1_700_000_000.1239),
+            ttl: 15.9999
+        ))
+        XCTAssertEqual(timing.issuedAtMilliseconds, 1_700_000_000_123)
+        XCTAssertEqual(timing.grantExpiresAtMilliseconds, 1_700_000_016_122)
+        XCTAssertEqual(timing.requestExpiresAtMilliseconds, 1_700_000_090_123)
+    }
+
+    func testApprovalAtExpiryBoundaryFailsBeforeBatchSave() async throws {
+        let restoreTTL = setCLIApprovalTTL(120)
+        defer { restoreTTL() }
+        let store = MemoryAgentJITGrantStore()
+        let clock = AgentJITApprovalClockSpy([now, now.addingTimeInterval(90)])
+        let handler = makeHandler(store: store, clock: clock.callAsFunction)
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API")]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertEqual(response.error?.code, .notAuthorized)
+        XCTAssertEqual(store.saveAllCallCount, 0)
+        XCTAssertEqual(store.grants, [])
+    }
+
+    func testApprovalAtGrantExpiryBoundaryFailsBeforeBatchSave() async throws {
+        let restoreTTL = setCLIApprovalTTL(15)
+        defer { restoreTTL() }
+        let store = MemoryAgentJITGrantStore()
+        let clock = AgentJITApprovalClockSpy([now, now.addingTimeInterval(15)])
+        let handler = makeHandler(store: store, clock: clock.callAsFunction)
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API")]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertEqual(response.error?.code, .notAuthorized)
+        XCTAssertEqual(store.saveAllCallCount, 0)
+        XCTAssertEqual(store.grants, [])
+    }
+
+    func testClockRollbackAndGlobalCLIDisableFailBeforeBatchSave() async throws {
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API")]
+        )
+        let rollbackStore = MemoryAgentJITGrantStore()
+        let rollbackHandler = makeHandler(
+            store: rollbackStore,
+            clock: AgentJITApprovalClockSpy([now, now.addingTimeInterval(-0.001)]).callAsFunction
+        )
+        let rollbackResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            rollbackHandler,
+            body: payload
+        )
+        XCTAssertEqual(rollbackResponse.error?.code, .notAuthorized)
+        XCTAssertEqual(rollbackStore.saveAllCallCount, 0)
+
+        let defaults = BridgeSettings.appDefaults
+        let key = BridgeSettings.cliAccessEnabledKey
+        let previous = defaults.object(forKey: key)
+        defaults.set(true, forKey: key)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        let disabledStore = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        approver.onRequest = { defaults.set(false, forKey: key) }
+        let disabledHandler = makeHandler(
+            store: disabledStore,
+            approver: approver,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let disabledResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            disabledHandler,
+            body: payload
+        )
+        XCTAssertEqual(disabledResponse.error?.code, .notAuthorized)
+        XCTAssertEqual(disabledStore.saveAllCallCount, 0)
+    }
+
+    func testTimedOutAndSupersededApprovalsRecordExactDenialAttribution() async throws {
+        for (outcome, expectedAttribution) in [
+            (RemoteJITApprovalOutcome.timedOut, "denied:timeout"),
+            (.superseded, "denied:superseded"),
+        ] {
+            let store = MemoryAgentJITGrantStore()
+            let (auditLogger, auditURL, tempDir) = try makeAuditLogger()
+            defer { try? FileManager.default.removeItem(at: tempDir) }
+            let handler = makeHandler(
+                store: store,
+                approver: JITApprovalTracker(outcome: outcome),
+                auditLogger: auditLogger,
+                clock: AgentJITApprovalClockSpy([now]).callAsFunction
+            )
+            let payload = AgentJITPreflightPayload(
+                requestedCommand: "exec",
+                references: [
+                    AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+                ]
+            )
+
+            let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+            XCTAssertEqual(response.error?.code, .notAuthorized)
+            XCTAssertEqual(try auditRecords(at: auditURL).map(\.approvedBy), [expectedAttribution])
+            XCTAssertEqual(store.saveAllCallCount, 0)
+        }
+    }
+
+    func testRemoteProjectionMapsEverySupportedListItemKindWithoutNames() async throws {
+        let builder = RemoteRequestBuilderSpy()
+        let handler = makeHandler(
+            store: MemoryAgentJITGrantStore(),
+            requestBuilder: builder,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "list",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "api-key", query: "API Key", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "cert", query: "API Cert", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "note", query: "API Note", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "ssh", query: "API SSH", folderPath: "Team/API"),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            requestedCommand: "list"
+        )
+
+        XCTAssertNil(response.error)
+        let input = try XCTUnwrap(builder.inputBatches.first?.first)
+        XCTAssertEqual(input.capabilities, [.list])
+        XCTAssertEqual(input.requestedItems.map(\.kind), [
+            .password, .apiKey, .certificate, .note, .ssh,
+        ])
+        XCTAssertEqual(Set(input.requestedItems.map(\.id)), Set([
+            stableUUID("password:API:Team/API"),
+            stableUUID("api-key:API Key:Team/API"),
+            stableUUID("certificate:API Cert:Team/API"),
+            stableUUID("note:API Note:Team/API"),
+            stableUUID("ssh:API SSH:Team/API"),
+        ]))
+    }
+
+    func testMissingOrChangedFreshCallerFailsBeforeBatchSave() async throws {
+        let providers: [CallerIdentityRevalidationProvider] = [
+            { _ in nil },
+            { _ in self.humanCallerIdentity },
+        ]
+        for provider in providers {
+            let store = MemoryAgentJITGrantStore()
+            let handler = makeHandler(
+                store: store,
+                callerIdentityRevalidationProvider: provider,
+                clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+            )
+            let payload = AgentJITPreflightPayload(
+                requestedCommand: "exec",
+                references: [
+                    AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+                ]
+            )
+
+            let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+            XCTAssertEqual(response.error?.code, .notAuthorized)
+            XCTAssertEqual(store.saveAllCallCount, 0)
+        }
+    }
+
+    func testFreshListAuthorityChangesFailBeforeBatchSave() async throws {
+        let original = listPayload()
+        let api = try XCTUnwrap(original.passwords.first { $0.name == "API" })
+        let retyped = BridgeListPayload(
+            accounts: original.accounts,
+            passwords: original.passwords.filter { $0.id != api.id },
+            apiKeys: original.apiKeys,
+            certificates: original.certificates,
+            notes: original.notes + [BridgeNote(
+                id: api.id,
+                title: api.name,
+                folderPath: api.folderPath,
+                isFavorite: false,
+                isCliEnabled: true,
+                isScraped: false,
+                createdAt: api.createdAt,
+                updatedAt: api.updatedAt
+            )],
+            sshKeys: original.sshKeys
+        )
+        let variants = [
+            listPayload(replacingPasswords: original.passwords.filter { $0.id != api.id }),
+            listPayload(replacingPasswords: original.passwords.map {
+                $0.id == api.id ? copyPassword($0, folderPath: "Team/Web") : $0
+            }),
+            listPayload(replacingPasswords: original.passwords.map {
+                $0.id == api.id ? copyPassword($0, isCliEnabled: false) : $0
+            }),
+            listPayload(replacingPasswords: Array(original.passwords.reversed())),
+            retyped,
+        ]
+        for changed in variants {
+            let provider = ListProviderSequence([.success(original), .success(changed)])
+            let store = MemoryAgentJITGrantStore()
+            let handler = makeHandler(
+                store: store,
+                listProvider: provider.callAsFunction,
+                clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+            )
+            let payload = AgentJITPreflightPayload(
+                requestedCommand: "list",
+                references: [AgentJITPreflightReference(
+                    type: "password",
+                    query: "",
+                    folderPath: "Team/API",
+                    isFolderScoped: true
+                )]
+            )
+
+            let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+                handler,
+                body: payload,
+                requestedCommand: "list"
+            )
+
+            XCTAssertEqual(response.error?.code, .notAuthorized)
+            XCTAssertEqual(store.saveAllCallCount, 0)
+        }
+    }
+
+    func testRenameOnlyDoesNotChangeLocalOrRemoteAuthority() async throws {
+        let original = listPayload()
+        let api = try XCTUnwrap(original.passwords.first { $0.name == "API" })
+        let renamed = listPayload(replacingPasswords: original.passwords.map {
+            $0.id == api.id ? copyPassword($0, name: "Renamed API") : $0
+        })
+        let provider = ListProviderSequence([.success(original), .success(renamed)])
+        let builder = RemoteRequestBuilderSpy()
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            listProvider: provider.callAsFunction,
+            requestBuilder: builder,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(
+                type: "password",
+                query: api.id.uuidString,
+                folderPath: "Team/API"
+            )]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(store.grants.first?.requestedItems.first?.name, "API")
+        XCTAssertEqual(store.saveAllCallCount, 1)
+    }
+
+    func testFreshListOrGrantLoadFailureFailsBeforeBatchSave() async throws {
+        let listProvider = ListProviderSequence([
+            .success(listPayload()),
+            .failure(AgentJITGrantStoreError.corruptedStore),
+        ])
+        let listStore = MemoryAgentJITGrantStore()
+        let listHandler = makeHandler(
+            store: listStore,
+            listProvider: listProvider.callAsFunction,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API")]
+        )
+
+        let listResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            listHandler,
+            body: payload
+        )
+        XCTAssertEqual(listResponse.error?.code, .notAuthorized)
+        XCTAssertEqual(listStore.saveAllCallCount, 0)
+
+        let grantStore = MemoryAgentJITGrantStore()
+        grantStore.loadErrorOnCall = 2
+        let grantHandler = makeHandler(
+            store: grantStore,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let grantResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            grantHandler,
+            body: payload
+        )
+        XCTAssertEqual(grantResponse.error?.code, .notAuthorized)
+        XCTAssertEqual(grantStore.saveAllCallCount, 0)
+    }
+
+    func testNewlyCoveringOrRevokedInitiallyCoveringGrantFailsRevalidation() async throws {
+        let caller = callerFingerprint(requestedCommand: "exec")
+        let newlyCoveringStore = MemoryAgentJITGrantStore()
+        let newlyCoveringApprover = JITApprovalTracker(result: true)
+        newlyCoveringApprover.onRequest = {
+            newlyCoveringStore.grants.append(.fixture(
+                callerFingerprint: caller,
+                folderScope: .folder("Team/API"),
+                capabilities: [.exec, .list],
+                createdAt: self.now,
+                expiresAt: self.now.addingTimeInterval(600)
+            ))
+        }
+        let newlyCoveringHandler = makeHandler(
+            store: newlyCoveringStore,
+            approver: newlyCoveringApprover,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let apiPayload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API")]
+        )
+        let newlyCovered: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            newlyCoveringHandler,
+            body: apiPayload
+        )
+        XCTAssertEqual(newlyCovered.error?.code, .notAuthorized)
+        XCTAssertEqual(newlyCoveringStore.saveAllCallCount, 0)
+
+        let active = AgentJITGrant.fixture(
+            callerFingerprint: caller,
+            folderScope: .folder("Team/API"),
+            capabilities: [.exec, .list],
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(600)
+        )
+        let revokedStore = MemoryAgentJITGrantStore([active])
+        let revokedApprover = JITApprovalTracker(result: true)
+        revokedApprover.onRequest = {
+            revokedStore.grants[0] = revokedStore.grants[0].copy(revokedAt: self.now)
+        }
+        let revokedHandler = makeHandler(
+            store: revokedStore,
+            approver: revokedApprover,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let mixedPayload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "cert", query: "Web Cert", folderPath: "Team/Web"),
+            ]
+        )
+        let revoked: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            revokedHandler,
+            body: mixedPayload
+        )
+        XCTAssertEqual(revoked.error?.code, .notAuthorized)
+        XCTAssertEqual(revokedStore.savedBatches.filter { $0.contains { $0.folderScope == .folder("Team/Web") } }, [])
+    }
+
+    func testInitiallyCoveringGrantThatExpiresDuringApprovalFailsRevalidation() async throws {
+        let restoreTTL = setCLIApprovalTTL(15)
+        defer { restoreTTL() }
+        let store = MemoryAgentJITGrantStore([.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/API"),
+            capabilities: [.exec, .list],
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(1)
+        )])
+        let handler = makeHandler(
+            store: store,
+            clock: AgentJITApprovalClockSpy([now, now.addingTimeInterval(2)]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "cert", query: "Web Cert", folderPath: "Team/Web"),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertEqual(response.error?.code, .notAuthorized)
+        XCTAssertEqual(store.grants.count, 1)
+        XCTAssertEqual(
+            store.savedBatches.filter { $0.contains { $0.folderScope == .folder("Team/Web") } },
+            []
+        )
+    }
+
+    func testConcreteStoreRevokesClosedTerminalGrantBeforePreflightAndDoesNotReuseIt() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let store = AgentJITGrantStore(
+            fileURL: tempDir.appendingPathComponent("grants.json"),
+            terminalSessionLiveness: { _ in .closed }
+        )
+        let existing = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/API"),
+            capabilities: [.exec, .list],
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(600)
+        )
+        try store.save(existing)
+        let approver = JITApprovalTracker(result: false)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            clock: AgentJITApprovalClockSpy([now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API")]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertEqual(response.error?.code, .notAuthorized)
+        XCTAssertEqual(approver.requests.count, 1)
+        XCTAssertEqual(try store.loadAll().first?.revokedAt, now)
+    }
+
+    func testConcreteStoreTerminalClosingDuringApprovalInvalidatesSnapshotWithoutSavingNewGrant() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        var liveness = TerminalSessionLiveness.active
+        let store = AgentJITGrantStore(
+            fileURL: tempDir.appendingPathComponent("grants.json"),
+            terminalSessionLiveness: { _ in liveness }
+        )
+        let existing = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/API"),
+            capabilities: [.exec, .list],
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(600)
+        )
+        try store.save(existing)
+        let approver = JITApprovalTracker(result: true)
+        approver.onRequest = { liveness = .closed }
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "cert", query: "Web Cert", folderPath: "Team/Web"),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertEqual(response.error?.code, .notAuthorized)
+        let stored = try store.loadAll()
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored.first?.id, existing.id)
+        XCTAssertEqual(stored.first?.revokedAt, now)
+    }
+
+    func testConcreteStoreActiveReuseUpdatesLastUsedAndMergesRenamedItemMetadata() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let store = AgentJITGrantStore(
+            fileURL: tempDir.appendingPathComponent("grants.json"),
+            terminalSessionLiveness: { _ in .active }
+        )
+        let existing = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/API"),
+            capabilities: [.exec, .list],
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(600)
+        )
+        try store.save(existing)
+        let original = listPayload()
+        let api = try XCTUnwrap(original.passwords.first { $0.name == "API" })
+        let renamed = listPayload(replacingPasswords: original.passwords.map {
+            $0.id == api.id ? copyPassword($0, name: "Renamed API") : $0
+        })
+        let approver = JITApprovalTracker(result: false)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            listProvider: { renamed },
+            clock: AgentJITApprovalClockSpy([now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(
+                type: "password",
+                query: api.id.uuidString,
+                folderPath: "Team/API"
+            )]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(response.payload?.grantIDs, [existing.id])
+        XCTAssertEqual(approver.requests, [])
+        let reused = try XCTUnwrap(try store.loadAll().first)
+        XCTAssertEqual(reused.lastUsedAt, now)
+        XCTAssertEqual(reused.requestedItems.map(\.name), ["Renamed API"])
+    }
+
+    func testActiveGrantReuseSucceedsWhenRequestedItemMetadataSaveFails() async throws {
+        let existing = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/API"),
+            capabilities: [.exec, .list],
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(600)
+        )
+        let store = MemoryAgentJITGrantStore([existing])
+        store.saveAllError = AgentJITGrantStoreError.corruptedStore
+        let approver = JITApprovalTracker(result: false)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            clock: AgentJITApprovalClockSpy([now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(response.payload?.grantIDs, [existing.id])
+        XCTAssertEqual(approver.requests, [])
+        XCTAssertEqual(store.saveAllCallCount, 1)
+    }
+
+    func testOversizedProjectionWithNoRemoteBuilderKeepsMacApprovalPath() async throws {
+        let oversizedList = listPayloadWithRootPasswords(count: 1_025)
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            listProvider: { oversizedList },
+            requestBuilder: nil,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "list",
+            references: [AgentJITPreflightReference(
+                type: "password",
+                query: "",
+                folderPath: nil,
+                isFolderScoped: true
+            )]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            requestedCommand: "list"
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(approver.requests.first?.remoteRequests, [])
+        XCTAssertEqual(store.grants.first?.requestedItems.count, 1_025)
+    }
+
+    func testOversizedRemoteProjectionKeepsMacPathButDeniesPairedIPhone() async throws {
+        let oversizedList = listPayloadWithRootPasswords(count: 1_025)
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "list",
+            references: [AgentJITPreflightReference(
+                type: "password",
+                query: "",
+                folderPath: nil,
+                isFolderScoped: true
+            )]
+        )
+
+        let macBuilder = RemoteRequestBuilderSpy()
+        let macApprover = JITApprovalTracker(result: true)
+        let macStore = MemoryAgentJITGrantStore()
+        let macHandler = makeHandler(
+            store: macStore,
+            approver: macApprover,
+            listProvider: { oversizedList },
+            requestBuilder: macBuilder,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let macResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            macHandler,
+            body: payload,
+            requestedCommand: "list"
+        )
+        XCTAssertNil(macResponse.error)
+        XCTAssertEqual(macBuilder.inputBatches, [])
+        XCTAssertEqual(macApprover.requests.first?.remoteRequests, [])
+        XCTAssertEqual(macStore.grants.first?.requestedItems.count, 1_025)
+
+        let remoteBuilder = RemoteRequestBuilderSpy()
+        let remoteSource = try RemoteJITApprovalPairedIPhoneSource(
+            pairingGenerationID: remoteBuilder.pairing.pairingGenerationID,
+            signingKeyFingerprint: remoteBuilder.pairing.iphoneSigningKeyFingerprint
+        )
+        let remoteStore = MemoryAgentJITGrantStore()
+        let remoteHandler = makeHandler(
+            store: remoteStore,
+            approver: JITApprovalTracker(outcome: .approved(source: .pairedIPhone(remoteSource))),
+            listProvider: { oversizedList },
+            requestBuilder: remoteBuilder,
+            clock: AgentJITApprovalClockSpy([now]).callAsFunction
+        )
+        let remoteResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            remoteHandler,
+            body: payload,
+            requestedCommand: "list"
+        )
+        XCTAssertEqual(remoteResponse.error?.code, .notAuthorized)
+        XCTAssertEqual(remoteStore.saveAllCallCount, 0)
+    }
+
+    func testBatchSaveFailureProducesNoApprovalAudit() async throws {
+        let store = MemoryAgentJITGrantStore()
+        store.saveAllError = AgentJITGrantStoreError.corruptedStore
+        let (auditLogger, auditURL, tempDir) = try makeAuditLogger()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let handler = makeHandler(
+            store: store,
+            auditLogger: auditLogger,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API")]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertEqual(response.error?.code, .appUnavailable)
+        XCTAssertEqual(store.grants, [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: auditURL.path))
+    }
+
     override func tearDown() {
         for directory in isolatedAuditDirectories {
             try? FileManager.default.removeItem(at: directory)
@@ -1839,7 +2772,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
     }
 
     private func makeHandler(
-        store: MemoryAgentJITGrantStore,
+        store: AgentJITGrantStoring,
         approver: JITApprovalTracker = JITApprovalTracker(result: true),
         repository: VaultRepositoryProviding? = nil,
         automationCredentialLookupProvider: @escaping XPCRequestHandler.AutomationCredentialLookupProvider = {
@@ -1849,18 +2782,42 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             nil
         },
         auditLogger: BridgeAuditLogger? = nil,
-        callerIdentity: CallerIdentity? = nil
+        callerIdentity: CallerIdentity? = nil,
+        listProvider: XPCRequestHandler.ListProvider? = nil,
+        requestBuilder: RemoteJITApprovalRequestBuilding? = nil,
+        callerIdentityRevalidationProvider: CallerIdentityRevalidationProvider? = nil,
+        clock: @escaping AgentJITApprovalClock = Date.init
     ) -> XPCRequestHandler {
-        XPCRequestHandler(
-            listProvider: listPayload,
+        let resolvedCallerIdentity = callerIdentity ?? self.callerIdentity
+        return XPCRequestHandler(
+            listProvider: listProvider ?? listPayload,
             approver: approver,
             repository: repository ?? EmptyVaultRepository(),
             automationCredentialLookupProvider: automationCredentialLookupProvider,
             currentMachineIdProvider: currentMachineIdProvider,
             agentJITGrantStore: store,
-            callerIdentityProvider: { callerIdentity ?? self.callerIdentity },
+            callerIdentityProvider: { resolvedCallerIdentity },
+            callerIdentityRevalidationProvider: callerIdentityRevalidationProvider ?? { _ in
+                resolvedCallerIdentity
+            },
+            remoteJITApprovalRequestBuilder: requestBuilder,
+            agentJITApprovalClock: clock,
             auditLogger: auditLogger ?? makeIsolatedAuditLogger()
         )
+    }
+
+    private func setCLIApprovalTTL(_ ttl: TimeInterval) -> () -> Void {
+        let defaults = BridgeSettings.appDefaults
+        let key = BridgeSettings.cliSessionTTLKey
+        let previous = defaults.object(forKey: key)
+        defaults.set(ttl, forKey: key)
+        return {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
     }
 
     private func makeIsolatedAuditLogger() -> BridgeAuditLogger {
@@ -2065,7 +3022,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         BridgeListPayload(
             accounts: [
                 BridgeAccount(
-                    id: UUID(),
+                    id: stableUUID("account:OTP"),
                     issuer: "OTP",
                     label: "otp",
                     isFavorite: false,
@@ -2105,13 +3062,63 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
     }
 
+    private func listPayload(replacingPasswords passwords: [BridgePassword]) -> BridgeListPayload {
+        let payload = listPayload()
+        return BridgeListPayload(
+            accounts: payload.accounts,
+            passwords: passwords,
+            apiKeys: payload.apiKeys,
+            certificates: payload.certificates,
+            notes: payload.notes,
+            sshKeys: payload.sshKeys
+        )
+    }
+
+    private func copyPassword(
+        _ password: BridgePassword,
+        name: String? = nil,
+        folderPath: String? = nil,
+        isCliEnabled: Bool? = nil
+    ) -> BridgePassword {
+        BridgePassword(
+            id: password.id,
+            name: name ?? password.name,
+            username: password.username,
+            website: password.website,
+            folderPath: folderPath ?? password.folderPath,
+            isFavorite: password.isFavorite,
+            isCliEnabled: isCliEnabled ?? password.isCliEnabled,
+            isScraped: password.isScraped,
+            createdAt: password.createdAt,
+            updatedAt: password.updatedAt,
+            expiresAt: password.expiresAt,
+            scrapeMachineName: password.scrapeMachineName,
+            scrapeMachineId: password.scrapeMachineId,
+            hasSecret: password.hasSecret,
+            environments: password.environments
+        )
+    }
+
+    private func listPayloadWithRootPasswords(count: Int) -> BridgeListPayload {
+        BridgeListPayload(
+            accounts: [],
+            passwords: (0..<count).map { index in
+                password("Root \(index)", folderPath: nil)
+            },
+            apiKeys: [],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+    }
+
     private func password(
         _ name: String,
         folderPath: String?,
         isCliEnabled: Bool = true
     ) -> BridgePassword {
         BridgePassword(
-            id: UUID(),
+            id: stableUUID("password:\(name):\(folderPath ?? "root")"),
             name: name,
             username: "user",
             website: nil,
@@ -2130,7 +3137,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         isCliEnabled: Bool = true
     ) -> BridgeAPIKey {
         BridgeAPIKey(
-            id: UUID(),
+            id: stableUUID("api-key:\(name):\(folderPath ?? "root")"),
             name: name,
             website: nil,
             folderPath: folderPath,
@@ -2144,7 +3151,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
 
     private func passwordMetadata(name: String, folderPath: String? = nil) -> PasswordMetadata {
         PasswordMetadata(
-            id: UUID(),
+            id: stableUUID("metadata-password:\(name):\(folderPath ?? "root")"),
             name: name,
             username: "user",
             website: nil,
@@ -2160,7 +3167,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
 
     private func certificate(_ name: String, folderPath: String?) -> BridgeCertificate {
         BridgeCertificate(
-            id: UUID(),
+            id: stableUUID("certificate:\(name):\(folderPath ?? "root")"),
             name: name,
             issuer: nil,
             subject: nil,
@@ -2180,7 +3187,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         isCliEnabled: Bool = true
     ) -> BridgeNote {
         BridgeNote(
-            id: UUID(),
+            id: stableUUID("note:\(title):\(folderPath ?? "root")"),
             title: title,
             folderPath: folderPath,
             isFavorite: false,
@@ -2193,7 +3200,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
 
     private func sshKey(_ name: String, folderPath: String?) -> BridgeSSHKey {
         BridgeSSHKey(
-            id: UUID(),
+            id: stableUUID("ssh:\(name):\(folderPath ?? "root")"),
             name: name,
             comment: "",
             fingerprint: "SHA256:\(name)",
@@ -2206,22 +3213,176 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             updatedAt: now
         )
     }
+
+    private func stableUUID(_ value: String) -> UUID {
+        let hex = SHA256.hash(data: Data(value.utf8))
+            .prefix(16)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let start = hex.startIndex
+        let i8 = hex.index(start, offsetBy: 8)
+        let i12 = hex.index(start, offsetBy: 12)
+        let i16 = hex.index(start, offsetBy: 16)
+        let i20 = hex.index(start, offsetBy: 20)
+        return UUID(uuidString: [
+            String(hex[start..<i8]),
+            String(hex[i8..<i12]),
+            String(hex[i12..<i16]),
+            String(hex[i16..<i20]),
+            String(hex[i20...]),
+        ].joined(separator: "-"))!
+    }
 }
 
 private struct AuditLineFixture: Decodable {
     let record: BridgeAuditRecord
 }
 
+@MainActor
+private final class ListProviderSequence {
+    private var results: [Result<BridgeListPayload, Error>]
+
+    init(_ results: [Result<BridgeListPayload, Error>]) {
+        self.results = results
+    }
+
+    func callAsFunction() throws -> BridgeListPayload {
+        let result: Result<BridgeListPayload, Error>
+        if results.count > 1 {
+            result = results.removeFirst()
+        } else {
+            result = results[0]
+        }
+        return try result.get()
+    }
+}
+
+@MainActor
+private final class AgentJITApprovalClockSpy {
+    private var dates: [Date]
+    private(set) var callCount = 0
+
+    init(_ dates: [Date]) {
+        self.dates = dates
+    }
+
+    func callAsFunction() -> Date {
+        callCount += 1
+        if dates.count > 1 {
+            return dates.removeFirst()
+        }
+        return dates.first ?? Date(timeIntervalSince1970: 0)
+    }
+}
+
+@MainActor
+private final class RemoteRequestBuilderSpy: RemoteJITApprovalRequestBuilding {
+    enum Mode: Equatable {
+        case valid
+        case throwError
+        case wrongCount
+        case reversed
+        case mismatchedAuthority
+    }
+
+    struct BuilderError: Error {}
+
+    let pairing = try! RemoteJITApprovalPairingBinding(
+        pairingGenerationID: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+        macDeviceID: UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!,
+        iphoneDeviceID: UUID(uuidString: "cccccccc-cccc-cccc-cccc-cccccccccccc")!,
+        macSigningKeyFingerprint: Data(repeating: 0x11, count: 32),
+        iphoneSigningKeyFingerprint: Data(repeating: 0x22, count: 32)
+    )
+    let mode: Mode
+    private(set) var inputBatches: [[RemoteJITApprovalDescriptorInput]] = []
+
+    init(mode: Mode = .valid) {
+        self.mode = mode
+    }
+
+    var remoteAttribution: String {
+        var generationUUID = pairing.pairingGenerationID.uuid
+        let generationBytes = withUnsafeBytes(of: &generationUUID) { Data($0) }
+        let digest = SHA256.hash(data: generationBytes + pairing.iphoneSigningKeyFingerprint)
+        let suffix = digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+        return "ios-remote:\(suffix)"
+    }
+
+    func buildRequests(
+        for inputs: [RemoteJITApprovalDescriptorInput]
+    ) async throws -> [RemoteJITApprovalRequest] {
+        inputBatches.append(inputs)
+        if mode == .throwError {
+            throw BuilderError()
+        }
+
+        var requests = try inputs.enumerated().map { offset, input in
+            try request(for: input, offset: offset)
+        }
+        switch mode {
+        case .valid, .throwError:
+            break
+        case .wrongCount:
+            _ = requests.popLast()
+        case .reversed:
+            requests.reverse()
+        case .mismatchedAuthority:
+            guard let first = inputs.first else { break }
+            let mismatched = try RemoteJITApprovalDescriptorInput(
+                bridgeRequestID: UUID(uuidString: "dddddddd-dddd-dddd-dddd-dddddddddddd")!,
+                requestIssuedAtMilliseconds: first.requestIssuedAtMilliseconds,
+                callerFingerprint: first.callerFingerprint,
+                capabilities: first.capabilities,
+                folderScope: first.folderScope,
+                environmentScope: first.environmentScope,
+                requestedItems: first.requestedItems,
+                grantExpiresAtMilliseconds: first.grantExpiresAtMilliseconds
+            )
+            requests[0] = try request(for: mismatched, offset: 99)
+        }
+        return requests
+    }
+
+    private func request(
+        for input: RemoteJITApprovalDescriptorInput,
+        offset: Int
+    ) throws -> RemoteJITApprovalRequest {
+        let descriptor = try RemoteJITApprovalDescriptor(
+            input: input,
+            approvalID: UUID(),
+            approvalNonce: Data(repeating: UInt8(offset & 0xff), count: 32),
+            pairing: pairing
+        )
+        return try RemoteJITApprovalRequest(
+            descriptor: descriptor,
+            requestDigest: Data(repeating: 0x33, count: 32),
+            requestSignature: Data(repeating: 0x44, count: 64)
+        )
+    }
+}
+
 private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
     var grants: [AgentJITGrant]
     var markUsedScopesError: Error?
+    var loadError: Error?
+    var loadErrorOnCall: Int?
+    var saveAllError: Error?
+    private(set) var loadCallCount = 0
+    private(set) var saveAllCallCount = 0
+    private(set) var savedBatches: [[AgentJITGrant]] = []
 
     init(_ grants: [AgentJITGrant] = []) {
         self.grants = grants
     }
 
     func loadAll() throws -> [AgentJITGrant] {
-        grants
+        loadCallCount += 1
+        if loadCallCount == loadErrorOnCall {
+            throw AgentJITGrantStoreError.corruptedStore
+        }
+        if let loadError { throw loadError }
+        return grants
     }
 
     func save(_ grant: AgentJITGrant) throws {
@@ -2229,6 +3390,9 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
     }
 
     func saveAll(_ newGrants: [AgentJITGrant]) throws {
+        saveAllCallCount += 1
+        savedBatches.append(newGrants)
+        if let saveAllError { throw saveAllError }
         var updatedGrants = grants
         for grant in newGrants {
             if let index = updatedGrants.firstIndex(where: { $0.id == grant.id }) {
@@ -2275,7 +3439,7 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
                 itemFolderPath: itemFolderPath,
                 caller: caller,
                 now: now
-            )
+            ) && ($0.environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
         }) else {
             return nil
         }
@@ -2315,6 +3479,7 @@ private final class JITApprovalTracker: BridgeApprover {
 
     private var results: [RemoteJITApprovalOutcome]
     private(set) var requests: [Request] = []
+    var onRequest: (() -> Void)?
 
     init(result: Bool) {
         self.results = [Self.outcome(for: result)]
@@ -2349,6 +3514,7 @@ private final class JITApprovalTracker: BridgeApprover {
                 remoteRequests: remoteRequests
             )
         )
+        onRequest?()
         if results.count > 1 {
             return results.removeFirst()
         }
@@ -2441,7 +3607,8 @@ private extension AgentJITGrant {
             lastUsedAt: lastUsedAt ?? self.lastUsedAt,
             requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
-            approvedBy: approvedBy
+            approvedBy: approvedBy,
+            environmentScope: environmentScope
         )
     }
 }
