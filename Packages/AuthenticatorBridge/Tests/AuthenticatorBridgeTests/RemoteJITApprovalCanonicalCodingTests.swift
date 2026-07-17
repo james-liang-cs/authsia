@@ -40,6 +40,169 @@ final class RemoteJITApprovalCanonicalCodingTests: XCTestCase {
         )
     }
 
+    func testRequestEncoderRejectsCallerConstructedDigestMismatch() throws {
+        let fixture = try RemoteJITApprovalGoldenFixture.load()
+        let request = try RemoteJITApprovalRequest(
+            descriptor: fixture.makeDescriptor(),
+            requestDigest: changing(
+                try Data(hexadecimal: fixture.expected.requestDigestHex),
+                at: 0,
+                to: 0
+            ),
+            requestSignature: Data(hexadecimal: fixture.expected.requestSignatureHex)
+        )
+
+        XCTAssertThrowsError(
+            try RemoteJITApprovalCanonicalCoding.encodeRequest(request)
+        )
+    }
+
+    func testRejectsMalformedRequestEnvelopes() throws {
+        let fixture = try RemoteJITApprovalGoldenFixture.load()
+        let golden = try Data(hexadecimal: fixture.expected.requestEnvelopeHex)
+        let domain = Data("Authsia.RemoteJITApproval.RequestEnvelope.V1\0".utf8)
+        let descriptor = try Data(hexadecimal: fixture.expected.descriptorHex)
+        let digestOffset = domain.count + 4 + descriptor.count
+        let signatureOffset = digestOffset + 32
+
+        var derSignature = golden
+        derSignature.replaceSubrange(
+            signatureOffset..<golden.count,
+            with: Data([0x30, 0x44]) + Data(repeating: 0, count: 68)
+        )
+        let mutations = [
+            NamedMutation(name: "wrong request domain", bytes: changing(golden, at: 0, to: 0)),
+            NamedMutation(
+                name: "descriptor length mismatch",
+                bytes: writingUInt32(golden, at: domain.count, value: UInt32(descriptor.count + 1))
+            ),
+            NamedMutation(
+                name: "decoded digest mismatch",
+                bytes: changing(golden, at: digestOffset, to: golden[digestOffset] ^ 0x01)
+            ),
+            NamedMutation(name: "DER signature", bytes: derSignature),
+            NamedMutation(name: "short signature", bytes: Data(golden.dropLast())),
+            NamedMutation(name: "truncation", bytes: Data(golden.prefix(domain.count + 8))),
+            NamedMutation(name: "trailing byte", bytes: golden + Data([0])),
+        ]
+        for mutation in mutations {
+            XCTAssertThrowsError(
+                try RemoteJITApprovalCanonicalCoding.decodeRequest(mutation.bytes),
+                mutation.name
+            )
+        }
+
+        assertOversized {
+            _ = try RemoteJITApprovalCanonicalCoding.decodeRequest(
+                writingUInt32(golden, at: domain.count, value: 1_000_001)
+            )
+        }
+        assertOversized {
+            _ = try RemoteJITApprovalCanonicalCoding.decodeRequest(
+                Data(repeating: 0, count: 1_048_577)
+            )
+        }
+    }
+
+    func testRejectsMalformedDecisionEnvelopes() throws {
+        let fixture = try RemoteJITApprovalGoldenFixture.load()
+        let golden = try Data(hexadecimal: fixture.expected.approveDecisionEnvelopeHex)
+        let domain = Data("Authsia.RemoteJITApproval.DecisionEnvelope.V1\0".utf8)
+        let decisionTagOffset = domain.count + 4 + 16 + 32 + 32 + 16 + 16 + 16
+        let expiryOffset = decisionTagOffset + 1
+        let signatureOffset = expiryOffset + 8
+
+        var invalidExpiry = golden
+        invalidExpiry.replaceSubrange(expiryOffset..<(expiryOffset + 8), with: Data(repeating: 0xFF, count: 8))
+        var derSignature = golden
+        derSignature.replaceSubrange(
+            signatureOffset..<golden.count,
+            with: Data([0x30, 0x44]) + Data(repeating: 0, count: 68)
+        )
+        let mutations = [
+            NamedMutation(name: "wrong decision domain", bytes: changing(golden, at: 0, to: 0)),
+            NamedMutation(name: "unsupported decision schema", bytes: changing(golden, at: domain.count + 1, to: 2)),
+            NamedMutation(name: "unsupported decision protocol", bytes: changing(golden, at: domain.count + 3, to: 2)),
+            NamedMutation(name: "unknown decision tag", bytes: changing(golden, at: decisionTagOffset, to: 3)),
+            NamedMutation(name: "invalid decision expiry", bytes: invalidExpiry),
+            NamedMutation(name: "DER decision signature", bytes: derSignature),
+            NamedMutation(name: "short decision signature", bytes: Data(golden.dropLast())),
+            NamedMutation(name: "decision truncation", bytes: Data(golden.prefix(domain.count + 8))),
+            NamedMutation(name: "decision trailing byte", bytes: golden + Data([0])),
+        ]
+        for mutation in mutations {
+            XCTAssertThrowsError(
+                try RemoteJITApprovalCanonicalCoding.decodeDecision(mutation.bytes),
+                mutation.name
+            )
+        }
+
+        assertOversized {
+            _ = try RemoteJITApprovalCanonicalCoding.decodeDecision(
+                Data(repeating: 0, count: 1_048_577)
+            )
+        }
+    }
+
+    func testEveryDecisionPayloadFieldChangesUnsignedBytes() throws {
+        let fixture = try RemoteJITApprovalGoldenFixture.load()
+        let payload = try fixture.makeApprovePayload()
+        let golden = try RemoteJITApprovalCanonicalCoding.unsignedDecisionBytes(payload)
+        let changedNonce = changing(payload.approvalNonce, at: 0, to: payload.approvalNonce[0] ^ 0x01)
+        let changedDigest = changing(payload.requestDigest, at: 0, to: payload.requestDigest[0] ^ 0x01)
+        let variants = try [
+            copiedPayload(payload, approvalID: XCTUnwrap(UUID(uuidString: "aaaaaaaa-1111-4111-8111-111111111111"))),
+            copiedPayload(payload, approvalNonce: changedNonce),
+            copiedPayload(payload, requestDigest: changedDigest),
+            copiedPayload(payload, pairingGenerationID: XCTUnwrap(UUID(uuidString: "aaaaaaaa-3333-4333-8333-333333333333"))),
+            copiedPayload(payload, macDeviceID: XCTUnwrap(UUID(uuidString: "aaaaaaaa-4444-4444-8444-444444444444"))),
+            copiedPayload(payload, iphoneDeviceID: XCTUnwrap(UUID(uuidString: "aaaaaaaa-5555-4555-8555-555555555555"))),
+            copiedPayload(payload, value: .deny),
+            copiedPayload(payload, requestExpiresAtMilliseconds: payload.requestExpiresAtMilliseconds - 1),
+        ]
+
+        for variant in variants {
+            XCTAssertNotEqual(
+                try RemoteJITApprovalCanonicalCoding.unsignedDecisionBytes(variant),
+                golden
+            )
+        }
+    }
+
+    func testEnvelopeDecodersPreserveOpaqueHighSSignatures() throws {
+        let fixture = try RemoteJITApprovalGoldenFixture.load()
+        var requestBytes = try Data(hexadecimal: fixture.expected.requestEnvelopeHex)
+        requestBytes.replaceSubrange((requestBytes.count - 32)..<requestBytes.count, with: Data(repeating: 0xFF, count: 32))
+        let request = try RemoteJITApprovalCanonicalCoding.decodeRequest(requestBytes)
+        XCTAssertEqual(request.requestSignature.suffix(32), Data(repeating: 0xFF, count: 32))
+        XCTAssertEqual(try RemoteJITApprovalCanonicalCoding.encodeRequest(request), requestBytes)
+
+        var decisionBytes = try Data(hexadecimal: fixture.expected.approveDecisionEnvelopeHex)
+        decisionBytes.replaceSubrange((decisionBytes.count - 32)..<decisionBytes.count, with: Data(repeating: 0xFF, count: 32))
+        let decision = try RemoteJITApprovalCanonicalCoding.decodeDecision(decisionBytes)
+        XCTAssertEqual(decision.decisionSignature.suffix(32), Data(repeating: 0xFF, count: 32))
+        XCTAssertEqual(try RemoteJITApprovalCanonicalCoding.encodeDecision(decision), decisionBytes)
+    }
+
+    func testEnvelopeDecodersAcceptDataSlicesWithNonzeroStartIndex() throws {
+        let fixture = try RemoteJITApprovalGoldenFixture.load()
+        let requestBytes = try Data(hexadecimal: fixture.expected.requestEnvelopeHex)
+        let decisionBytes = try Data(hexadecimal: fixture.expected.approveDecisionEnvelopeHex)
+
+        XCTAssertEqual(
+            try RemoteJITApprovalCanonicalCoding.encodeRequest(
+                RemoteJITApprovalCanonicalCoding.decodeRequest((Data([0xFF]) + requestBytes)[1...])
+            ),
+            requestBytes
+        )
+        XCTAssertEqual(
+            try RemoteJITApprovalCanonicalCoding.encodeDecision(
+                RemoteJITApprovalCanonicalCoding.decodeDecision((Data([0xFF]) + decisionBytes)[1...])
+            ),
+            decisionBytes
+        )
+    }
+
     private func malformedMutations(
         golden: Data,
         layout: DescriptorLayout
@@ -201,6 +364,44 @@ final class RemoteJITApprovalCanonicalCodingTests: XCTestCase {
             with: bigEndianBytes(UInt32(bytes.count)) + bytes
         )
         return result
+    }
+
+    private func copiedPayload(
+        _ payload: RemoteJITApprovalDecisionPayload,
+        approvalID: UUID? = nil,
+        approvalNonce: Data? = nil,
+        requestDigest: Data? = nil,
+        pairingGenerationID: UUID? = nil,
+        macDeviceID: UUID? = nil,
+        iphoneDeviceID: UUID? = nil,
+        value: RemoteJITApprovalDecisionValue? = nil,
+        requestExpiresAtMilliseconds: Int64? = nil
+    ) throws -> RemoteJITApprovalDecisionPayload {
+        try RemoteJITApprovalDecisionPayload(
+            approvalID: approvalID ?? payload.approvalID,
+            approvalNonce: approvalNonce ?? payload.approvalNonce,
+            requestDigest: requestDigest ?? payload.requestDigest,
+            pairingGenerationID: pairingGenerationID ?? payload.pairingGenerationID,
+            macDeviceID: macDeviceID ?? payload.macDeviceID,
+            iphoneDeviceID: iphoneDeviceID ?? payload.iphoneDeviceID,
+            value: value ?? payload.value,
+            requestExpiresAtMilliseconds: requestExpiresAtMilliseconds ?? payload.requestExpiresAtMilliseconds
+        )
+    }
+
+    private func assertOversized(
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ operation: () throws -> Void
+    ) {
+        XCTAssertThrowsError(try operation(), file: file, line: line) { error in
+            XCTAssertEqual(
+                error as? RemoteJITApprovalValidationError,
+                .oversized,
+                file: file,
+                line: line
+            )
+        }
     }
 }
 

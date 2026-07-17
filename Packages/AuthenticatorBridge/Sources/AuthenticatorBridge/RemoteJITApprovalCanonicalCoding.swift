@@ -1,10 +1,18 @@
+import CryptoKit
 import Foundation
 
 public enum RemoteJITApprovalCanonicalCoding {
     private static let descriptorDomain = Data(
         "Authsia.RemoteJITApproval.Descriptor.V1\0".utf8
     )
+    private static let requestEnvelopeDomain = Data(
+        "Authsia.RemoteJITApproval.RequestEnvelope.V1\0".utf8
+    )
+    private static let decisionEnvelopeDomain = Data(
+        "Authsia.RemoteJITApproval.DecisionEnvelope.V1\0".utf8
+    )
     private static let maximumDescriptorBytes = 1_000_000
+    private static let maximumEnvelopeBytes = 1_048_576
 
     public static func encodeDescriptor(
         _ descriptor: RemoteJITApprovalDescriptor
@@ -118,6 +126,151 @@ public enum RemoteJITApprovalCanonicalCoding {
             throw RemoteJITApprovalValidationError.nonCanonical
         }
         return descriptor
+    }
+
+    public static func encodeRequest(
+        _ request: RemoteJITApprovalRequest
+    ) throws -> Data {
+        let descriptorBytes = try encodeDescriptor(request.descriptor)
+        let digest = descriptorDigest(descriptorBytes)
+        guard request.requestDigest == digest else {
+            throw RemoteJITApprovalValidationError.inconsistentBinding
+        }
+
+        var writer = CanonicalWriter()
+        writer.append(requestEnvelopeDomain)
+        writer.append(UInt32(descriptorBytes.count))
+        writer.append(descriptorBytes)
+        writer.append(digest)
+        writer.append(request.requestSignature)
+        guard writer.data.count <= maximumEnvelopeBytes else {
+            throw RemoteJITApprovalValidationError.oversized
+        }
+        return writer.data
+    }
+
+    public static func decodeRequest(
+        _ data: Data
+    ) throws -> RemoteJITApprovalRequest {
+        guard data.count <= maximumEnvelopeBytes else {
+            throw RemoteJITApprovalValidationError.oversized
+        }
+
+        var reader = CanonicalReader(data: data)
+        guard try reader.readFixedData(count: requestEnvelopeDomain.count) == requestEnvelopeDomain else {
+            throw RemoteJITApprovalValidationError.nonCanonical
+        }
+        let descriptorLength = try reader.readBoundedLength(maximum: maximumDescriptorBytes)
+        let descriptorBytes = try reader.readFixedData(count: descriptorLength)
+        let descriptor = try decodeDescriptor(descriptorBytes)
+        let encodedDigest = try reader.readFixedData(count: 32)
+        let requestSignature = try reader.readFixedData(count: 64)
+        guard reader.isAtEnd else {
+            throw RemoteJITApprovalValidationError.nonCanonical
+        }
+        guard descriptorDigest(descriptorBytes) == encodedDigest else {
+            throw RemoteJITApprovalValidationError.inconsistentBinding
+        }
+
+        let request = try RemoteJITApprovalRequest(
+            descriptor: descriptor,
+            requestDigest: encodedDigest,
+            requestSignature: requestSignature
+        )
+        guard try encodeRequest(request) == data else {
+            throw RemoteJITApprovalValidationError.nonCanonical
+        }
+        return request
+    }
+
+    public static func encodeDecision(
+        _ decision: RemoteJITApprovalDecision
+    ) throws -> Data {
+        var writer = CanonicalWriter()
+        writer.append(decisionEnvelopeDomain)
+        writer.append(try unsignedDecisionBytes(decision.payload))
+        writer.append(decision.decisionSignature)
+        guard writer.data.count <= maximumEnvelopeBytes else {
+            throw RemoteJITApprovalValidationError.oversized
+        }
+        return writer.data
+    }
+
+    public static func decodeDecision(
+        _ data: Data
+    ) throws -> RemoteJITApprovalDecision {
+        guard data.count <= maximumEnvelopeBytes else {
+            throw RemoteJITApprovalValidationError.oversized
+        }
+
+        var reader = CanonicalReader(data: data)
+        guard try reader.readFixedData(count: decisionEnvelopeDomain.count) == decisionEnvelopeDomain else {
+            throw RemoteJITApprovalValidationError.nonCanonical
+        }
+        guard try reader.readUInt16() == RemoteJITApprovalDescriptor.schemaVersion,
+              try reader.readUInt16() == RemoteJITApprovalDescriptor.protocolVersion else {
+            throw RemoteJITApprovalValidationError.unsupportedVersion
+        }
+        let approvalID = try reader.readUUID()
+        let approvalNonce = try reader.readFixedData(count: 32)
+        let requestDigest = try reader.readFixedData(count: 32)
+        let pairingGenerationID = try reader.readUUID()
+        let macDeviceID = try reader.readUUID()
+        let iphoneDeviceID = try reader.readUUID()
+        guard let value = RemoteJITApprovalDecisionValue(rawValue: try reader.readUInt8()) else {
+            throw RemoteJITApprovalValidationError.nonCanonical
+        }
+        let requestExpiresAtMilliseconds = try reader.readInt64()
+        let decisionSignature = try reader.readFixedData(count: 64)
+        guard reader.isAtEnd else {
+            throw RemoteJITApprovalValidationError.nonCanonical
+        }
+
+        let payload = try RemoteJITApprovalDecisionPayload(
+            approvalID: approvalID,
+            approvalNonce: approvalNonce,
+            requestDigest: requestDigest,
+            pairingGenerationID: pairingGenerationID,
+            macDeviceID: macDeviceID,
+            iphoneDeviceID: iphoneDeviceID,
+            value: value,
+            requestExpiresAtMilliseconds: requestExpiresAtMilliseconds
+        )
+        let decision = try RemoteJITApprovalDecision(
+            payload: payload,
+            decisionSignature: decisionSignature
+        )
+        guard try encodeDecision(decision) == data else {
+            throw RemoteJITApprovalValidationError.nonCanonical
+        }
+        return decision
+    }
+
+    public static func unsignedDecisionBytes(
+        _ payload: RemoteJITApprovalDecisionPayload
+    ) throws -> Data {
+        var writer = CanonicalWriter()
+        writer.append(RemoteJITApprovalDescriptor.schemaVersion)
+        writer.append(RemoteJITApprovalDescriptor.protocolVersion)
+        writer.append(payload.approvalID)
+        writer.append(payload.approvalNonce)
+        writer.append(payload.requestDigest)
+        writer.append(payload.pairingGenerationID)
+        writer.append(payload.macDeviceID)
+        writer.append(payload.iphoneDeviceID)
+        writer.append(payload.value.rawValue)
+        writer.append(payload.requestExpiresAtMilliseconds)
+        return writer.data
+    }
+
+    static func requestDigest(
+        for descriptor: RemoteJITApprovalDescriptor
+    ) throws -> Data {
+        descriptorDigest(try encodeDescriptor(descriptor))
+    }
+
+    private static func descriptorDigest(_ descriptorBytes: Data) -> Data {
+        Data(SHA256.hash(data: descriptorBytes))
     }
 }
 
@@ -395,7 +548,7 @@ private struct CanonicalReader {
         return items
     }
 
-    private mutating func readBoundedLength(maximum: Int) throws -> Int {
+    mutating func readBoundedLength(maximum: Int) throws -> Int {
         let encoded = try readUInt32()
         guard encoded <= UInt32(maximum) else {
             throw RemoteJITApprovalValidationError.oversized
