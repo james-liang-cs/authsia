@@ -75,19 +75,31 @@ enum HexadecimalDecodingError: Error {
 
 extension Data {
     init(hexadecimal: String) throws {
-        guard hexadecimal.utf8.count.isMultiple(of: 2) else {
+        let encoded = Array(hexadecimal.utf8)
+        guard encoded.count.isMultiple(of: 2) else {
             throw HexadecimalDecodingError.oddLength
         }
 
-        var decoded = Data(capacity: hexadecimal.utf8.count / 2)
-        var index = hexadecimal.startIndex
-        while index < hexadecimal.endIndex {
-            let nextIndex = hexadecimal.index(index, offsetBy: 2)
-            guard let byte = UInt8(hexadecimal[index..<nextIndex], radix: 16) else {
+        func nibble(_ byte: UInt8) -> UInt8? {
+            switch byte {
+            case UInt8(ascii: "0")...UInt8(ascii: "9"):
+                byte - UInt8(ascii: "0")
+            case UInt8(ascii: "a")...UInt8(ascii: "f"):
+                byte - UInt8(ascii: "a") + 10
+            case UInt8(ascii: "A")...UInt8(ascii: "F"):
+                byte - UInt8(ascii: "A") + 10
+            default:
+                nil
+            }
+        }
+
+        var decoded = Data(capacity: encoded.count / 2)
+        for index in stride(from: 0, to: encoded.count, by: 2) {
+            guard let high = nibble(encoded[index]),
+                  let low = nibble(encoded[index + 1]) else {
                 throw HexadecimalDecodingError.invalidCharacter
             }
-            decoded.append(byte)
-            index = nextIndex
+            decoded.append((high << 4) | low)
         }
         self = decoded
     }

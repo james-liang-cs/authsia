@@ -30,9 +30,10 @@ All integers are unsigned unless stated otherwise.
 
 Date-to-millisecond conversion truncates toward zero. Required strings and
 present optional strings are nonempty, NFC/precomposed, contain no NUL or other
-Unicode control scalar, and respect the field-specific UTF-8 byte limit. A
-decoder requires the received bytes to already have this form; it never repairs
-or normalizes input.
+unsafe Unicode control scalar, and respect the field-specific UTF-8 byte limit.
+For V1, an unsafe control scalar is any scalar whose Unicode General_Category is
+`Cc` or `Cf`. A decoder requires received bytes to already have this form; it
+never repairs or normalizes input.
 
 A canonical descriptor is at most 1,000,000 bytes. A request or decision
 envelope is at most 1,048,576 bytes. Counts and lengths must be checked against
@@ -95,17 +96,21 @@ are `[list]` and `[exec, list]`.
 
 Folder tags are `root = 0x00` and `folderAndDescendants = 0x01` followed by a
 string. A folder path uses the existing `normalizeFolderPath` behavior: split on
-`/`, trim Foundation whitespace and newlines from each segment, discard empty
-segments, and rejoin with `/`. A received named folder must already equal that
-normalized nonempty result.
+`/`, trim the frozen Foundation whitespace-and-newline mirror from each segment,
+discard empty segments, and rejoin with `/`. That trim set is exactly
+U+0009...U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000...U+200B, U+2028,
+U+2029, U+202F, U+205F, and U+3000. A received named folder must already equal
+that normalized nonempty result and therefore cannot carry a trimmed `Cf`
+scalar on the wire.
 
 Environment tags are `unrestricted(nil) = 0x00`, `defaultOnly = 0x01`, and
 `named = 0x02` followed by a string. A named environment trims only ASCII
 U+0009...U+000D and U+0020 from both ends, converts to NFC, rejects an empty
 result and all remaining Unicode control scalars, and preserves spelling and
-case. A decoder requires exact equality with this normalized result. A later
-host may authorize environment names case-insensitively, but wire bytes never
-case-fold.
+case. Here and throughout V1, “control scalars” means Unicode General_Category
+`Cc` or `Cf`. A decoder requires exact equality with this normalized result. A
+later host may authorize environment names case-insensitively, but wire bytes
+never case-fold.
 
 Item tags are `password = 0x01`, `apiKey = 0x02`, `certificate = 0x03`,
 `note = 0x04`, and `ssh = 0x05`. Each item contains its tag, UUID, and optional
@@ -120,7 +125,7 @@ for the root working directory and otherwise its last normalized component.
 Scope, environment, duration, and requested item counts and kinds come from the
 signed authority fields. The Mac label comes from the trusted pairing record.
 UI renders derived strings with normal platform escaping; a pairing layer must
-apply the same no-control-scalar rule to the Mac label.
+apply the same no-`Cc`/`Cf` rule to the Mac label.
 
 ## Signed request
 
