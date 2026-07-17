@@ -400,11 +400,19 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
     }
 
     func save(_ grant: AgentJITGrant) throws {
-        if let index = grants.firstIndex(where: { $0.id == grant.id }) {
-            grants[index] = grant
-        } else {
-            grants.append(grant)
+        try saveAll([grant])
+    }
+
+    func saveAll(_ newGrants: [AgentJITGrant]) throws {
+        var updatedGrants = grants
+        for grant in newGrants {
+            if let index = updatedGrants.firstIndex(where: { $0.id == grant.id }) {
+                updatedGrants[index] = grant
+            } else {
+                updatedGrants.append(grant)
+            }
         }
+        grants = updatedGrants
     }
 
     func markUsed(id: UUID, at date: Date) throws -> AgentJITGrant {
@@ -481,6 +489,8 @@ private final class RevokingAtomicGrantStore: AgentJITGrantStoring {
 
     func save(_ grant: AgentJITGrant) throws {}
 
+    func saveAll(_ grants: [AgentJITGrant]) throws {}
+
     func markUsed(id: UUID, at date: Date) throws -> AgentJITGrant {
         grant.copy(lastUsedAt: date)
     }
@@ -534,6 +544,8 @@ private final class BatchOnlyScopeStore: AgentJITGrantStoring {
     }
 
     func save(_ grant: AgentJITGrant) throws {}
+
+    func saveAll(_ grants: [AgentJITGrant]) throws {}
 
     func markUsed(id: UUID, at date: Date) throws -> AgentJITGrant {
         throw AgentJITGrantStoreError.notFound(id)
