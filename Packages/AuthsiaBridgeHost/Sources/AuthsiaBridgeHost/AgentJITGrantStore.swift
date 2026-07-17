@@ -19,6 +19,7 @@ public enum AgentJITGrantStoreError: LocalizedError, Equatable {
 public nonisolated protocol AgentJITGrantStoring {
     func loadAll() throws -> [AgentJITGrant]
     func save(_ grant: AgentJITGrant) throws
+    func saveAll(_ grants: [AgentJITGrant]) throws
     func markUsed(id: UUID, at date: Date) throws -> AgentJITGrant
     func revoke(id: UUID, revokedAt date: Date) throws -> AgentJITGrant
     func revokeClosedTerminalGrants(now: Date) throws -> [AgentJITGrant]
@@ -46,6 +47,7 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
     private let fileURL: URL
     private let fileManager: FileManager
     private let terminalSessionLiveness: (String?) -> TerminalSessionLiveness
+    private let atomicWriter: (Data) throws -> Void
 
     public init(
         fileURL: URL = AgentJITGrantStore.defaultFileURL(),
@@ -57,6 +59,23 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
         self.fileURL = fileURL
         self.fileManager = fileManager
         self.terminalSessionLiveness = terminalSessionLiveness
+        self.atomicWriter = { data in
+            try Self.writeAtomically(data, to: fileURL, fileManager: fileManager)
+        }
+    }
+
+    init(
+        fileURL: URL,
+        fileManager: FileManager = .default,
+        terminalSessionLiveness: @escaping (String?) -> TerminalSessionLiveness = {
+            TerminalSessionScope.liveness(for: $0)
+        },
+        atomicWriter: @escaping (Data) throws -> Void
+    ) {
+        self.fileURL = fileURL
+        self.fileManager = fileManager
+        self.terminalSessionLiveness = terminalSessionLiveness
+        self.atomicWriter = atomicWriter
     }
 
     public func loadAll() throws -> [AgentJITGrant] {
@@ -77,12 +96,19 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
     }
 
     public func save(_ grant: AgentJITGrant) throws {
+        try saveAll([grant])
+    }
+
+    public func saveAll(_ newGrants: [AgentJITGrant]) throws {
+        guard !newGrants.isEmpty else { return }
         try locked {
             var grants = try loadAllUnlocked()
-            if let index = grants.firstIndex(where: { $0.id == grant.id }) {
-                grants[index] = grant
-            } else {
-                grants.append(grant)
+            for grant in newGrants {
+                if let index = grants.firstIndex(where: { $0.id == grant.id }) {
+                    grants[index] = grant
+                } else {
+                    grants.append(grant)
+                }
             }
             try writeUnlocked(grants)
         }
@@ -229,8 +255,7 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
     private func writeUnlocked(_ grants: [AgentJITGrant]) throws {
         try ensureDirectory()
         let data = try Self.encoder.encode(grants)
-        try data.write(to: fileURL, options: .atomic)
-        try enforceFilePermissions()
+        try atomicWriter(data)
     }
 
     private func ensureDirectory() throws {
@@ -245,6 +270,34 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
 
     private func enforceFilePermissions() throws {
         try fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: fileURL.path)
+    }
+
+    private static func writeAtomically(
+        _ data: Data,
+        to fileURL: URL,
+        fileManager: FileManager
+    ) throws {
+        let directory = fileURL.deletingLastPathComponent()
+        let temporaryURL = directory.appendingPathComponent(
+            ".\(fileURL.lastPathComponent).\(UUID().uuidString).tmp"
+        )
+        defer { try? fileManager.removeItem(at: temporaryURL) }
+
+        try data.write(to: temporaryURL)
+        try fileManager.setAttributes(
+            [.posixPermissions: filePermissions],
+            ofItemAtPath: temporaryURL.path
+        )
+        if fileManager.fileExists(atPath: fileURL.path) {
+            _ = try fileManager.replaceItemAt(
+                fileURL,
+                withItemAt: temporaryURL,
+                backupItemName: nil,
+                options: .usingNewMetadataOnly
+            )
+        } else {
+            try fileManager.moveItem(at: temporaryURL, to: fileURL)
+        }
     }
 
     private static var encoder: JSONEncoder {
