@@ -53,6 +53,7 @@ final class XPCRequestHandlerWorkspaceMetadataTests: XCTestCase {
         XCTAssertNil(response.sessionToken)
         XCTAssertEqual(response.payload?.passwords.map(\.name), ["DB_PASSWORD"])
         XCTAssertEqual(approver.callCount, 0)
+        XCTAssertEqual(approver.remoteRequests, [])
         XCTAssertEqual(listProvider.callCount, 1)
     }
 
@@ -487,16 +488,19 @@ private final class WorkspaceMetadataStubRepository: VaultRepositoryProviding {
 
 private final class WorkspaceMetadataApprovalTracker: BridgeApprover {
     private(set) var callCount = 0
+    private(set) var remoteRequests: [[RemoteJITApprovalRequest]] = []
 
     func requestApproval(
         prompt: String,
         command: BridgeRequestType,
         itemLabel: String?,
         field: String?,
-        callback: AuthsiaBridgeApprovalCallbackProtocol?
-    ) async -> Bool {
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome {
         callCount += 1
-        return true
+        self.remoteRequests.append(remoteRequests)
+        return .approved(source: .macBiometric)
     }
 }
 

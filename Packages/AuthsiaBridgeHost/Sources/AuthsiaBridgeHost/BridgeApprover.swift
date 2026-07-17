@@ -7,6 +7,26 @@ public protocol BridgeApprover {
         command: BridgeRequestType,
         itemLabel: String?,
         field: String?,
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome
+}
+
+public extension BridgeApprover {
+    func requestApproval(
+        prompt: String,
+        command: BridgeRequestType,
+        itemLabel: String?,
+        field: String?,
         callback: AuthsiaBridgeApprovalCallbackProtocol?
-    ) async -> Bool
+    ) async -> RemoteJITApprovalOutcome {
+        await requestApproval(
+            prompt: prompt,
+            command: command,
+            itemLabel: itemLabel,
+            field: field,
+            callback: callback,
+            remoteRequests: []
+        )
+    }
 }

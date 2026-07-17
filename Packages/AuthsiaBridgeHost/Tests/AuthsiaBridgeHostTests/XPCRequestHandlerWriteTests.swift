@@ -45,6 +45,7 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         XCTAssertEqual(approver.requests.first?.command, .createAccess)
         XCTAssertEqual(approver.requests.first?.itemLabel, "Team/API")
         XCTAssertEqual(approver.requests.first?.field, nil)
+        XCTAssertEqual(approver.requests.first?.remoteRequests, [])
         XCTAssertEqual(approver.requests.first?.prompt.contains("Example-MacBook"), true)
         XCTAssertEqual(approver.requests.first?.prompt.contains("allow=exec,ssh"), true)
     }
@@ -997,13 +998,16 @@ private final class ApprovalTracker: BridgeApprover {
         let command: BridgeRequestType
         let itemLabel: String?
         let field: String?
+        let remoteRequests: [RemoteJITApprovalRequest]
     }
 
-    private let result: Bool
+    private let outcome: RemoteJITApprovalOutcome
     private(set) var requests: [Request] = []
 
     init(result: Bool) {
-        self.result = result
+        self.outcome = result
+            ? .approved(source: .macBiometric)
+            : .denied(source: .macBiometric)
     }
 
     func requestApproval(
@@ -1011,10 +1015,19 @@ private final class ApprovalTracker: BridgeApprover {
         command: BridgeRequestType,
         itemLabel: String?,
         field: String?,
-        callback: AuthsiaBridgeApprovalCallbackProtocol?
-    ) async -> Bool {
-        requests.append(Request(prompt: prompt, command: command, itemLabel: itemLabel, field: field))
-        return result
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome {
+        requests.append(
+            Request(
+                prompt: prompt,
+                command: command,
+                itemLabel: itemLabel,
+                field: field,
+                remoteRequests: remoteRequests
+            )
+        )
+        return outcome
     }
 }
 

@@ -105,7 +105,7 @@ extension XPCRequestHandler {
             guard let self else { return }
 
             let ttlSeconds = Self.configuredSessionTTL
-            let approved = await self.approver.requestApproval(
+            let authorization = await self.requestLocalApproval(
                 prompt: "Unlock CLI session for \(Int(ttlSeconds)) seconds",
                 command: .unlock,
                 itemLabel: nil,
@@ -113,7 +113,7 @@ extension XPCRequestHandler {
                 callback: callback
             )
 
-            guard approved else {
+            guard case .allowed(_, let approvalAttribution) = authorization else {
                 let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                     id: bridgeRequest.id,
                     code: .notAuthorized,
@@ -150,7 +150,7 @@ extension XPCRequestHandler {
             self.recordAudit(
                 command: .unlock,
                 itemId: "",
-                approvedBy: "biometric",
+                approvedBy: approvalAttribution,
                 caller: callerIdentity,
                 requestedCommand: bridgeRequest.context.requestedCommand,
                 fullCommand: bridgeRequest.context.fullCommand,

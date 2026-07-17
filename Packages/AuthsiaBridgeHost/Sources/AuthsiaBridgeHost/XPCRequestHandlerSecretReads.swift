@@ -94,22 +94,23 @@ extension XPCRequestHandler {
                 ) else { return }
                 var newSessionToken: String?
                 var newSessionExpiresAt: Date?
+                var interactiveApprovalAttribution: String?
                 let sessionToken = bridgeRequest.sessionToken
                 let needsApproval = !bypassApproval && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
                 if needsApproval {
-                    let approved = await self.approver.requestApproval(
+                    let authorization = await self.requestLocalApproval(
                         prompt: "Allow CLI to access OTP code for \(match.issuer)",
                         command: .getOTP,
                         itemLabel: match.issuer,
                         field: "otp",
                         callback: callback
                     )
-                    guard approved else {
+                    guard case .allowed(_, let attribution) = authorization else {
                         self.recordAudit(
                             command: .getOTP,
                             itemId: match.id.uuidString,
                             itemName: match.issuer,
-                            approvedBy: "denied",
+                            approvedBy: authorization.attribution,
                             caller: callerIdentity,
                             requestedCommand: bridgeRequest.context.requestedCommand,
                             fullCommand: bridgeRequest.context.fullCommand,
@@ -124,6 +125,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
+                    interactiveApprovalAttribution = attribution
                     guard let session = Self.sharedSessionManager.createSessionOrNil(
                         ttlSeconds: Self.configuredSessionTTL,
                         scope: bridgeRequest.context.sessionScope,
@@ -173,7 +175,9 @@ extension XPCRequestHandler {
                     command: .getOTP,
                     itemId: match.id.uuidString,
                     itemName: match.issuer,
-                    approvedBy: bypassApproval ? "automation" : (needsApproval ? "biometric" : "session"),
+                    approvedBy: bypassApproval
+                        ? "automation"
+                        : (interactiveApprovalAttribution ?? "session"),
                     caller: callerIdentity,
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
@@ -293,20 +297,21 @@ extension XPCRequestHandler {
                 }
                 var newSessionToken: String?
                 var newSessionExpiresAt: Date?
+                var interactiveApprovalAttribution: String?
                 if needsApproval {
-                    let approved = await self.approver.requestApproval(
+                    let authorization = await self.requestLocalApproval(
                         prompt: "Allow CLI to access password for \(match.name)",
                         command: .getPassword,
                         itemLabel: match.name,
                         field: "password",
                         callback: callback
                     )
-                    guard approved else {
+                    guard case .allowed(_, let attribution) = authorization else {
                         self.recordAudit(
                             command: .getPassword,
                             itemId: match.id.uuidString,
                             itemName: match.name,
-                            approvedBy: "denied",
+                            approvedBy: authorization.attribution,
                             caller: callerIdentity,
                             requestedCommand: bridgeRequest.context.requestedCommand,
                             fullCommand: bridgeRequest.context.fullCommand,
@@ -321,6 +326,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
+                    interactiveApprovalAttribution = attribution
                     guard let session = Self.sharedSessionManager.createSessionOrNil(
                         ttlSeconds: Self.configuredSessionTTL,
                         scope: bridgeRequest.context.sessionScope,
@@ -338,7 +344,7 @@ extension XPCRequestHandler {
                     newSessionToken = session.sessionToken
                     newSessionExpiresAt = session.expiresAt
                 }
-                let auditApprovedBy = needsApproval ? "biometric" : approvedBy
+                let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
 
                 let secretData = try VaultKeychainStore.shared.retrievePassword(for: match.id)
                 let passwordString = String(data: secretData, encoding: .utf8) ?? ""
@@ -482,20 +488,21 @@ extension XPCRequestHandler {
 
                 var newSessionToken: String?
                 var newSessionExpiresAt: Date?
+                var interactiveApprovalAttribution: String?
                 if needsApproval {
-                    let approved = await self.approver.requestApproval(
+                    let authorization = await self.requestLocalApproval(
                         prompt: "Allow CLI to access API key for \(match.name)",
                         command: .getAPIKey,
                         itemLabel: match.name,
                         field: "key",
                         callback: callback
                     )
-                    guard approved else {
+                    guard case .allowed(_, let attribution) = authorization else {
                         self.recordAudit(
                             command: .getAPIKey,
                             itemId: match.id.uuidString,
                             itemName: match.name,
-                            approvedBy: "denied",
+                            approvedBy: authorization.attribution,
                             caller: callerIdentity,
                             requestedCommand: bridgeRequest.context.requestedCommand,
                             fullCommand: bridgeRequest.context.fullCommand,
@@ -510,6 +517,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
+                    interactiveApprovalAttribution = attribution
                     guard let session = Self.sharedSessionManager.createSessionOrNil(
                         ttlSeconds: Self.configuredSessionTTL,
                         scope: bridgeRequest.context.sessionScope,
@@ -527,7 +535,7 @@ extension XPCRequestHandler {
                     newSessionToken = session.sessionToken
                     newSessionExpiresAt = session.expiresAt
                 }
-                let auditApprovedBy = needsApproval ? "biometric" : approvedBy
+                let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
 
                 let secretData = try VaultKeychainStore.shared.retrieveAPIKey(for: match.id)
                 let keyString = String(data: secretData, encoding: .utf8) ?? ""
@@ -662,20 +670,21 @@ extension XPCRequestHandler {
                 }
                 var newSessionToken: String?
                 var newSessionExpiresAt: Date?
+                var interactiveApprovalAttribution: String?
                 if needsApproval {
-                    let approved = await self.approver.requestApproval(
+                    let authorization = await self.requestLocalApproval(
                         prompt: "Allow CLI to access certificate for \(match.name)",
                         command: .getCertificate,
                         itemLabel: match.name,
                         field: "certificate",
                         callback: callback
                     )
-                    guard approved else {
+                    guard case .allowed(_, let attribution) = authorization else {
                         self.recordAudit(
                             command: .getCertificate,
                             itemId: match.id.uuidString,
                             itemName: match.name,
-                            approvedBy: "denied",
+                            approvedBy: authorization.attribution,
                             caller: callerIdentity,
                             requestedCommand: bridgeRequest.context.requestedCommand,
                             fullCommand: bridgeRequest.context.fullCommand,
@@ -690,6 +699,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
+                    interactiveApprovalAttribution = attribution
                     guard let session = Self.sharedSessionManager.createSessionOrNil(
                         ttlSeconds: Self.configuredSessionTTL,
                         scope: bridgeRequest.context.sessionScope,
@@ -707,7 +717,7 @@ extension XPCRequestHandler {
                     newSessionToken = session.sessionToken
                     newSessionExpiresAt = session.expiresAt
                 }
-                let auditApprovedBy = needsApproval ? "biometric" : approvedBy
+                let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
 
                 let (certData, keyData) = try VaultKeychainStore.shared.retrieveCertificate(for: match.id)
                 let certString = String(data: certData, encoding: .utf8) ?? certData.base64EncodedString()
@@ -846,20 +856,21 @@ extension XPCRequestHandler {
                 }
                 var newSessionToken: String?
                 var newSessionExpiresAt: Date?
+                var interactiveApprovalAttribution: String?
                 if needsApproval {
-                    let approved = await self.approver.requestApproval(
+                    let authorization = await self.requestLocalApproval(
                         prompt: "Allow CLI to access secure note for \(match.title)",
                         command: .getNote,
                         itemLabel: match.title,
                         field: "content",
                         callback: callback
                     )
-                    guard approved else {
+                    guard case .allowed(_, let attribution) = authorization else {
                         self.recordAudit(
                             command: .getNote,
                             itemId: match.id.uuidString,
                             itemName: match.title,
-                            approvedBy: "denied",
+                            approvedBy: authorization.attribution,
                             caller: callerIdentity,
                             requestedCommand: bridgeRequest.context.requestedCommand,
                             fullCommand: bridgeRequest.context.fullCommand,
@@ -874,6 +885,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
+                    interactiveApprovalAttribution = attribution
                     guard let session = Self.sharedSessionManager.createSessionOrNil(
                         ttlSeconds: Self.configuredSessionTTL,
                         scope: bridgeRequest.context.sessionScope,
@@ -891,7 +903,7 @@ extension XPCRequestHandler {
                     newSessionToken = session.sessionToken
                     newSessionExpiresAt = session.expiresAt
                 }
-                let auditApprovedBy = needsApproval ? "biometric" : approvedBy
+                let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
 
                 let contentData = try VaultKeychainStore.shared.retrieveNoteContent(for: match.id)
                 let contentString = String(data: contentData, encoding: .utf8) ?? ""
@@ -1016,22 +1028,23 @@ extension XPCRequestHandler {
                 ) else { return }
                 var newSessionToken: String?
                 var newSessionExpiresAt: Date?
+                var interactiveApprovalAttribution: String?
                 let sessionToken = bridgeRequest.sessionToken
                 let needsApproval = !bypassApproval && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
                 if needsApproval {
-                    let approved = await self.approver.requestApproval(
+                    let authorization = await self.requestLocalApproval(
                         prompt: "Allow CLI to access SSH key for \(match.name)",
                         command: .getSSH,
                         itemLabel: match.name,
                         field: "ssh",
                         callback: callback
                     )
-                    guard approved else {
+                    guard case .allowed(_, let attribution) = authorization else {
                         self.recordAudit(
                             command: .getSSH,
                             itemId: match.id.uuidString,
                             itemName: match.name,
-                            approvedBy: "denied",
+                            approvedBy: authorization.attribution,
                             caller: callerIdentity,
                             requestedCommand: bridgeRequest.context.requestedCommand,
                             fullCommand: bridgeRequest.context.fullCommand,
@@ -1046,6 +1059,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
+                    interactiveApprovalAttribution = attribution
                     guard let session = Self.sharedSessionManager.createSessionOrNil(
                         ttlSeconds: Self.configuredSessionTTL,
                         scope: bridgeRequest.context.sessionScope,
@@ -1095,7 +1109,9 @@ extension XPCRequestHandler {
                     command: .getSSH,
                     itemId: match.id.uuidString,
                     itemName: match.name,
-                    approvedBy: bypassApproval ? "automation" : (needsApproval ? "biometric" : "session"),
+                    approvedBy: bypassApproval
+                        ? "automation"
+                        : (interactiveApprovalAttribution ?? "session"),
                     caller: callerIdentity,
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
