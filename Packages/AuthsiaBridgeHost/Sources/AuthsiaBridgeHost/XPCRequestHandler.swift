@@ -5,6 +5,9 @@ import Security
 import AuthenticatorData
 import AuthenticatorCore
 
+public typealias CallerIdentityRevalidationProvider = (CallerIdentity) -> CallerIdentity?
+public typealias AgentJITApprovalClock = () -> Date
+
 final class XPCReply: @unchecked Sendable {
     private let callback: (Data?, NSError?) -> Void
 
@@ -41,6 +44,9 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     let agentJITGrantStore: AgentJITGrantStoring
     let agentJITGrantAuthorizer: AgentJITGrantAuthorizer
     let callerIdentityProvider: CallerIdentityProvider
+    let callerIdentityRevalidationProvider: CallerIdentityRevalidationProvider
+    let remoteJITApprovalRequestBuilder: RemoteJITApprovalRequestBuilding?
+    let agentJITApprovalClock: AgentJITApprovalClock
     let auditLogger: BridgeAuditLogger
     let appBundlePath: String
 
@@ -99,6 +105,11 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         callerIdentityProvider: @escaping CallerIdentityProvider = {
             CallerIdentityExtractor.extract(from: NSXPCConnection.current())
         },
+        callerIdentityRevalidationProvider: @escaping CallerIdentityRevalidationProvider = { original in
+            CallerIdentityExtractor.extract(fromPID: original.pid)
+        },
+        remoteJITApprovalRequestBuilder: RemoteJITApprovalRequestBuilding? = nil,
+        agentJITApprovalClock: @escaping AgentJITApprovalClock = Date.init,
         auditLogger: BridgeAuditLogger = BridgeAuditLogger(),
         appBundlePath: String = Bundle.main.bundlePath
     ) {
@@ -114,6 +125,9 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         self.agentJITGrantStore = agentJITGrantStore
         self.agentJITGrantAuthorizer = AgentJITGrantAuthorizer(store: agentJITGrantStore)
         self.callerIdentityProvider = callerIdentityProvider
+        self.callerIdentityRevalidationProvider = callerIdentityRevalidationProvider
+        self.remoteJITApprovalRequestBuilder = remoteJITApprovalRequestBuilder
+        self.agentJITApprovalClock = agentJITApprovalClock
         self.auditLogger = auditLogger
         self.appBundlePath = appBundlePath
         super.init()

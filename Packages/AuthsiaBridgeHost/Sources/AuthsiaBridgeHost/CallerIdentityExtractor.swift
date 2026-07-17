@@ -14,9 +14,9 @@ public enum CallerIdentityExtractor {
         return extract(fromPID: connection.processIdentifier)
     }
 
+    @usableFromInline
     static func extract(fromPID pid: pid_t) -> CallerIdentity? {
-        guard pid > 0 else { return nil }
-        let processName = Self.processName(for: pid) ?? "unknown"
+        guard pid > 0, let processName = Self.processName(for: pid) else { return nil }
         let parentContext = parentProcessContext(for: pid)
 
         var code: SecCode?
