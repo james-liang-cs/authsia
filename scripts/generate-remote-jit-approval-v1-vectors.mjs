@@ -22,7 +22,8 @@ const DOMAINS = Object.freeze({
   decisionEnvelope: Buffer.from("Authsia.RemoteJITApproval.DecisionEnvelope.V1\0", "ascii"),
 });
 const FOUNDATION_WHITESPACE_AND_NEWLINES =
-  /^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu;
+  /^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000]+$/gu;
+const UNSAFE_PROTOCOL_CONTROL = /[\p{Cc}\p{Cf}]/u;
 
 const sha256 = data => createHash("sha256").update(data).digest();
 const hex = data => data.toString("hex");
@@ -79,7 +80,7 @@ function protocolString(value, maximumBytes, label) {
     );
   }
   assert.equal(value, value.normalize("NFC"), `${label} must already be NFC`);
-  assert(!/\p{Cc}/u.test(value), `${label} contains a control scalar`);
+  assert(!UNSAFE_PROTOCOL_CONTROL.test(value), `${label} contains an unsafe control scalar`);
   const encoded = Buffer.from(value, "utf8");
   assert(encoded.length > 0 && encoded.length <= maximumBytes, `${label} exceeds its byte limit`);
   return Buffer.concat([u32(encoded.length), encoded]);
@@ -116,7 +117,7 @@ function normalizeNamedEnvironment(value) {
 function canonicalNamedEnvironment(value) {
   const normalized = normalizeNamedEnvironment(value);
   assert(normalized.length > 0, "named environment must not be empty");
-  assert(!/\p{Cc}/u.test(normalized), "named environment contains a control scalar");
+  assert(!UNSAFE_PROTOCOL_CONTROL.test(normalized), "named environment contains an unsafe control scalar");
   assert.equal(value, normalized, "named environment must already be normalized");
   return protocolString(value, 255, "named environment");
 }
@@ -133,7 +134,10 @@ function normalizeWorkingDirectory(value) {
       continue;
     }
     assert.equal(rawComponent, rawComponent.normalize("NFC"), "working-directory component must be NFC");
-    assert(!/\p{Cc}/u.test(rawComponent), "working-directory component contains a control scalar");
+    assert(
+      !UNSAFE_PROTOCOL_CONTROL.test(rawComponent),
+      "working-directory component contains an unsafe control scalar",
+    );
     output.push(rawComponent);
   }
   return `/${output.join("/")}`;
@@ -526,6 +530,17 @@ function verifyFixture(fixture) {
   expectedHex(approveDecisionEnvelope, expected.approveDecisionEnvelopeHex, "approve decision envelope");
   expectedHex(denyDecisionEnvelope, expected.denyDecisionEnvelopeHex, "deny decision envelope");
 }
+
+function runCanonicalizationRegressionAssertions() {
+  assert.equal(normalizeFolderPath("\u200bTeam\u200b/ API "), "Team/API");
+  assert.throws(() => protocolString("safe\u202e", 255, "bidi override"));
+  assert.throws(() => protocolString("safe\u2066", 255, "bidi isolate"));
+  assert.throws(() => protocolString("safe\ufeff", 255, "format control"));
+  assert.throws(() => canonicalNamedEnvironment("Prod\u202e"));
+  assert.throws(() => normalizeWorkingDirectory("/workspace/\u2066hidden"));
+}
+
+runCanonicalizationRegressionAssertions();
 
 const [mode, path, ...extra] = process.argv.slice(2);
 assert(extra.length === 0 && path, "usage: generate-remote-jit-approval-v1-vectors.mjs (--generate|--verify) path");

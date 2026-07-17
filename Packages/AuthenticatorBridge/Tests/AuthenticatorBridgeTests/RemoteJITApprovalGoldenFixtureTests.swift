@@ -23,4 +23,9 @@ final class RemoteJITApprovalGoldenFixtureTests: XCTestCase {
         let data = try Data(hexadecimal: "00a1ff")
         XCTAssertEqual(data.hexString, "00a1ff")
     }
+
+    func testHexadecimalDataRejectsNonASCIIWithoutTrapping() {
+        XCTAssertThrowsError(try Data(hexadecimal: "é"))
+        XCTAssertThrowsError(try Data(hexadecimal: "😀"))
+    }
 }
