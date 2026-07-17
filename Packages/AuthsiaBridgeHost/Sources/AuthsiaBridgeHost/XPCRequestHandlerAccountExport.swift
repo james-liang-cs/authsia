@@ -89,20 +89,21 @@ extension XPCRequestHandler {
                 return
             }
 
-            // Export is a bulk operation — always require biometric or a valid session.
+            // Export is a bulk operation — always require explicit local approval or a valid session.
             var newSessionToken: String?
             var newSessionExpiresAt: Date?
+            var interactiveApprovalAttribution: String?
             let sessionToken = bridgeRequest.sessionToken
             let needsApproval = !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
             if needsApproval {
-                let approved = await self.approver.requestApproval(
+                let authorization = await self.requestLocalApproval(
                     prompt: "Allow CLI to export all 2FA accounts",
                     command: .exportAccounts,
                     itemLabel: nil,
                     field: nil,
                     callback: callback
                 )
-                guard approved else {
+                guard case .allowed(_, let attribution) = authorization else {
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                         id: bridgeRequest.id,
                         code: .notAuthorized,
@@ -111,6 +112,7 @@ extension XPCRequestHandler {
                     reply(self.encodeResponse(response), nil)
                     return
                 }
+                interactiveApprovalAttribution = attribution
                 guard let session = Self.sharedSessionManager.createSessionOrNil(
                     ttlSeconds: Self.configuredSessionTTL,
                     scope: bridgeRequest.context.sessionScope,
@@ -160,7 +162,7 @@ extension XPCRequestHandler {
                     command: .exportAccounts,
                     itemId: "all-accounts",
                     itemName: "All Accounts",
-                    approvedBy: needsApproval ? "biometric" : "session",
+                    approvedBy: interactiveApprovalAttribution ?? "session",
                     caller: callerIdentity,
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,

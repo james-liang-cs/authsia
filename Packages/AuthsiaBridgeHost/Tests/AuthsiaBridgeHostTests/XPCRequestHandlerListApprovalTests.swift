@@ -56,6 +56,7 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         await fulfillment(of: [second], timeout: 1)
 
         XCTAssertEqual(approver.callCount, 1)
+        XCTAssertEqual(approver.remoteRequests, [[]])
         XCTAssertEqual(listProvider.callCount, 2)
     }
 
@@ -1097,10 +1098,13 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
 
 private final class ApprovalTracker: BridgeApprover {
     private(set) var callCount = 0
-    private let result: Bool
+    private(set) var remoteRequests: [[RemoteJITApprovalRequest]] = []
+    private let outcome: RemoteJITApprovalOutcome
 
     init(result: Bool) {
-        self.result = result
+        self.outcome = result
+            ? .approved(source: .macBiometric)
+            : .denied(source: .macBiometric)
     }
 
     func requestApproval(
@@ -1108,27 +1112,34 @@ private final class ApprovalTracker: BridgeApprover {
         command: BridgeRequestType,
         itemLabel: String?,
         field: String?,
-        callback: AuthsiaBridgeApprovalCallbackProtocol?
-    ) async -> Bool {
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome {
         callCount += 1
-        return result
+        self.remoteRequests.append(remoteRequests)
+        return outcome
     }
 }
 
 private final class CallbackRequiredApprover: BridgeApprover {
     private(set) var callCount = 0
     private(set) var receivedCallback = false
+    private(set) var remoteRequests: [[RemoteJITApprovalRequest]] = []
 
     func requestApproval(
         prompt: String,
         command: BridgeRequestType,
         itemLabel: String?,
         field: String?,
-        callback: AuthsiaBridgeApprovalCallbackProtocol?
-    ) async -> Bool {
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome {
         callCount += 1
         receivedCallback = callback != nil
+        self.remoteRequests.append(remoteRequests)
         return receivedCallback
+            ? .approved(source: .macPanel)
+            : .denied(source: .macPanel)
     }
 }
 

@@ -101,7 +101,7 @@ extension XPCRequestHandler {
         }
 
         if shouldBatchAgentJITListApproval(payload) && !pendingResolutions.isEmpty {
-            let approved = await approver.requestApproval(
+            let outcome = await approver.requestApproval(
                 prompt: agentJITBroadListPreflightPrompt(
                     caller: caller,
                     duration: duration,
@@ -114,12 +114,17 @@ extension XPCRequestHandler {
                 field: nil,
                 callback: callback
             )
-            guard approved else {
+            let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
+                outcome: outcome,
+                command: .agentJITPreflight,
+                remoteRequests: []
+            )
+            guard case .allowed(_, let approvalAttribution) = authorization else {
                 recordAudit(
                     command: .agentJITPreflight,
                     itemId: "All folders",
                     itemName: "All folders",
-                    approvedBy: "denied",
+                    approvedBy: authorization.attribution,
                     caller: callerIdentity,
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
@@ -141,14 +146,15 @@ extension XPCRequestHandler {
                         expiresAt: expiresAt,
                         requestedItems: resolution.requestedItems,
                         agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
-                        environmentScope: payload.environmentScope
+                        environmentScope: payload.environmentScope,
+                        approvedBy: approvalAttribution
                     )
                 )
             }
         } else {
             for resolution in pendingResolutions {
                 let scope = resolution.scope
-                let approved = await approver.requestApproval(
+                let outcome = await approver.requestApproval(
                     prompt: agentJITPreflightPrompt(
                         caller: caller,
                         scope: scope,
@@ -162,12 +168,17 @@ extension XPCRequestHandler {
                     field: nil,
                     callback: callback
                 )
-                guard approved else {
+                let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
+                    outcome: outcome,
+                    command: .agentJITPreflight,
+                    remoteRequests: []
+                )
+                guard case .allowed(_, let approvalAttribution) = authorization else {
                     recordAudit(
                         command: .agentJITPreflight,
                         itemId: scope.displayName,
                         itemName: scope.displayName,
-                        approvedBy: "denied",
+                        approvedBy: authorization.attribution,
                         caller: callerIdentity,
                         requestedCommand: bridgeRequest.context.requestedCommand,
                         fullCommand: bridgeRequest.context.fullCommand,
@@ -187,7 +198,8 @@ extension XPCRequestHandler {
                     expiresAt: expiresAt,
                     requestedItems: resolution.requestedItems,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
-                    environmentScope: payload.environmentScope
+                    environmentScope: payload.environmentScope,
+                    approvedBy: approvalAttribution
                 )
                 pendingGrants.append(grant)
             }
@@ -209,7 +221,7 @@ extension XPCRequestHandler {
                 command: .agentJITPreflight,
                 itemId: grant.id.uuidString,
                 itemName: grant.folderScope.displayName,
-                approvedBy: "biometric",
+                approvedBy: grant.approvedBy,
                 caller: callerIdentity,
                 requestedCommand: bridgeRequest.context.requestedCommand,
                 fullCommand: bridgeRequest.context.fullCommand,
@@ -236,7 +248,8 @@ extension XPCRequestHandler {
         expiresAt: Date,
         requestedItems: [AgentJITGrantItemReference],
         agentRuntimeContext: AgentRuntimeContext?,
-        environmentScope: EnvironmentAccessScope?
+        environmentScope: EnvironmentAccessScope?,
+        approvedBy: String
     ) -> AgentJITGrant {
         AgentJITGrant(
             id: UUID(),
@@ -250,7 +263,7 @@ extension XPCRequestHandler {
             lastUsedAt: nil,
             requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
-            approvedBy: "biometric",
+            approvedBy: approvedBy,
             environmentScope: environmentScope
         )
     }

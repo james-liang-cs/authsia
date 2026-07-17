@@ -69,14 +69,14 @@ extension XPCRequestHandler {
                 }
                 let prompt = "Approve automation access '\(payload.name)' on '\(payload.machineName)' for scope '\(scopeName)' " +
                     "environment='\(environmentName)' allow=\(allow) ttl=\(payload.ttlSeconds)s"
-                let approved = await self.approver.requestApproval(
+                let authorization = await self.requestLocalApproval(
                     prompt: prompt,
                     command: .createAccess,
                     itemLabel: scopeName,
                     field: nil,
                     callback: callback
                 )
-                guard approved else {
+                guard case .allowed = authorization else {
                     replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
                     return
                 }

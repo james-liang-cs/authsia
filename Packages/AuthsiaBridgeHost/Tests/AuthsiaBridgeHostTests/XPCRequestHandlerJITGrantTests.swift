@@ -116,6 +116,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(store.grants.first?.approvedBy, "biometric")
         XCTAssertEqual(store.grants.first?.agentName, "Claude")
         XCTAssertEqual(approver.requests.map(\.command), [.agentJITPreflight])
+        XCTAssertEqual(approver.requests.map(\.remoteRequests), [[]])
         XCTAssertEqual(approver.requests.first?.itemLabel, "Root")
         XCTAssertEqual(approver.requests.first?.prompt.contains(
             "Allow Claude temporary access to CLI-enabled password, API key, certificate, and note items in Root only"
@@ -283,6 +284,30 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertTrue(approver.requests[0].prompt.contains("Environment: Production."))
     }
 
+    func testMacPanelPreflightAttributesStoredGrantAndAudit() async throws {
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(outcome: .approved(source: .macPanel))
+        let (auditLogger, auditURL, tempDir) = try makeAuditLogger()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let handler = makeHandler(store: store, approver: approver, auditLogger: auditLogger)
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        let grant = try XCTUnwrap(store.grants.first)
+        let records = try auditRecords(at: auditURL)
+        XCTAssertNil(response.error)
+        XCTAssertEqual(grant.approvedBy, "mac-panel")
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records[0].approvedBy, "mac-panel")
+        XCTAssertEqual(records[0].agentJITGrantID, grant.id)
+    }
+
     func testPreflightStoresAgentNameWithIDEHost() async throws {
         let store = MemoryAgentJITGrantStore()
         let handler = makeHandler(
@@ -349,7 +374,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(records[0].command, .agentJITPreflight)
         XCTAssertEqual(records[0].itemId, "Team/API")
         XCTAssertEqual(records[0].itemName, "Team/API")
-        XCTAssertEqual(records[0].approvedBy, "denied")
+        XCTAssertEqual(records[0].approvedBy, "denied:biometric")
         XCTAssertEqual(records[0].requestedCommand, "exec")
         XCTAssertNil(records[0].agentJITGrantID)
     }
@@ -2277,17 +2302,26 @@ private final class JITApprovalTracker: BridgeApprover {
         let command: BridgeRequestType
         let itemLabel: String?
         let field: String?
+        let remoteRequests: [RemoteJITApprovalRequest]
     }
 
-    private var results: [Bool]
+    private var results: [RemoteJITApprovalOutcome]
     private(set) var requests: [Request] = []
 
     init(result: Bool) {
-        self.results = [result]
+        self.results = [Self.outcome(for: result)]
     }
 
     init(results: [Bool]) {
-        self.results = results
+        self.results = results.map(Self.outcome(for:))
+    }
+
+    init(outcome: RemoteJITApprovalOutcome) {
+        self.results = [outcome]
+    }
+
+    init(outcomes: [RemoteJITApprovalOutcome]) {
+        self.results = outcomes
     }
 
     func requestApproval(
@@ -2295,13 +2329,26 @@ private final class JITApprovalTracker: BridgeApprover {
         command: BridgeRequestType,
         itemLabel: String?,
         field: String?,
-        callback: AuthsiaBridgeApprovalCallbackProtocol?
-    ) async -> Bool {
-        requests.append(Request(prompt: prompt, command: command, itemLabel: itemLabel, field: field))
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome {
+        requests.append(
+            Request(
+                prompt: prompt,
+                command: command,
+                itemLabel: itemLabel,
+                field: field,
+                remoteRequests: remoteRequests
+            )
+        )
         if results.count > 1 {
             return results.removeFirst()
         }
-        return results.first ?? false
+        return results.first ?? .denied(source: .macBiometric)
+    }
+
+    private static func outcome(for result: Bool) -> RemoteJITApprovalOutcome {
+        result ? .approved(source: .macBiometric) : .denied(source: .macBiometric)
     }
 }
 

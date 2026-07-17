@@ -433,8 +433,30 @@ extension XPCRequestHandler {
         return false
     }
 
-    /// Ensures the request is authorized, either via valid session or biometric approval.
-    /// Returns the new session token and expiry if biometric was triggered, or nil if existing session was valid.
+    /// Ensures the request is authorized, either via valid session or explicit local approval.
+    /// Returns the new session token and expiry if approval was required, or nil if an existing session was valid.
+    @MainActor
+    func requestLocalApproval(
+        prompt: String,
+        command: BridgeRequestType,
+        itemLabel: String?,
+        field: String?,
+        callback: AuthsiaBridgeApprovalCallbackProtocol?
+    ) async -> RemoteJITApprovalAuthorizationPolicy.Result {
+        let outcome = await approver.requestApproval(
+            prompt: prompt,
+            command: command,
+            itemLabel: itemLabel,
+            field: field,
+            callback: callback
+        )
+        return RemoteJITApprovalAuthorizationPolicy.authorize(
+            outcome: outcome,
+            command: command,
+            remoteRequests: []
+        )
+    }
+
     @MainActor
     func ensureApproval(
         for request: BridgeRequest,
@@ -449,14 +471,14 @@ extension XPCRequestHandler {
             return (true, nil, nil)
         }
 
-        let approved = await approver.requestApproval(
+        let authorization = await requestLocalApproval(
             prompt: prompt,
             command: request.type,
             itemLabel: itemLabel,
             field: nil,
             callback: callback
         )
-        if approved {
+        if case .allowed = authorization {
             guard let session = Self.sharedSessionManager.createSessionOrNil(
                 ttlSeconds: Self.configuredSessionTTL,
                 scope: request.context.sessionScope,

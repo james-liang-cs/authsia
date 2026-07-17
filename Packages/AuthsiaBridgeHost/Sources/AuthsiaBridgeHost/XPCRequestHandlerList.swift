@@ -158,6 +158,7 @@ extension XPCRequestHandler {
                 && jitListScopes.isEmpty
                 && !agentCommandListWithoutJIT
                 && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
+            var interactiveApprovalAttribution: String?
 
             if needsApproval {
                 // A direct CLI command (e.g. `code`, `read`) bootstraps its session via a
@@ -169,14 +170,14 @@ extension XPCRequestHandler {
                 } else {
                     approvalPrompt = "Allow CLI to list items"
                 }
-                let approved = await self.approver.requestApproval(
+                let authorization = await self.requestLocalApproval(
                     prompt: approvalPrompt,
                     command: .list,
                     itemLabel: nil,
                     field: nil,
                     callback: callback
                 )
-                guard approved else {
+                guard case .allowed(_, let attribution) = authorization else {
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                         id: bridgeRequest.id,
                         code: .notAuthorized,
@@ -185,6 +186,7 @@ extension XPCRequestHandler {
                     reply(self.encodeResponse(response), nil)
                     return
                 }
+                interactiveApprovalAttribution = attribution
                 guard let session = Self.sharedSessionManager.createSessionOrNil(
                     ttlSeconds: Self.configuredSessionTTL,
                     scope: bridgeRequest.context.sessionScope,
@@ -225,7 +227,9 @@ extension XPCRequestHandler {
                         command: .list,
                         itemId: "list",
                         itemName: nil,
-                        approvedBy: bypassApproval ? "automation" : (needsApproval ? "biometric" : "session"),
+                        approvedBy: bypassApproval
+                            ? "automation"
+                            : (interactiveApprovalAttribution ?? "session"),
                         caller: callerIdentity,
                         requestedCommand: bridgeRequest.context.requestedCommand,
                         fullCommand: bridgeRequest.context.fullCommand,
