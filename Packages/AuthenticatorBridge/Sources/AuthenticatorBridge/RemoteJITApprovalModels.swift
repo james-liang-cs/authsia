@@ -110,6 +110,48 @@ public enum RemoteJITApprovalOutcome: Equatable, Sendable {
     case timedOut
 }
 
+public struct RemoteJITApprovalDescriptorInput: Equatable, Sendable {
+    public let bridgeRequestID: UUID
+    public let requestIssuedAtMilliseconds: Int64
+    public let callerFingerprint: AgentJITCallerFingerprint
+    public let capabilities: [AgentJITCapability]
+    public let folderScope: AgentJITFolderScope
+    public let environmentScope: EnvironmentAccessScope?
+    public let requestedItems: [RemoteJITApprovalItemReference]
+    public let grantExpiresAtMilliseconds: Int64
+
+    public init(
+        bridgeRequestID: UUID,
+        requestIssuedAtMilliseconds: Int64,
+        callerFingerprint: AgentJITCallerFingerprint,
+        capabilities: [AgentJITCapability],
+        folderScope: AgentJITFolderScope,
+        environmentScope: EnvironmentAccessScope?,
+        requestedItems: [RemoteJITApprovalItemReference],
+        grantExpiresAtMilliseconds: Int64
+    ) throws {
+        let authority = try RemoteJITApprovalNormalizedAuthority(
+            bridgeRequestID: bridgeRequestID,
+            requestIssuedAtMilliseconds: requestIssuedAtMilliseconds,
+            callerFingerprint: callerFingerprint,
+            capabilities: capabilities,
+            folderScope: folderScope,
+            environmentScope: environmentScope,
+            requestedItems: requestedItems,
+            grantExpiresAtMilliseconds: grantExpiresAtMilliseconds
+        )
+
+        self.bridgeRequestID = authority.bridgeRequestID
+        self.requestIssuedAtMilliseconds = authority.requestIssuedAtMilliseconds
+        self.callerFingerprint = authority.callerFingerprint
+        self.capabilities = authority.capabilities
+        self.folderScope = authority.folderScope
+        self.environmentScope = authority.environmentScope
+        self.requestedItems = authority.requestedItems
+        self.grantExpiresAtMilliseconds = authority.grantExpiresAtMilliseconds
+    }
+}
+
 public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
     public static let schemaVersion: UInt16 = 1
     public static let protocolVersion: UInt16 = 1
@@ -132,6 +174,7 @@ public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
     public let requestedItems: [RemoteJITApprovalItemReference]
     public let grantIssuedAtMilliseconds: Int64
     public let grantExpiresAtMilliseconds: Int64
+    private let normalizedInput: RemoteJITApprovalDescriptorInput
 
     public init(
         approvalID: UUID,
@@ -157,40 +200,40 @@ public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
               iphoneSigningKeyFingerprint.count == 32 else {
             throw RemoteJITApprovalValidationError.invalidLength
         }
-        try validateDescriptorTimes(
+        let input = try RemoteJITApprovalDescriptorInput(
+            bridgeRequestID: bridgeRequestID,
             requestIssuedAtMilliseconds: requestIssuedAtMilliseconds,
-            requestExpiresAtMilliseconds: requestExpiresAtMilliseconds,
-            grantIssuedAtMilliseconds: grantIssuedAtMilliseconds,
+            callerFingerprint: callerFingerprint,
+            capabilities: capabilities,
+            folderScope: folderScope,
+            environmentScope: environmentScope,
+            requestedItems: requestedItems,
             grantExpiresAtMilliseconds: grantExpiresAtMilliseconds
         )
-
-        let normalizedCaller = try normalizedRemoteCallerFingerprint(callerFingerprint)
-        let normalizedCapabilities = try normalizedRemoteCapabilities(capabilities)
-        let normalizedFolderScope = try normalizedRemoteFolderScope(folderScope)
-        let normalizedEnvironmentScope = try normalizedRemoteEnvironmentScope(environmentScope)
-        let normalizedItems = try normalizedRemoteItems(
-            requestedItems,
-            folderScope: normalizedFolderScope,
-            capabilities: normalizedCapabilities
+        try validateDescriptorEnvelopeTimes(
+            input: input,
+            requestExpiresAtMilliseconds: requestExpiresAtMilliseconds,
+            grantIssuedAtMilliseconds: grantIssuedAtMilliseconds
         )
 
         self.approvalID = approvalID
         self.approvalNonce = approvalNonce
-        self.bridgeRequestID = bridgeRequestID
+        self.bridgeRequestID = input.bridgeRequestID
         self.pairingGenerationID = pairingGenerationID
         self.macDeviceID = macDeviceID
         self.iphoneDeviceID = iphoneDeviceID
         self.macSigningKeyFingerprint = macSigningKeyFingerprint
         self.iphoneSigningKeyFingerprint = iphoneSigningKeyFingerprint
-        self.requestIssuedAtMilliseconds = requestIssuedAtMilliseconds
+        self.requestIssuedAtMilliseconds = input.requestIssuedAtMilliseconds
         self.requestExpiresAtMilliseconds = requestExpiresAtMilliseconds
-        self.callerFingerprint = normalizedCaller
-        self.capabilities = normalizedCapabilities
-        self.folderScope = normalizedFolderScope
-        self.environmentScope = normalizedEnvironmentScope
-        self.requestedItems = normalizedItems
+        self.callerFingerprint = input.callerFingerprint
+        self.capabilities = input.capabilities
+        self.folderScope = input.folderScope
+        self.environmentScope = input.environmentScope
+        self.requestedItems = input.requestedItems
         self.grantIssuedAtMilliseconds = grantIssuedAtMilliseconds
-        self.grantExpiresAtMilliseconds = grantExpiresAtMilliseconds
+        self.grantExpiresAtMilliseconds = input.grantExpiresAtMilliseconds
+        self.normalizedInput = input
     }
 
     var workspaceLabel: String {
@@ -198,6 +241,39 @@ public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
             return "/"
         }
         return String(path.split(separator: "/").last ?? "/")
+    }
+}
+
+public extension RemoteJITApprovalDescriptor {
+    init(
+        input: RemoteJITApprovalDescriptorInput,
+        approvalID: UUID,
+        approvalNonce: Data,
+        pairing: RemoteJITApprovalPairingBinding
+    ) throws {
+        try self.init(
+            approvalID: approvalID,
+            approvalNonce: approvalNonce,
+            bridgeRequestID: input.bridgeRequestID,
+            pairingGenerationID: pairing.pairingGenerationID,
+            macDeviceID: pairing.macDeviceID,
+            iphoneDeviceID: pairing.iphoneDeviceID,
+            macSigningKeyFingerprint: pairing.macSigningKeyFingerprint,
+            iphoneSigningKeyFingerprint: pairing.iphoneSigningKeyFingerprint,
+            requestIssuedAtMilliseconds: input.requestIssuedAtMilliseconds,
+            requestExpiresAtMilliseconds: input.requestIssuedAtMilliseconds + Self.requestLifetimeMilliseconds,
+            callerFingerprint: input.callerFingerprint,
+            capabilities: input.capabilities,
+            folderScope: input.folderScope,
+            environmentScope: input.environmentScope,
+            requestedItems: input.requestedItems,
+            grantIssuedAtMilliseconds: input.requestIssuedAtMilliseconds,
+            grantExpiresAtMilliseconds: input.grantExpiresAtMilliseconds
+        )
+    }
+
+    var input: RemoteJITApprovalDescriptorInput {
+        normalizedInput
     }
 }
 
@@ -276,28 +352,86 @@ private let maximumRemoteGrantLifetime: Int64 = 86_400_000
 private let maximumRemoteItemCount = 1_024
 private let maximumRemoteRawStringBytes = 1_048_576
 
-private func validateDescriptorTimes(
+private struct RemoteJITApprovalNormalizedAuthority {
+    let bridgeRequestID: UUID
+    let requestIssuedAtMilliseconds: Int64
+    let callerFingerprint: AgentJITCallerFingerprint
+    let capabilities: [AgentJITCapability]
+    let folderScope: AgentJITFolderScope
+    let environmentScope: EnvironmentAccessScope?
+    let requestedItems: [RemoteJITApprovalItemReference]
+    let grantExpiresAtMilliseconds: Int64
+
+    init(
+        bridgeRequestID: UUID,
+        requestIssuedAtMilliseconds: Int64,
+        callerFingerprint: AgentJITCallerFingerprint,
+        capabilities: [AgentJITCapability],
+        folderScope: AgentJITFolderScope,
+        environmentScope: EnvironmentAccessScope?,
+        requestedItems: [RemoteJITApprovalItemReference],
+        grantExpiresAtMilliseconds: Int64
+    ) throws {
+        try validateDescriptorInputTimes(
+            requestIssuedAtMilliseconds: requestIssuedAtMilliseconds,
+            grantExpiresAtMilliseconds: grantExpiresAtMilliseconds
+        )
+        let normalizedCaller = try normalizedRemoteCallerFingerprint(callerFingerprint)
+        let normalizedCapabilities = try normalizedRemoteCapabilities(capabilities)
+        let normalizedFolderScope = try normalizedRemoteFolderScope(folderScope)
+        let normalizedEnvironmentScope = try normalizedRemoteEnvironmentScope(environmentScope)
+        let normalizedItems = try normalizedRemoteItems(
+            requestedItems,
+            folderScope: normalizedFolderScope,
+            capabilities: normalizedCapabilities
+        )
+
+        self.bridgeRequestID = bridgeRequestID
+        self.requestIssuedAtMilliseconds = requestIssuedAtMilliseconds
+        self.callerFingerprint = normalizedCaller
+        self.capabilities = normalizedCapabilities
+        self.folderScope = normalizedFolderScope
+        self.environmentScope = normalizedEnvironmentScope
+        self.requestedItems = normalizedItems
+        self.grantExpiresAtMilliseconds = grantExpiresAtMilliseconds
+    }
+}
+
+private func validateDescriptorInputTimes(
     requestIssuedAtMilliseconds: Int64,
-    requestExpiresAtMilliseconds: Int64,
-    grantIssuedAtMilliseconds: Int64,
     grantExpiresAtMilliseconds: Int64
 ) throws {
     try validateRemoteTime(requestIssuedAtMilliseconds)
-    try validateRemoteTime(requestExpiresAtMilliseconds)
-    try validateRemoteTime(grantIssuedAtMilliseconds)
-    try validateRemoteTime(grantExpiresAtMilliseconds)
-
-    let (expectedRequestExpiry, requestOverflow) = requestIssuedAtMilliseconds.addingReportingOverflow(
+    let (requestExpiresAtMilliseconds, requestOverflow) = requestIssuedAtMilliseconds.addingReportingOverflow(
         RemoteJITApprovalDescriptor.requestLifetimeMilliseconds
     )
+    guard !requestOverflow else {
+        throw RemoteJITApprovalValidationError.invalidTime
+    }
+    try validateRemoteTime(requestExpiresAtMilliseconds)
+    try validateRemoteTime(grantExpiresAtMilliseconds)
+
     let (grantLifetime, grantOverflow) = grantExpiresAtMilliseconds.subtractingReportingOverflow(
-        grantIssuedAtMilliseconds
+        requestIssuedAtMilliseconds
+    )
+    guard !grantOverflow, (1...maximumRemoteGrantLifetime).contains(grantLifetime) else {
+        throw RemoteJITApprovalValidationError.invalidTime
+    }
+}
+
+private func validateDescriptorEnvelopeTimes(
+    input: RemoteJITApprovalDescriptorInput,
+    requestExpiresAtMilliseconds: Int64,
+    grantIssuedAtMilliseconds: Int64
+) throws {
+    try validateRemoteTime(requestExpiresAtMilliseconds)
+
+    let (expectedRequestExpiry, requestOverflow) = input.requestIssuedAtMilliseconds.addingReportingOverflow(
+        RemoteJITApprovalDescriptor.requestLifetimeMilliseconds
     )
     guard !requestOverflow,
-          !grantOverflow,
           requestExpiresAtMilliseconds == expectedRequestExpiry,
-          grantIssuedAtMilliseconds == requestIssuedAtMilliseconds,
-          (1...maximumRemoteGrantLifetime).contains(grantLifetime) else {
+          grantIssuedAtMilliseconds == input.requestIssuedAtMilliseconds else {
         throw RemoteJITApprovalValidationError.invalidTime
     }
 }

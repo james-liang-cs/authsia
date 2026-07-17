@@ -3,6 +3,89 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class RemoteJITApprovalModelTests: XCTestCase {
+    func testDescriptorInputNormalizesAuthorityAndFactoryRoundTripsWithoutPlaceholders() throws {
+        let lowPassword = try makeItem(
+            id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            kind: .password,
+            folderPath: " Team / API "
+        )
+        let highPassword = try makeItem(
+            id: UUID(uuidString: "FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF")!,
+            kind: .password,
+            folderPath: "Team/API/Build"
+        )
+        let apiKey = try makeItem(
+            id: UUID(uuidString: "00000000-0000-4000-8000-000000000000")!,
+            kind: .apiKey,
+            folderPath: "Team/API"
+        )
+        let input = try makeValidDescriptorInput(
+            callerFingerprint: makeCaller(processName: "De\u{301}mo"),
+            capabilities: [.list, .exec],
+            folderScope: .folder(" Team / API "),
+            environmentScope: .named("\tProduc\u{301}tion \n"),
+            items: [apiKey, highPassword, lowPassword]
+        )
+
+        XCTAssertEqual(input.callerFingerprint.processName, "Démo")
+        XCTAssertEqual(input.capabilities, [.exec, .list])
+        XCTAssertEqual(input.folderScope, .folder("Team/API"))
+        XCTAssertEqual(input.environmentScope, .named("Produćtion"))
+        XCTAssertEqual(input.requestedItems, [lowPassword, highPassword, apiKey])
+
+        let approvalID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        let approvalNonce = Data(repeating: 0x11, count: 32)
+        let pairing = try makeValidPairingBinding()
+        let descriptor = try RemoteJITApprovalDescriptor(
+            input: input,
+            approvalID: approvalID,
+            approvalNonce: approvalNonce,
+            pairing: pairing
+        )
+
+        XCTAssertEqual(descriptor.input, input)
+        XCTAssertEqual(descriptor.approvalID, approvalID)
+        XCTAssertEqual(descriptor.approvalNonce, approvalNonce)
+        XCTAssertEqual(descriptor.pairingGenerationID, pairing.pairingGenerationID)
+        XCTAssertEqual(descriptor.macDeviceID, pairing.macDeviceID)
+        XCTAssertEqual(descriptor.iphoneDeviceID, pairing.iphoneDeviceID)
+        XCTAssertEqual(descriptor.macSigningKeyFingerprint, pairing.macSigningKeyFingerprint)
+        XCTAssertEqual(descriptor.iphoneSigningKeyFingerprint, pairing.iphoneSigningKeyFingerprint)
+        XCTAssertEqual(
+            descriptor.requestExpiresAtMilliseconds,
+            input.requestIssuedAtMilliseconds + RemoteJITApprovalDescriptor.requestLifetimeMilliseconds
+        )
+        XCTAssertEqual(descriptor.grantIssuedAtMilliseconds, input.requestIssuedAtMilliseconds)
+    }
+
+    func testDescriptorInputRejectsInvalidTimeAndCallerAuthority() throws {
+        assertValidationError(.invalidTime) {
+            try makeValidDescriptorInput(grantExpiresAtMilliseconds: 2_000_000_000_000)
+        }
+        assertValidationError(.invalidTime) {
+            try makeValidDescriptorInput(grantExpiresAtMilliseconds: 2_000_086_400_001)
+        }
+        assertValidationError(.invalidTime) {
+            try makeValidDescriptorInput(requestIssuedAtMilliseconds: 253_402_300_799_999)
+        }
+        assertValidationError(.invalidString) {
+            try makeValidDescriptorInput(callerFingerprint: makeCaller(processName: ""))
+        }
+    }
+
+    func testDescriptorInputRejectsInvalidItemAuthorityAndEmptyItems() throws {
+        let item = try makeItem()
+        assertValidationError(.invalidItems) {
+            try makeValidDescriptorInput(items: [])
+        }
+        assertValidationError(.duplicateItem) {
+            try makeValidDescriptorInput(items: [item, item])
+        }
+        assertValidationError(.invalidItems) {
+            try makeValidDescriptorInput(items: [try makeItem(folderPath: "Other")])
+        }
+    }
+
     func testValidDescriptorPreservesCanonicalAuthority() throws {
         let descriptor = try makeValidDescriptor()
 
@@ -401,6 +484,27 @@ private func makeValidDescriptor(
         environmentScope: environmentScope,
         requestedItems: try items ?? [makeItem()],
         grantIssuedAtMilliseconds: grantIssuedAtMilliseconds,
+        grantExpiresAtMilliseconds: grantExpiresAtMilliseconds
+    )
+}
+
+private func makeValidDescriptorInput(
+    callerFingerprint: AgentJITCallerFingerprint = makeCaller(),
+    capabilities: [AgentJITCapability] = [.list, .exec],
+    folderScope: AgentJITFolderScope = .folder("Team/API"),
+    environmentScope: EnvironmentAccessScope? = .named("Production"),
+    items: [RemoteJITApprovalItemReference]? = nil,
+    requestIssuedAtMilliseconds: Int64 = 2_000_000_000_000,
+    grantExpiresAtMilliseconds: Int64 = 2_000_000_300_000
+) throws -> RemoteJITApprovalDescriptorInput {
+    try RemoteJITApprovalDescriptorInput(
+        bridgeRequestID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!,
+        requestIssuedAtMilliseconds: requestIssuedAtMilliseconds,
+        callerFingerprint: callerFingerprint,
+        capabilities: capabilities,
+        folderScope: folderScope,
+        environmentScope: environmentScope,
+        requestedItems: try items ?? [makeItem()],
         grantExpiresAtMilliseconds: grantExpiresAtMilliseconds
     )
 }
