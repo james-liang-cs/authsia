@@ -274,6 +274,7 @@ public struct RemoteJITApprovalDecision: Equatable, Sendable {
 private let maximumRemoteTimestamp: Int64 = 253_402_300_799_999
 private let maximumRemoteGrantLifetime: Int64 = 86_400_000
 private let maximumRemoteItemCount = 1_024
+private let maximumRemoteRawStringBytes = 1_048_576
 
 private func validateDescriptorTimes(
     requestIssuedAtMilliseconds: Int64,
@@ -340,6 +341,7 @@ private func normalizedRemoteCallerFingerprint(
 }
 
 private func normalizedRemoteString(_ value: String, maximumBytes: Int) throws -> String {
+    try validateRemoteRawStringInput(value)
     let normalized = value.precomposedStringWithCanonicalMapping
     guard !normalized.isEmpty, isSafeRemoteString(normalized) else {
         throw RemoteJITApprovalValidationError.invalidString
@@ -370,6 +372,7 @@ private func isSafeRemoteString(_ value: String) -> Bool {
 }
 
 func normalizedRemoteEnvironmentName(_ value: String) throws -> String {
+    try validateRemoteRawStringInput(value)
     let trimmed = stringByTrimmingScalars(value, where: isASCIIWhitespace)
         .precomposedStringWithCanonicalMapping
     guard !trimmed.isEmpty, isSafeRemoteString(trimmed) else {
@@ -411,6 +414,9 @@ private func normalizedRemoteFolderScope(
 private func normalizedRemoteCapabilities(
     _ capabilities: [AgentJITCapability]
 ) throws -> [AgentJITCapability] {
+    guard capabilities.count <= 2 else {
+        throw RemoteJITApprovalValidationError.invalidCapabilities
+    }
     guard Set(capabilities).count == capabilities.count else {
         throw RemoteJITApprovalValidationError.invalidCapabilities
     }
@@ -502,6 +508,7 @@ private func remoteOptionalFolderBytes(_ value: String?) -> [UInt8] {
 }
 
 private func normalizedRemoteFolderPath(_ value: String) throws -> String? {
+    try validateRemoteRawStringInput(value)
     var components: [String] = []
     for rawComponent in value.split(separator: "/", omittingEmptySubsequences: false) {
         let trimmed = stringByTrimmingScalars(String(rawComponent), where: isFolderTrimScalar)
@@ -521,6 +528,7 @@ private func normalizedRemoteFolderPath(_ value: String) throws -> String? {
 }
 
 private func normalizedRemoteWorkingDirectory(_ value: String) throws -> String {
+    try validateRemoteRawStringInput(value)
     guard value.hasPrefix("/") else {
         throw RemoteJITApprovalValidationError.invalidPath
     }
@@ -547,6 +555,16 @@ private func normalizedRemoteWorkingDirectory(_ value: String) throws -> String 
         throw RemoteJITApprovalValidationError.oversized
     }
     return normalized
+}
+
+private func validateRemoteRawStringInput(_ value: String) throws {
+    var byteCount = 0
+    for _ in value.utf8 {
+        byteCount += 1
+        guard byteCount <= maximumRemoteRawStringBytes else {
+            throw RemoteJITApprovalValidationError.oversized
+        }
+    }
 }
 
 private func stringByTrimmingScalars(

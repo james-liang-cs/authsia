@@ -105,6 +105,54 @@ final class RemoteJITApprovalModelTests: XCTestCase {
         XCTAssertEqual(descriptor.callerFingerprint.processName, "Démo")
     }
 
+    func testRejectsRawCallerStringAboveSharedInputCeiling() {
+        let oversizedProcessName = String(repeating: "x", count: remoteRawInputCeiling + 1)
+
+        assertValidationError(.oversized) {
+            try makeValidDescriptor(
+                callerFingerprint: makeCaller(processName: oversizedProcessName)
+            )
+        }
+    }
+
+    func testRejectsRawEnvironmentAboveCeilingBeforeTrimming() {
+        let oversizedEnvironment = String(repeating: " ", count: remoteRawInputCeiling) + "P"
+
+        assertValidationError(.oversized) {
+            try makeValidDescriptor(environmentScope: .named(oversizedEnvironment))
+        }
+    }
+
+    func testRejectsRawFolderAboveCeilingBeforeSplitting() {
+        let oversizedFolder = String(repeating: "/", count: remoteRawInputCeiling) + "T"
+
+        assertValidationError(.oversized) {
+            try makeItem(folderPath: oversizedFolder)
+        }
+    }
+
+    func testRejectsRawWorkingDirectoryAboveCeilingBeforeSplitting() {
+        let oversizedWorkingDirectory = String(repeating: "/", count: remoteRawInputCeiling) + "w"
+
+        assertValidationError(.oversized) {
+            try makeValidDescriptor(
+                callerFingerprint: makeCaller(workingDirectory: oversizedWorkingDirectory)
+            )
+        }
+    }
+
+    func testDecomposedCallerInputNormalizesBeforeApplyingFieldLimit() throws {
+        let decomposedProcessName = String(repeating: "e\u{301}", count: 127)
+        XCTAssertGreaterThan(decomposedProcessName.utf8.count, 255)
+
+        let descriptor = try makeValidDescriptor(
+            callerFingerprint: makeCaller(processName: decomposedProcessName)
+        )
+
+        XCTAssertEqual(descriptor.callerFingerprint.processName, String(repeating: "é", count: 127))
+        XCTAssertEqual(descriptor.callerFingerprint.processName.utf8.count, 254)
+    }
+
     func testWorkingDirectoryNormalizationIsLexicalAbsoluteAndSafe() throws {
         let descriptor = try makeValidDescriptor(
             callerFingerprint: makeCaller(workingDirectory: "/workspace/./one/../De\u{301}mo//")
@@ -143,6 +191,12 @@ final class RemoteJITApprovalModelTests: XCTestCase {
             assertValidationError(.invalidCapabilities) {
                 try makeValidDescriptor(capabilities: invalid)
             }
+        }
+    }
+
+    func testRejectsMoreThanTwoCapabilities() {
+        assertValidationError(.invalidCapabilities) {
+            try makeValidDescriptor(capabilities: [.exec, .list, .list])
         }
     }
 
@@ -280,6 +334,7 @@ final class RemoteJITApprovalModelTests: XCTestCase {
 }
 
 private let syntheticItemID = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
+private let remoteRawInputCeiling = 1_048_576
 
 private func makeItem(
     id: UUID = syntheticItemID,
