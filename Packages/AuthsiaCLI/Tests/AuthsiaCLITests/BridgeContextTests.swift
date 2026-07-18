@@ -200,6 +200,45 @@ struct BridgeContextTests {
         #expect(ctx.agentRuntimeContext?.agentType == "default-chat")
     }
 
+    @Test("explicit non-terminal agent context carries process-session scope")
+    func explicitNonTerminalAgentContextCarriesProcessSessionScope() {
+        let ctx = AutomationAccessResolver.bridgeContext(
+            requestedCommand: "list",
+            environment: [
+                AgentRuntimeContextResolver.environmentPlatformKey: "codex",
+                AgentRuntimeContextResolver.environmentInvokesAuthsiaKey: "1",
+            ],
+            terminalIdentifier: nil,
+            processSessionIdentifier: 4242,
+            ancestralScope: { nil },
+            currentDirectoryPath: "/repo",
+            processAncestry: [
+                AgenticProcessReference(processName: "authsia", bundleIdentifier: "com.authsia.cli"),
+                AgenticProcessReference(processName: "Codex", bundleIdentifier: nil),
+            ],
+            agentRuntimeContextEventsURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        )
+
+        #expect(ctx.sessionScope == "agent:codex:sid:4242")
+    }
+
+    @Test("explicit agent marker does not scope automation credential")
+    func explicitAgentMarkerDoesNotScopeAutomationCredential() {
+        let ctx = AutomationAccessResolver.bridgeContext(
+            requestedCommand: "list",
+            environment: [
+                AgentRuntimeContextResolver.environmentPlatformKey: "codex",
+                AgentRuntimeContextResolver.environmentInvokesAuthsiaKey: "1",
+                AutomationCredentialEnvironment.generalCredentialKey: UUID().uuidString,
+            ],
+            terminalIdentifier: nil,
+            processSessionIdentifier: 4242,
+            ancestralScope: { nil }
+        )
+
+        #expect(ctx.sessionScope == nil)
+    }
+
     @Test("CLI context falls back to ancestor terminal scope")
     func cliContextFallsBackToAncestorTerminalScope() {
         let ctx = AutomationAccessResolver.bridgeContext(

@@ -56,6 +56,19 @@ enum AgentRuntimeContextResolver {
         explicitAgentRuntimeContext(environment: environment) != nil
     }
 
+    static func explicitAgentSessionScope(
+        environment: [String: String],
+        processSessionIdentifier: Int32?
+    ) -> String? {
+        guard !SessionCache.hasAutomationCredential(in: environment),
+              let processSessionIdentifier,
+              processSessionIdentifier > 0,
+              let platform = explicitAgentRuntimeContext(environment: environment)?.platform else {
+            return nil
+        }
+        return "agent:\(platform):sid:\(processSessionIdentifier)"
+    }
+
     private static func explicitAgentRuntimeContext(environment: [String: String]) -> AgentRuntimeContext? {
         guard isTruthy(environment[environmentInvokesAuthsiaKey]),
               let platform = normalizedPlatform(environment[environmentPlatformKey]) else {
