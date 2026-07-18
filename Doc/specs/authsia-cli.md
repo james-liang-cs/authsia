@@ -1073,21 +1073,24 @@ agent terminal scopes.
 Claude settings installation is structural and idempotent. If
 `.claude/settings.local.json` is absent, Authsia creates it. If an existing file
 is valid JSON with compatible object/array containers, Authsia adds every exact
-Authsia command-history hook plus the `~/.authsia/agent.sock` Unix-socket value,
-and removes the legacy `Authsia.Bridge` and `Authsia.SSHAgent` Mach lookup values
-while preserving unrelated settings and custom Mach services;
+Authsia command-history hook plus outside-sandbox exclusions for Authsia, Git
+network/authentication commands, and SSH clients. It removes the obsolete
+`~/.authsia/agent.sock` Unix-socket value and legacy `Authsia.Bridge` and
+`Authsia.SSHAgent` Mach lookup values while preserving unrelated settings and
+custom commands, sockets, and Mach services;
 missing or `null` containers are treated as empty. Incompatible non-null
 container shapes are left byte-for-byte unchanged and reported with manual
-merge guidance. Repeating installation does not duplicate hooks or sandbox
-values.
+merge guidance. Repeating installation does not duplicate hooks or command
+exclusions.
 
 When workspace update retains or adds Claude Code, it uses the same structural
 merge. When workspace update removes Claude Code, or when uninstall/reset
 removes its rules, Authsia uses the inverse structural cleanup. A file containing
 only Authsia's generated structure is deleted.
 Otherwise, Authsia removes every exact Authsia hook object, including copies
-across repeated matcher entries, the exact Authsia socket value, and both legacy
-Authsia Mach lookup values while preserving custom content. A custom-only no-op remains
+across repeated matcher entries, every generated command exclusion, the exact
+Authsia socket value, and both legacy Authsia Mach lookup values while preserving
+custom content. A custom-only no-op remains
 byte-for-byte unchanged. If removal cannot be proved safe, the file is left
 unchanged with manual cleanup guidance.
 
@@ -1101,7 +1104,7 @@ Created files depend on the selected agent:
 
 | Agent | Rule files | Local sandbox helper |
 |-------|------------|----------------------|
-| Claude Code | `.authsia/agent-rules.md`, `CLAUDE.md` | Creates or safely merges `.claude/settings.local.json` with the exact SSH-agent socket value and Bash command-history hooks, while removing legacy Authsia Mach lookup values; incompatible shapes remain unchanged with manual guidance. |
+| Claude Code | `.authsia/agent-rules.md`, `CLAUDE.md` | Creates or safely merges `.claude/settings.local.json` with outside-sandbox Authsia/Git/SSH command exclusions and Bash command-history hooks, while removing obsolete Authsia socket and Mach lookup values; incompatible shapes remain unchanged with manual guidance. |
 | Codex | `.authsia/agent-rules.md`, `AGENTS.md` | Existing `AGENTS.md` content is preserved and Authsia's managed block is appended or replaced; command history uses explicit Authsia markers plus process-monitor fallback. |
 | Cursor | `.authsia/agent-rules.md`, `.cursor/rules/authsia.mdc` | Rule text only. |
 | Windsurf | `.authsia/agent-rules.md`, `.windsurf/rules/authsia.md` | Rule text only. |
@@ -1310,7 +1313,7 @@ Applying reset requires interactive confirmation, restores managed env files fro
 Authsia scrape backups when available, then removes the workspace config plus Authsia-owned managed
 rule files/blocks. For merged Claude settings, reset deletes a generated-only
 file or structurally
-removes all exact Authsia hook/socket entries and legacy Authsia Mach lookup values while preserving custom content; unsafe
+removes all exact Authsia hook, command-exclusion, socket, and legacy Mach lookup entries while preserving custom content; unsafe
 shapes remain unchanged with manual guidance. If a managed env file has refs but no matching backup, reset leaves that env file
 unchanged, warns that it will keep unusable `authsia://` references, and still removes workspace
 metadata. The macOS app requires the user to acknowledge that warning before applying reset. `--yes`
@@ -2240,7 +2243,7 @@ available to agentic or CLI workflows.
 | Tool | Rules file | Recommended pattern |
 |------|-----------|-------------------|
 | Codex | `AGENTS.md` | Local IDE: `authsia exec -- <cmd>` with the Authsia agent marker |
-| Claude Code | `CLAUDE.md`, `.claude/settings.local.json` | Outside-sandbox `authsia exec -- <cmd>` + the SSH-agent socket exception and command-history hooks |
+| Claude Code | `CLAUDE.md`, `.claude/settings.local.json` | Outside-sandbox `authsia exec -- <cmd>`, Git/SSH network authentication, and command-history hooks |
 | Cursor | `.cursor/rules/authsia.mdc` | `authsia exec -- <cmd>` |
 | Windsurf | `.windsurf/rules/authsia.md` | `authsia exec -- <cmd>` |
 | GitHub Copilot | `AGENTS.md` | Local IDE: `authsia exec -- <cmd>`; cloud agents leave `authsia://` refs for local execution |

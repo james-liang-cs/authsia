@@ -88,6 +88,7 @@ enum AgentRuleInstaller {
     static let managedStartMarker = "<!-- >>> Authsia agent rules >>> -->"
     static let managedEndMarker = "<!-- <<< Authsia agent rules <<< -->"
     private static let legacyClaudeMachLookupValues = ["Authsia.Bridge", "Authsia.SSHAgent"]
+    private static let legacyClaudeUnixSocketValues = ["~/.authsia/agent.sock"]
     private static let agentShimWorkspaceGuidanceLine =
         "- Implicit guarded-terminal shims under agents do not resolve `authsia://` refs; use explicit " +
         "`authsia workspace run -- <command>` or `authsia exec` for any command that needs workspace secrets."
@@ -286,7 +287,7 @@ enum AgentRuleInstaller {
                     AgentRuleManualStep(
                         path: path,
                         reason: "already exists but could not be parsed or safely merged. " +
-                            "Add this sandbox and command-history hook block manually.",
+                            "Add this sandbox command-exclusion and command-history hook block manually.",
                         block: claudeSettingsManualBlock
                     )
                 )
@@ -321,7 +322,7 @@ enum AgentRuleInstaller {
         }
         guard !jsonObjectsAreEqual(settings, generated) else { return existing }
         guard mergeClaudeHooks(from: generated, into: &settings),
-              mergeClaudeSandboxNetwork(from: generated, into: &settings) else {
+              mergeClaudeSandbox(from: generated, into: &settings) else {
             return nil
         }
         guard JSONSerialization.isValidJSONObject(settings),
@@ -407,37 +408,48 @@ enum AgentRuleInstaller {
         return true
     }
 
-    /// Merges the generated sandbox network permissions into `settings`. Returns `false` if the
-    /// existing `sandbox`/`network`/permission values have an unexpected shape, so the caller can
+    /// Merges the generated sandbox command exclusions into `settings` and removes obsolete Authsia
+    /// network exceptions. Returns `false` if an existing value has an unexpected shape, so the caller can
     /// fall back to the manual block instead of clobbering them.
-    private static func mergeClaudeSandboxNetwork(from generated: [String: Any], into settings: inout [String: Any]) -> Bool {
-        guard let generatedSandbox = generated["sandbox"] as? [String: Any],
-              let generatedNetwork = generatedSandbox["network"] as? [String: Any] else {
-            return true
-        }
+    private static func mergeClaudeSandbox(from generated: [String: Any], into settings: inout [String: Any]) -> Bool {
+        guard let generatedSandbox = generated["sandbox"] as? [String: Any] else { return true }
         guard var sandbox = existingObject(settings["sandbox"]) else { return false }
-        guard var network = existingObject(sandbox["network"]) else { return false }
-        if let generatedValues = generatedNetwork["allowUnixSockets"] as? [String] {
-            guard let existingValues = existingStringArray(network["allowUnixSockets"]) else { return false }
-            network["allowUnixSockets"] = appendMissingValues(generatedValues, to: existingValues)
+        if let generatedValues = generatedSandbox["excludedCommands"] as? [String] {
+            guard let existingValues = existingStringArray(sandbox["excludedCommands"]) else { return false }
+            sandbox["excludedCommands"] = appendMissingValues(generatedValues, to: existingValues)
         }
-        guard removeLegacyClaudeMachLookups(from: &network) else { return false }
-        sandbox["network"] = network
+        var didRemoveLegacyPermission = false
+        guard removeLegacyClaudeNetworkPermissions(
+            from: &sandbox,
+            didRemove: &didRemoveLegacyPermission
+        ) else { return false }
         settings["sandbox"] = sandbox
         return true
     }
 
-    private static func removeLegacyClaudeMachLookups(from network: inout [String: Any]) -> Bool {
-        guard let existingValue = network["allowMachLookup"], !(existingValue is NSNull) else {
-            return true
+    private static func removeLegacyClaudeNetworkPermissions(
+        from sandbox: inout [String: Any],
+        didRemove: inout Bool
+    ) -> Bool {
+        guard let networkValue = sandbox["network"], !(networkValue is NSNull) else { return true }
+        guard var network = networkValue as? [String: Any] else { return false }
+        guard removeClaudeSandboxNetworkValues(
+            legacyClaudeUnixSocketValues,
+            forKey: "allowUnixSockets",
+            from: &network,
+            didRemove: &didRemove
+        ), removeClaudeSandboxNetworkValues(
+            legacyClaudeMachLookupValues,
+            forKey: "allowMachLookup",
+            from: &network,
+            didRemove: &didRemove
+        ) else {
+            return false
         }
-        guard let existingValues = existingValue as? [String] else { return false }
-        let filteredValues = existingValues.filter { !legacyClaudeMachLookupValues.contains($0) }
-        guard filteredValues.count != existingValues.count else { return true }
-        if filteredValues.isEmpty {
-            network.removeValue(forKey: "allowMachLookup")
+        if network.isEmpty {
+            sandbox.removeValue(forKey: "network")
         } else {
-            network["allowMachLookup"] = filteredValues
+            sandbox["network"] = network
         }
         return true
     }
@@ -620,7 +632,7 @@ enum AgentRuleInstaller {
             result.manualSteps.append(AgentRuleManualStep(
                 path: relativePath,
                 reason: "has a structure that cannot be safely updated. Remove Authsia hooks and " +
-                    "sandbox network permissions manually.",
+                    "sandbox command exclusions or legacy network permissions manually.",
                 block: ""
             ))
             return
@@ -642,7 +654,7 @@ enum AgentRuleInstaller {
         }
         var didRemove = false
         guard removeClaudeHooks(from: generated, in: &settings, didRemove: &didRemove),
-              removeClaudeSandboxNetwork(from: generated, in: &settings, didRemove: &didRemove) else {
+              removeClaudeSandbox(from: generated, in: &settings, didRemove: &didRemove) else {
             return nil
         }
         guard didRemove else { return existing }
@@ -706,7 +718,7 @@ enum AgentRuleInstaller {
         return true
     }
 
-    private static func removeClaudeSandboxNetwork(
+    private static func removeClaudeSandbox(
         from generated: [String: Any],
         in settings: inout [String: Any],
         didRemove: inout Bool
@@ -715,35 +727,25 @@ enum AgentRuleInstaller {
             return true
         }
         guard let generatedSandbox = generatedSandboxValue as? [String: Any] else { return false }
-        guard let generatedNetworkValue = generatedSandbox["network"], !(generatedNetworkValue is NSNull) else {
-            return true
-        }
-        guard let generatedNetwork = generatedNetworkValue as? [String: Any] else { return false }
         guard let sandboxValue = settings["sandbox"], !(sandboxValue is NSNull) else { return true }
         guard var sandbox = sandboxValue as? [String: Any] else { return false }
-        guard let networkValue = sandbox["network"], !(networkValue is NSNull) else { return true }
-        guard var network = networkValue as? [String: Any] else { return false }
-
-        guard let generatedUnixSocketValue = generatedNetwork["allowUnixSockets"],
-              !(generatedUnixSocketValue is NSNull),
-              let generatedUnixSocketValues = generatedUnixSocketValue as? [String] else {
-            return false
+        if let generatedExcludedCommands = generatedSandbox["excludedCommands"] as? [String] {
+            guard removeClaudeSandboxNetworkValues(
+                generatedExcludedCommands,
+                forKey: "excludedCommands",
+                from: &sandbox,
+                didRemove: &didRemove
+            ) else { return false }
         }
-        guard removeClaudeSandboxNetworkValues(
-            generatedUnixSocketValues,
-            forKey: "allowUnixSockets",
-            from: &network,
+        guard removeLegacyClaudeNetworkPermissions(
+            from: &sandbox,
             didRemove: &didRemove
-        ), removeClaudeSandboxNetworkValues(
-            legacyClaudeMachLookupValues,
-            forKey: "allowMachLookup",
-            from: &network,
-            didRemove: &didRemove
-        ) else {
-            return false
+        ) else { return false }
+        if sandbox.isEmpty {
+            settings.removeValue(forKey: "sandbox")
+        } else {
+            settings["sandbox"] = sandbox
         }
-        sandbox["network"] = network
-        settings["sandbox"] = sandbox
         return true
     }
 
@@ -953,8 +955,10 @@ enum AgentRuleInstaller {
     ## Authsia Sandbox Handling
 
     - Always run every `authsia ...` CLI command outside the sandbox.
-    - If the agent session is sandboxed, request permission to run the Authsia command outside the sandbox before trying it.
-    - Treat missing `authsia`, missing `/Applications/Authsia.app`, missing `~/.authsia/agent.sock`, or bridge communication failures inside a sandbox as sandbox/runtime-boundary issues first.
+    - When Authsia SSH agent access is configured for this workspace, also run Git network/authentication commands (`git clone`, `git fetch`, `git pull`, `git push`, `git ls-remote`, `git remote update`, and `git submodule add/update`) plus `ssh`, `scp`, and `sftp` outside the sandbox.
+    - Keep local-only Git commands such as `git status`, `git diff`, `git log`, `git add`, and `git commit` inside the sandbox.
+    - If the agent session is sandboxed, request permission to run those Authsia-backed commands outside the sandbox before trying them.
+    - Treat missing `authsia`, missing `/Applications/Authsia.app`, missing `~/.authsia/agent.sock`, authentication failures, or bridge communication failures inside a sandbox as sandbox/runtime-boundary issues first.
     """
         }
         return """
@@ -1185,11 +1189,26 @@ enum AgentRuleInstaller {
         ]
       },
       "sandbox": {
-        "network": {
-          "allowUnixSockets": [
-            "~/.authsia/agent.sock"
-          ]
-        }
+        "excludedCommands": [
+          "authsia",
+          "authsia *",
+          "git clone *",
+          "git fetch",
+          "git fetch *",
+          "git pull",
+          "git pull *",
+          "git push",
+          "git push *",
+          "git ls-remote *",
+          "git remote update",
+          "git remote update *",
+          "git submodule add *",
+          "git submodule update",
+          "git submodule update *",
+          "ssh *",
+          "scp *",
+          "sftp *"
+        ]
       }
     }
     """
@@ -1347,11 +1366,26 @@ enum AgentRuleInstaller {
         ]
       },
       "sandbox": {
-        "network": {
-          "allowUnixSockets": [
-            "~/.authsia/agent.sock"
-          ]
-        }
+        "excludedCommands": [
+          "authsia",
+          "authsia *",
+          "git clone *",
+          "git fetch",
+          "git fetch *",
+          "git pull",
+          "git pull *",
+          "git push",
+          "git push *",
+          "git ls-remote *",
+          "git remote update",
+          "git remote update *",
+          "git submodule add *",
+          "git submodule update",
+          "git submodule update *",
+          "ssh *",
+          "scp *",
+          "sftp *"
+        ]
       }
     }
     """
