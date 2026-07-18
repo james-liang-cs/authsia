@@ -123,6 +123,44 @@ struct BridgeClientErrorTests {
         #expect(recoveries == 1)
     }
 
+    @Test("normal requests preserve the configured XPC timeout")
+    func normalRequestsPreserveConfiguredXPCTimeout() {
+        let baseTimeout: TimeInterval = 12.5
+
+        let timeout = AuthsiaBridgeClient.xpcWaitTimeout(
+            for: .getPassword,
+            baseTimeout: baseTimeout
+        )
+
+        #expect(timeout == baseTimeout)
+    }
+
+    @Test("agent JIT requests cover the remote approval lifetime and reply buffer")
+    func agentJITRequestsCoverRemoteApprovalLifetimeAndReplyBuffer() {
+        let remoteApprovalLifetime = TimeInterval(
+            RemoteJITApprovalDescriptor.requestLifetimeMilliseconds
+        ) / 1_000
+
+        let timeout = AuthsiaBridgeClient.xpcWaitTimeout(
+            for: .agentJITPreflight,
+            baseTimeout: 30
+        )
+
+        #expect(timeout == remoteApprovalLifetime + 5)
+    }
+
+    @Test("agent JIT requests preserve a longer configured XPC timeout")
+    func agentJITRequestsPreserveLongerConfiguredXPCTimeout() {
+        let baseTimeout: TimeInterval = 120
+
+        let timeout = AuthsiaBridgeClient.xpcWaitTimeout(
+            for: .agentJITPreflight,
+            baseTimeout: baseTimeout
+        )
+
+        #expect(timeout == baseTimeout)
+    }
+
     @Test("approval prompt is shown for direct CLI secret requests")
     func approvalPromptShownForDirectCLISecretRequests() {
         let message = AuthsiaBridgeClient.approvalPromptMessage(

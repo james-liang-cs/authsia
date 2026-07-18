@@ -147,6 +147,7 @@ extension BridgeRequestType {
 final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @unchecked Sendable {
     static let shared = AuthsiaBridgeClient()
     private static let shellCompletionRequestedCommand = "completion"
+    private static let remoteJITReplyBuffer: TimeInterval = 5
 
     private let serviceName = "Authsia.Bridge"
     private let appBundleIdentifier = "Authsia"
@@ -1298,7 +1299,9 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
         let requestData = try BridgeCoder.encode(request)
         Self.maybeWriteApprovalPrompt(for: request)
 
-        let responseData = try Self.awaitResponse(timeout: timeout) { replyHandler, proxyErrorHandler in
+        let responseData = try Self.awaitResponse(
+            timeout: Self.xpcWaitTimeout(for: request.type, baseTimeout: timeout)
+        ) { replyHandler, proxyErrorHandler in
             let proxy = connection.remoteObjectProxyWithErrorHandler { error in
                 proxyErrorHandler(error)
             } as? AuthsiaBridgeXPCProtocol
@@ -1351,6 +1354,19 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
         }
 
         return try BridgeCoder.decode(T.self, from: responseData)
+    }
+
+    static func xpcWaitTimeout(
+        for requestType: BridgeRequestType,
+        baseTimeout: TimeInterval
+    ) -> TimeInterval {
+        guard requestType == .agentJITPreflight else {
+            return baseTimeout
+        }
+        let remoteApprovalLifetime = TimeInterval(
+            RemoteJITApprovalDescriptor.requestLifetimeMilliseconds
+        ) / 1_000
+        return max(baseTimeout, remoteApprovalLifetime + remoteJITReplyBuffer)
     }
 
     static func awaitResponse(
