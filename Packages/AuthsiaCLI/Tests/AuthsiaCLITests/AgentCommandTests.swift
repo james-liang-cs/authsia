@@ -6,7 +6,7 @@ import AuthenticatorBridge
 @Suite("Agent init command")
 struct AgentCommandTests {
 
-    @Test("Claude init creates shared rules, Claude rules, and local sandbox settings")
+    @Test("Claude init creates shared rules, Claude rules, and outside-sandbox command settings")
     func claudeInitCreatesRulesAndLocalSettings() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -21,11 +21,15 @@ struct AgentCommandTests {
         #expect(shared.contains("Never ask the user for plaintext secrets."))
         #expect(shared.contains("authsia exec"))
         #expect(shared.contains("Always run every `authsia ...` CLI command outside the sandbox."))
+        #expect(shared.contains("also run Git network/authentication commands"))
+        #expect(shared.contains("Keep local-only Git commands"))
         #expect(claudeRules.contains(AgentRuleInstaller.managedStartMarker))
         #expect(claudeRules.contains("Authsia Secret Handling"))
         #expect(!settings.contains("Authsia.Bridge"))
         #expect(!settings.contains("Authsia.SSHAgent"))
-        #expect(settings.contains("~/.authsia/agent.sock"))
+        #expect(!settings.contains("~/.authsia/agent.sock"))
+        #expect(settings.contains("git pull *"))
+        #expect(settings.contains("ssh *"))
         #expect(settings.contains("\"hooks\""))
         #expect(settings.contains("\"PreToolUse\""))
         #expect(settings.contains("\"PostToolUse\""))
@@ -405,7 +409,7 @@ struct AgentCommandTests {
         #expect(event.confidence == .direct)
     }
 
-    @Test("existing Claude local settings merge Authsia hooks and socket permission")
+    @Test("existing Claude local settings merge Authsia hooks and outside-sandbox commands")
     func existingClaudeSettingsMergeAuthsiaHooksAndSandboxPermissions() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -440,6 +444,9 @@ struct AgentCommandTests {
             ]
           },
           "sandbox": {
+            "excludedCommands": [
+              "custom-tool *"
+            ],
             "network": {
               "allowMachLookup": [
                 "Custom.Service"
@@ -460,12 +467,10 @@ struct AgentCommandTests {
         let permissions = try #require(object["permissions"] as? [String: Any])
         #expect((permissions["allow"] as? [String]) == ["Bash(uv sync)"])
         let sandbox = try #require(object["sandbox"] as? [String: Any])
+        #expect((sandbox["excludedCommands"] as? [String]) == ["custom-tool *"] + claudeOutsideSandboxCommands)
         let network = try #require(sandbox["network"] as? [String: Any])
         #expect((network["allowMachLookup"] as? [String]) == ["Custom.Service"])
-        #expect((network["allowUnixSockets"] as? [String]) == [
-            "~/custom.sock",
-            "~/.authsia/agent.sock",
-        ])
+        #expect((network["allowUnixSockets"] as? [String]) == ["~/custom.sock"])
         let hooks = try #require(object["hooks"] as? [String: Any])
         let preToolUse = try #require(hooks["PreToolUse"] as? [[String: Any]])
         let bashHookEntry = try #require(preToolUse.first { $0["matcher"] as? String == "Bash" })
@@ -505,10 +510,8 @@ struct AgentCommandTests {
         let sandbox = try #require(object["sandbox"] as? [String: Any])
         let network = try #require(sandbox["network"] as? [String: Any])
         #expect((network["allowMachLookup"] as? [String]) == ["Custom.Service"])
-        #expect((network["allowUnixSockets"] as? [String]) == [
-            "~/custom.sock",
-            "~/.authsia/agent.sock",
-        ])
+        #expect((network["allowUnixSockets"] as? [String]) == ["~/custom.sock"])
+        #expect((sandbox["excludedCommands"] as? [String]) == claudeOutsideSandboxCommands)
         #expect(result.updated.contains(".claude/settings.local.json"))
         #expect(result.manualSteps.isEmpty)
     }
@@ -534,9 +537,8 @@ struct AgentCommandTests {
 
         let object = try expectJSONObject(try read(".claude/settings.local.json", in: root))
         let sandbox = try #require(object["sandbox"] as? [String: Any])
-        let network = try #require(sandbox["network"] as? [String: Any])
-        #expect(network["allowMachLookup"] == nil)
-        #expect((network["allowUnixSockets"] as? [String]) == ["~/.authsia/agent.sock"])
+        #expect(sandbox["network"] == nil)
+        #expect((sandbox["excludedCommands"] as? [String]) == claudeOutsideSandboxCommands)
     }
 
     @Test("invalid existing Claude local settings are not mutated and print a manual merge block")
@@ -686,6 +688,9 @@ struct AgentCommandTests {
             ]
           },
           "sandbox": {
+            "excludedCommands": [
+              "custom-tool *"
+            ],
             "network": {
               "allowMachLookup": [
                 "Custom.Service",
@@ -733,6 +738,7 @@ struct AgentCommandTests {
         ))
         let sandbox = try #require(object["sandbox"] as? [String: Any])
         #expect(sandbox["customSandboxField"] as? String == "preserve")
+        #expect((sandbox["excludedCommands"] as? [String]) == ["custom-tool *"])
         let network = try #require(sandbox["network"] as? [String: Any])
         #expect((network["allowMachLookup"] as? [String]) == [
             "Custom.Service",
@@ -768,9 +774,11 @@ struct AgentCommandTests {
         let settingsURL = root.appendingPathComponent(".claude/settings.local.json")
         var settings = try expectJSONObject(try String(contentsOf: settingsURL, encoding: .utf8))
         var sandbox = try #require(settings["sandbox"] as? [String: Any])
-        var network = try #require(sandbox["network"] as? [String: Any])
-        network["allowMachLookup"] = ["Authsia.Bridge", "Authsia.SSHAgent"]
-        sandbox["network"] = network
+        sandbox.removeValue(forKey: "excludedCommands")
+        sandbox["network"] = [
+            "allowMachLookup": ["Authsia.Bridge", "Authsia.SSHAgent"],
+            "allowUnixSockets": ["~/.authsia/agent.sock"],
+        ]
         settings["sandbox"] = sandbox
         let legacyData = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
         try legacyData.write(to: settingsURL)
@@ -993,7 +1001,7 @@ struct AgentCommandTests {
         let agents = try read("AGENTS.md", in: root)
 
         #expect(agents.contains("Always run every `authsia ...` CLI command outside the sandbox."))
-        #expect(agents.contains("If the agent session is sandboxed, request permission to run the Authsia command outside the sandbox before trying it."))
+        #expect(agents.contains("If the agent session is sandboxed, request permission to run those Authsia-backed commands outside the sandbox before trying them."))
         #expect(agents.contains("Authsia records Codex command history from explicit Authsia markers and macOS process monitoring fallback."))
         #expect(!agents.contains("If sandboxed, request access to `Authsia.Bridge`"))
         #expect(!fileExists(".codex/rules/authsia.rules", in: root))
@@ -1239,6 +1247,29 @@ struct AgentCommandTests {
         ["Read", "Write", "Edit", "MultiEdit", "LS", "Glob", "Grep"]
     }
 
+    private var claudeOutsideSandboxCommands: [String] {
+        [
+            "authsia",
+            "authsia *",
+            "git clone *",
+            "git fetch",
+            "git fetch *",
+            "git pull",
+            "git pull *",
+            "git push",
+            "git push *",
+            "git ls-remote *",
+            "git remote update",
+            "git remote update *",
+            "git submodule add *",
+            "git submodule update",
+            "git submodule update *",
+            "ssh *",
+            "scp *",
+            "sftp *",
+        ]
+    }
+
     private func expectClaudeSettings(_ settings: String) throws {
         let object = try expectJSONObject(settings)
         let hooks = try #require(object["hooks"] as? [String: Any])
@@ -1247,12 +1278,17 @@ struct AgentCommandTests {
 
         #expect(!object.keys.contains("network"))
         let sandbox = try #require(object["sandbox"] as? [String: Any])
-        let network = try #require(sandbox["network"] as? [String: Any])
-        let allowMachLookup = (network["allowMachLookup"] as? [String]) ?? []
-        #expect(!allowMachLookup.contains("Authsia.Bridge"))
-        #expect(!allowMachLookup.contains("Authsia.SSHAgent"))
-        let allowUnixSockets = try #require(network["allowUnixSockets"] as? [String])
-        #expect(allowUnixSockets.contains("~/.authsia/agent.sock"))
+        let excludedCommands = try #require(sandbox["excludedCommands"] as? [String])
+        for command in claudeOutsideSandboxCommands {
+            #expect(excludedCommands.contains(command))
+        }
+        if let network = sandbox["network"] as? [String: Any] {
+            let allowMachLookup = (network["allowMachLookup"] as? [String]) ?? []
+            #expect(!allowMachLookup.contains("Authsia.Bridge"))
+            #expect(!allowMachLookup.contains("Authsia.SSHAgent"))
+            let allowUnixSockets = (network["allowUnixSockets"] as? [String]) ?? []
+            #expect(!allowUnixSockets.contains("~/.authsia/agent.sock"))
+        }
     }
 
     private func expectClaudeHookEntries(_ entries: [[String: Any]]) throws {
