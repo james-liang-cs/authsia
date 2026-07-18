@@ -1,9 +1,12 @@
 #if os(macOS)
 import Foundation
+import OSLog
 import Security
 @preconcurrency import AuthenticatorBridge
 import AuthenticatorData
 import AuthenticatorCore
+
+private let remoteJITApprovalLogger = Logger(subsystem: "app.authsia", category: "RemoteApproval")
 
 struct AgentJITFixedApprovalTiming: Equatable {
     let issuedAtMilliseconds: Int64
@@ -505,10 +508,14 @@ extension XPCRequestHandler {
                   zip(requests, inputs).allSatisfy({ request, input in
                       request.descriptor.input == input
                   }) else {
+                remoteJITApprovalLogger.error("remote-request-batch-mismatch")
                 return []
             }
             return requests
         } catch {
+            remoteJITApprovalLogger.error(
+                "remote-request-build-rejected: \(String(describing: error), privacy: .public)"
+            )
             return []
         }
     }

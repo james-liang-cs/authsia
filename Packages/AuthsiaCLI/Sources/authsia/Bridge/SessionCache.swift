@@ -414,7 +414,7 @@ struct SessionCache {
         removeLegacySessionFile(at: legacyFilePath)
     }
 
-    private static func hasAutomationCredential(in environment: [String: String]) -> Bool {
+    static func hasAutomationCredential(in environment: [String: String]) -> Bool {
         nonEmpty(environment[AutomationCredentialEnvironment.generalCredentialKey]) != nil
             || nonEmpty(environment[AutomationCredentialEnvironment.sshCredentialKey]) != nil
     }
