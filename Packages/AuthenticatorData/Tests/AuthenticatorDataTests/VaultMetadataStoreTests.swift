@@ -237,6 +237,194 @@ final class VaultMetadataStoreTests: XCTestCase {
         XCTAssertEqual(try store.loadAPIKeys().map(\.id), [apiKey.id])
     }
 
+    func testLoadCertificatesSuppressesStaleCandidateCoveredBySyncedTombstone() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let certificate = makeCertificateMetadata(modifiedAt: Date(timeIntervalSince1970: 1_700_000_010))
+        let tombstone = CertificateDeletionTombstone(
+            id: certificate.id,
+            deletedAt: Date(timeIntervalSince1970: 1_700_000_020)
+        )
+        let metadataCandidates: [[CertificateMetadata]] = [[], [certificate]]
+        let tombstoneCandidates: [[CertificateDeletionTombstone]] = [[tombstone], []]
+        try keychain.seedCandidates(metadataCandidates, key: "vault_certificates_metadata")
+        try keychain.seedCandidates(tombstoneCandidates, key: "vault_certificate_deletion_tombstones")
+
+        XCTAssertEqual(try store.loadCertificates(), [])
+    }
+
+    func testLoadCertificatesKeepsMetadataNewerThanTombstone() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let certificate = makeCertificateMetadata(modifiedAt: Date(timeIntervalSince1970: 1_700_000_020))
+        let tombstone = CertificateDeletionTombstone(
+            id: certificate.id,
+            deletedAt: Date(timeIntervalSince1970: 1_700_000_010)
+        )
+        let metadataCandidates: [[CertificateMetadata]] = [[], [certificate]]
+        let tombstoneCandidates: [[CertificateDeletionTombstone]] = [[tombstone], []]
+        try keychain.seedCandidates(metadataCandidates, key: "vault_certificates_metadata")
+        try keychain.seedCandidates(tombstoneCandidates, key: "vault_certificate_deletion_tombstones")
+
+        XCTAssertEqual(try store.loadCertificates().map(\.id), [certificate.id])
+    }
+
+    func testLoadNotesSuppressesStaleCandidateCoveredBySyncedTombstone() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let note = makeNoteMetadata(modifiedAt: Date(timeIntervalSince1970: 1_700_000_010))
+        let tombstone = NoteDeletionTombstone(
+            id: note.id,
+            deletedAt: Date(timeIntervalSince1970: 1_700_000_020)
+        )
+        let metadataCandidates: [[SecureNoteMetadata]] = [[], [note]]
+        let tombstoneCandidates: [[NoteDeletionTombstone]] = [[tombstone], []]
+        try keychain.seedCandidates(metadataCandidates, key: "vault_notes_metadata")
+        try keychain.seedCandidates(tombstoneCandidates, key: "vault_note_deletion_tombstones")
+
+        XCTAssertEqual(try store.loadNotes(), [])
+    }
+
+    func testLoadNotesKeepsMetadataNewerThanTombstone() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let note = makeNoteMetadata(modifiedAt: Date(timeIntervalSince1970: 1_700_000_020))
+        let tombstone = NoteDeletionTombstone(
+            id: note.id,
+            deletedAt: Date(timeIntervalSince1970: 1_700_000_010)
+        )
+        let metadataCandidates: [[SecureNoteMetadata]] = [[], [note]]
+        let tombstoneCandidates: [[NoteDeletionTombstone]] = [[tombstone], []]
+        try keychain.seedCandidates(metadataCandidates, key: "vault_notes_metadata")
+        try keychain.seedCandidates(tombstoneCandidates, key: "vault_note_deletion_tombstones")
+
+        XCTAssertEqual(try store.loadNotes().map(\.id), [note.id])
+    }
+
+    func testLoadSSHKeysSuppressesStaleCandidateCoveredBySyncedTombstone() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let sshKey = makeSSHKeyMetadata(modifiedAt: Date(timeIntervalSince1970: 1_700_000_010))
+        let tombstone = SSHKeyDeletionTombstone(
+            id: sshKey.id,
+            deletedAt: Date(timeIntervalSince1970: 1_700_000_020)
+        )
+        let metadataCandidates: [[SSHKeyMetadata]] = [[], [sshKey]]
+        let tombstoneCandidates: [[SSHKeyDeletionTombstone]] = [[tombstone], []]
+        try keychain.seedCandidates(metadataCandidates, key: "vault_sshkeys_metadata")
+        try keychain.seedCandidates(tombstoneCandidates, key: "vault_ssh_key_deletion_tombstones")
+
+        XCTAssertEqual(try store.loadSSHKeys(), [])
+    }
+
+    func testLoadSSHKeysKeepsMetadataNewerThanTombstone() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let sshKey = makeSSHKeyMetadata(modifiedAt: Date(timeIntervalSince1970: 1_700_000_020))
+        let tombstone = SSHKeyDeletionTombstone(
+            id: sshKey.id,
+            deletedAt: Date(timeIntervalSince1970: 1_700_000_010)
+        )
+        let metadataCandidates: [[SSHKeyMetadata]] = [[], [sshKey]]
+        let tombstoneCandidates: [[SSHKeyDeletionTombstone]] = [[tombstone], []]
+        try keychain.seedCandidates(metadataCandidates, key: "vault_sshkeys_metadata")
+        try keychain.seedCandidates(tombstoneCandidates, key: "vault_ssh_key_deletion_tombstones")
+
+        XCTAssertEqual(try store.loadSSHKeys().map(\.id), [sshKey.id])
+    }
+
+    func testLoadPasswordDeletionTombstonesReconcilesDivergentCandidates() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let first = PasswordDeletionTombstone(
+            id: UUID(),
+            deletedAt: Date(timeIntervalSince1970: 1_800_000_010)
+        )
+        let second = PasswordDeletionTombstone(
+            id: UUID(),
+            deletedAt: Date(timeIntervalSince1970: 1_800_000_020)
+        )
+        try keychain.seedCandidates([[first], [second]], key: "vault_password_deletion_tombstones")
+
+        let loaded = try store.loadPasswordDeletionTombstones()
+
+        XCTAssertEqual(Set(loaded.map(\.id)), [first.id, second.id])
+        XCTAssertTrue(keychain.savedKeys.contains("vault_password_deletion_tombstones"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let persisted = try XCTUnwrap(keychain.stored["vault_password_deletion_tombstones"])
+        let persistedTombstones = try decoder.decode([PasswordDeletionTombstone].self, from: persisted)
+        XCTAssertEqual(Set(persistedTombstones.map(\.id)), [first.id, second.id])
+    }
+
+    func testLoadPasswordDeletionTombstonesDoesNotRewriteConvergedCandidates() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let tombstone = PasswordDeletionTombstone(
+            id: UUID(),
+            deletedAt: Date(timeIntervalSince1970: 1_800_000_010)
+        )
+        try keychain.seedCandidates([[tombstone], [tombstone]], key: "vault_password_deletion_tombstones")
+
+        let loaded = try store.loadPasswordDeletionTombstones()
+
+        XCTAssertEqual(loaded.map(\.id), [tombstone.id])
+        XCTAssertFalse(keychain.savedKeys.contains("vault_password_deletion_tombstones"))
+    }
+
+    func testLoadPasswordDeletionTombstonesHealsMissingTarget() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let tombstone = PasswordDeletionTombstone(
+            id: UUID(),
+            deletedAt: Date(timeIntervalSince1970: 1_800_000_010)
+        )
+        try keychain.seedCandidates([[tombstone]], key: "vault_password_deletion_tombstones")
+
+        XCTAssertEqual(try store.loadPasswordDeletionTombstones(), [tombstone])
+        XCTAssertTrue(keychain.savedKeys.contains("vault_password_deletion_tombstones"))
+    }
+
+    func testLoadPasswordDeletionTombstonesDoesNotRewriteMissingReadOnlyFallback() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let keychain = StubVaultMetadataKeychain()
+        let store = VaultMetadataStore(documentsDirectory: tempDir, keychain: keychain)
+        let tombstone = PasswordDeletionTombstone(
+            id: UUID(),
+            deletedAt: Date(timeIntervalSince1970: 1_800_000_010)
+        )
+        try keychain.seedTargeted(
+            [false: [tombstone]],
+            key: "vault_password_deletion_tombstones"
+        )
+
+        let loaded = try KeychainSyncSettings.withICloudKeychainSyncEnabled(false) {
+            try store.loadPasswordDeletionTombstones()
+        }
+
+        XCTAssertEqual(loaded, [tombstone])
+        XCTAssertFalse(keychain.savedKeys.contains("vault_password_deletion_tombstones"))
+    }
+
     func testLoadFoldersMergesStaleSyncAndFreshLocalCandidates() throws {
         let tempDir = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -448,11 +636,67 @@ final class VaultMetadataStoreTests: XCTestCase {
             isScraped: true
         )
     }
+
+    private func makeCertificateMetadata(
+        id: UUID = UUID(),
+        modifiedAt: Date
+    ) -> CertificateMetadata {
+        CertificateMetadata(
+            id: id,
+            name: "Example",
+            expirationDate: nil,
+            issuer: nil,
+            subject: nil,
+            notes: nil,
+            folderPath: nil,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            modifiedAt: modifiedAt,
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false
+        )
+    }
+
+    private func makeNoteMetadata(
+        id: UUID = UUID(),
+        modifiedAt: Date
+    ) -> SecureNoteMetadata {
+        SecureNoteMetadata(
+            id: id,
+            title: "Example",
+            folderPath: nil,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            modifiedAt: modifiedAt,
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false
+        )
+    }
+
+    private func makeSSHKeyMetadata(
+        id: UUID = UUID(),
+        modifiedAt: Date
+    ) -> SSHKeyMetadata {
+        SSHKeyMetadata(
+            id: id,
+            name: "Example",
+            publicKey: "ssh-ed25519 AAAA",
+            comment: "example",
+            fingerprint: "SHA256:abc",
+            folderPath: nil,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            modifiedAt: modifiedAt,
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false
+        )
+    }
 }
 
 private final class StubVaultMetadataKeychain: VaultMetadataKeychainStoring, @unchecked Sendable {
     var stored: [String: Data] = [:]
     var storedCandidates: [String: [Data]] = [:]
+    var targetedCandidates: [String: [Bool: Data]] = [:]
     var savedKeys: [String] = []
     var loadError: Error?
     var saveError: Error?
@@ -475,6 +719,12 @@ private final class StubVaultMetadataKeychain: VaultMetadataKeychainStoring, @un
         stored[key] = storedCandidates[key]?.first
     }
 
+    func seedTargeted<T: Encodable>(_ values: [Bool: T], key: String) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        targetedCandidates[key] = try values.mapValues { try encoder.encode($0) }
+    }
+
     func save(data: Data, key: String) throws {
         if let saveError { throw saveError }
         savedKeys.append(key)
@@ -486,8 +736,40 @@ private final class StubVaultMetadataKeychain: VaultMetadataKeychainStoring, @un
         return stored[key]
     }
 
-    func loadCandidates(key: String) throws -> [Data] {
+    func loadCandidates(key: String) throws -> [KeychainDataCandidate] {
         if let loadError { throw loadError }
-        return storedCandidates[key] ?? stored[key].map { [$0] } ?? []
+        if let candidates = targetedCandidates[key] {
+            return [true, false].map { synchronizable in
+                KeychainDataCandidate(
+                    synchronizable: synchronizable,
+                    data: candidates[synchronizable],
+                    isAvailable: true
+                )
+            }
+        }
+        if let candidates = storedCandidates[key] {
+            return [
+                KeychainDataCandidate(
+                    synchronizable: true,
+                    data: candidates.first,
+                    isAvailable: true
+                ),
+                KeychainDataCandidate(
+                    synchronizable: false,
+                    data: candidates.dropFirst().first,
+                    isAvailable: true
+                ),
+            ]
+        }
+        if let data = stored[key] {
+            return [
+                KeychainDataCandidate(synchronizable: true, data: data, isAvailable: true),
+                KeychainDataCandidate(synchronizable: false, data: data, isAvailable: true),
+            ]
+        }
+        return [
+            KeychainDataCandidate(synchronizable: true, data: nil, isAvailable: true),
+            KeychainDataCandidate(synchronizable: false, data: nil, isAvailable: true),
+        ]
     }
 }

@@ -691,8 +691,11 @@ private final class ImportTestVaultMetadataStore: VaultMetadataStoring {
     var apiKeys: [APIKeyMetadata] = []
     var apiKeyDeletionTombstones: [APIKeyDeletionTombstone] = []
     var certificates: [CertificateMetadata] = []
+    var certificateDeletionTombstones: [CertificateDeletionTombstone] = []
     var notes: [SecureNoteMetadata] = []
+    var noteDeletionTombstones: [NoteDeletionTombstone] = []
     var sshKeys: [SSHKeyMetadata] = []
+    var sshKeyDeletionTombstones: [SSHKeyDeletionTombstone] = []
     var folders: [VaultItemType: [String]] = [:]
     var folderStates: [VaultFolderState] = []
 
@@ -750,6 +753,12 @@ private final class ImportTestVaultMetadataStore: VaultMetadataStoring {
         try saveCertificates(metadata)
     }
     func loadCertificates() throws -> [CertificateMetadata] { certificates }
+    func saveCertificateDeletionTombstones(_ tombstones: [CertificateDeletionTombstone]) throws {
+        certificateDeletionTombstones = tombstones
+    }
+    func loadCertificateDeletionTombstones() throws -> [CertificateDeletionTombstone] {
+        certificateDeletionTombstones
+    }
     func saveNotes(_ metadata: [SecureNoteMetadata]) throws {
         notes = metadata
     }
@@ -757,6 +766,12 @@ private final class ImportTestVaultMetadataStore: VaultMetadataStoring {
         try saveNotes(metadata)
     }
     func loadNotes() throws -> [SecureNoteMetadata] { notes }
+    func saveNoteDeletionTombstones(_ tombstones: [NoteDeletionTombstone]) throws {
+        noteDeletionTombstones = tombstones
+    }
+    func loadNoteDeletionTombstones() throws -> [NoteDeletionTombstone] {
+        noteDeletionTombstones
+    }
     func saveSSHKeys(_ metadata: [SSHKeyMetadata]) throws {
         sshKeys = metadata
     }
@@ -764,6 +779,12 @@ private final class ImportTestVaultMetadataStore: VaultMetadataStoring {
         try saveSSHKeys(metadata)
     }
     func loadSSHKeys() throws -> [SSHKeyMetadata] { sshKeys }
+    func saveSSHKeyDeletionTombstones(_ tombstones: [SSHKeyDeletionTombstone]) throws {
+        sshKeyDeletionTombstones = tombstones
+    }
+    func loadSSHKeyDeletionTombstones() throws -> [SSHKeyDeletionTombstone] {
+        sshKeyDeletionTombstones
+    }
     func saveFolders(_ folders: [VaultItemType: [String]]) throws {
         self.folders = folders
     }

@@ -177,6 +177,252 @@ final class RepositorySavePathSyncPolicyTests: XCTestCase {
         XCTAssertEqual(metadataStore.folderStateSaveTargets, [[true, false]])
     }
 
+    func testSyncEnableSnapshotDoesNotReintroduceTombstonedPassword() throws {
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let password = PasswordItem(
+            name: "Deleted",
+            username: "user",
+            password: Data("fixture".utf8),
+            createdAt: createdAt,
+            modifiedAt: createdAt
+        )
+        let keychain = RecordingVaultKeychainStore(writeTargets: [true, false])
+        let metadataStore = RecordingVaultMetadataStore(writeTargets: [true, false])
+        metadataStore.passwordDeletionTombstones = [
+            PasswordDeletionTombstone(
+                id: password.id,
+                deletedAt: createdAt.addingTimeInterval(10)
+            ),
+        ]
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        let snapshot = VaultFullItemSnapshot(
+            passwords: [password],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        try repository.saveFullItemsToCurrentStoragePolicy(snapshot)
+
+        XCTAssertTrue(metadataStore.passwords.isEmpty)
+        XCTAssertNil(keychain.passwords[password.id])
+    }
+
+    func testSyncEnableSnapshotDoesNotReintroduceTombstonedCertificateNoteOrSSHKey() throws {
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let deletedAt = createdAt.addingTimeInterval(10)
+        let certificate = CertificateItem(
+            name: "Deleted",
+            certificateData: Data("certificate".utf8),
+            privateKeyData: Data("private-key".utf8),
+            createdAt: createdAt,
+            modifiedAt: createdAt
+        )
+        let note = SecureNoteItem(
+            title: "Deleted",
+            content: Data("note".utf8),
+            createdAt: createdAt,
+            modifiedAt: createdAt
+        )
+        let sshKey = SSHKeyItem(
+            name: "Deleted",
+            publicKey: Data("ssh-ed25519 AAAA".utf8),
+            privateKey: Data("ssh-private".utf8),
+            comment: "deleted",
+            fingerprint: "SHA256:deleted",
+            createdAt: createdAt,
+            modifiedAt: createdAt
+        )
+        let keychain = RecordingVaultKeychainStore(writeTargets: [true, false])
+        let metadataStore = RecordingVaultMetadataStore(writeTargets: [true, false])
+        metadataStore.certificateDeletionTombstones = [
+            CertificateDeletionTombstone(id: certificate.id, deletedAt: deletedAt),
+        ]
+        metadataStore.noteDeletionTombstones = [
+            NoteDeletionTombstone(id: note.id, deletedAt: deletedAt),
+        ]
+        metadataStore.sshKeyDeletionTombstones = [
+            SSHKeyDeletionTombstone(id: sshKey.id, deletedAt: deletedAt),
+        ]
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        let snapshot = VaultFullItemSnapshot(
+            passwords: [],
+            certificates: [certificate],
+            notes: [note],
+            sshKeys: [sshKey]
+        )
+
+        try repository.saveFullItemsToCurrentStoragePolicy(snapshot)
+
+        XCTAssertTrue(metadataStore.certificates.isEmpty)
+        XCTAssertTrue(metadataStore.notes.isEmpty)
+        XCTAssertTrue(metadataStore.sshKeys.isEmpty)
+        XCTAssertNil(keychain.certificates[certificate.id])
+        XCTAssertNil(keychain.notes[note.id])
+        XCTAssertNil(keychain.sshKeys[sshKey.id])
+    }
+
+    func testSyncEnablePersistsPasswordCertificateNoteAndSSHKeyDeletionIntentToCurrentPolicy() throws {
+        let deletedAt = Date(timeIntervalSince1970: 1_700_000_010)
+        let metadataStore = RecordingVaultMetadataStore(writeTargets: [true, false])
+        metadataStore.passwordDeletionTombstones = [
+            PasswordDeletionTombstone(id: UUID(), deletedAt: deletedAt),
+        ]
+        metadataStore.certificateDeletionTombstones = [
+            CertificateDeletionTombstone(id: UUID(), deletedAt: deletedAt),
+        ]
+        metadataStore.noteDeletionTombstones = [
+            NoteDeletionTombstone(id: UUID(), deletedAt: deletedAt),
+        ]
+        metadataStore.sshKeyDeletionTombstones = [
+            SSHKeyDeletionTombstone(id: UUID(), deletedAt: deletedAt),
+        ]
+        let repository = VaultRepository(
+            keychainStore: RecordingVaultKeychainStore(writeTargets: [true, false]),
+            metadataStore: metadataStore
+        )
+        let snapshot = VaultFullItemSnapshot(
+            passwords: [],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        try repository.saveFullItemsToCurrentStoragePolicy(snapshot)
+
+        XCTAssertEqual(metadataStore.passwordTombstoneSaveTargets, [[true, false]])
+        XCTAssertEqual(metadataStore.certificateTombstoneSaveTargets, [[true, false]])
+        XCTAssertEqual(metadataStore.noteTombstoneSaveTargets, [[true, false]])
+        XCTAssertEqual(metadataStore.sshKeyTombstoneSaveTargets, [[true, false]])
+    }
+
+    func testSyncEnableDoesNotReintroduceTombstonedAccount() throws {
+        let deletedAt = Date(timeIntervalSince1970: 1_700_000_010)
+        let deleted = makeAccount(id: UUID(), secret: Data("otp-deleted".utf8), label: "Deleted")
+        let keeper = makeAccount(id: UUID(), secret: Data("otp-keeper".utf8), label: "Keeper")
+        let accountKeychain = RecordingAccountKeychainStore(writeTargets: [true, false])
+        accountKeychain.savedSecrets.append((deleted.id, deleted.secret, []))
+        accountKeychain.savedSecrets.append((keeper.id, keeper.secret, []))
+        let metadataKeychain = RecordingMetadataKeychainStore(writeTargets: [true, false])
+        let encoder = JSONEncoder()
+        metadataKeychain.dataByKey["account_metadata"] = try encoder.encode([
+            AccountMetadata(from: deleted),
+            AccountMetadata(from: keeper),
+        ])
+        metadataKeychain.dataByKey["account_deletion_tombstones"] = try encoder.encode([
+            AccountDeletionTombstone(id: deleted.id, deletedAt: deletedAt),
+        ])
+        let metadataStore = MetadataStore(fileURL: nil, foldersFileURL: nil, keychain: metadataKeychain)
+        let repository = AccountRepository(keychainStore: accountKeychain, metadataStore: metadataStore)
+
+        let collected = try repository.collectFullAccountsForCurrentStoragePolicy()
+        XCTAssertEqual(collected.map(\.id), [keeper.id])
+        metadataKeychain.savedItems.removeAll()
+        try KeychainSyncSettings.withICloudKeychainSyncEnabled(true) {
+            try repository.saveFullAccountsToCurrentStoragePolicy(collected)
+        }
+
+        let savedMetadata = metadataKeychain.savedItems.filter { $0.key == "account_metadata" }
+        XCTAssertFalse(savedMetadata.isEmpty)
+        XCTAssertEqual(savedMetadata.map(\.targets), Array(repeating: [true, false], count: savedMetadata.count))
+        let persisted = try JSONDecoder().decode(
+            [AccountMetadata].self,
+            from: XCTUnwrap(savedMetadata.last?.data)
+        )
+        XCTAssertEqual(persisted.map(\.id), [keeper.id])
+        let savedTombstones = metadataKeychain.savedItems.filter { $0.key == "account_deletion_tombstones" }
+        XCTAssertEqual(savedTombstones.map(\.targets), [[true, false]])
+    }
+
+    func testSyncEnableDoesNotRestoreAccountDeletedAfterSnapshot() throws {
+        let account = makeAccount(id: UUID(), secret: Data("otp-stale".utf8), label: "Stale")
+        let deletedAt = account.lastUsed.addingTimeInterval(10)
+        let accountKeychain = RecordingAccountKeychainStore(writeTargets: [true, false])
+        accountKeychain.savedSecrets.append((account.id, account.secret, []))
+        let metadataKeychain = RecordingMetadataKeychainStore(writeTargets: [true, false])
+        let encoder = JSONEncoder()
+        metadataKeychain.dataByKey["account_metadata"] = try encoder.encode([AccountMetadata(from: account)])
+        metadataKeychain.onRetrieveCandidates = { key, count in
+            guard key == "account_deletion_tombstones", count == 2 else { return }
+            metadataKeychain.dataByKey[key] = try encoder.encode([
+                AccountDeletionTombstone(id: account.id, deletedAt: deletedAt),
+            ])
+        }
+        let metadataStore = MetadataStore(fileURL: nil, foldersFileURL: nil, keychain: metadataKeychain)
+        let repository = AccountRepository(keychainStore: accountKeychain, metadataStore: metadataStore)
+
+        try KeychainSyncSettings.withICloudKeychainSyncEnabled(true) {
+            try repository.saveFullAccountsToCurrentStoragePolicy([account])
+        }
+
+        let persistedData = try XCTUnwrap(metadataKeychain.dataByKey["account_metadata"])
+        XCTAssertEqual(try JSONDecoder().decode([AccountMetadata].self, from: persistedData), [])
+        XCTAssertFalse(accountKeychain.savedSecrets.contains { $0.targets == [true, false] })
+        XCTAssertTrue(metadataKeychain.savedItems.contains { $0.key == "account_deletion_tombstones" })
+    }
+
+    func testSyncEnableReapsAccountDeletedDuringSecretCopy() throws {
+        let account = makeAccount(id: UUID(), secret: Data("otp-race".utf8), label: "Race")
+        let deletedAt = account.lastUsed.addingTimeInterval(10)
+        let accountKeychain = RecordingAccountKeychainStore(writeTargets: [true, false])
+        accountKeychain.savedSecrets.append((account.id, account.secret, []))
+        let metadataKeychain = RecordingMetadataKeychainStore(writeTargets: [true, false])
+        let encoder = JSONEncoder()
+        metadataKeychain.dataByKey["account_metadata"] = try encoder.encode([AccountMetadata(from: account)])
+        accountKeychain.onSave = { id in
+            guard id == account.id else { return }
+            metadataKeychain.dataByKey["account_deletion_tombstones"] = try encoder.encode([
+                AccountDeletionTombstone(id: id, deletedAt: deletedAt),
+            ])
+        }
+        let metadataStore = MetadataStore(fileURL: nil, foldersFileURL: nil, keychain: metadataKeychain)
+        let repository = AccountRepository(keychainStore: accountKeychain, metadataStore: metadataStore)
+
+        try KeychainSyncSettings.withICloudKeychainSyncEnabled(true) {
+            try repository.saveFullAccountsToCurrentStoragePolicy([account])
+        }
+
+        XCTAssertTrue(accountKeychain.deletedIDs.contains(account.id))
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                [AccountMetadata].self,
+                from: XCTUnwrap(metadataKeychain.dataByKey["account_metadata"])
+            ),
+            []
+        )
+    }
+
+    func testSyncEnableReapsPasswordDeletedDuringSecretCopy() throws {
+        let password = makePassword(name: "Race", password: Data("password-race".utf8))
+        let deletedAt = password.modifiedAt.addingTimeInterval(10)
+        let keychain = RecordingVaultKeychainStore(writeTargets: [true, false])
+        keychain.passwords[password.id] = password.password
+        let metadataStore = RecordingVaultMetadataStore(writeTargets: [true, false])
+        metadataStore.passwords = [PasswordMetadata(from: password)]
+        keychain.onPasswordSave = { id in
+            guard id == password.id else { return }
+            metadataStore.passwordDeletionTombstones = [
+                PasswordDeletionTombstone(id: id, deletedAt: deletedAt),
+            ]
+        }
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+
+        try KeychainSyncSettings.withICloudKeychainSyncEnabled(true) {
+            try repository.saveFullItemsToCurrentStoragePolicy(
+                VaultFullItemSnapshot(
+                    passwords: [password],
+                    certificates: [],
+                    notes: [],
+                    sshKeys: []
+                )
+            )
+        }
+
+        XCTAssertTrue(metadataStore.passwords.isEmpty)
+        XCTAssertNil(keychain.passwords[password.id])
+        XCTAssertTrue(keychain.passwordDeleteIDs.contains(password.id))
+    }
+
     func testSyncEnableSnapshotPreservesPasswordAddedAfterCollect() throws {
         let existing = makePassword(name: "Existing", password: Data("pw".utf8))
         let added = makePassword(name: "Added", password: Data("added".utf8))
@@ -434,6 +680,7 @@ private final class RecordingAccountKeychainStore: AccountKeychainStoring {
     let writeTargets: [Bool]
     var savedSecrets: [(id: UUID, secret: Data, targets: [Bool])] = []
     var deletedIDs: [UUID] = []
+    var onSave: ((UUID) throws -> Void)?
 
     init(writeTargets: [Bool]) {
         self.writeTargets = writeTargets
@@ -441,6 +688,7 @@ private final class RecordingAccountKeychainStore: AccountKeychainStoring {
 
     func save(secret: Data, for accountID: UUID) throws {
         savedSecrets.append((accountID, secret, writeTargets))
+        try onSave?(accountID)
     }
 
     func retrieve(for accountID: UUID) throws -> Data {
@@ -459,6 +707,8 @@ private final class RecordingMetadataKeychainStore: MetadataKeychainStoring {
     let writeTargets: [Bool]
     var dataByKey: [String: Data] = [:]
     var savedItems: [(key: String, data: Data, targets: [Bool])] = []
+    var onRetrieveCandidates: ((String, Int) throws -> Void)?
+    private var retrieveCandidateCounts: [String: Int] = [:]
 
     init(writeTargets: [Bool]) {
         self.writeTargets = writeTargets
@@ -472,6 +722,22 @@ private final class RecordingMetadataKeychainStore: MetadataKeychainStoring {
     func retrieve(for key: String) throws -> Data {
         guard let data = dataByKey[key] else { throw KeychainError.itemNotFound }
         return data
+    }
+
+    func retrieveCandidates(for key: String) throws -> [KeychainDataCandidate] {
+        let count = (retrieveCandidateCounts[key] ?? 0) + 1
+        retrieveCandidateCounts[key] = count
+        try onRetrieveCandidates?(key, count)
+        if let data = dataByKey[key] {
+            return [
+                KeychainDataCandidate(synchronizable: true, data: data, isAvailable: true),
+                KeychainDataCandidate(synchronizable: false, data: data, isAvailable: true),
+            ]
+        }
+        return [
+            KeychainDataCandidate(synchronizable: true, data: nil, isAvailable: true),
+            KeychainDataCandidate(synchronizable: false, data: nil, isAvailable: true),
+        ]
     }
 }
 
@@ -494,14 +760,20 @@ private final class RecordingVaultMetadataKeychain: VaultMetadataKeychainStoring
     }
 
     func load(key: String) throws -> Data? {
-        try loadCandidates(key: key).first
+        try loadCandidates(key: key).first(where: { $0.data != nil })?.data
     }
 
-    func loadCandidates(key: String) throws -> [Data] {
-        let candidates = KeychainSyncSettings.isICloudKeychainSyncEnabled
-            ? [synchronizable[key], local[key]]
-            : [local[key], synchronizable[key]]
-        return candidates.compactMap { $0 }
+    func loadCandidates(key: String) throws -> [KeychainDataCandidate] {
+        let targets = KeychainSyncSettings.isICloudKeychainSyncEnabled
+            ? [true, false]
+            : [false, true]
+        return targets.map { synchronizableTarget in
+            KeychainDataCandidate(
+                synchronizable: synchronizableTarget,
+                data: synchronizableTarget ? synchronizable[key] : local[key],
+                isAvailable: true
+            )
+        }
     }
 
     func decodeSavedPasswords() throws -> [PasswordMetadata] {
@@ -530,6 +802,7 @@ private final class RecordingVaultKeychainStore: VaultKeychainStoring, @unchecke
     var noteDeleteIDs: [UUID] = []
     var sshDeleteIDs: [UUID] = []
     var passwordSaveErrorIDs: Set<UUID> = []
+    var onPasswordSave: ((UUID) throws -> Void)?
 
     init(writeTargets: [Bool]) {
         self.writeTargets = writeTargets
@@ -541,6 +814,7 @@ private final class RecordingVaultKeychainStore: VaultKeychainStoring, @unchecke
         }
         passwords[itemID] = password
         passwordSaveTargets.append(writeTargets)
+        try onPasswordSave?(itemID)
     }
 
     func containsPassword(for itemID: UUID) throws -> Bool {
@@ -647,8 +921,11 @@ private final class RecordingVaultMetadataStore: VaultMetadataStoring {
     var apiKeys: [APIKeyMetadata] = []
     var apiKeyDeletionTombstones: [APIKeyDeletionTombstone] = []
     var certificates: [CertificateMetadata] = []
+    var certificateDeletionTombstones: [CertificateDeletionTombstone] = []
     var notes: [SecureNoteMetadata] = []
+    var noteDeletionTombstones: [NoteDeletionTombstone] = []
     var sshKeys: [SSHKeyMetadata] = []
+    var sshKeyDeletionTombstones: [SSHKeyDeletionTombstone] = []
     var folders: [VaultItemType: [String]] = [:]
     var folderStates: [VaultFolderState] = []
     var passwordSaveTargets: [[Bool]] = []
@@ -657,7 +934,11 @@ private final class RecordingVaultMetadataStore: VaultMetadataStoring {
     var noteSaveTargets: [[Bool]] = []
     var sshSaveTargets: [[Bool]] = []
     var folderSaveTargets: [[Bool]] = []
+    var passwordTombstoneSaveTargets: [[Bool]] = []
     var apiKeyTombstoneSaveTargets: [[Bool]] = []
+    var certificateTombstoneSaveTargets: [[Bool]] = []
+    var noteTombstoneSaveTargets: [[Bool]] = []
+    var sshKeyTombstoneSaveTargets: [[Bool]] = []
     var folderStateSaveTargets: [[Bool]] = []
 
     init(writeTargets: [Bool]) {
@@ -679,6 +960,7 @@ private final class RecordingVaultMetadataStore: VaultMetadataStoring {
 
     func savePasswordDeletionTombstones(_ tombstones: [PasswordDeletionTombstone]) throws {
         passwordDeletionTombstones = tombstones
+        passwordTombstoneSaveTargets.append(writeTargets)
     }
 
     func loadPasswordDeletionTombstones() throws -> [PasswordDeletionTombstone] {
@@ -705,6 +987,33 @@ private final class RecordingVaultMetadataStore: VaultMetadataStoring {
 
     func loadAPIKeyDeletionTombstones() throws -> [APIKeyDeletionTombstone] {
         apiKeyDeletionTombstones
+    }
+
+    func saveCertificateDeletionTombstones(_ tombstones: [CertificateDeletionTombstone]) throws {
+        certificateDeletionTombstones = tombstones
+        certificateTombstoneSaveTargets.append(writeTargets)
+    }
+
+    func loadCertificateDeletionTombstones() throws -> [CertificateDeletionTombstone] {
+        certificateDeletionTombstones
+    }
+
+    func saveNoteDeletionTombstones(_ tombstones: [NoteDeletionTombstone]) throws {
+        noteDeletionTombstones = tombstones
+        noteTombstoneSaveTargets.append(writeTargets)
+    }
+
+    func loadNoteDeletionTombstones() throws -> [NoteDeletionTombstone] {
+        noteDeletionTombstones
+    }
+
+    func saveSSHKeyDeletionTombstones(_ tombstones: [SSHKeyDeletionTombstone]) throws {
+        sshKeyDeletionTombstones = tombstones
+        sshKeyTombstoneSaveTargets.append(writeTargets)
+    }
+
+    func loadSSHKeyDeletionTombstones() throws -> [SSHKeyDeletionTombstone] {
+        sshKeyDeletionTombstones
     }
 
     func saveCertificates(_ metadata: [CertificateMetadata]) throws {

@@ -104,6 +104,12 @@ protocol VaultMetadataStoring: AnyObject {
     func loadAPIKeys() throws -> [APIKeyMetadata]
     func saveAPIKeyDeletionTombstones(_ tombstones: [APIKeyDeletionTombstone]) throws
     func loadAPIKeyDeletionTombstones() throws -> [APIKeyDeletionTombstone]
+    func saveCertificateDeletionTombstones(_ tombstones: [CertificateDeletionTombstone]) throws
+    func loadCertificateDeletionTombstones() throws -> [CertificateDeletionTombstone]
+    func saveNoteDeletionTombstones(_ tombstones: [NoteDeletionTombstone]) throws
+    func loadNoteDeletionTombstones() throws -> [NoteDeletionTombstone]
+    func saveSSHKeyDeletionTombstones(_ tombstones: [SSHKeyDeletionTombstone]) throws
+    func loadSSHKeyDeletionTombstones() throws -> [SSHKeyDeletionTombstone]
     func saveCertificates(_ metadata: [CertificateMetadata]) throws
     func replaceCertificates(_ metadata: [CertificateMetadata]) throws
     func loadCertificates() throws -> [CertificateMetadata]
@@ -221,8 +227,11 @@ public class VaultRepository {
         let loadedAPIKeys = try metadataStore.loadAPIKeys()
         let apiKeyDeletionTombstones = try metadataStore.loadAPIKeyDeletionTombstones()
         let loadedCertificates = try metadataStore.loadCertificates()
+        let certificateDeletionTombstones = try metadataStore.loadCertificateDeletionTombstones()
         let loadedNotes = try metadataStore.loadNotes()
+        let noteDeletionTombstones = try metadataStore.loadNoteDeletionTombstones()
         let loadedSSHKeys = try metadataStore.loadSSHKeys()
+        let sshKeyDeletionTombstones = try metadataStore.loadSSHKeyDeletionTombstones()
 
         let expiredPasswordIDs = Set(loadedPasswords.filter {
             $0.autoDestroyOnExpiry && Self.isExpired($0.expiresAt, currentDate: currentDate)
@@ -245,6 +254,27 @@ public class VaultRepository {
             }
             try? keychain.deleteAPIKey(for: tombstone.id)
         }
+        let visibleCertificatesByID = Dictionary(uniqueKeysWithValues: loadedCertificates.map { ($0.id, $0) })
+        for tombstone in certificateDeletionTombstones {
+            if let visible = visibleCertificatesByID[tombstone.id], visible.modifiedAt > tombstone.deletedAt {
+                continue
+            }
+            try? keychain.deleteCertificate(for: tombstone.id)
+        }
+        let visibleNotesByID = Dictionary(uniqueKeysWithValues: loadedNotes.map { ($0.id, $0) })
+        for tombstone in noteDeletionTombstones {
+            if let visible = visibleNotesByID[tombstone.id], visible.modifiedAt > tombstone.deletedAt {
+                continue
+            }
+            try? keychain.deleteNoteContent(for: tombstone.id)
+        }
+        let visibleSSHKeysByID = Dictionary(uniqueKeysWithValues: loadedSSHKeys.map { ($0.id, $0) })
+        for tombstone in sshKeyDeletionTombstones {
+            if let visible = visibleSSHKeysByID[tombstone.id], visible.modifiedAt > tombstone.deletedAt {
+                continue
+            }
+            try? keychain.deleteSSHKey(for: tombstone.id)
+        }
 
         let unexpiredPasswords = loadedPasswords.filter { !expiredPasswordIDs.contains($0.id) }
         let unexpiredAPIKeys = loadedAPIKeys.filter { !expiredAPIKeyIDs.contains($0.id) }
@@ -262,7 +292,18 @@ public class VaultRepository {
         sshKeys = prunedSSHKeys.metadata
 
         if !expiredPasswordIDs.isEmpty {
-            try recordPasswordDeletions(expiredPasswordIDs, deletedAt: currentDate)
+            try recordPasswordDeletions(
+                expiredPasswordIDs,
+                deletedAt: currentDate,
+                sourceMetadata: loadedPasswords
+            )
+        }
+        if !expiredAPIKeyIDs.isEmpty {
+            try recordAPIKeyDeletions(
+                expiredAPIKeyIDs,
+                deletedAt: currentDate,
+                sourceMetadata: loadedAPIKeys
+            )
         }
         if !expiredPasswordIDs.isEmpty || prunedPasswords.didPrune {
             try metadataStore.replacePasswords(passwords)
@@ -514,16 +555,27 @@ public class VaultRepository {
 
     public func saveFullItemsToCurrentStoragePolicy(_ snapshot: VaultFullItemSnapshot) throws {
         let currentPasswords = try metadataStore.loadPasswords()
+        let currentPasswordDeletionTombstones = try metadataStore.loadPasswordDeletionTombstones()
         let currentAPIKeys = try metadataStore.loadAPIKeys()
         let currentAPIKeyDeletionTombstones = try metadataStore.loadAPIKeyDeletionTombstones()
         let currentCertificates = try metadataStore.loadCertificates()
+        let currentCertificateDeletionTombstones = try metadataStore.loadCertificateDeletionTombstones()
         let currentNotes = try metadataStore.loadNotes()
+        let currentNoteDeletionTombstones = try metadataStore.loadNoteDeletionTombstones()
         let currentSSHKeys = try metadataStore.loadSSHKeys()
+        let currentSSHKeyDeletionTombstones = try metadataStore.loadSSHKeyDeletionTombstones()
         let currentFolders = try metadataStore.loadFolders()
         let currentFolderStates = try metadataStore.loadFolderStates()
 
+        let passwordTombstonesByID = Dictionary(
+            uniqueKeysWithValues: currentPasswordDeletionTombstones.map { ($0.id, $0) }
+        )
+        let visibleSnapshotPasswords = snapshot.passwords.filter { item in
+            guard let tombstone = passwordTombstonesByID[item.id] else { return true }
+            return item.modifiedAt > tombstone.deletedAt
+        }
         let mergedPasswords = try mergeAvailableFullItems(
-            snapshotItems: snapshot.passwords,
+            snapshotItems: visibleSnapshotPasswords,
             currentMetadata: currentPasswords,
             load: getFullPassword,
             id: \.id,
@@ -545,24 +597,45 @@ public class VaultRepository {
             modifiedAt: \.modifiedAt,
             sort: { Self.localizedAscending($0.name, $1.name) }
         )
+        let certificateTombstonesByID = Dictionary(
+            uniqueKeysWithValues: currentCertificateDeletionTombstones.map { ($0.id, $0) }
+        )
+        let visibleSnapshotCertificates = snapshot.certificates.filter { item in
+            guard let tombstone = certificateTombstonesByID[item.id] else { return true }
+            return item.modifiedAt > tombstone.deletedAt
+        }
         let mergedCertificates = try mergeAvailableFullItems(
-            snapshotItems: snapshot.certificates,
+            snapshotItems: visibleSnapshotCertificates,
             currentMetadata: currentCertificates,
             load: getFullCertificate,
             id: \.id,
             modifiedAt: \.modifiedAt,
             sort: { Self.localizedAscending($0.name, $1.name) }
         )
+        let noteTombstonesByID = Dictionary(
+            uniqueKeysWithValues: currentNoteDeletionTombstones.map { ($0.id, $0) }
+        )
+        let visibleSnapshotNotes = snapshot.notes.filter { item in
+            guard let tombstone = noteTombstonesByID[item.id] else { return true }
+            return item.modifiedAt > tombstone.deletedAt
+        }
         let mergedNotes = try mergeAvailableFullItems(
-            snapshotItems: snapshot.notes,
+            snapshotItems: visibleSnapshotNotes,
             currentMetadata: currentNotes,
             load: getFullNote,
             id: \.id,
             modifiedAt: \.modifiedAt,
             sort: { Self.localizedAscending($0.title, $1.title) }
         )
+        let sshKeyTombstonesByID = Dictionary(
+            uniqueKeysWithValues: currentSSHKeyDeletionTombstones.map { ($0.id, $0) }
+        )
+        let visibleSnapshotSSHKeys = snapshot.sshKeys.filter { item in
+            guard let tombstone = sshKeyTombstonesByID[item.id] else { return true }
+            return item.modifiedAt > tombstone.deletedAt
+        }
         let mergedSSHKeys = try mergeAvailableFullItems(
-            snapshotItems: snapshot.sshKeys,
+            snapshotItems: visibleSnapshotSSHKeys,
             currentMetadata: currentSSHKeys,
             load: getFullSSHKey,
             id: \.id,
@@ -578,9 +651,6 @@ public class VaultRepository {
         folders = currentFolders
         mergeFoldersFromMetadata()
 
-        if !currentAPIKeyDeletionTombstones.isEmpty {
-            try metadataStore.saveAPIKeyDeletionTombstones(currentAPIKeyDeletionTombstones)
-        }
         if !currentFolderStates.isEmpty {
             try metadataStore.saveFolderStates(currentFolderStates)
         }
@@ -611,6 +681,80 @@ public class VaultRepository {
             try keychain.saveSSHKey(publicKey: sshKey.publicKey, privateKey: sshKey.privateKey, for: sshKey.id)
         }
 
+        let latestPasswordTombstones = try metadataStore.loadPasswordDeletionTombstones()
+        let latestAPIKeyTombstones = try metadataStore.loadAPIKeyDeletionTombstones()
+        let latestCertificateTombstones = try metadataStore.loadCertificateDeletionTombstones()
+        let latestNoteTombstones = try metadataStore.loadNoteDeletionTombstones()
+        let latestSSHKeyTombstones = try metadataStore.loadSSHKeyDeletionTombstones()
+
+        passwords = Self.filterMetadata(
+            passwords,
+            tombstones: latestPasswordTombstones.map { ($0.id, $0.deletedAt) },
+            modifiedAt: \.modifiedAt
+        )
+        apiKeys = Self.filterMetadata(
+            apiKeys,
+            tombstones: latestAPIKeyTombstones.map { ($0.id, $0.deletedAt) },
+            modifiedAt: \.modifiedAt
+        )
+        certificates = Self.filterMetadata(
+            certificates,
+            tombstones: latestCertificateTombstones.map { ($0.id, $0.deletedAt) },
+            modifiedAt: \.modifiedAt
+        )
+        notes = Self.filterMetadata(
+            notes,
+            tombstones: latestNoteTombstones.map { ($0.id, $0.deletedAt) },
+            modifiedAt: \.modifiedAt
+        )
+        sshKeys = Self.filterMetadata(
+            sshKeys,
+            tombstones: latestSSHKeyTombstones.map { ($0.id, $0.deletedAt) },
+            modifiedAt: \.modifiedAt
+        )
+
+        if !latestPasswordTombstones.isEmpty {
+            try metadataStore.savePasswordDeletionTombstones(latestPasswordTombstones)
+        }
+        if !latestAPIKeyTombstones.isEmpty {
+            try metadataStore.saveAPIKeyDeletionTombstones(latestAPIKeyTombstones)
+        }
+        if !latestCertificateTombstones.isEmpty {
+            try metadataStore.saveCertificateDeletionTombstones(latestCertificateTombstones)
+        }
+        if !latestNoteTombstones.isEmpty {
+            try metadataStore.saveNoteDeletionTombstones(latestNoteTombstones)
+        }
+        if !latestSSHKeyTombstones.isEmpty {
+            try metadataStore.saveSSHKeyDeletionTombstones(latestSSHKeyTombstones)
+        }
+        try metadataStore.replacePasswords(passwords)
+        try metadataStore.replaceAPIKeys(apiKeys)
+        try metadataStore.replaceCertificates(certificates)
+        try metadataStore.replaceNotes(notes)
+        try metadataStore.replaceSSHKeys(sshKeys)
+
+        let visiblePasswordIDs = Set(passwords.map(\.id))
+        for tombstone in latestPasswordTombstones where !visiblePasswordIDs.contains(tombstone.id) {
+            try? keychain.deletePassword(for: tombstone.id)
+        }
+        let visibleAPIKeyIDs = Set(apiKeys.map(\.id))
+        for tombstone in latestAPIKeyTombstones where !visibleAPIKeyIDs.contains(tombstone.id) {
+            try? keychain.deleteAPIKey(for: tombstone.id)
+        }
+        let visibleCertificateIDs = Set(certificates.map(\.id))
+        for tombstone in latestCertificateTombstones where !visibleCertificateIDs.contains(tombstone.id) {
+            try? keychain.deleteCertificate(for: tombstone.id)
+        }
+        let visibleNoteIDs = Set(notes.map(\.id))
+        for tombstone in latestNoteTombstones where !visibleNoteIDs.contains(tombstone.id) {
+            try? keychain.deleteNoteContent(for: tombstone.id)
+        }
+        let visibleSSHKeyIDs = Set(sshKeys.map(\.id))
+        for tombstone in latestSSHKeyTombstones where !visibleSSHKeyIDs.contains(tombstone.id) {
+            try? keychain.deleteSSHKey(for: tombstone.id)
+        }
+
         hasLoadedVaultState = true
         try saveCLIMetadataSnapshot()
 
@@ -638,6 +782,21 @@ public class VaultRepository {
 
     private static func localizedAscending(_ lhs: String, _ rhs: String) -> Bool {
         lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+    }
+
+    private static func filterMetadata<Metadata: Identifiable>(
+        _ metadata: [Metadata],
+        tombstones: [(id: UUID, deletedAt: Date)],
+        modifiedAt: KeyPath<Metadata, Date>
+    ) -> [Metadata] where Metadata.ID == UUID {
+        let deletedAtByID = Dictionary(
+            tombstones,
+            uniquingKeysWith: { max($0, $1) }
+        )
+        return metadata.filter { item in
+            guard let deletedAt = deletedAtByID[item.id] else { return true }
+            return item[keyPath: modifiedAt] > deletedAt
+        }
     }
 
     private static func notesPreservingUsername(existingNotes: String?, username: String) -> String? {
@@ -844,6 +1003,11 @@ public class VaultRepository {
 
     public func addCertificate(_ item: CertificateItem) throws {
         try prepareForMutation()
+        var item = item
+        if let tombstone = try metadataStore.loadCertificateDeletionTombstones().first(where: { $0.id == item.id }),
+           item.modifiedAt <= tombstone.deletedAt {
+            item.modifiedAt = max(Date(), tombstone.deletedAt.addingTimeInterval(1))
+        }
         try keychain.saveCertificate(item.certificateData, privateKey: item.privateKeyData, for: item.id)
 
         let metadata = CertificateMetadata(from: item)
@@ -875,7 +1039,12 @@ public class VaultRepository {
     }
 
     public func deleteCertificate(id: UUID) throws {
+        try deleteCertificate(id: id, deletedAt: Date())
+    }
+
+    public func deleteCertificate(id: UUID, deletedAt: Date) throws {
         try prepareForMutation()
+        try recordCertificateDeletions([id], deletedAt: deletedAt)
         try keychain.deleteCertificate(for: id)
         certificates.removeAll { $0.id == id }
         try metadataStore.replaceCertificates(certificates)
@@ -911,6 +1080,11 @@ public class VaultRepository {
 
     public func addNote(_ item: SecureNoteItem) throws {
         try prepareForMutation()
+        var item = item
+        if let tombstone = try metadataStore.loadNoteDeletionTombstones().first(where: { $0.id == item.id }),
+           item.modifiedAt <= tombstone.deletedAt {
+            item.modifiedAt = max(Date(), tombstone.deletedAt.addingTimeInterval(1))
+        }
         try keychain.saveNoteContent(item.content, for: item.id)
 
         let metadata = SecureNoteMetadata(from: item)
@@ -938,7 +1112,12 @@ public class VaultRepository {
     }
 
     public func deleteNote(id: UUID) throws {
+        try deleteNote(id: id, deletedAt: Date())
+    }
+
+    public func deleteNote(id: UUID, deletedAt: Date) throws {
         try prepareForMutation()
+        try recordNoteDeletions([id], deletedAt: deletedAt)
         try keychain.deleteNoteContent(for: id)
         notes.removeAll { $0.id == id }
         try metadataStore.replaceNotes(notes)
@@ -969,6 +1148,11 @@ public class VaultRepository {
 
     public func addSSHKey(_ item: SSHKeyItem) throws {
         try prepareForMutation()
+        var item = item
+        if let tombstone = try metadataStore.loadSSHKeyDeletionTombstones().first(where: { $0.id == item.id }),
+           item.modifiedAt <= tombstone.deletedAt {
+            item.modifiedAt = max(Date(), tombstone.deletedAt.addingTimeInterval(1))
+        }
         try keychain.saveSSHKey(publicKey: item.publicKey, privateKey: item.privateKey, for: item.id)
 
         let metadata = SSHKeyMetadata(from: item)
@@ -996,7 +1180,12 @@ public class VaultRepository {
     }
 
     public func deleteSSHKey(id: UUID) throws {
+        try deleteSSHKey(id: id, deletedAt: Date())
+    }
+
+    public func deleteSSHKey(id: UUID, deletedAt: Date) throws {
         try prepareForMutation()
+        try recordSSHKeyDeletions([id], deletedAt: deletedAt)
         try keychain.deleteSSHKey(for: id)
         sshKeys.removeAll { $0.id == id }
         try metadataStore.replaceSSHKeys(sshKeys)
@@ -1031,6 +1220,9 @@ public class VaultRepository {
         let deletedAt = Date()
         try recordPasswordDeletions(passwordIDs, deletedAt: deletedAt)
         try recordAPIKeyDeletions(apiKeyIDs, deletedAt: deletedAt)
+        try recordCertificateDeletions(certificateIDs, deletedAt: deletedAt)
+        try recordNoteDeletions(noteIDs, deletedAt: deletedAt)
+        try recordSSHKeyDeletions(sshKeyIDs, deletedAt: deletedAt)
         try metadataStore.saveFolderStates([
             VaultFolderState(type: type, path: normalizedPath, modifiedAt: deletedAt, isDeleted: true),
         ])
@@ -1344,7 +1536,12 @@ public class VaultRepository {
     /// Removes secrets from Keychain and clears all metadata.
     public func deleteAllItems() throws {
         try prepareForMutation()
-        try recordPasswordDeletions(Set(passwords.map(\.id)), deletedAt: Date())
+        let deletedAt = Date()
+        try recordPasswordDeletions(Set(passwords.map(\.id)), deletedAt: deletedAt)
+        try recordAPIKeyDeletions(Set(apiKeys.map(\.id)), deletedAt: deletedAt)
+        try recordCertificateDeletions(Set(certificates.map(\.id)), deletedAt: deletedAt)
+        try recordNoteDeletions(Set(notes.map(\.id)), deletedAt: deletedAt)
+        try recordSSHKeyDeletions(Set(sshKeys.map(\.id)), deletedAt: deletedAt)
 
         // 1. Delete all secrets from Keychain
         for password in passwords {
@@ -1888,18 +2085,86 @@ public class VaultRepository {
         }
     }
 
-    private func recordPasswordDeletions(_ ids: Set<UUID>, deletedAt: Date) throws {
+    private func recordPasswordDeletions(
+        _ ids: Set<UUID>,
+        deletedAt: Date,
+        sourceMetadata: [PasswordMetadata]? = nil
+    ) throws {
         guard !ids.isEmpty else { return }
+        let modifiedAtByID = Dictionary(
+            uniqueKeysWithValues: (sourceMetadata ?? passwords).map { ($0.id, $0.modifiedAt) }
+        )
         try metadataStore.savePasswordDeletionTombstones(
-            ids.map { PasswordDeletionTombstone(id: $0, deletedAt: deletedAt) }
+            ids.map { id in
+                PasswordDeletionTombstone(
+                    id: id,
+                    deletedAt: deletionDate(deletedAt, newerThan: modifiedAtByID[id])
+                )
+            }
         )
     }
 
-    private func recordAPIKeyDeletions(_ ids: Set<UUID>, deletedAt: Date) throws {
+    private func recordAPIKeyDeletions(
+        _ ids: Set<UUID>,
+        deletedAt: Date,
+        sourceMetadata: [APIKeyMetadata]? = nil
+    ) throws {
         guard !ids.isEmpty else { return }
-        try metadataStore.saveAPIKeyDeletionTombstones(
-            ids.map { APIKeyDeletionTombstone(id: $0, deletedAt: deletedAt) }
+        let modifiedAtByID = Dictionary(
+            uniqueKeysWithValues: (sourceMetadata ?? apiKeys).map { ($0.id, $0.modifiedAt) }
         )
+        try metadataStore.saveAPIKeyDeletionTombstones(
+            ids.map { id in
+                APIKeyDeletionTombstone(
+                    id: id,
+                    deletedAt: deletionDate(deletedAt, newerThan: modifiedAtByID[id])
+                )
+            }
+        )
+    }
+
+    private func recordCertificateDeletions(_ ids: Set<UUID>, deletedAt: Date) throws {
+        guard !ids.isEmpty else { return }
+        let modifiedAtByID = Dictionary(uniqueKeysWithValues: certificates.map { ($0.id, $0.modifiedAt) })
+        try metadataStore.saveCertificateDeletionTombstones(
+            ids.map { id in
+                CertificateDeletionTombstone(
+                    id: id,
+                    deletedAt: deletionDate(deletedAt, newerThan: modifiedAtByID[id])
+                )
+            }
+        )
+    }
+
+    private func recordNoteDeletions(_ ids: Set<UUID>, deletedAt: Date) throws {
+        guard !ids.isEmpty else { return }
+        let modifiedAtByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0.modifiedAt) })
+        try metadataStore.saveNoteDeletionTombstones(
+            ids.map { id in
+                NoteDeletionTombstone(
+                    id: id,
+                    deletedAt: deletionDate(deletedAt, newerThan: modifiedAtByID[id])
+                )
+            }
+        )
+    }
+
+    private func recordSSHKeyDeletions(_ ids: Set<UUID>, deletedAt: Date) throws {
+        guard !ids.isEmpty else { return }
+        let modifiedAtByID = Dictionary(uniqueKeysWithValues: sshKeys.map { ($0.id, $0.modifiedAt) })
+        try metadataStore.saveSSHKeyDeletionTombstones(
+            ids.map { id in
+                SSHKeyDeletionTombstone(
+                    id: id,
+                    deletedAt: deletionDate(deletedAt, newerThan: modifiedAtByID[id])
+                )
+            }
+        )
+    }
+
+    private func deletionDate(_ requested: Date, newerThan modifiedAt: Date?) -> Date {
+        guard let modifiedAt else { return requested }
+        return max(requested, modifiedAt.addingTimeInterval(1))
     }
 
     private func setPasswordCLIAccess(
