@@ -46,6 +46,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     let callerIdentityProvider: CallerIdentityProvider
     let callerIdentityRevalidationProvider: CallerIdentityRevalidationProvider
     let remoteJITApprovalRequestBuilder: RemoteJITApprovalRequestBuilding?
+    let remoteJITApprovalEnabled: @Sendable () -> Bool
     let agentJITApprovalClock: AgentJITApprovalClock
     let auditLogger: BridgeAuditLogger
     let appBundlePath: String
@@ -109,6 +110,9 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
             CallerIdentityExtractor.extract(fromPID: original.pid)
         },
         remoteJITApprovalRequestBuilder: RemoteJITApprovalRequestBuilding? = nil,
+        remoteJITApprovalEnabled: @escaping @Sendable () -> Bool = {
+            BridgeSettings.isRemoteApprovalEnabled()
+        },
         agentJITApprovalClock: @escaping AgentJITApprovalClock = Date.init,
         auditLogger: BridgeAuditLogger = BridgeAuditLogger(),
         appBundlePath: String = Bundle.main.bundlePath
@@ -127,6 +131,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         self.callerIdentityProvider = callerIdentityProvider
         self.callerIdentityRevalidationProvider = callerIdentityRevalidationProvider
         self.remoteJITApprovalRequestBuilder = remoteJITApprovalRequestBuilder
+        self.remoteJITApprovalEnabled = remoteJITApprovalEnabled
         self.agentJITApprovalClock = agentJITApprovalClock
         self.auditLogger = auditLogger
         self.appBundlePath = appBundlePath

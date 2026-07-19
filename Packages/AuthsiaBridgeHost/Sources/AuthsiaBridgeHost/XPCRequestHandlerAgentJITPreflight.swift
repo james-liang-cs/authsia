@@ -493,7 +493,8 @@ extension XPCRequestHandler {
         environmentScope: EnvironmentAccessScope?,
         resolutions: [AgentJITScopeResolution]
     ) async -> [RemoteJITApprovalRequest] {
-        guard let remoteJITApprovalRequestBuilder else { return [] }
+        guard remoteJITApprovalEnabled(),
+              let remoteJITApprovalRequestBuilder else { return [] }
         do {
             let inputs = try remoteAgentJITApprovalInputs(
                 bridgeRequestID: bridgeRequestID,

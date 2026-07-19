@@ -128,6 +128,35 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(clock.callCount, 2)
     }
 
+    func testDisabledICloudSyncSkipsRemoteBuilderAndKeepsLocalApproval() async throws {
+        let builder = RemoteRequestBuilderSpy()
+        let approver = JITApprovalTracker(result: true)
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            requestBuilder: builder,
+            remoteJITApprovalEnabled: { false },
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertTrue(builder.inputBatches.isEmpty)
+        XCTAssertEqual(approver.requests.first?.remoteRequests, [])
+        XCTAssertEqual(store.grants.count, 1)
+    }
+
     func testBroadRemoteApprovalBuildsAndPassesAllRequestsInResolverOrder() async throws {
         let builder = RemoteRequestBuilderSpy()
         let approver = JITApprovalTracker(result: true)
@@ -2785,6 +2814,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         callerIdentity: CallerIdentity? = nil,
         listProvider: XPCRequestHandler.ListProvider? = nil,
         requestBuilder: RemoteJITApprovalRequestBuilding? = nil,
+        remoteJITApprovalEnabled: @escaping @Sendable () -> Bool = { true },
         callerIdentityRevalidationProvider: CallerIdentityRevalidationProvider? = nil,
         clock: @escaping AgentJITApprovalClock = Date.init
     ) -> XPCRequestHandler {
@@ -2801,6 +2831,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
                 resolvedCallerIdentity
             },
             remoteJITApprovalRequestBuilder: requestBuilder,
+            remoteJITApprovalEnabled: remoteJITApprovalEnabled,
             agentJITApprovalClock: clock,
             auditLogger: auditLogger ?? makeIsolatedAuditLogger()
         )
