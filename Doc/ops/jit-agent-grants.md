@@ -68,9 +68,10 @@ The retained notification work uses the CloudKit query subscription
 - The subscription fires on record creation when
   `transportState == "pending" AND notify == 1`, producing one creation push
   per batch instead of one push per record.
-- Before publishing a batch, the Mac prepares v2 and deletes the v1
-  per-record subscription. A non-missing deletion failure blocks publication so
-  v1 and v2 are not knowingly run together.
+- Before publishing a batch, the Mac prepares v2 and deletes both the v1
+  per-record subscription and the reverted v3 mutable-content subscription. A
+  non-missing deletion failure blocks publication so only v2 is knowingly
+  active.
 - Subscription compatibility is versioned by subscription ID and structural
   properties. The server's rewritten predicate string is not used as a
   re-save signal.
@@ -101,7 +102,8 @@ records remain non-actionable.
    were tested to re-query CloudKit at delivery time. When no actionable request
    remained, the extension softened the alert and removed its sound; errors and
    timeouts failed open to the original alert. This experiment regressed normal
-   notification and approval visibility and was reverted.
+   notification and approval visibility and was reverted. Current v2 preparation
+   removes the experimental v3 subscription before accepting or saving v2.
 6. Fully suppressing a stale alert from a Notification Service Extension by
    returning empty notification content requires Apple's restricted filtering
    entitlement. Apple's request form currently limits eligibility to encrypted
@@ -122,11 +124,10 @@ records remain non-actionable.
   arbitrary first approval record; there is no batch notification record with
   its own lifecycle. This is sufficient for one creation trigger, but it cannot
   express batch-level cancellation or exact notification reconciliation.
-- **A reverted v3 subscription may survive in CloudKit.** The current v2
-  migration deletes v1 only. If an installed experimental build saved
-  `RemoteJITApprovalV1.pending-created.v3`, that subscription can coexist with
-  v2 until explicitly deleted. Device testing is not conclusive until v1, v2,
-  and v3 subscription state is inspected or a one-time v3 cleanup is shipped.
+- **Obsolete-subscription cleanup requires one preparation run.** A rebuilt Mac
+  must prepare an approval subscription once before any saved v1 or v3
+  subscription is removed. Missing obsolete subscriptions are tolerated, while
+  a real deletion failure blocks v2 saving and approval publication.
 - **Production schema readiness must be confirmed.** The `notify` field must
   exist with the required queryability/indexing before Production can save the
   v2 predicate. The repository tests validate construction and migration logic,
