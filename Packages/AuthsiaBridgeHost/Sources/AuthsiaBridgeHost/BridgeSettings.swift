@@ -6,6 +6,7 @@ public enum BridgeSettings {
     public static let cliSessionTTLKey = "cliSessionTTL"
     public static let sshSessionTTLKey = "sshSessionTTL"
     public static let cliAccessEnabledKey = "cliAccessEnabled"
+    public static let iCloudKeychainSyncEnabledKey = "iCloudKeychainSyncEnabled"
     public static let defaultSessionTTL: TimeInterval = 15.0
     public static let defaultSSHSessionTTL: TimeInterval = 1800.0
     public static let maximumSessionTTL: TimeInterval = 24 * 60 * 60
@@ -53,6 +54,10 @@ public enum BridgeSettings {
             return true
         }
         return defaults.bool(forKey: cliAccessEnabledKey)
+    }
+
+    public static func isRemoteApprovalEnabled(defaults: UserDefaults = appDefaults) -> Bool {
+        defaults.bool(forKey: iCloudKeychainSyncEnabledKey)
     }
 }
 #endif

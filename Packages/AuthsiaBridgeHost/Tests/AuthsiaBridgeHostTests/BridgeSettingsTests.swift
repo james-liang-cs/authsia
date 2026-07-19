@@ -88,6 +88,16 @@ final class BridgeSettingsTests: XCTestCase {
         }
     }
 
+    func testRemoteApprovalDefaultsDisabledAndTracksICloudSyncPreference() {
+        withDefaults { defaults in
+            XCTAssertFalse(BridgeSettings.isRemoteApprovalEnabled(defaults: defaults))
+
+            defaults.set(true, forKey: BridgeSettings.iCloudKeychainSyncEnabledKey)
+
+            XCTAssertTrue(BridgeSettings.isRemoteApprovalEnabled(defaults: defaults))
+        }
+    }
+
     private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
         let suiteName = "BridgeSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
