@@ -49,7 +49,9 @@ approver seam, final policy revalidation, and atomic grant persistence are
 implemented. Private pairing, encrypted CloudKit transport, the iOS approval
 surface, and Face ID response path live in the parent application repository.
 Earlier Development and Production physical-device CloudKit round trips passed;
-the different-iCloud-account device test remains waived and not run.
+on 2026-07-19 the matching version 1.7.0 (22) Developer ID Mac and TestFlight
+iPhone also passed the full Production notification and approval flow. The
+different-iCloud-account device test remains waived and not run.
 
 ### Current notification implementation
 
@@ -69,9 +71,15 @@ The retained notification work uses the CloudKit query subscription
   `transportState == "pending" AND notify == 1`, producing one creation push
   per batch instead of one push per record.
 - Before publishing a batch, the Mac prepares v2 and deletes both the v1
-  per-record subscription and the reverted v3 mutable-content subscription. A
-  non-missing deletion failure blocks publication so only v2 is knowingly
-  active.
+  per-record subscription `RemoteJITApprovalV1.pending-created.v1` and the
+  reverted v3 mutable-content subscription
+  `RemoteJITApprovalV1.pending-created.v3`. A non-missing deletion failure
+  blocks publication so only v2 is knowingly active.
+- The capability-spike zone subscription `RemoteJITApprovalsV1.changes` was
+  found in both CloudKit environments and manually removed. It fired on every
+  zone change and was the source of additional completion-time alerts. The
+  current application does not recreate it; the observed final Development and
+  Production state contains only v2.
 - Subscription compatibility is versioned by subscription ID and structural
   properties. The server's rewritten predicate string is not used as a
   re-save signal.
@@ -110,6 +118,13 @@ records remain non-actionable.
    messaging, earthquake warning, education, and healthcare patient-care use
    cases. Authsia's security approval workflow does not truthfully fit those
    categories, so this entitlement is not an available architectural dependency.
+7. The first Production v2 save failed closed because the deployed
+   `RemoteJITApprovalV1` schema did not contain `notify`. Unified CloudKit logs
+   reported `could not find required field 'notify'`. The installed Developer
+   ID Mac app and embedded profile were verified to use Production, isolating
+   the failure to schema deployment. Promoting the working Development schema
+   added the field and index; v2 then saved and the matching TestFlight device
+   completed the notification and approval flow.
 
 ### Blockers and residual risks
 
@@ -127,19 +142,21 @@ records remain non-actionable.
 - **Obsolete-subscription cleanup requires one preparation run.** A rebuilt Mac
   must prepare an approval subscription once before any saved v1 or v3
   subscription is removed. Missing obsolete subscriptions are tolerated, while
-  a real deletion failure blocks v2 saving and approval publication.
-- **Production schema readiness must be confirmed.** The `notify` field must
-  exist with the required queryability/indexing before Production can save the
-  v2 predicate. The repository tests validate construction and migration logic,
-  but do not prove the deployed CloudKit schema. Notification preparation fails
-  closed and prevents approval-record creation when subscription setup fails.
+  a real deletion failure blocks v2 saving and approval publication. The older
+  capability-spike `.changes` subscription is not part of this automated list;
+  it was removed manually and must not be recreated by running a spike build.
+- **Schema changes must precede matching releases.** Production now has the
+  required `notify` field and queryability for v2. Any future subscription
+  predicate that adds a field or index must promote its Development schema
+  change before distributing code that depends on it; otherwise publication
+  fails closed before approval records are created.
 - **Mixed record versions are not compatible.** The strict decoder rejects old
   records missing `notify`, and an older decoder rejects new records containing
   it. The impact is bounded by the 90-second request lifetime, but macOS and iOS
   should be upgraded together for device verification.
-- **Old APNs work cannot be migrated.** Pushes already queued from v1 or the
-  experimental v3 retain their original payload and can be observed once while
-  the queue drains.
+- **Old APNs work cannot be migrated.** Pushes already queued from v1, the
+  capability-spike `.changes` subscription, or experimental v3 retain their
+  original payload and can be observed once while the queue drains.
 - **Account-isolation evidence is incomplete.** The different-iCloud-account
   physical-device scenario remains explicitly waived and not run.
 
