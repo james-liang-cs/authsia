@@ -17,6 +17,139 @@ JIT grants are deliberately narrow:
 - They expire with the same TTL as the CLI session setting.
 - They are bound to the caller fingerprint, terminal/session scope, and working directory.
 
+## Remote iPhone Approval Status
+
+This section records the remote JIT approval state as of 2026-07-19. Remote
+approval is an alternate way to approve the same bounded Agent JIT preflight;
+it does not create a second grant type or move grant authority to the phone or
+CloudKit.
+
+### Current authority flow
+
+- Only Agent JIT preflight requests are eligible for remote approval. Other
+  Bridge approvals remain local to the Mac.
+- The Mac freezes and signs the complete approval descriptors, encrypts the
+  application payload, and publishes short-lived records to the user's private
+  CloudKit database. The request lifetime remains 90 seconds.
+- Local Mac approval remains available while the remote request is pending.
+  CloudKit failure, notification failure, or an unavailable phone must not turn
+  into approval.
+- The paired iPhone fetches current records, decrypts and verifies the requests,
+  requires a fresh biometric decision, and signs Approve or Deny responses.
+- The originating Mac verifies the response against the current pairing and
+  request, wins the local-versus-remote race exactly once, reruns live caller,
+  scope, item, environment, and grant policy, then persists the grant batch
+  atomically.
+- No vault secret, grant token, pairing private key, or approval authority is
+  sent to iOS or stored in CloudKit. A notification is only a generic prompt to
+  review current state.
+
+The public request model, canonical encoding, signature verification, typed
+approver seam, final policy revalidation, and atomic grant persistence are
+implemented. Private pairing, encrypted CloudKit transport, the iOS approval
+surface, and Face ID response path live in the parent application repository.
+Earlier Development and Production physical-device CloudKit round trips passed;
+the different-iCloud-account device test remains waived and not run.
+
+### Current notification implementation
+
+The Notification Service Extension experiment has been reverted. The current
+application has no `NotificationService.appex`, does not request mutable-content
+delivery, and does not carry the
+`com.apple.developer.usernotifications.filtering` entitlement.
+
+The retained notification work uses the CloudKit query subscription
+`RemoteJITApprovalV1.pending-created.v2`:
+
+- Each approval record has a required integer `notify` field whose only valid
+  values are `0` and `1`.
+- An atomic approval batch marks only its first record as `notify = 1`; all
+  remaining records use `notify = 0`.
+- The subscription fires on record creation when
+  `transportState == "pending" AND notify == 1`, producing one creation push
+  per batch instead of one push per record.
+- Before publishing a batch, the Mac prepares v2 and deletes the v1
+  per-record subscription. A non-missing deletion failure blocks publication so
+  v1 and v2 are not knowingly run together.
+- Subscription compatibility is versioned by subscription ID and structural
+  properties. The server's rewritten predicate string is not used as a
+  re-save signal.
+- The app removes delivered approval notifications after a refresh or response
+  observes no pending requests. This cleanup works only while application code
+  is running.
+
+The notification does not authorize anything. On open, iOS fetches current
+CloudKit state, and expired, closed, denied, malformed, or already-completed
+records remain non-actionable.
+
+### Findings and attempted fixes
+
+1. The original v1 subscription fired once for every approval record. A broad
+   approval containing several scopes therefore produced several pushes. The
+   v2 `notify` marker and predicate address this fan-out at record creation.
+2. A collapse identifier was attempted and removed. CloudKit treats
+   `collapseIDKey` as the name of a record field, not as a literal collapse
+   value; configuring an unbacked key made subscription delivery invalid rather
+   than providing reliable batch cancellation.
+3. Comparing CloudKit's round-tripped `predicateFormat` with the locally
+   constructed string caused an equivalent subscription to be saved again
+   before later batches. The current code versions predicate changes through
+   the subscription ID and compares only stable structural properties.
+4. Clearing delivered alerts in the app handles completion while Authsia is
+   active, but cannot run after the user swipes the app away.
+5. A v3 mutable-content subscription and iOS Notification Service Extension
+   were tested to re-query CloudKit at delivery time. When no actionable request
+   remained, the extension softened the alert and removed its sound; errors and
+   timeouts failed open to the original alert. This experiment regressed normal
+   notification and approval visibility and was reverted.
+6. Fully suppressing a stale alert from a Notification Service Extension by
+   returning empty notification content requires Apple's restricted filtering
+   entitlement. Apple's request form currently limits eligibility to encrypted
+   messaging, earthquake warning, education, and healthcare patient-care use
+   cases. Authsia's security approval workflow does not truthfully fit those
+   categories, so this entitlement is not an available architectural dependency.
+
+### Blockers and residual risks
+
+- **A queued visible push cannot be recalled.** Once CloudKit/APNs has accepted
+  the generic alert, approval completion on the Mac cannot retract it. If iOS
+  delivers it after Authsia has been swiped away, it can still appear once even
+  though opening the app shows no pending approval.
+- **The current guarantee is creation cardinality, not retraction.** V2 targets
+  one push per newly created batch. It cannot guarantee that a delayed push is
+  still actionable when displayed.
+- **The batch is not a first-class transport record.** `notify = 1` marks an
+  arbitrary first approval record; there is no batch notification record with
+  its own lifecycle. This is sufficient for one creation trigger, but it cannot
+  express batch-level cancellation or exact notification reconciliation.
+- **A reverted v3 subscription may survive in CloudKit.** The current v2
+  migration deletes v1 only. If an installed experimental build saved
+  `RemoteJITApprovalV1.pending-created.v3`, that subscription can coexist with
+  v2 until explicitly deleted. Device testing is not conclusive until v1, v2,
+  and v3 subscription state is inspected or a one-time v3 cleanup is shipped.
+- **Production schema readiness must be confirmed.** The `notify` field must
+  exist with the required queryability/indexing before Production can save the
+  v2 predicate. The repository tests validate construction and migration logic,
+  but do not prove the deployed CloudKit schema. Notification preparation fails
+  closed and prevents approval-record creation when subscription setup fails.
+- **Mixed record versions are not compatible.** The strict decoder rejects old
+  records missing `notify`, and an older decoder rejects new records containing
+  it. The impact is bounded by the 90-second request lifetime, but macOS and iOS
+  should be upgraded together for device verification.
+- **Old APNs work cannot be migrated.** Pushes already queued from v1 or the
+  experimental v3 retain their original payload and can be observed once while
+  the queue drains.
+- **Account-isolation evidence is incomplete.** The different-iCloud-account
+  physical-device scenario remains explicitly waived and not run.
+
+These constraints do not weaken the security boundary: a stale notification
+cannot recreate a request or grant access. They do limit the notification UX.
+Without the restricted entitlement, the product must choose between a reliable
+visible alert that may arrive stale and a background-only signal that iOS may
+not deliver after force-quit. The current design chooses the visible generic
+alert, treats CloudKit state as the source of truth, and accepts the possibility
+of one late, non-actionable notification.
+
 ## Why This Exists
 
 `authsia exec` is the safest agent-facing command because secrets are injected
