@@ -581,6 +581,309 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         XCTAssertEqual(Set(metadataStore.passwordDeletionTombstones.map(\.id)), [password.id])
     }
 
+    func testDeleteCertificateRecordsTombstoneBeforeRemovingSource() throws {
+        let deletedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let certificate = CertificateItem(
+            name: "Old",
+            certificateData: Data("certificate".utf8),
+            privateKeyData: Data("private-key".utf8)
+        )
+        let metadataStore = FakeVaultMetadataStore()
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        try repository.addCertificate(certificate)
+
+        try repository.deleteCertificate(id: certificate.id, deletedAt: deletedAt)
+
+        XCTAssertEqual(
+            metadataStore.certificateDeletionTombstones,
+            [CertificateDeletionTombstone(id: certificate.id, deletedAt: deletedAt)]
+        )
+        XCTAssertNil(keychain.certificates[certificate.id])
+        XCTAssertNil(keychain.certificateKeys[certificate.id])
+        XCTAssertTrue(repository.certificates.isEmpty)
+    }
+
+    func testDeleteNoteRecordsTombstoneBeforeRemovingSource() throws {
+        let deletedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let note = SecureNoteItem(
+            title: "Old",
+            content: Data("note".utf8)
+        )
+        let metadataStore = FakeVaultMetadataStore()
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        try repository.addNote(note)
+
+        try repository.deleteNote(id: note.id, deletedAt: deletedAt)
+
+        XCTAssertEqual(
+            metadataStore.noteDeletionTombstones,
+            [NoteDeletionTombstone(id: note.id, deletedAt: deletedAt)]
+        )
+        XCTAssertNil(keychain.notes[note.id])
+        XCTAssertTrue(repository.notes.isEmpty)
+    }
+
+    func testDeleteSSHKeyRecordsTombstoneBeforeRemovingSource() throws {
+        let deletedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let sshKey = SSHKeyItem(
+            name: "Old",
+            publicKey: Data("ssh-ed25519 AAAA".utf8),
+            privateKey: Data("ssh-private".utf8),
+            comment: "old",
+            fingerprint: "SHA256:old"
+        )
+        let metadataStore = FakeVaultMetadataStore()
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        try repository.addSSHKey(sshKey)
+
+        try repository.deleteSSHKey(id: sshKey.id, deletedAt: deletedAt)
+
+        XCTAssertEqual(
+            metadataStore.sshKeyDeletionTombstones,
+            [SSHKeyDeletionTombstone(id: sshKey.id, deletedAt: deletedAt)]
+        )
+        XCTAssertNil(keychain.sshPublicKeys[sshKey.id])
+        XCTAssertNil(keychain.sshPrivateKeys[sshKey.id])
+        XCTAssertTrue(repository.sshKeys.isEmpty)
+    }
+
+    func testLoadDeletesStaleSecretCoveredByCertificateTombstone() throws {
+        let id = UUID()
+        let metadataStore = FakeVaultMetadataStore(
+            certificateDeletionTombstones: [
+                CertificateDeletionTombstone(
+                    id: id,
+                    deletedAt: Date(timeIntervalSince1970: 1_800_000_000)
+                ),
+            ]
+        )
+        let keychain = FakeVaultKeychainStore()
+        keychain.certificates[id] = Data("stale".utf8)
+        keychain.certificateKeys[id] = Data("stale-key".utf8)
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+
+        try repository.load()
+
+        XCTAssertNil(keychain.certificates[id])
+        XCTAssertNil(keychain.certificateKeys[id])
+        XCTAssertTrue(repository.certificates.isEmpty)
+    }
+
+    func testLoadDeletesStaleSecretCoveredByNoteTombstone() throws {
+        let id = UUID()
+        let metadataStore = FakeVaultMetadataStore(
+            noteDeletionTombstones: [
+                NoteDeletionTombstone(
+                    id: id,
+                    deletedAt: Date(timeIntervalSince1970: 1_800_000_000)
+                ),
+            ]
+        )
+        let keychain = FakeVaultKeychainStore()
+        keychain.notes[id] = Data("stale".utf8)
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+
+        try repository.load()
+
+        XCTAssertNil(keychain.notes[id])
+        XCTAssertTrue(repository.notes.isEmpty)
+    }
+
+    func testLoadDeletesStaleSecretCoveredBySSHKeyTombstone() throws {
+        let id = UUID()
+        let metadataStore = FakeVaultMetadataStore(
+            sshKeyDeletionTombstones: [
+                SSHKeyDeletionTombstone(
+                    id: id,
+                    deletedAt: Date(timeIntervalSince1970: 1_800_000_000)
+                ),
+            ]
+        )
+        let keychain = FakeVaultKeychainStore()
+        keychain.sshPublicKeys[id] = Data("stale-pub".utf8)
+        keychain.sshPrivateKeys[id] = Data("stale-priv".utf8)
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+
+        try repository.load()
+
+        XCTAssertNil(keychain.sshPublicKeys[id])
+        XCTAssertNil(keychain.sshPrivateKeys[id])
+        XCTAssertTrue(repository.sshKeys.isEmpty)
+    }
+
+    func testAddCertificateRestoresSameIDWithTimestampNewerThanTombstone() throws {
+        let id = UUID()
+        let deletedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let metadataStore = FakeVaultMetadataStore(
+            certificateDeletionTombstones: [
+                CertificateDeletionTombstone(id: id, deletedAt: deletedAt),
+            ]
+        )
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        let restored = CertificateItem(
+            id: id,
+            name: "Restored",
+            certificateData: Data("restored".utf8),
+            modifiedAt: deletedAt.addingTimeInterval(-60)
+        )
+
+        try repository.addCertificate(restored)
+
+        let restoredMetadata = try XCTUnwrap(metadataStore.certificates.first(where: { $0.id == id }))
+        XCTAssertGreaterThan(restoredMetadata.modifiedAt, deletedAt)
+        XCTAssertEqual(keychain.certificates[id], restored.certificateData)
+    }
+
+    func testAddNoteRestoresSameIDWithTimestampNewerThanTombstone() throws {
+        let id = UUID()
+        let deletedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let metadataStore = FakeVaultMetadataStore(
+            noteDeletionTombstones: [
+                NoteDeletionTombstone(id: id, deletedAt: deletedAt),
+            ]
+        )
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        let restored = SecureNoteItem(
+            id: id,
+            title: "Restored",
+            content: Data("restored".utf8),
+            modifiedAt: deletedAt.addingTimeInterval(-60)
+        )
+
+        try repository.addNote(restored)
+
+        let restoredMetadata = try XCTUnwrap(metadataStore.notes.first(where: { $0.id == id }))
+        XCTAssertGreaterThan(restoredMetadata.modifiedAt, deletedAt)
+        XCTAssertEqual(keychain.notes[id], restored.content)
+    }
+
+    func testAddSSHKeyRestoresSameIDWithTimestampNewerThanTombstone() throws {
+        let id = UUID()
+        let deletedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let metadataStore = FakeVaultMetadataStore(
+            sshKeyDeletionTombstones: [
+                SSHKeyDeletionTombstone(id: id, deletedAt: deletedAt),
+            ]
+        )
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        let restored = SSHKeyItem(
+            id: id,
+            name: "Restored",
+            publicKey: Data("ssh-ed25519 AAAA".utf8),
+            privateKey: Data("restored".utf8),
+            comment: "restored",
+            fingerprint: "SHA256:restored",
+            modifiedAt: deletedAt.addingTimeInterval(-60)
+        )
+
+        try repository.addSSHKey(restored)
+
+        let restoredMetadata = try XCTUnwrap(metadataStore.sshKeys.first(where: { $0.id == id }))
+        XCTAssertGreaterThan(restoredMetadata.modifiedAt, deletedAt)
+        XCTAssertEqual(keychain.sshPublicKeys[id], restored.publicKey)
+        XCTAssertEqual(keychain.sshPrivateKeys[id], restored.privateKey)
+    }
+
+    func testDeleteFolderRecordsCertificateTombstones() async throws {
+        let certificate = CertificateItem(
+            name: "Folder certificate",
+            certificateData: Data("certificate".utf8),
+            folderPath: "Team/Nested"
+        )
+        let metadataStore = FakeVaultMetadataStore()
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        try repository.addCertificate(certificate)
+
+        try await repository.deleteFolder(path: "Team", type: .certificate)
+
+        XCTAssertEqual(Set(metadataStore.certificateDeletionTombstones.map(\.id)), [certificate.id])
+    }
+
+    func testDeleteFolderRecordsNoteTombstones() async throws {
+        let note = SecureNoteItem(
+            title: "Folder note",
+            content: Data("note".utf8),
+            folderPath: "Team/Nested"
+        )
+        let metadataStore = FakeVaultMetadataStore()
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        try repository.addNote(note)
+
+        try await repository.deleteFolder(path: "Team", type: .secureNote)
+
+        XCTAssertEqual(Set(metadataStore.noteDeletionTombstones.map(\.id)), [note.id])
+    }
+
+    func testDeleteFolderRecordsSSHKeyTombstones() async throws {
+        let sshKey = SSHKeyItem(
+            name: "Folder key",
+            publicKey: Data("ssh-ed25519 AAAA".utf8),
+            privateKey: Data("ssh-private".utf8),
+            comment: "folder",
+            fingerprint: "SHA256:folder",
+            folderPath: "Team/Nested"
+        )
+        let metadataStore = FakeVaultMetadataStore()
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        try repository.addSSHKey(sshKey)
+
+        try await repository.deleteFolder(path: "Team", type: .sshKey)
+
+        XCTAssertEqual(Set(metadataStore.sshKeyDeletionTombstones.map(\.id)), [sshKey.id])
+    }
+
+    func testDeleteAllRecordsTombstonesForAllVaultTypes() throws {
+        let password = PasswordItem(
+            name: "Delete all password",
+            username: "",
+            password: Data("secret".utf8)
+        )
+        let apiKey = APIKeyItem(
+            name: "Delete all key",
+            key: Data("fixture".utf8)
+        )
+        let certificate = CertificateItem(
+            name: "Delete all certificate",
+            certificateData: Data("certificate".utf8)
+        )
+        let note = SecureNoteItem(
+            title: "Delete all note",
+            content: Data("note".utf8)
+        )
+        let sshKey = SSHKeyItem(
+            name: "Delete all ssh",
+            publicKey: Data("ssh-ed25519 AAAA".utf8),
+            privateKey: Data("ssh-private".utf8),
+            comment: "delete-all",
+            fingerprint: "SHA256:delete-all"
+        )
+        let metadataStore = FakeVaultMetadataStore()
+        let keychain = FakeVaultKeychainStore()
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+        try repository.addPassword(password)
+        try repository.addAPIKey(apiKey)
+        try repository.addCertificate(certificate)
+        try repository.addNote(note)
+        try repository.addSSHKey(sshKey)
+
+        try repository.deleteAllItems()
+
+        XCTAssertEqual(Set(metadataStore.passwordDeletionTombstones.map(\.id)), [password.id])
+        XCTAssertEqual(Set(metadataStore.apiKeyDeletionTombstones.map(\.id)), [apiKey.id])
+        XCTAssertEqual(Set(metadataStore.certificateDeletionTombstones.map(\.id)), [certificate.id])
+        XCTAssertEqual(Set(metadataStore.noteDeletionTombstones.map(\.id)), [note.id])
+        XCTAssertEqual(Set(metadataStore.sshKeyDeletionTombstones.map(\.id)), [sshKey.id])
+    }
+
     func testAddPasswordRestoresSameIDWithTimestampNewerThanTombstone() throws {
         let id = UUID()
         let deletedAt = Date(timeIntervalSince1970: 1_800_000_000)
@@ -604,6 +907,34 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         let restoredMetadata = try XCTUnwrap(metadataStore.passwords.first(where: { $0.id == id }))
         XCTAssertGreaterThan(restoredMetadata.modifiedAt, deletedAt)
         XCTAssertEqual(keychain.passwords[id], restored.password)
+    }
+
+    func testDeletePasswordAfterRestoreRecordsNewerTombstone() throws {
+        let id = UUID()
+        let firstDeletion = Date(timeIntervalSince1970: 1_900_000_000)
+        let metadataStore = FakeVaultMetadataStore(
+            passwordDeletionTombstones: [
+                PasswordDeletionTombstone(id: id, deletedAt: firstDeletion),
+            ]
+        )
+        let repository = VaultRepository(
+            keychainStore: FakeVaultKeychainStore(),
+            metadataStore: metadataStore
+        )
+        let restored = PasswordItem(
+            id: id,
+            name: "Restored",
+            username: "",
+            password: Data("restored".utf8),
+            modifiedAt: firstDeletion.addingTimeInterval(-60)
+        )
+        try repository.addPassword(restored)
+        let restoredMetadata = try XCTUnwrap(metadataStore.passwords.first(where: { $0.id == id }))
+
+        try repository.deletePassword(id: id, deletedAt: firstDeletion.addingTimeInterval(0.5))
+
+        let tombstone = try XCTUnwrap(metadataStore.passwordDeletionTombstones.first(where: { $0.id == id }))
+        XCTAssertGreaterThan(tombstone.deletedAt, restoredMetadata.modifiedAt)
     }
 
     func testMigratesLegacyBackupManifestNotesIntoRootBackupFolder() throws {
@@ -713,12 +1044,92 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         XCTAssertNil(keychain.passwords[expiredPasswordID])
         XCTAssertNotNil(keychain.notes[noteID])
         XCTAssertEqual(metadataStore.savedPasswords.last?.map(\.id), [activePasswordID])
-        XCTAssertEqual(
-            metadataStore.passwordDeletionTombstones,
-            [PasswordDeletionTombstone(id: expiredPasswordID, deletedAt: now)]
+        XCTAssertEqual(metadataStore.passwordDeletionTombstones.map(\.id), [expiredPasswordID])
+        XCTAssertGreaterThan(
+            try XCTUnwrap(metadataStore.passwordDeletionTombstones.first?.deletedAt),
+            now
         )
         XCTAssertEqual(snapshotStore.savedSnapshots.last?.passwords.map(\.id), [activePasswordID])
         XCTAssertEqual(snapshotStore.savedSnapshots.last?.notes.map(\.id), [noteID])
+    }
+
+    func testLoadPurgesExpiredAPIKeyAndRecordsTombstone() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let id = UUID()
+        let metadata = APIKeyMetadata(
+            id: id,
+            name: "Expired key",
+            website: nil,
+            notes: nil,
+            createdAt: now.addingTimeInterval(-172_800),
+            modifiedAt: now.addingTimeInterval(-172_800),
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false,
+            expiresAt: now.addingTimeInterval(-86_400),
+            autoDestroyOnExpiry: true,
+            environments: []
+        )
+        let metadataStore = FakeVaultMetadataStore(apiKeys: [metadata])
+        let keychain = FakeVaultKeychainStore()
+        keychain.apiKeys[id] = Data("expired".utf8)
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+
+        try repository.load(currentDate: now)
+
+        XCTAssertTrue(repository.apiKeys.isEmpty)
+        XCTAssertNil(keychain.apiKeys[id])
+        XCTAssertEqual(
+            metadataStore.apiKeyDeletionTombstones,
+            [APIKeyDeletionTombstone(id: id, deletedAt: now)]
+        )
+    }
+
+    func testLoadExpiryTombstonesAreNewerThanFutureDatedMetadata() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let futureModifiedAt = now.addingTimeInterval(3_600)
+        let passwordID = UUID()
+        let apiKeyID = UUID()
+        let apiKey = APIKeyMetadata(
+            id: apiKeyID,
+            name: "Expired key",
+            website: nil,
+            notes: nil,
+            createdAt: now.addingTimeInterval(-172_800),
+            modifiedAt: futureModifiedAt,
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false,
+            expiresAt: now.addingTimeInterval(-86_400),
+            autoDestroyOnExpiry: true,
+            environments: []
+        )
+        let metadataStore = FakeVaultMetadataStore(
+            passwords: [
+                makePasswordMetadata(
+                    id: passwordID,
+                    expiresAt: now.addingTimeInterval(-86_400),
+                    autoDestroyOnExpiry: true,
+                    modifiedAt: futureModifiedAt
+                ),
+            ],
+            apiKeys: [apiKey]
+        )
+        let keychain = FakeVaultKeychainStore()
+        keychain.passwords[passwordID] = Data("expired-password".utf8)
+        keychain.apiKeys[apiKeyID] = Data("expired-key".utf8)
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+
+        try repository.load(currentDate: now)
+
+        XCTAssertGreaterThan(
+            try XCTUnwrap(metadataStore.passwordDeletionTombstones.first?.deletedAt),
+            futureModifiedAt
+        )
+        XCTAssertGreaterThan(
+            try XCTUnwrap(metadataStore.apiKeyDeletionTombstones.first?.deletedAt),
+            futureModifiedAt
+        )
     }
 
     func testLoadRetainsExpiredPasswordWhenAutoDestroyIsDisabled() throws {
@@ -1560,8 +1971,11 @@ private final class FakeVaultMetadataStore: VaultMetadataStoring {
     var apiKeys: [APIKeyMetadata]
     var apiKeyDeletionTombstones: [APIKeyDeletionTombstone]
     var certificates: [CertificateMetadata]
+    var certificateDeletionTombstones: [CertificateDeletionTombstone]
     var notes: [SecureNoteMetadata]
+    var noteDeletionTombstones: [NoteDeletionTombstone]
     var sshKeys: [SSHKeyMetadata]
+    var sshKeyDeletionTombstones: [SSHKeyDeletionTombstone]
     var folders: [VaultItemType: [String]]
     var folderStates: [VaultFolderState]
     var mergeFolderSaves: Bool
@@ -1578,8 +1992,11 @@ private final class FakeVaultMetadataStore: VaultMetadataStoring {
         apiKeys: [APIKeyMetadata] = [],
         apiKeyDeletionTombstones: [APIKeyDeletionTombstone] = [],
         certificates: [CertificateMetadata] = [],
+        certificateDeletionTombstones: [CertificateDeletionTombstone] = [],
         notes: [SecureNoteMetadata] = [],
+        noteDeletionTombstones: [NoteDeletionTombstone] = [],
         sshKeys: [SSHKeyMetadata] = [],
+        sshKeyDeletionTombstones: [SSHKeyDeletionTombstone] = [],
         folders: [VaultItemType: [String]] = [:],
         folderStates: [VaultFolderState] = [],
         mergeFolderSaves: Bool = false
@@ -1589,8 +2006,11 @@ private final class FakeVaultMetadataStore: VaultMetadataStoring {
         self.apiKeys = apiKeys
         self.apiKeyDeletionTombstones = apiKeyDeletionTombstones
         self.certificates = certificates
+        self.certificateDeletionTombstones = certificateDeletionTombstones
         self.notes = notes
+        self.noteDeletionTombstones = noteDeletionTombstones
         self.sshKeys = sshKeys
+        self.sshKeyDeletionTombstones = sshKeyDeletionTombstones
         self.folders = folders
         self.folderStates = folderStates
         self.mergeFolderSaves = mergeFolderSaves
@@ -1647,6 +2067,42 @@ private final class FakeVaultMetadataStore: VaultMetadataStoring {
 
     func loadAPIKeyDeletionTombstones() throws -> [APIKeyDeletionTombstone] {
         apiKeyDeletionTombstones
+    }
+
+    func saveCertificateDeletionTombstones(_ tombstones: [CertificateDeletionTombstone]) throws {
+        var byID = Dictionary(uniqueKeysWithValues: certificateDeletionTombstones.map { ($0.id, $0) })
+        for tombstone in tombstones where byID[tombstone.id].map({ $0.deletedAt <= tombstone.deletedAt }) ?? true {
+            byID[tombstone.id] = tombstone
+        }
+        certificateDeletionTombstones = byID.values.sorted { $0.deletedAt < $1.deletedAt }
+    }
+
+    func loadCertificateDeletionTombstones() throws -> [CertificateDeletionTombstone] {
+        certificateDeletionTombstones
+    }
+
+    func saveNoteDeletionTombstones(_ tombstones: [NoteDeletionTombstone]) throws {
+        var byID = Dictionary(uniqueKeysWithValues: noteDeletionTombstones.map { ($0.id, $0) })
+        for tombstone in tombstones where byID[tombstone.id].map({ $0.deletedAt <= tombstone.deletedAt }) ?? true {
+            byID[tombstone.id] = tombstone
+        }
+        noteDeletionTombstones = byID.values.sorted { $0.deletedAt < $1.deletedAt }
+    }
+
+    func loadNoteDeletionTombstones() throws -> [NoteDeletionTombstone] {
+        noteDeletionTombstones
+    }
+
+    func saveSSHKeyDeletionTombstones(_ tombstones: [SSHKeyDeletionTombstone]) throws {
+        var byID = Dictionary(uniqueKeysWithValues: sshKeyDeletionTombstones.map { ($0.id, $0) })
+        for tombstone in tombstones where byID[tombstone.id].map({ $0.deletedAt <= tombstone.deletedAt }) ?? true {
+            byID[tombstone.id] = tombstone
+        }
+        sshKeyDeletionTombstones = byID.values.sorted { $0.deletedAt < $1.deletedAt }
+    }
+
+    func loadSSHKeyDeletionTombstones() throws -> [SSHKeyDeletionTombstone] {
+        sshKeyDeletionTombstones
     }
 
     func saveCertificates(_ metadata: [CertificateMetadata]) throws {

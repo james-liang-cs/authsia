@@ -137,6 +137,12 @@ extension AccountMetadata: Codable {
 protocol MetadataKeychainStoring {
     func save(data: Data, for key: String) throws
     func retrieve(for key: String) throws -> Data
+    func retrieveCandidates(for key: String) throws -> [KeychainDataCandidate]
+}
+
+struct AccountDeletionTombstone: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let deletedAt: Date
 }
 
 extension KeychainStore: MetadataKeychainStoring {}
@@ -184,33 +190,145 @@ public final class MetadataStore: @unchecked Sendable {
     }
     
     public func saveAll(_ metadata: [AccountMetadata]) throws {
+        // Merge with the current candidates so a writer holding a stale cache
+        // cannot silently erase accounts another process or device added, then
+        // drop anything covered by a deletion tombstone so stale candidates
+        // cannot reintroduce deleted accounts.
+        var mergedByID: [UUID: AccountMetadata] = [:]
+        var order: [UUID] = []
+        for item in try loadAll() where mergedByID[item.id] == nil {
+            mergedByID[item.id] = item
+            order.append(item.id)
+        }
+        for item in metadata {
+            if mergedByID[item.id] == nil {
+                order.append(item.id)
+            }
+            mergedByID[item.id] = item
+        }
+        let merged = try filterTombstonedAccounts(order.compactMap { mergedByID[$0] })
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
-        let data = try encoder.encode(metadata)
+        let data = try encoder.encode(merged)
         try keychain.save(data: data, for: "account_metadata")
         CoreLogger.shared.info("Saved metadata to Keychain")
     }
-    
+
     public func loadAll() throws -> [AccountMetadata] {
         do {
-            let data = try keychain.retrieve(for: "account_metadata")
-            let decoder = JSONDecoder()
-            do {
-                let metadata = try decoder.decode([AccountMetadata].self, from: data)
-                CoreLogger.shared.info("Loaded metadata from Keychain")
-                return metadata
-            } catch {
-                throw MetadataLoadError.decodeFailed(String(describing: error))
+            let candidates = try keychain.retrieveCandidates(for: "account_metadata")
+            let tombstonesByID = Dictionary(
+                uniqueKeysWithValues: try loadAccountDeletionTombstones().map { ($0.id, $0) }
+            )
+            var merged: [AccountMetadata] = []
+            var seenIDs = Set<UUID>()
+            for candidate in candidates {
+                guard let data = candidate.data else { continue }
+                let decoded: [AccountMetadata]
+                do {
+                    decoded = try JSONDecoder().decode([AccountMetadata].self, from: data)
+                } catch {
+                    throw MetadataLoadError.decodeFailed(String(describing: error))
+                }
+                for item in decoded
+                    where isVisible(item, tombstonesByID: tombstonesByID) && seenIDs.insert(item.id).inserted {
+                    merged.append(item)
+                }
             }
+            if candidates.contains(where: \.needsHealing),
+               candidates.contains(where: { $0.data != nil }),
+               let data = try? JSONEncoder().encode(merged) {
+                try? keychain.save(data: data, for: "account_metadata")
+            }
+            CoreLogger.shared.info("Loaded metadata from Keychain")
+            return merged
         } catch let metadataError as MetadataLoadError {
             throw metadataError
-        } catch KeychainError.itemNotFound {
-            return []
         } catch let KeychainError.unknown(status) {
             throw MetadataLoadError.keychainUnavailable(status)
         } catch {
             throw MetadataLoadError.keychainUnavailable(nil)
         }
+    }
+
+    private func filterTombstonedAccounts(_ metadata: [AccountMetadata]) throws -> [AccountMetadata] {
+        let tombstonesByID = Dictionary(
+            uniqueKeysWithValues: try loadAccountDeletionTombstones().map { ($0.id, $0) }
+        )
+        return metadata.filter { isVisible($0, tombstonesByID: tombstonesByID) }
+    }
+
+    private func isVisible(
+        _ item: AccountMetadata,
+        tombstonesByID: [UUID: AccountDeletionTombstone]
+    ) -> Bool {
+        guard let tombstone = tombstonesByID[item.id] else { return true }
+        return item.lastUsed > tombstone.deletedAt
+    }
+
+    func saveAccountDeletionTombstones(_ tombstones: [AccountDeletionTombstone]) throws {
+        let merged = mergeTombstones(tombstones, with: try loadAccountDeletionTombstones())
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let data = try encoder.encode(merged)
+        try keychain.save(data: data, for: "account_deletion_tombstones")
+    }
+
+    func loadAccountDeletionTombstones() throws -> [AccountDeletionTombstone] {
+        do {
+            let candidates = try keychain.retrieveCandidates(for: "account_deletion_tombstones")
+            var merged: [AccountDeletionTombstone] = []
+            var writeTargetFingerprints: [[UUID: Date]] = []
+            for candidate in candidates {
+                guard let data = candidate.data else { continue }
+                let decoded: [AccountDeletionTombstone]
+                do {
+                    decoded = try JSONDecoder().decode([AccountDeletionTombstone].self, from: data)
+                } catch {
+                    throw MetadataLoadError.decodeFailed(String(describing: error))
+                }
+                if candidate.isWriteTarget {
+                    writeTargetFingerprints.append(
+                        Dictionary(decoded.map { ($0.id, $0.deletedAt) }, uniquingKeysWith: { max($0, $1) })
+                    )
+                }
+                merged = mergeTombstones(decoded, with: merged)
+            }
+            // Re-save the union when any candidate is missing entries (for
+            // example after iCloud last-writer-wins clobbered a fresher blob on
+            // another device) so deletion intent stays monotonic. Best effort.
+            let mergedFingerprint = Dictionary(
+                merged.map { ($0.id, $0.deletedAt) },
+                uniquingKeysWith: { max($0, $1) }
+            )
+            if (candidates.contains(where: \.needsHealing)
+                || writeTargetFingerprints.contains(where: { $0 != mergedFingerprint })),
+               candidates.contains(where: { $0.data != nil }),
+               let data = try? JSONEncoder().encode(merged) {
+                try? keychain.save(data: data, for: "account_deletion_tombstones")
+            }
+            return merged
+        } catch let metadataError as MetadataLoadError {
+            throw metadataError
+        } catch let KeychainError.unknown(status) {
+            throw MetadataLoadError.keychainUnavailable(status)
+        } catch {
+            throw MetadataLoadError.keychainUnavailable(nil)
+        }
+    }
+
+    private func mergeTombstones(
+        _ incoming: [AccountDeletionTombstone],
+        with existing: [AccountDeletionTombstone]
+    ) -> [AccountDeletionTombstone] {
+        var byID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        for tombstone in incoming {
+            if let current = byID[tombstone.id], current.deletedAt > tombstone.deletedAt {
+                continue
+            }
+            byID[tombstone.id] = tombstone
+        }
+        return byID.values.sorted { $0.deletedAt < $1.deletedAt }
     }
 
     public func saveFolders(_ folders: [String]) throws {

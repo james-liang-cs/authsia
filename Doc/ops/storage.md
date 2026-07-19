@@ -116,6 +116,7 @@ Account metadata uses `MetadataStore`. It is JSON-encoded and saved through
 ```text
 account_metadata
 account_folders
+account_deletion_tombstones
 ```
 
 On load, `MetadataStore` reads these Keychain records. Historical Documents
@@ -230,14 +231,35 @@ The same toggle applies to live metadata. OTP metadata uses `KeychainStore`.
 Vault metadata uses `com.authsia.vault.metadata` for the synchronizable copy
 and `com.authsia.vault.metadata.local` for the local copy.
 
-Password deletions also write non-secret tombstones under
-`vault_password_deletion_tombstones`. Each tombstone contains only the deleted
+Deletions of any vault item type also write non-secret tombstones under
+`vault_password_deletion_tombstones`, `vault_api_key_deletion_tombstones`,
+`vault_certificate_deletion_tombstones`, `vault_note_deletion_tombstones`, and
+`vault_ssh_key_deletion_tombstones`. Each tombstone contains only the deleted
 item UUID and deletion time. When local and synchronizable metadata disagree,
-a tombstone suppresses password metadata that is not newer than the deletion,
-so an offline device's stale local fallback cannot restore a converted or
-deleted password. Repository loading retries removal of any tombstoned local or
-synchronizable secret without returning its value. An explicit later restore of
-the same UUID is stamped newer than the tombstone and remains visible.
+a tombstone suppresses metadata that is not newer than the deletion, so an
+offline device's stale local fallback cannot restore a converted or deleted
+item. Repository loading retries removal of any tombstoned local or
+synchronizable secret without returning its value. An explicit later restore
+of the same UUID is stamped newer than the tombstone and remains visible. A
+subsequent deletion is in turn stamped strictly newer than the current item,
+so deleting immediately after a restore still wins. The enable-sync copy
+filters collected items against every tombstone set, then reloads deletion
+intent after copying secrets, re-filters metadata, and reaps any secret covered
+by a deletion that arrived during the copy. It re-saves the latest tombstones
+through the sync-enabled write policy, so a stale device enabling sync cannot
+reintroduce deleted items.
+
+OTP account deletions write the same kind of tombstone under
+`account_deletion_tombstones`, with `lastUsed` as the freshness timestamp.
+Account metadata loads filter each stored candidate against tombstones before
+choosing the preferred value for an account ID, and saves merge all visible
+candidates, so a stale whole-blob write cannot erase or resurrect accounts.
+
+Tombstone loads merge every stored candidate; when a writable candidate is
+missing or lacks entries the union has, the union is re-saved through the
+current write policy, so deletion intent survives iCloud Keychain whole-item
+conflict resolution on another device without repeatedly rewriting a
+read-only fallback while sync is disabled.
 
 Enabling sync from Settings first collects the current local-first account and
 vault records, then saves those records through a scoped sync-enabled write

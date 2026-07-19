@@ -110,6 +110,21 @@ struct APIKeyDeletionTombstone: Identifiable, Codable, Equatable, Sendable {
     let deletedAt: Date
 }
 
+struct CertificateDeletionTombstone: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let deletedAt: Date
+}
+
+struct NoteDeletionTombstone: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let deletedAt: Date
+}
+
+struct SSHKeyDeletionTombstone: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let deletedAt: Date
+}
+
 struct VaultFolderState: Codable, Equatable, Sendable {
     let type: VaultItemType
     let path: String
@@ -657,7 +672,7 @@ extension SSHKeyMetadata {
 protocol VaultMetadataKeychainStoring: Sendable {
     func save(data: Data, key: String) throws
     func load(key: String) throws -> Data?
-    func loadCandidates(key: String) throws -> [Data]
+    func loadCandidates(key: String) throws -> [KeychainDataCandidate]
 }
 
 struct SecurityVaultMetadataKeychainStore: VaultMetadataKeychainStoring {
@@ -696,32 +711,39 @@ struct SecurityVaultMetadataKeychainStore: VaultMetadataKeychainStoring {
     }
 
     func load(key: String) throws -> Data? {
-        try loadCandidates(key: key).first
+        try loadCandidates(key: key).first(where: { $0.data != nil })?.data
     }
 
-    func loadCandidates(key: String) throws -> [Data] {
+    func loadCandidates(key: String) throws -> [KeychainDataCandidate] {
         var unavailableStatus: OSStatus?
-        var results: [Data] = []
-        var seen = Set<Data>()
+        var candidates: [KeychainDataCandidate] = []
+        let writeTargets = Set(writeSynchronizableValues)
         for synchronizable in readSynchronizableValues {
             do {
-                if let data = try load(key: key, synchronizable: synchronizable) {
-                    if seen.insert(data).inserted {
-                        results.append(data)
-                    }
-                }
+                candidates.append(KeychainDataCandidate(
+                    synchronizable: synchronizable,
+                    data: try load(key: key, synchronizable: synchronizable),
+                    isAvailable: true,
+                    isWriteTarget: writeTargets.contains(synchronizable)
+                ))
             } catch KeychainError.unknown(let status) where Self.isStoreUnavailable(status) {
                 unavailableStatus = unavailableStatus ?? status
+                candidates.append(KeychainDataCandidate(
+                    synchronizable: synchronizable,
+                    data: nil,
+                    isAvailable: false,
+                    isWriteTarget: writeTargets.contains(synchronizable)
+                ))
             }
         }
 
-        if !results.isEmpty {
-            return results
+        if candidates.contains(where: { $0.data != nil }) {
+            return candidates
         }
         if let unavailableStatus {
             throw KeychainError.unknown(unavailableStatus)
         }
-        return []
+        return candidates
     }
 
     private func load(key: String, synchronizable: Bool) throws -> Data? {
@@ -991,7 +1013,7 @@ public final class VaultMetadataStore: @unchecked Sendable {
     }
 
     func loadPasswordDeletionTombstones() throws -> [PasswordDeletionTombstone] {
-        try loadMetadataArrays(
+        try loadTombstoneArrays(
             key: "vault_password_deletion_tombstones",
             modifiedAt: \.deletedAt,
             sort: { $0.deletedAt < $1.deletedAt }
@@ -1040,7 +1062,7 @@ public final class VaultMetadataStore: @unchecked Sendable {
     }
 
     func loadAPIKeyDeletionTombstones() throws -> [APIKeyDeletionTombstone] {
-        try loadMetadataArrays(
+        try loadTombstoneArrays(
             key: "vault_api_key_deletion_tombstones",
             modifiedAt: \.deletedAt,
             sort: { $0.deletedAt < $1.deletedAt }
@@ -1064,10 +1086,35 @@ public final class VaultMetadataStore: @unchecked Sendable {
     }
 
     public func loadCertificates() throws -> [CertificateMetadata] {
-        try loadMetadataArrays(
+        let metadata: [CertificateMetadata] = try loadMetadataArrays(
             key: "vault_certificates_metadata",
             modifiedAt: \.modifiedAt,
             sort: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        )
+        let tombstonesByID = Dictionary(
+            uniqueKeysWithValues: try loadCertificateDeletionTombstones().map { ($0.id, $0) }
+        )
+        return metadata.filter { item in
+            guard let tombstone = tombstonesByID[item.id] else { return true }
+            return item.modifiedAt > tombstone.deletedAt
+        }
+    }
+
+    func saveCertificateDeletionTombstones(_ tombstones: [CertificateDeletionTombstone]) throws {
+        let merged = mergeMetadata(
+            incoming: tombstones,
+            existing: try loadCertificateDeletionTombstones(),
+            modifiedAt: \.deletedAt,
+            sort: { $0.deletedAt < $1.deletedAt }
+        )
+        try saveMetadata(merged, key: "vault_certificate_deletion_tombstones")
+    }
+
+    func loadCertificateDeletionTombstones() throws -> [CertificateDeletionTombstone] {
+        try loadTombstoneArrays(
+            key: "vault_certificate_deletion_tombstones",
+            modifiedAt: \.deletedAt,
+            sort: { $0.deletedAt < $1.deletedAt }
         )
     }
 
@@ -1088,10 +1135,35 @@ public final class VaultMetadataStore: @unchecked Sendable {
     }
 
     public func loadNotes() throws -> [SecureNoteMetadata] {
-        try loadMetadataArrays(
+        let metadata: [SecureNoteMetadata] = try loadMetadataArrays(
             key: "vault_notes_metadata",
             modifiedAt: \.modifiedAt,
             sort: { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        )
+        let tombstonesByID = Dictionary(
+            uniqueKeysWithValues: try loadNoteDeletionTombstones().map { ($0.id, $0) }
+        )
+        return metadata.filter { item in
+            guard let tombstone = tombstonesByID[item.id] else { return true }
+            return item.modifiedAt > tombstone.deletedAt
+        }
+    }
+
+    func saveNoteDeletionTombstones(_ tombstones: [NoteDeletionTombstone]) throws {
+        let merged = mergeMetadata(
+            incoming: tombstones,
+            existing: try loadNoteDeletionTombstones(),
+            modifiedAt: \.deletedAt,
+            sort: { $0.deletedAt < $1.deletedAt }
+        )
+        try saveMetadata(merged, key: "vault_note_deletion_tombstones")
+    }
+
+    func loadNoteDeletionTombstones() throws -> [NoteDeletionTombstone] {
+        try loadTombstoneArrays(
+            key: "vault_note_deletion_tombstones",
+            modifiedAt: \.deletedAt,
+            sort: { $0.deletedAt < $1.deletedAt }
         )
     }
 
@@ -1112,10 +1184,35 @@ public final class VaultMetadataStore: @unchecked Sendable {
     }
 
     public func loadSSHKeys() throws -> [SSHKeyMetadata] {
-        try loadMetadataArrays(
+        let metadata: [SSHKeyMetadata] = try loadMetadataArrays(
             key: "vault_sshkeys_metadata",
             modifiedAt: \.modifiedAt,
             sort: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        )
+        let tombstonesByID = Dictionary(
+            uniqueKeysWithValues: try loadSSHKeyDeletionTombstones().map { ($0.id, $0) }
+        )
+        return metadata.filter { item in
+            guard let tombstone = tombstonesByID[item.id] else { return true }
+            return item.modifiedAt > tombstone.deletedAt
+        }
+    }
+
+    func saveSSHKeyDeletionTombstones(_ tombstones: [SSHKeyDeletionTombstone]) throws {
+        let merged = mergeMetadata(
+            incoming: tombstones,
+            existing: try loadSSHKeyDeletionTombstones(),
+            modifiedAt: \.deletedAt,
+            sort: { $0.deletedAt < $1.deletedAt }
+        )
+        try saveMetadata(merged, key: "vault_ssh_key_deletion_tombstones")
+    }
+
+    func loadSSHKeyDeletionTombstones() throws -> [SSHKeyDeletionTombstone] {
+        try loadTombstoneArrays(
+            key: "vault_ssh_key_deletion_tombstones",
+            modifiedAt: \.deletedAt,
+            sort: { $0.deletedAt < $1.deletedAt }
         )
     }
 
@@ -1152,11 +1249,12 @@ public final class VaultMetadataStore: @unchecked Sendable {
 
         do {
             let candidates = try keychain.loadCandidates(key: "vault_folders")
-            guard !candidates.isEmpty else {
+            let storedCandidates = candidates.compactMap(\.data)
+            guard !storedCandidates.isEmpty else {
                 return [:]
             }
             var merged: [VaultItemType: [String]] = [:]
-            for data in candidates {
+            for data in storedCandidates {
                 guard let map = decode(data) else {
                     throw MetadataLoadError.decodeFailed("Unable to decode vault folders")
                 }
@@ -1189,7 +1287,7 @@ public final class VaultMetadataStore: @unchecked Sendable {
         do {
             let candidates = try keychain.loadCandidates(key: "vault_folder_states")
             var merged: [String: VaultFolderState] = [:]
-            for data in candidates {
+            for data in candidates.compactMap(\.data) {
                 let decoded: [VaultFolderState]
                 do {
                     decoded = try decoder.decode([VaultFolderState].self, from: data)
@@ -1308,19 +1406,21 @@ public final class VaultMetadataStore: @unchecked Sendable {
         try keychain.save(data: data, key: key)
     }
 
-    private func loadMetadataArrays<T: Decodable & Identifiable>(
+    private func loadMetadataArrays<T: Codable & Identifiable>(
         key: String,
         modifiedAt: KeyPath<T, Date>,
         sort: (T, T) -> Bool
     ) throws -> [T] where T.ID == UUID {
         do {
             let candidates = try keychain.loadCandidates(key: key)
-            guard !candidates.isEmpty else {
+            let storedCandidates = candidates.compactMap(\.data)
+            guard !storedCandidates.isEmpty else {
                 return []
             }
             var merged: [T] = []
             let decoder = decoder
-            for data in candidates {
+            for candidate in candidates {
+                guard let data = candidate.data else { continue }
                 let decoded: [T]
                 do {
                     decoded = try decoder.decode([T].self, from: data)
@@ -1328,6 +1428,62 @@ public final class VaultMetadataStore: @unchecked Sendable {
                     throw MetadataLoadError.decodeFailed(String(describing: error))
                 }
                 merged = mergeMetadata(incoming: decoded, existing: merged, modifiedAt: modifiedAt, sort: sort)
+            }
+            if candidates.contains(where: \.needsHealing) {
+                try? saveMetadata(merged, key: key)
+            }
+            return merged
+        } catch let metadataError as MetadataLoadError {
+            throw metadataError
+        } catch let KeychainError.unknown(status) {
+            throw MetadataLoadError.keychainUnavailable(status)
+        } catch {
+            throw MetadataLoadError.keychainUnavailable(nil)
+        }
+    }
+
+    /// Loads a tombstone array like `loadMetadataArrays`, but when any stored
+    /// candidate is missing entries the merged union has — for example after
+    /// iCloud Keychain last-writer-wins clobbered a fresher blob on another
+    /// device — the union is re-saved so deletion intent stays monotonic
+    /// across the sync circle. The re-save is best effort and never fails the
+    /// load.
+    private func loadTombstoneArrays<T: Codable & Identifiable>(
+        key: String,
+        modifiedAt: KeyPath<T, Date>,
+        sort: (T, T) -> Bool
+    ) throws -> [T] where T.ID == UUID {
+        do {
+            let candidates = try keychain.loadCandidates(key: key)
+            let storedCandidates = candidates.compactMap(\.data)
+            guard !storedCandidates.isEmpty else {
+                return []
+            }
+            var merged: [T] = []
+            var writeTargetFingerprints: [[UUID: Date]] = []
+            let decoder = decoder
+            for candidate in candidates {
+                guard let data = candidate.data else { continue }
+                let decoded: [T]
+                do {
+                    decoded = try decoder.decode([T].self, from: data)
+                } catch {
+                    throw MetadataLoadError.decodeFailed(String(describing: error))
+                }
+                if candidate.isWriteTarget {
+                    writeTargetFingerprints.append(
+                        Dictionary(decoded.map { ($0.id, $0[keyPath: modifiedAt]) }, uniquingKeysWith: { max($0, $1) })
+                    )
+                }
+                merged = mergeMetadata(incoming: decoded, existing: merged, modifiedAt: modifiedAt, sort: sort)
+            }
+            let mergedFingerprint = Dictionary(
+                merged.map { ($0.id, $0[keyPath: modifiedAt]) },
+                uniquingKeysWith: { max($0, $1) }
+            )
+            if candidates.contains(where: \.needsHealing)
+                || writeTargetFingerprints.contains(where: { $0 != mergedFingerprint }) {
+                try? saveMetadata(merged, key: key)
             }
             return merged
         } catch let metadataError as MetadataLoadError {

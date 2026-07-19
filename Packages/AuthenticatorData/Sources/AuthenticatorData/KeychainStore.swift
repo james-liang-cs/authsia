@@ -23,6 +23,34 @@ public enum KeychainError: Error, LocalizedError {
     }
 }
 
+struct KeychainDataCandidate: Equatable, Sendable {
+    let synchronizable: Bool
+    let data: Data?
+    let isAvailable: Bool
+    let isWriteTarget: Bool
+
+    init(
+        synchronizable: Bool,
+        data: Data?,
+        isAvailable: Bool,
+        isWriteTarget: Bool? = nil
+    ) {
+        self.synchronizable = synchronizable
+        self.data = data
+        self.isAvailable = isAvailable
+        self.isWriteTarget = isWriteTarget
+            ?? (!synchronizable || KeychainSyncSettings.isICloudKeychainSyncEnabled)
+    }
+
+    var isMissing: Bool {
+        isAvailable && data == nil
+    }
+
+    var needsHealing: Bool {
+        isWriteTarget && isMissing
+    }
+}
+
 public final class KeychainStore: @unchecked Sendable {
     public static let shared = KeychainStore()
     static let preferredSynchronizableValues: [Bool] = [true, false]
@@ -85,6 +113,41 @@ public final class KeychainStore: @unchecked Sendable {
 
     public func retrieve(for key: String) throws -> Data {
         try retrieve(account: key)
+    }
+
+    /// Returns the state of every metadata target in read-policy order
+    /// (synchronizable first when iCloud sync is enabled, local first
+    /// otherwise), retaining missing and unavailable targets so callers can
+    /// decide whether a stored union needs healing.
+    func retrieveCandidates(for key: String) throws -> [KeychainDataCandidate] {
+        var unavailableStatus: OSStatus?
+        var candidates: [KeychainDataCandidate] = []
+        let writeTargets = Set(writeSynchronizableValues)
+        for synchronizable in readSynchronizableValues {
+            do {
+                candidates.append(KeychainDataCandidate(
+                    synchronizable: synchronizable,
+                    data: try retrieve(account: key, synchronizable: synchronizable),
+                    isAvailable: true,
+                    isWriteTarget: writeTargets.contains(synchronizable)
+                ))
+            } catch KeychainError.unknown(let status) where Self.isStoreUnavailable(status) {
+                unavailableStatus = unavailableStatus ?? status
+                candidates.append(KeychainDataCandidate(
+                    synchronizable: synchronizable,
+                    data: nil,
+                    isAvailable: false,
+                    isWriteTarget: writeTargets.contains(synchronizable)
+                ))
+            }
+        }
+        if candidates.contains(where: { $0.data != nil }) {
+            return candidates
+        }
+        if let unavailableStatus {
+            throw KeychainError.unknown(unavailableStatus)
+        }
+        return candidates
     }
 
     // MARK: - Internal Helpers

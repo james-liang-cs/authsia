@@ -34,7 +34,8 @@ public class AccountRepository {
     // In-memory cache of metadata
     public private(set) var accounts: [AccountMetadata] = []
     public private(set) var folders: [String] = []
-    
+    public private(set) var hasLoadedState = false
+
     public convenience init(keychain: KeychainStore = .shared, metadataStore: MetadataStore = .shared) {
         self.init(keychainStore: keychain, metadataStore: metadataStore)
     }
@@ -43,17 +44,41 @@ public class AccountRepository {
         self.keychain = keychainStore
         self.metadataStore = metadataStore
     }
-    
+
     public func load() throws {
-        self.accounts = try metadataStore.loadAll()
+        let loadedAccounts = try metadataStore.loadAll()
+        let tombstones = try metadataStore.loadAccountDeletionTombstones()
+        let visibleByID = Dictionary(uniqueKeysWithValues: loadedAccounts.map { ($0.id, $0) })
+        for tombstone in tombstones {
+            if let visible = visibleByID[tombstone.id], visible.lastUsed > tombstone.deletedAt {
+                continue
+            }
+            try? keychain.delete(for: tombstone.id)
+        }
+        self.accounts = loadedAccounts
         self.folders = try metadataStore.loadFolders()
         mergeAccountFoldersFromMetadata()
+        hasLoadedState = true
+    }
+
+    /// Refreshes the in-memory cache before any mutation. The GUI app and the
+    /// headless bridge each hold their own long-lived AccountRepository;
+    /// saving from a stale cache silently erases or resurrects accounts the
+    /// other process changed since our last load.
+    private func prepareForMutation() throws {
+        guard hasLoadedState else {
+            try load()
+            return
+        }
+        accounts = try metadataStore.loadAll()
+        folders = try metadataStore.loadFolders()
     }
 
     public func collectFullAccountsForCurrentStoragePolicy() throws -> [Account] {
         self.accounts = try metadataStore.loadAll()
         self.folders = try metadataStore.loadFolders()
         mergeAccountFoldersFromMetadata()
+        hasLoadedState = true
 
         return try accounts.map { metadata in
             try getFullAccount(metadata: metadata)
@@ -61,9 +86,35 @@ public class AccountRepository {
     }
 
     public func saveFullAccountsToCurrentStoragePolicy(_ fullAccounts: [Account]) throws {
+        let tombstones = try metadataStore.loadAccountDeletionTombstones()
+        let tombstonesByID = Dictionary(uniqueKeysWithValues: tombstones.map { ($0.id, $0) })
         for account in fullAccounts {
-            try saveOrUpdateAccount(account)
+            if let tombstone = tombstonesByID[account.id], account.lastUsed <= tombstone.deletedAt {
+                continue
+            }
+            try saveOrUpdateAccount(account, restoringDeletedAccount: false)
         }
+        let currentAccounts = try metadataStore.loadAll()
+        let latestTombstones = try metadataStore.loadAccountDeletionTombstones()
+        let latestTombstonesByID = Dictionary(
+            uniqueKeysWithValues: latestTombstones.map { ($0.id, $0) }
+        )
+        let visibleAccounts = currentAccounts.filter { account in
+            guard let tombstone = latestTombstonesByID[account.id] else { return true }
+            return account.lastUsed > tombstone.deletedAt
+        }
+        if !latestTombstones.isEmpty {
+            try metadataStore.saveAccountDeletionTombstones(latestTombstones)
+        }
+        try metadataStore.saveAll(visibleAccounts)
+        let visibleByID = Dictionary(uniqueKeysWithValues: visibleAccounts.map { ($0.id, $0) })
+        for tombstone in latestTombstones {
+            if let visible = visibleByID[tombstone.id], visible.lastUsed > tombstone.deletedAt {
+                continue
+            }
+            try? keychain.delete(for: tombstone.id)
+        }
+        self.accounts = visibleAccounts
         try metadataStore.saveFolders(folders)
     }
 
@@ -98,23 +149,41 @@ public class AccountRepository {
     }
 
     public func addAccount(_ account: Account) throws {
+        try prepareForMutation()
+        var account = account
+        if let tombstone = try metadataStore.loadAccountDeletionTombstones().first(where: { $0.id == account.id }),
+           account.lastUsed <= tombstone.deletedAt {
+            account.lastUsed = max(Date(), tombstone.deletedAt.addingTimeInterval(1))
+        }
         // 1. Save Secret to Keychain
         try keychain.save(secret: account.secret, for: account.id)
-        
+
         // 2. Save Metadata
         let metadata = AccountMetadata(from: account)
         var newAccounts = self.accounts
         newAccounts.append(metadata)
-        
+
         try metadataStore.saveAll(newAccounts)
         self.accounts = newAccounts
         try registerFolderIfNeeded(metadata.folderPath)
     }
-    
+
     /// Adds multiple accounts efficiently by saving metadata only once.
     public func addAccounts(_ accounts: [Account]) throws {
         if accounts.isEmpty { return }
-        
+        try prepareForMutation()
+
+        let tombstonesByID = Dictionary(
+            uniqueKeysWithValues: try metadataStore.loadAccountDeletionTombstones().map { ($0.id, $0) }
+        )
+        let accounts = accounts.map { account -> Account in
+            var account = account
+            if let tombstone = tombstonesByID[account.id], account.lastUsed <= tombstone.deletedAt {
+                account.lastUsed = max(Date(), tombstone.deletedAt.addingTimeInterval(1))
+            }
+            return account
+        }
+
         // 1. Save Secrets to Keychain (Iterative)
         // We do this first so if it fails, we haven't updated metadata yet
         // However, secrets are individual items so failures might be partial.
@@ -122,31 +191,39 @@ public class AccountRepository {
         for account in accounts {
             try keychain.save(secret: account.secret, for: account.id)
         }
-        
+
         // 2. Save Metadata (Batch)
         let newMetadata = accounts.map { AccountMetadata(from: $0) }
         var currentAccounts = self.accounts
         currentAccounts.append(contentsOf: newMetadata)
-        
+
         try metadataStore.saveAll(currentAccounts)
         self.accounts = currentAccounts
         mergeAccountFoldersFromMetadata()
     }
     
     public func deleteAccount(id: UUID) throws {
+        try deleteAccount(id: id, deletedAt: Date())
+    }
+
+    public func deleteAccount(id: UUID, deletedAt: Date) throws {
+        try prepareForMutation()
+        try recordAccountDeletions([id], deletedAt: deletedAt)
+
         // 1. Delete from Keychain
         // We attempt to delete, but if it fails (not found), we proceed to clean metadata
         try? keychain.delete(for: id)
-        
+
         // 2. Remove from Metadata
         var newAccounts = self.accounts
         newAccounts.removeAll { $0.id == id }
-        
+
         try metadataStore.saveAll(newAccounts)
         self.accounts = newAccounts
     }
-    
+
     public func updateAccountMetadata(_ metadata: AccountMetadata) throws {
+        try prepareForMutation()
         var newAccounts = self.accounts
         if let index = newAccounts.firstIndex(where: { $0.id == metadata.id }) {
             newAccounts[index] = metadata
@@ -157,6 +234,25 @@ public class AccountRepository {
     }
 
     public func saveOrUpdateAccount(_ account: Account) throws {
+        try saveOrUpdateAccount(account, restoringDeletedAccount: true)
+    }
+
+    private func saveOrUpdateAccount(
+        _ account: Account,
+        restoringDeletedAccount: Bool
+    ) throws {
+        try prepareForMutation()
+        var account = account
+        if let tombstone = try metadataStore.loadAccountDeletionTombstones().first(where: { $0.id == account.id }),
+           account.lastUsed <= tombstone.deletedAt {
+            guard restoringDeletedAccount else {
+                if !accounts.contains(where: { $0.id == account.id }) {
+                    try? keychain.delete(for: account.id)
+                }
+                return
+            }
+            account.lastUsed = max(Date(), tombstone.deletedAt.addingTimeInterval(1))
+        }
         try keychain.save(secret: account.secret, for: account.id)
 
         let metadata = AccountMetadata(from: account)
@@ -248,6 +344,9 @@ public class AccountRepository {
     /// Permanently deletes all accounts and folders.
     /// Removes secrets from Keychain and clears all metadata.
     public func deleteAllAccounts() throws {
+        try prepareForMutation()
+        try recordAccountDeletions(Set(accounts.map(\.id)), deletedAt: Date())
+
         // 1. Delete all secrets from Keychain
         for account in accounts {
             try? keychain.delete(for: account.id)
@@ -260,6 +359,19 @@ public class AccountRepository {
         // 3. Clear folders
         try metadataStore.saveFolders([])
         self.folders = []
+    }
+
+    private func recordAccountDeletions(_ ids: Set<UUID>, deletedAt: Date) throws {
+        guard !ids.isEmpty else { return }
+        let lastUsedByID = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0.lastUsed) })
+        try metadataStore.saveAccountDeletionTombstones(
+            ids.map { id in
+                let effectiveDeletion = lastUsedByID[id]
+                    .map { max(deletedAt, $0.addingTimeInterval(1)) }
+                    ?? deletedAt
+                return AccountDeletionTombstone(id: id, deletedAt: effectiveDeletion)
+            }
+        )
     }
 
     // MARK: - Import/Export
