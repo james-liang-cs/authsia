@@ -1,5 +1,16 @@
 # Remote JIT Approval Protocol V1
 
+## Table of Contents
+
+- [Scope](#scope)
+- [Canonical primitives](#canonical-primitives)
+- [Approval descriptor](#approval-descriptor)
+  - [Authority fields](#authority-fields)
+- [Signed request](#signed-request)
+- [Signed decision](#signed-decision)
+- [P-256 representation and signature rules](#p-256-representation-and-signature-rules)
+- [Strict decoding](#strict-decoding)
+
 ## Scope
 
 This document defines the presentation-neutral bytes exchanged by a paired Mac

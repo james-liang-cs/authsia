@@ -1,5 +1,28 @@
 # Just-in-Time Agent Grants
 
+## Table of Contents
+
+- [Remote iPhone Approval Status](#remote-iphone-approval-status)
+  - [Current authority flow](#current-authority-flow)
+  - [CloudKit architecture](#cloudkit-architecture)
+  - [Current notification implementation](#current-notification-implementation)
+  - [Findings and attempted fixes](#findings-and-attempted-fixes)
+  - [Blockers and residual risks](#blockers-and-residual-risks)
+- [Why This Exists](#why-this-exists)
+- [When JIT Runs](#when-jit-runs)
+- [Process Detection](#process-detection)
+- [Grant Flow](#grant-flow)
+- [Scope Rules](#scope-rules)
+- [Approval Copy](#approval-copy)
+- [Capabilities](#capabilities)
+- [TTL And Revocation](#ttl-and-revocation)
+- [Agent File Activity Evidence](#agent-file-activity-evidence)
+- [Access Insights](#access-insights)
+- [Audit](#audit)
+- [Failure Behavior](#failure-behavior)
+- [Operational Checks](#operational-checks)
+- [Source Map](#source-map)
+
 This document describes Authsia's just-in-time (JIT) grant path for local coding
 agents that need to run `authsia exec` or scoped Vault metadata `authsia list`
 without turning a human CLI session into ambient agent authority.
@@ -19,7 +42,7 @@ JIT grants are deliberately narrow:
 
 ## Remote iPhone Approval Status
 
-This section records the remote JIT approval state as of 2026-07-19. Remote
+This section records the remote JIT approval state as of 2026-07-20. Remote
 approval is an alternate way to approve the same bounded Agent JIT preflight;
 it does not create a second grant type or move grant authority to the phone or
 CloudKit.
@@ -52,6 +75,79 @@ Earlier Development and Production physical-device CloudKit round trips passed;
 on 2026-07-19 the matching version 1.7.0 (22) Developer ID Mac and TestFlight
 iPhone also passed the full Production notification and approval flow. The
 different-iCloud-account device test remains waived and not run.
+
+### CloudKit architecture
+
+CloudKit is an untrusted, account-scoped courier for pairing messages, approval
+requests and decisions, and pairing revocations. Both devices use the private
+database in container `iCloud.app.authsia` and the custom record zone
+`RemoteJITApprovalsV1`. Devices must therefore reach the same iCloud private
+database to discover one another's records. CloudKit availability is not an
+authorization signal, and a transport failure never becomes approval.
+
+The zone contains three versioned record types:
+
+| Record type | Purpose | Important cleartext routing fields | Protected payload |
+| --- | --- | --- | --- |
+| `RemoteJITPairingV1` | Drives the short-lived pairing state machine. | Pairing ID, expiry, transport state, and bootstrap exchange bytes. | Authenticated pairing messages after the initial pending state. |
+| `RemoteJITApprovalV1` | Carries a signed request from Mac to iPhone, then the signed decision from iPhone to Mac. | Request ID, 16-byte routing tag, expiry, transport state, and the `notify` marker. | The canonical signed request or decision, encrypted and authenticated for the current pairing. |
+| `RemoteJITRevocationV1` | Tells a previously paired Mac that the iPhone removed that pairing. | Revocation ID, 16-byte routing tag, expiry, and transport state. | A generation- and device-bound revocation notice encrypted and authenticated with the removed pairing. |
+
+Record IDs are deterministic lowercase UUID strings inside the custom zone.
+Strict decoders reject missing, extra, mistyped, or inconsistent fields.
+Pairing and approval updates use CloudKit record change tags and conditional
+saves so a stale writer cannot overwrite a newer state. Approval records for
+one preflight are created atomically; only the first record in that batch sets
+`notify = 1`.
+
+The end-to-end approval flow is:
+
+1. The Mac signs each canonical approval request, encrypts it for the active
+   pairing, and writes an atomic `RemoteJITApprovalV1` batch in `pending` state.
+2. A generic query-subscription push tells the iPhone only that CloudKit may
+   contain new work. The notification carries no approval authority and is not
+   scoped to a particular routing tag.
+3. The iPhone queries pending records using its current pairing's routing tag,
+   then decrypts and verifies all request, generation, device, key, and expiry
+   bindings before showing actionable approval UI.
+4. After Face ID, the iPhone signs the decision, encrypts it for the same
+   pairing, and conditionally changes the record to `responded`.
+5. The originating Mac decrypts and verifies the decision and reruns current
+   local JIT policy before creating a grant. Closing or expiring the local
+   request makes the CloudKit record non-actionable or removes it.
+
+The generic notification predicate explains the multi-device edge case. If an
+iPhone replaces pairing A with pairing B, a notification caused by stale Mac A
+can still reach that iCloud account, but the phone's B routing tag cannot fetch
+or decrypt A's request. Opening that notification therefore shows no approval.
+To prevent new ghost requests, iPhone unpairing publishes a
+`RemoteJITRevocationV1` record keyed by pairing A's generation before clearing
+its local identity. Mac A checks that exact generation for revocation before
+publishing every new approval batch; revocation does not depend on a second
+push. This exact lookup adds one CloudKit read per atomic approval batch and is
+intentionally not cached, because a cache would reopen the unpair-to-publish
+race. A valid notice clears A's local pairing and fails the request as not
+paired. A malformed or unauthenticated notice grants no revocation authority,
+but it is retained and blocks publication rather than being deleted and
+silently treated as no revocation. The phone still clears its local pairing if
+revocation publication fails, so unpair remains fail-closed locally, but the
+stale Mac cannot learn that change through this channel and the phone reports
+the publication error.
+
+Unacknowledged revocation records use a 24-hour retention horizon. An active
+paired iPhone opportunistically removes expired records during refresh, with
+cleanup throttled to one successful attempt per 24 hours. Cleanup failure does
+not hide or reject otherwise actionable approvals; it is retried on a later
+refresh.
+
+Development CloudKit schema changes must be promoted before distributing code
+that depends on them. Production requires all three record types, and the
+approval query fields `routingTag`, `transportState`, and `notify` must support
+the pending-record query and v2 notification predicate. The revocation
+`expiresAt` field must be queryable for retention cleanup. In particular,
+`RemoteJITRevocationV1` and its expiry index must be deployed before releasing
+the multi-device revocation flow; a missing record type or index must fail
+publication rather than bypass a pairing check.
 
 ### Current notification implementation
 

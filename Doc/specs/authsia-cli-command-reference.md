@@ -15,6 +15,7 @@
 - [Inject (Template Secret Injection)](#inject-template-secret-injection)
 - [Access (Automation Credentials)](#access-automation-credentials)
 - [Agent Rule Setup](#agent-rule-setup)
+- [Workspace](#workspace)
 - [Environment Profiles](#environment-profiles)
 - [SSH Tooling](#ssh-tooling)
 - [Status, Setup &amp; Doctor](#status-setup-doctor)
