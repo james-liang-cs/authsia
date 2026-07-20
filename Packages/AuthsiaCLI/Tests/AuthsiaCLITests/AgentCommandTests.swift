@@ -21,15 +21,13 @@ struct AgentCommandTests {
         #expect(shared.contains("Never ask the user for plaintext secrets."))
         #expect(shared.contains("authsia exec"))
         #expect(shared.contains("Always run every `authsia ...` CLI command outside the sandbox."))
-        #expect(shared.contains("also run Git network/authentication commands"))
-        #expect(shared.contains("Keep local-only Git commands"))
+        #expect(!shared.contains("also run Git network/authentication commands"))
+        #expect(!shared.contains("Keep local-only Git commands"))
         #expect(claudeRules.contains(AgentRuleInstaller.managedStartMarker))
         #expect(claudeRules.contains("Authsia Secret Handling"))
         #expect(!settings.contains("Authsia.Bridge"))
         #expect(!settings.contains("Authsia.SSHAgent"))
         #expect(!settings.contains("~/.authsia/agent.sock"))
-        #expect(settings.contains("git pull *"))
-        #expect(settings.contains("ssh *"))
         #expect(settings.contains("\"hooks\""))
         #expect(settings.contains("\"PreToolUse\""))
         #expect(settings.contains("\"PostToolUse\""))
@@ -1001,7 +999,7 @@ struct AgentCommandTests {
         let agents = try read("AGENTS.md", in: root)
 
         #expect(agents.contains("Always run every `authsia ...` CLI command outside the sandbox."))
-        #expect(agents.contains("If the agent session is sandboxed, request permission to run those Authsia-backed commands outside the sandbox before trying them."))
+        #expect(agents.contains("If the agent session is sandboxed, request permission to run Authsia CLI commands outside the sandbox before trying them."))
         #expect(agents.contains("Authsia records Codex command history from explicit Authsia markers and macOS process monitoring fallback."))
         #expect(!agents.contains("If sandboxed, request access to `Authsia.Bridge`"))
         #expect(!fileExists(".codex/rules/authsia.rules", in: root))
@@ -1251,6 +1249,11 @@ struct AgentCommandTests {
         [
             "authsia",
             "authsia *",
+        ]
+    }
+
+    private var claudeCommandsRemovedFromSandboxExclusions: [String] {
+        [
             "git clone *",
             "git fetch",
             "git fetch *",
@@ -1281,6 +1284,9 @@ struct AgentCommandTests {
         let excludedCommands = try #require(sandbox["excludedCommands"] as? [String])
         for command in claudeOutsideSandboxCommands {
             #expect(excludedCommands.contains(command))
+        }
+        for command in claudeCommandsRemovedFromSandboxExclusions {
+            #expect(!excludedCommands.contains(command))
         }
         if let network = sandbox["network"] as? [String: Any] {
             let allowMachLookup = (network["allowMachLookup"] as? [String]) ?? []

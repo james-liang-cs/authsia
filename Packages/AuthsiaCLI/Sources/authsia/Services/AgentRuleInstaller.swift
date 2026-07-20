@@ -955,9 +955,7 @@ enum AgentRuleInstaller {
     ## Authsia Sandbox Handling
 
     - Always run every `authsia ...` CLI command outside the sandbox.
-    - When Authsia SSH agent access is configured for this workspace, also run Git network/authentication commands (`git clone`, `git fetch`, `git pull`, `git push`, `git ls-remote`, `git remote update`, and `git submodule add/update`) plus `ssh`, `scp`, and `sftp` outside the sandbox.
-    - Keep local-only Git commands such as `git status`, `git diff`, `git log`, `git add`, and `git commit` inside the sandbox.
-    - If the agent session is sandboxed, request permission to run those Authsia-backed commands outside the sandbox before trying them.
+    - If the agent session is sandboxed, request permission to run Authsia CLI commands outside the sandbox before trying them.
     - Treat missing `authsia`, missing `/Applications/Authsia.app`, missing `~/.authsia/agent.sock`, authentication failures, or bridge communication failures inside a sandbox as sandbox/runtime-boundary issues first.
     """
         }
@@ -1191,23 +1189,7 @@ enum AgentRuleInstaller {
       "sandbox": {
         "excludedCommands": [
           "authsia",
-          "authsia *",
-          "git clone *",
-          "git fetch",
-          "git fetch *",
-          "git pull",
-          "git pull *",
-          "git push",
-          "git push *",
-          "git ls-remote *",
-          "git remote update",
-          "git remote update *",
-          "git submodule add *",
-          "git submodule update",
-          "git submodule update *",
-          "ssh *",
-          "scp *",
-          "sftp *"
+          "authsia *"
         ]
       }
     }
@@ -1368,23 +1350,7 @@ enum AgentRuleInstaller {
       "sandbox": {
         "excludedCommands": [
           "authsia",
-          "authsia *",
-          "git clone *",
-          "git fetch",
-          "git fetch *",
-          "git pull",
-          "git pull *",
-          "git push",
-          "git push *",
-          "git ls-remote *",
-          "git remote update",
-          "git remote update *",
-          "git submodule add *",
-          "git submodule update",
-          "git submodule update *",
-          "ssh *",
-          "scp *",
-          "sftp *"
+          "authsia *"
         ]
       }
     }

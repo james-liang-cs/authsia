@@ -1,5 +1,18 @@
 # Authsia Local Security Model
 
+## Table of Contents
+
+- [Security Goals](#security-goals)
+- [Trust Boundaries](#trust-boundaries)
+- [Security Flow](#security-flow)
+- [Direct Bridge Access](#direct-bridge-access)
+- [Human CLI Path](#human-cli-path)
+- [AI Tool And JIT Path](#ai-tool-and-jit-path)
+- [SSH-Agent Path](#ssh-agent-path)
+- [Automation Credentials](#automation-credentials)
+- [What The Model Does Not Guarantee](#what-the-model-does-not-guarantee)
+- [Operational Checks](#operational-checks)
+
 This document describes the local security model for Authsia's macOS CLI,
 headless bridge, SSH agent, and just-in-time (JIT) agent grants. It focuses on
 who can ask Authsia for secrets, which gates are applied, and what the design
