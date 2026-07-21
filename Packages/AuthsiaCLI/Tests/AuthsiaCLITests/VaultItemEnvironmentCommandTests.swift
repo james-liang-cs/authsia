@@ -40,9 +40,9 @@ struct VaultItemEnvironmentCommandTests {
         #expect(delete.environment == "Production")
     }
 
-    @Test("list environment filter keeps default-environment items eligible")
-    func listEnvironmentFilterKeepsDefaultEnvironmentItemsEligible() {
-        #expect(List.environmentMatches("Production", itemEnvironments: []))
+    @Test("list environment filter requires the selected tag")
+    func listEnvironmentFilterRequiresSelectedTag() {
+        #expect(!List.environmentMatches("Production", itemEnvironments: []))
         #expect(List.environmentMatches("Production", itemEnvironments: ["Production"]))
         #expect(!List.environmentMatches("Production", itemEnvironments: ["Development"]))
     }
