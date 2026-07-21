@@ -98,7 +98,7 @@ final class XPCRequestHandlerWorkspaceMetadataTests: XCTestCase {
         XCTAssertEqual(listProvider.callCount, 1)
     }
 
-    func testAgentWorkspaceRunValidationMetadataProbesExactItemsWithoutApproval() async throws {
+    func testAgentWorkspaceRunValidationMetadataProbesExactIDOutsideWorkspaceWithoutApproval() async throws {
         let approver = WorkspaceMetadataApprovalTracker()
         let listProvider = WorkspaceMetadataListProvider()
         let handler = XPCRequestHandler(
@@ -118,8 +118,8 @@ final class XPCRequestHandlerWorkspaceMetadataTests: XCTestCase {
                     references: [
                         WorkspaceMetadataReference(
                             itemType: .apiKey,
-                            itemName: "API_KEY",
-                            folderPath: "Workspaces/Baseline"
+                            itemName: listProvider.baselineAPIKeyID.uuidString,
+                            folderPath: nil
                         ),
                     ]
                 )

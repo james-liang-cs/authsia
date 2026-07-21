@@ -1,3 +1,4 @@
+import ArgumentParser
 import AuthenticatorBridge
 import Foundation
 import Testing
@@ -110,6 +111,60 @@ struct WorkspaceEnvironmentRuntimeTests {
         }
     }
 
+    @Test("workspace run names variables with ambiguous active-environment folders")
+    func runNamesVariablesWithAmbiguousActiveEnvironmentFolders() {
+        let servicesID = UUID(uuidString: "EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE")!
+        let workersID = UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil,
+            envBindings: [
+                .init(name: "DATABASE_URL", reference: "authsia://api-key/\(servicesID.uuidString)/key"),
+                .init(name: "DATABASE_URL", reference: "authsia://api-key/\(workersID.uuidString)/key"),
+            ]
+        )
+        let plan = WorkspaceRunPlan(
+            workspaceRoot: URL(fileURLWithPath: "/tmp/authsia-folder-conflict-test", isDirectory: true),
+            config: config,
+            envFiles: [],
+            managedEnvFileCount: 0,
+            envBindings: [:],
+            activeEnvironment: nil,
+            defaultOnly: true,
+            commandArgs: ["/usr/bin/true"],
+            usesShell: false
+        )
+        let timestamp = Date(timeIntervalSince1970: 0)
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [],
+            apiKeys: [
+                BridgeAPIKey(id: servicesID, name: "DATABASE_URL", website: nil, folderPath: "Workspaces/api/services", isFavorite: false, isCliEnabled: true, isScraped: false, createdAt: timestamp, updatedAt: timestamp, environments: ["Production"]),
+                BridgeAPIKey(id: workersID, name: "DATABASE_URL", website: nil, folderPath: "Workspaces/api/workers", isFavorite: false, isCliEnabled: true, isScraped: false, createdAt: timestamp, updatedAt: timestamp, environments: ["Production"]),
+            ],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        do {
+            _ = try Workspace.Run.applyingEnvironment(
+                to: plan,
+                selection: .named("Production"),
+                payload: payload
+            )
+            Issue.record("Expected workspace environment validation to fail")
+        } catch let error as ValidationError {
+            #expect(error.message.contains("conflict (DATABASE_URL)"))
+            #expect(!error.message.contains(servicesID.uuidString))
+            #expect(!error.message.contains(workersID.uuidString))
+        } catch {
+            Issue.record("Expected ValidationError, got \(error)")
+        }
+    }
+
     @Test("schema v2 evaluation selects active tag and returns only effective overrides")
     func v2EvaluationReturnsEffectiveOverrides() throws {
         let productionID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
@@ -147,6 +202,58 @@ struct WorkspaceEnvironmentRuntimeTests {
         #expect(evaluation.environmentOverrides == [
             "DATABASE_URL": "authsia://api-key/\(productionID.uuidString)/key",
         ])
+    }
+
+    @Test("workspace run resolves active-environment bindings from multiple folders")
+    func runResolvesActiveEnvironmentBindingsFromMultipleFolders() throws {
+        let databaseID = UUID(uuidString: "12121212-1212-1212-1212-121212121212")!
+        let queueID = UUID(uuidString: "34343434-3434-3434-3434-343434343434")!
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil,
+            envBindings: [
+                .init(name: "DATABASE_URL", reference: "authsia://api-key/\(databaseID.uuidString)/key"),
+                .init(name: "QUEUE_URL", reference: "authsia://api-key/\(queueID.uuidString)/key"),
+            ]
+        )
+        let plan = WorkspaceRunPlan(
+            workspaceRoot: URL(fileURLWithPath: "/tmp/authsia-multi-folder-test", isDirectory: true),
+            config: config,
+            envFiles: [],
+            managedEnvFileCount: 0,
+            envBindings: [:],
+            activeEnvironment: nil,
+            defaultOnly: true,
+            commandArgs: ["/usr/bin/true"],
+            usesShell: false
+        )
+        let timestamp = Date(timeIntervalSince1970: 0)
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [],
+            apiKeys: [
+                BridgeAPIKey(id: databaseID, name: "DATABASE_URL", website: nil, folderPath: "Workspaces/api/services", isFavorite: false, isCliEnabled: true, isScraped: false, createdAt: timestamp, updatedAt: timestamp, environments: ["Production"]),
+                BridgeAPIKey(id: queueID, name: "QUEUE_URL", website: nil, folderPath: "Workspaces/api/workers", isFavorite: false, isCliEnabled: true, isScraped: false, createdAt: timestamp, updatedAt: timestamp, environments: ["Production"]),
+            ],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        let resolved = try Workspace.Run.applyingEnvironment(
+            to: plan,
+            selection: .named("Production"),
+            payload: payload
+        )
+
+        #expect(resolved.envBindings == [
+            "DATABASE_URL": "authsia://api-key/\(databaseID.uuidString)/key",
+            "QUEUE_URL": "authsia://api-key/\(queueID.uuidString)/key",
+        ])
+        #expect(resolved.activeEnvironment == "Production")
+        #expect(!resolved.defaultOnly)
     }
 
     @Test("same-name name-and-folder references resolve by active environment through runtime secret fetch")
