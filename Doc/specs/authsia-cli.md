@@ -1263,13 +1263,14 @@ review action but waits for source-item selection before it can apply. Workspace
 refs-only by default; sharing encrypted secret bundles is an explicit export/import choice, not an
 automatic part of workspace sharing.
 
-`authsia workspace status`, `authsia workspace sync --dry-run`,
-`authsia workspace sync --plan-json`, and config-safe
-`authsia workspace sync --apply-json` do not request biometric or JIT approval.
-They use a dedicated bridge request that returns only CLI-enabled item metadata
-needed for the configured workspace folder: Status asks for its exact typed
-references, while Sync preview and apply can enumerate password and API Key rows
-in that exact folder. Apply uses this metadata only to validate the selected plan
+`authsia workspace status`, `authsia workspace env validate`, `authsia workspace run`
+preflight, `authsia workspace sync --dry-run`, `authsia workspace sync --plan-json`, and
+config-safe `authsia workspace sync --apply-json` do not request biometric or JIT approval.
+They use a dedicated bridge request that returns only CLI-enabled item metadata.
+Status, validation, and run preflight ask only for their exact typed references, including
+folder-qualified cross-folder references and unscoped exact item IDs. Name references require
+an exact folder. Sync preview and apply can enumerate password and API Key rows only in the
+configured workspace folder. Apply uses this metadata only to validate the selected plan
 before writing workspace references. The response never contains OTP accounts or password, API Key,
 certificate, note, SSH private-key, or OTP values. The same behavior applies
 when Workspace Center launches these commands and when a local coding agent
@@ -1285,8 +1286,10 @@ served while the app is locked — the app lock routinely engages silently (and
 always in the headless bridge helper), and requiring an unlock here made every
 preview report unverified rows. Secret reads remain gated on approval
 regardless of lock state.
-Malformed, mismatched, or out-of-folder requests fail closed and return no
-metadata. Direct `authsia list`, Sync apply, secret reads, decrypted imports,
+Malformed or mismatched requests fail closed and return no metadata. Unscoped name references
+are rejected; folder-qualified references must match the exact type, name or item ID, and folder,
+while unscoped item-ID references must match the exact type and ID. Sync metadata remains limited
+to the configured workspace folder. Direct `authsia list`, Sync apply, secret reads, decrypted imports,
 copy/move/create actions, and vault mutations keep their existing approval,
 session, automation, or JIT controls.
 
@@ -1538,9 +1541,9 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace env add <NAME> <authsia://...>` | Add or update a commit-safe workspace env binding | `authsia workspace env add API_KEY 'authsia://api-key/API_KEY/key?folder=Workspaces%2Fapi'` |
 | `workspace env list` | List bindings with active environment, item environment properties, and effective/inactive state | `authsia workspace env list` |
 | `workspace env remove <NAME> [authsia://...]` | Remove one workspace env binding; a repeated schema-v2 name requires its exact reference | `authsia workspace env remove API_KEY 'authsia://api-key/API_KEY/key'` |
-| `workspace env validate` | Validate exact configured env refs, including cross-folder bindings, without listing the vault or returning values; unavailable scoped metadata is reported as unverified | `authsia workspace env validate` |
-| `workspace run -- <command>` | Validate exact active workspace refs through scoped metadata, then run the command; secret-bearing env refs use `exec` | `authsia workspace run -- npm dev` |
-| `workspace run --env-file <path> -- <command>` | Add an extra env file for one run; its exact workspace-scoped refs join the run preflight | `authsia workspace run --env-file .env.production -- npm run deploy` |
+| `workspace env validate` | Validate exact configured env refs, including cross-folder bindings and unscoped item IDs, without listing the vault or returning values; unavailable scoped metadata is reported as unverified | `authsia workspace env validate` |
+| `workspace run -- <command>` | Validate exact active workspace refs through exact-reference metadata, then run the command; secret-bearing env refs use `exec` | `authsia workspace run -- npm dev` |
+| `workspace run --env-file <path> -- <command>` | Add an extra env file for one run; its exact applicable refs join the run preflight | `authsia workspace run --env-file .env.production -- npm run deploy` |
 | `workspace run --environment <name> -- <command>` | Use one tagged environment plus default-environment items without persisting the choice | `authsia workspace run --environment Production -- npm run deploy` |
 | `workspace run --default-only -- <command>` | Use only default-environment items for one run | `authsia workspace run --default-only -- npm test` |
 | `workspace run --shell -- <command>` | Run a quoted shell command through `/bin/sh -c` with managed env files | `authsia workspace run --shell -- 'curl "$API_KEY"'` |

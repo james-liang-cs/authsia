@@ -5,6 +5,8 @@ import AuthenticatorBridge
 
 final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
+    private let otherPasswordID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+    private let baselineAPIKeyID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
 
     func testStatusReturnsOnlyExactCLIEnabledReferences() throws {
         let request = try makeRequest(
@@ -68,6 +70,28 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         XCTAssertTrue(filtered.sshKeys.isEmpty)
     }
 
+    func testValidationAllowsExactIDReferenceOutsideWorkspaceFolder() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceEnvValidateRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .validate,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .apiKey,
+                        itemName: baselineAPIKeyID.uuidString,
+                        folderPath: "Workspaces/Baseline"
+                    ),
+                ]
+            )
+        )
+
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertEqual(filtered.apiKeys.map(\.id), [baselineAPIKeyID])
+        XCTAssertTrue(filtered.passwords.isEmpty)
+    }
+
     func testWorkspaceRunValidationReturnsOnlyExactCLIEnabledReferences() throws {
         let request = try makeRequest(
             command: BridgeContext.workspaceRunRequestedCommand,
@@ -118,6 +142,28 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         XCTAssertTrue(filtered.certificates.isEmpty)
         XCTAssertTrue(filtered.notes.isEmpty)
         XCTAssertTrue(filtered.sshKeys.isEmpty)
+    }
+
+    func testWorkspaceRunValidationAllowsExactIDReferenceOutsideWorkspaceFolder() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceRunRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .validate,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .apiKey,
+                        itemName: baselineAPIKeyID.uuidString,
+                        folderPath: "Workspaces/Baseline"
+                    ),
+                ]
+            )
+        )
+
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertEqual(filtered.apiKeys.map(\.id), [baselineAPIKeyID])
+        XCTAssertTrue(filtered.passwords.isEmpty)
     }
 
     func testSyncPreviewReturnsOnlyCLIEnabledPasswordAndAPIKeyInExactFolder() throws {
@@ -189,6 +235,28 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         XCTAssertTrue(filtered.apiKeys.isEmpty)
     }
 
+    func testStatusAllowsUnscopedExactIDReference() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceStatusRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .status,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .password,
+                        itemName: otherPasswordID.uuidString,
+                        folderPath: nil
+                    ),
+                ]
+            )
+        )
+
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertEqual(filtered.passwords.map(\.id), [otherPasswordID])
+        XCTAssertTrue(filtered.apiKeys.isEmpty)
+    }
+
     func testRejectsEmptyWorkspaceFolder() throws {
         let request = try makeRequest(
             command: BridgeContext.workspaceStatusRequestedCommand,
@@ -245,11 +313,16 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
                 password("DB_PASSWORD", folder: "Workspaces/api", isCliEnabled: true),
                 password("Disabled", folder: "Workspaces/api", isCliEnabled: false),
                 password("Nested", folder: "Workspaces/api/nested", isCliEnabled: true),
-                password("Other", folder: "Team/other", isCliEnabled: true),
+                password("Other", folder: "Team/other", isCliEnabled: true, id: otherPasswordID),
             ],
             apiKeys: [
                 apiKey("API_KEY", folder: "Workspaces/api", isCliEnabled: true),
-                apiKey("BASELINE_API_KEY", folder: "Workspaces/Baseline", isCliEnabled: true),
+                apiKey(
+                    "BASELINE_API_KEY",
+                    folder: "Workspaces/Baseline",
+                    isCliEnabled: true,
+                    id: baselineAPIKeyID
+                ),
                 apiKey("Disabled API", folder: "Workspaces/api", isCliEnabled: false),
             ],
             certificates: [
@@ -297,9 +370,14 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         )
     }
 
-    private func password(_ name: String, folder: String, isCliEnabled: Bool) -> BridgePassword {
+    private func password(
+        _ name: String,
+        folder: String,
+        isCliEnabled: Bool,
+        id: UUID = UUID()
+    ) -> BridgePassword {
         BridgePassword(
-            id: UUID(),
+            id: id,
             name: name,
             username: "user",
             website: nil,
@@ -313,9 +391,14 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         )
     }
 
-    private func apiKey(_ name: String, folder: String, isCliEnabled: Bool) -> BridgeAPIKey {
+    private func apiKey(
+        _ name: String,
+        folder: String,
+        isCliEnabled: Bool,
+        id: UUID = UUID()
+    ) -> BridgeAPIKey {
         BridgeAPIKey(
-            id: UUID(),
+            id: id,
             name: name,
             website: nil,
             folderPath: folder,
