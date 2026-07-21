@@ -105,7 +105,7 @@ final class XPCRequestHandlerWorkspaceMetadataTests: XCTestCase {
             listProvider: listProvider.fetch,
             approver: approver,
             passwordSecretExistenceProvider: { _ in false },
-            apiKeySecretExistenceProvider: { $0 == listProvider.apiKeyID }
+            apiKeySecretExistenceProvider: { $0 == listProvider.baselineAPIKeyID }
         )
         let response = try await send(
             handler: handler,
@@ -119,7 +119,7 @@ final class XPCRequestHandlerWorkspaceMetadataTests: XCTestCase {
                         WorkspaceMetadataReference(
                             itemType: .apiKey,
                             itemName: "API_KEY",
-                            folderPath: "Workspaces/api"
+                            folderPath: "Workspaces/Baseline"
                         ),
                     ]
                 )
@@ -509,6 +509,7 @@ private final class WorkspaceMetadataListProvider {
     private let includePasswords: Bool
     let passwordID = UUID()
     let apiKeyID = UUID()
+    let baselineAPIKeyID = UUID()
 
     init(includePasswords: Bool = true) {
         self.includePasswords = includePasswords
@@ -553,6 +554,18 @@ private final class WorkspaceMetadataListProvider {
                     name: "API_KEY",
                     website: nil,
                     folderPath: "Workspaces/api",
+                    isFavorite: false,
+                    isCliEnabled: true,
+                    isScraped: false,
+                    createdAt: now,
+                    updatedAt: now,
+                    hasSecret: true
+                ),
+                BridgeAPIKey(
+                    id: baselineAPIKeyID,
+                    name: "API_KEY",
+                    website: nil,
+                    folderPath: "Workspaces/Baseline",
                     isFavorite: false,
                     isCliEnabled: true,
                     isScraped: false,

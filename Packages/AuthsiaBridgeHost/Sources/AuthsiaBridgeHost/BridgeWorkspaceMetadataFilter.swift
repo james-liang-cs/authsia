@@ -40,7 +40,7 @@ public enum BridgeWorkspaceMetadataFilter {
             guard request.context.requestedCommand == BridgeContext.workspaceStatusRequestedCommand else {
                 throw Failure.invalidRequest("Workspace metadata status requires the workspace status command.")
             }
-            return try statusPayload(source, references: payload.references, workspaceFolder: workspaceFolder)
+            return try statusPayload(source, references: payload.references)
         case .validate:
             guard request.context.requestedCommand == BridgeContext.workspaceEnvValidateRequestedCommand ||
                     request.context.requestedCommand == BridgeContext.workspaceRunRequestedCommand else {
@@ -49,7 +49,6 @@ public enum BridgeWorkspaceMetadataFilter {
             return try exactReferencePayload(
                 source,
                 references: payload.references,
-                workspaceFolder: workspaceFolder,
                 operation: "validation"
             )
         case .syncPreview:
@@ -63,13 +62,11 @@ public enum BridgeWorkspaceMetadataFilter {
 
     private static func statusPayload(
         _ source: BridgeListPayload,
-        references: [WorkspaceMetadataReference],
-        workspaceFolder: String
+        references: [WorkspaceMetadataReference]
     ) throws -> BridgeListPayload {
         try exactReferencePayload(
             source,
             references: references,
-            workspaceFolder: workspaceFolder,
             operation: "status"
         )
     }
@@ -77,7 +74,6 @@ public enum BridgeWorkspaceMetadataFilter {
     private static func exactReferencePayload(
         _ source: BridgeListPayload,
         references: [WorkspaceMetadataReference],
-        workspaceFolder: String,
         operation: String
     ) throws -> BridgeListPayload {
         guard references.count <= maximumReferenceCount else {
@@ -88,13 +84,13 @@ public enum BridgeWorkspaceMetadataFilter {
             let itemName = reference.itemName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !itemName.isEmpty,
                   itemName.count <= 512,
-                  normalizeFolderPath(reference.folderPath) == workspaceFolder else {
+                  let folderPath = normalizeFolderPath(reference.folderPath) else {
                 throw Failure.invalidRequest("Workspace metadata reference is outside the workspace scope.")
             }
             return WorkspaceMetadataReference(
                 itemType: reference.itemType,
                 itemName: itemName,
-                folderPath: workspaceFolder
+                folderPath: folderPath
             )
         })
 
