@@ -386,7 +386,7 @@ struct List: ParsableCommand {
 
     static func environmentMatches(_ environment: String?, itemEnvironments: [String]) -> Bool {
         environment.map {
-            itemEnvironments.isEmpty || VaultEnvironmentTags.contains($0, in: itemEnvironments)
+            VaultEnvironmentTags.contains($0, in: itemEnvironments)
         } ?? true
     }
 }
