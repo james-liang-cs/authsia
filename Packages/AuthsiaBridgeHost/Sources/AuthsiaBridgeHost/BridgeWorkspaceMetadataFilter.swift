@@ -82,24 +82,44 @@ public enum BridgeWorkspaceMetadataFilter {
 
         let normalizedReferences = try Set(references.map { reference in
             let itemName = reference.itemName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let itemID = UUID(uuidString: itemName)
+            let folderPath = normalizeFolderPath(reference.folderPath)
             guard !itemName.isEmpty,
                   itemName.count <= 512,
-                  let folderPath = normalizeFolderPath(reference.folderPath) else {
+                  folderPath != nil || itemID != nil else {
                 throw Failure.invalidRequest("Workspace metadata reference is outside the workspace scope.")
             }
             return WorkspaceMetadataReference(
                 itemType: reference.itemType,
-                itemName: itemName,
+                itemName: itemID?.uuidString ?? itemName,
                 folderPath: folderPath
             )
         })
 
-        func contains(_ type: WorkspaceMetadataItemType, _ name: String, _ folderPath: String?) -> Bool {
-            normalizedReferences.contains(
+        func contains(
+            _ type: WorkspaceMetadataItemType,
+            _ id: UUID,
+            _ name: String,
+            _ folderPath: String?
+        ) -> Bool {
+            let normalizedFolderPath = normalizeFolderPath(folderPath)
+            return normalizedReferences.contains(
                 WorkspaceMetadataReference(
                     itemType: type,
                     itemName: name,
-                    folderPath: normalizeFolderPath(folderPath)
+                    folderPath: normalizedFolderPath
+                )
+            ) || normalizedReferences.contains(
+                WorkspaceMetadataReference(
+                    itemType: type,
+                    itemName: id.uuidString,
+                    folderPath: normalizedFolderPath
+                )
+            ) || normalizedReferences.contains(
+                WorkspaceMetadataReference(
+                    itemType: type,
+                    itemName: id.uuidString,
+                    folderPath: nil
                 )
             )
         }
@@ -107,19 +127,19 @@ public enum BridgeWorkspaceMetadataFilter {
         return BridgeListPayload(
             accounts: [],
             passwords: source.passwords.filter {
-                $0.isCliEnabled && contains(.password, $0.name, $0.folderPath)
+                $0.isCliEnabled && contains(.password, $0.id, $0.name, $0.folderPath)
             },
             apiKeys: source.apiKeys.filter {
-                $0.isCliEnabled && contains(.apiKey, $0.name, $0.folderPath)
+                $0.isCliEnabled && contains(.apiKey, $0.id, $0.name, $0.folderPath)
             },
             certificates: source.certificates.filter {
-                $0.isCliEnabled && contains(.certificate, $0.name, $0.folderPath)
+                $0.isCliEnabled && contains(.certificate, $0.id, $0.name, $0.folderPath)
             },
             notes: source.notes.filter {
-                $0.isCliEnabled && contains(.note, $0.title, $0.folderPath)
+                $0.isCliEnabled && contains(.note, $0.id, $0.title, $0.folderPath)
             },
             sshKeys: source.sshKeys.filter {
-                $0.isCliEnabled && contains(.ssh, $0.name, $0.folderPath)
+                $0.isCliEnabled && contains(.ssh, $0.id, $0.name, $0.folderPath)
             }
         )
     }
