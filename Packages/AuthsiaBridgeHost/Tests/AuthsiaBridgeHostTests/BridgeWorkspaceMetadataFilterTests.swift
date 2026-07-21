@@ -94,6 +94,32 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         XCTAssertTrue(filtered.sshKeys.isEmpty)
     }
 
+    func testWorkspaceRunValidationAllowsExactReferenceOutsideWorkspaceFolder() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceRunRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .validate,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .apiKey,
+                        itemName: "BASELINE_API_KEY",
+                        folderPath: "Workspaces/Baseline"
+                    ),
+                ]
+            )
+        )
+
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertEqual(filtered.apiKeys.map(\.name), ["BASELINE_API_KEY"])
+        XCTAssertTrue(filtered.passwords.isEmpty)
+        XCTAssertTrue(filtered.accounts.isEmpty)
+        XCTAssertTrue(filtered.certificates.isEmpty)
+        XCTAssertTrue(filtered.notes.isEmpty)
+        XCTAssertTrue(filtered.sshKeys.isEmpty)
+    }
+
     func testSyncPreviewReturnsOnlyCLIEnabledPasswordAndAPIKeyInExactFolder() throws {
         let request = try makeRequest(
             command: BridgeContext.workspaceSyncPreviewRequestedCommand,
@@ -141,7 +167,7 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         XCTAssertThrowsError(try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request))
     }
 
-    func testRejectsStatusReferenceOutsideWorkspaceFolder() throws {
+    func testStatusAllowsExactReferenceOutsideWorkspaceFolder() throws {
         let request = try makeRequest(
             command: BridgeContext.workspaceStatusRequestedCommand,
             payload: WorkspaceMetadataRequestPayload(
@@ -157,7 +183,10 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
             )
         )
 
-        XCTAssertThrowsError(try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request))
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertEqual(filtered.passwords.map(\.name), ["Other"])
+        XCTAssertTrue(filtered.apiKeys.isEmpty)
     }
 
     func testRejectsEmptyWorkspaceFolder() throws {
@@ -220,6 +249,7 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
             ],
             apiKeys: [
                 apiKey("API_KEY", folder: "Workspaces/api", isCliEnabled: true),
+                apiKey("BASELINE_API_KEY", folder: "Workspaces/Baseline", isCliEnabled: true),
                 apiKey("Disabled API", folder: "Workspaces/api", isCliEnabled: false),
             ],
             certificates: [

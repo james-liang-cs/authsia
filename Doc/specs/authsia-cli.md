@@ -1538,7 +1538,7 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace env add <NAME> <authsia://...>` | Add or update a commit-safe workspace env binding | `authsia workspace env add API_KEY 'authsia://api-key/API_KEY/key?folder=Workspaces%2Fapi'` |
 | `workspace env list` | List bindings with active environment, item environment properties, and effective/inactive state | `authsia workspace env list` |
 | `workspace env remove <NAME> [authsia://...]` | Remove one workspace env binding; a repeated schema-v2 name requires its exact reference | `authsia workspace env remove API_KEY 'authsia://api-key/API_KEY/key'` |
-| `workspace env validate` | Validate exact workspace-scoped env refs without listing the vault or returning values; unavailable scoped metadata is reported as unverified | `authsia workspace env validate` |
+| `workspace env validate` | Validate exact configured env refs, including cross-folder bindings, without listing the vault or returning values; unavailable scoped metadata is reported as unverified | `authsia workspace env validate` |
 | `workspace run -- <command>` | Validate exact active workspace refs through scoped metadata, then run the command; secret-bearing env refs use `exec` | `authsia workspace run -- npm dev` |
 | `workspace run --env-file <path> -- <command>` | Add an extra env file for one run; its exact workspace-scoped refs join the run preflight | `authsia workspace run --env-file .env.production -- npm run deploy` |
 | `workspace run --environment <name> -- <command>` | Use one tagged environment plus default-environment items without persisting the choice | `authsia workspace run --environment Production -- npm run deploy` |
