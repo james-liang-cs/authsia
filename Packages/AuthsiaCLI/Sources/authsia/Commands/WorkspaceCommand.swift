@@ -1202,8 +1202,10 @@ struct Workspace: AsyncParsableCommand {
             )
             let blockingIssues = evaluation.resolution.issues
             guard blockingIssues.isEmpty else {
-                let kinds = blockingIssues.map(\.kind.rawValue).sorted().joined(separator: ", ")
-                throw ValidationError("Workspace environment validation failed: \(kinds). Run `authsia workspace env validate`.")
+                let summaries = blockingIssues.map { issue in
+                    issue.variableName.map { "\(issue.kind.rawValue) (\($0))" } ?? issue.kind.rawValue
+                }.sorted().joined(separator: ", ")
+                throw ValidationError("Workspace environment validation failed: \(summaries). Run `authsia workspace env validate`.")
             }
             let activeName: String?
             switch evaluation.resolution.selection {
