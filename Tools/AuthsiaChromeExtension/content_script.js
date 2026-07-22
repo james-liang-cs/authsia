@@ -12,9 +12,18 @@
 
   const MENU_WIDTH = 320;
   const MENU_MAX_HEIGHT = 300;
+  const MENU_MIN_HEIGHT = 72;
   const MENU_OFFSET_Y = 4;
   const DEBOUNCE_MS = 100;
+  const MATCH_CACHE_TTL_MS = 30000;
+  const ICON_SIZE = 20;
+  const ICON_MARGIN_RIGHT = 6;
+  const MESSAGE_TYPE_LIST = 'AUTHsia_LIST_CREDENTIALS';
   const FRAME_ID = 'authsia-menu-frame-' + Math.random().toString(36).slice(2, 10);
+  const FIELD_ICON_HTML =
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+    '<path d="M13.5 7h-1V5.5C12.5 3.02 10.48 1 8 1S3.5 3.02 3.5 5.5V7h-1a.5.5 0 00-.5.5v7a.5.5 0 00.5.5h11a.5.5 0 00.5-.5v-7a.5.5 0 00-.5-.5zM5 5.5C5 3.85 6.35 2.5 8 2.5s3 1.35 3 3V7H5V5.5z" fill="currentColor"/>' +
+    '</svg>';
 
   // ============================================================================
   // State
@@ -25,6 +34,12 @@
   let focusDebounceTimer = null;
   let loginFields = [];
   let isExtensionContextValid = true;
+  let currentMenuHeight = MENU_MAX_HEIGHT;
+  let fieldIcon = null;
+  let iconInput = null;
+  let focusedInput = null;
+  let focusGeneration = 0;
+  const matchCache = new Map();
 
   // ============================================================================
   // Utility Functions
@@ -56,6 +71,12 @@
     }
   }
 
+  function getExtensionOrigin() {
+    const extensionURL = getExtensionURL('');
+    const match = extensionURL && extensionURL.match(/^(chrome-extension:\/\/[^/]+)/);
+    return match ? match[1] : null;
+  }
+
   function removeMenu() {
     if (currentMenuFrame) {
       currentMenuFrame.remove();
@@ -66,27 +87,177 @@
 
   function credentialFieldType(input) {
     const Heuristics = root.AuthsiaHeuristics;
-    if (!input || !Heuristics) {
+    if (!input || !Heuristics || !Heuristics.classifyCredentialField) {
       return null;
     }
-
-    if (Heuristics.scoreOTPField && Heuristics.scoreOTPField(input) > 0) {
-      return 'otp';
-    }
-
-    if (Heuristics.scorePasswordField && Heuristics.scorePasswordField(input) > 0) {
-      return 'password';
-    }
-
-    if (Heuristics.scoreUsernameField && Heuristics.scoreUsernameField(input) > 0) {
-      return 'username';
-    }
-
-    return null;
+    return Heuristics.classifyCredentialField(input, document);
   }
 
   function isCredentialField(input) {
+    if (!input || input.tagName !== 'INPUT') {
+      return false;
+    }
     return loginFields.includes(input) || credentialFieldType(input) !== null;
+  }
+
+  // ============================================================================
+  // Match Gating
+  // ============================================================================
+  // 1Password behavior: the inline menu only auto-opens when the vault has at
+  // least one matching item for this page. The field icon remains available
+  // for manual access to empty/error states.
+
+  function expectedKindForFieldType(fieldType) {
+    return fieldType === 'otp' ? 'otp' : 'password';
+  }
+
+  function cachedMatchCount(key) {
+    const entry = matchCache.get(key);
+    if (!entry) {
+      return null;
+    }
+    if (Date.now() - entry.timestamp > MATCH_CACHE_TTL_MS) {
+      matchCache.delete(key);
+      return null;
+    }
+    return entry.count;
+  }
+
+  function handleContextInvalidated(error) {
+    if (error && String(error.message || error).includes('Extension context invalidated')) {
+      isExtensionContextValid = false;
+      removeMenu();
+      hideFieldIcon();
+      return true;
+    }
+    return false;
+  }
+
+  function fetchMatchCount(host, currentURL, fieldType) {
+    const key = host + '|' + currentURL + '|' + expectedKindForFieldType(fieldType);
+    const cached = cachedMatchCount(key);
+    if (cached !== null) {
+      return Promise.resolve(cached);
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (count) => {
+        if (settled) return;
+        settled = true;
+        if (count >= 0) {
+          matchCache.set(key, { count, timestamp: Date.now() });
+        }
+        resolve(count);
+      };
+
+      let request;
+      try {
+        request = root.chrome.runtime.sendMessage({
+          type: MESSAGE_TYPE_LIST,
+          host: host,
+          currentURL: currentURL,
+        });
+      } catch (error) {
+        handleContextInvalidated(error);
+        finish(-1);
+        return;
+      }
+
+      Promise.resolve(request)
+        .then((response) => {
+          if (!response || !response.ok || !Array.isArray(response.credentials)) {
+            finish(-1);
+            return;
+          }
+          const kind = expectedKindForFieldType(fieldType);
+          const count = response.credentials.filter(
+            (credential) => (credential.kind === 'otp' ? 'otp' : 'password') === kind
+          ).length;
+          finish(count);
+        })
+        .catch(() => finish(-1));
+    });
+  }
+
+  // ============================================================================
+  // Field Icon
+  // ============================================================================
+
+  function ensureFieldIcon() {
+    if (fieldIcon) {
+      return fieldIcon;
+    }
+    const icon = document.createElement('div');
+    icon.id = 'authsia-field-icon';
+    icon.setAttribute('role', 'button');
+    icon.setAttribute('aria-label', 'Authsia: show saved items');
+    icon.setAttribute('tabindex', '-1');
+    icon.innerHTML = FIELD_ICON_HTML;
+
+    const style = icon.style;
+    style.position = 'absolute';
+    style.width = `${ICON_SIZE}px`;
+    style.height = `${ICON_SIZE}px`;
+    style.display = 'flex';
+    style.alignItems = 'center';
+    style.justifyContent = 'center';
+    style.cursor = 'pointer';
+    style.borderRadius = '4px';
+    style.color = '#6e6e73';
+    style.background = 'transparent';
+    style.zIndex = '2147483647';
+
+    // Keep keyboard focus on the input when the icon is used.
+    icon.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    icon.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!isExtensionContextValid || !iconInput) {
+        return;
+      }
+      if (currentMenuFrame) {
+        removeMenu();
+      } else {
+        injectMenu(iconInput);
+      }
+    });
+
+    fieldIcon = icon;
+    return icon;
+  }
+
+  function positionIcon(input) {
+    if (!fieldIcon || !input) {
+      return;
+    }
+    const rect = input.getBoundingClientRect();
+    const scrollX = root.scrollX || root.pageXOffset || 0;
+    const scrollY = root.scrollY || root.pageYOffset || 0;
+    fieldIcon.style.top = `${Math.round(rect.top + scrollY + (rect.height - ICON_SIZE) / 2)}px`;
+    fieldIcon.style.left = `${Math.round(rect.right + scrollX - ICON_SIZE - ICON_MARGIN_RIGHT)}px`;
+  }
+
+  function showFieldIcon(input) {
+    if (!isExtensionContextValid || !input) {
+      return;
+    }
+    const icon = ensureFieldIcon();
+    if (!icon.parentNode) {
+      document.body.appendChild(icon);
+    }
+    iconInput = input;
+    positionIcon(input);
+  }
+
+  function hideFieldIcon() {
+    if (fieldIcon && fieldIcon.parentNode) {
+      fieldIcon.parentNode.removeChild(fieldIcon);
+    }
+    iconInput = null;
   }
 
   // ============================================================================
@@ -97,6 +268,7 @@
     const rect = input.getBoundingClientRect();
     const scrollX = root.scrollX || root.pageXOffset || 0;
     const scrollY = root.scrollY || root.pageYOffset || 0;
+    const menuHeight = currentMenuHeight;
 
     // Position below the input field
     let top = rect.bottom + scrollY + MENU_OFFSET_Y;
@@ -113,9 +285,9 @@
     const spaceBelow = viewportHeight - rect.bottom;
     const spaceAbove = rect.top;
 
-    if (spaceBelow < MENU_MAX_HEIGHT && spaceAbove > spaceBelow) {
+    if (spaceBelow < menuHeight && spaceAbove > spaceBelow) {
       // Position above the input
-      top = rect.top + scrollY - MENU_MAX_HEIGHT - MENU_OFFSET_Y;
+      top = rect.top + scrollY - menuHeight - MENU_OFFSET_Y;
     }
 
     iframe.style.position = 'absolute';
@@ -123,7 +295,7 @@
     iframe.style.left = `${Math.max(0, left)}px`;
     iframe.style.width = `${MENU_WIDTH}px`;
     iframe.style.maxHeight = `${MENU_MAX_HEIGHT}px`;
-    iframe.style.height = `${MENU_MAX_HEIGHT}px`;
+    iframe.style.height = `${menuHeight}px`;
     iframe.style.zIndex = '2147483647';
     iframe.style.border = 'none';
     iframe.style.borderRadius = '12px';
@@ -148,6 +320,7 @@
     // Remove any existing menu
     removeMenu();
     activeInput = input;
+    currentMenuHeight = MENU_MAX_HEIGHT;
 
     const host = getHost();
     if (!host) {
@@ -187,6 +360,9 @@
     const repositionHandler = () => {
       if (currentMenuFrame && activeInput) {
         positionMenu(activeInput, currentMenuFrame);
+      }
+      if (iconInput) {
+        positionIcon(iconInput);
       }
     };
 
@@ -394,36 +570,75 @@
     if (focusDebounceTimer) {
       clearTimeout(focusDebounceTimer);
     }
+    const generation = ++focusGeneration;
+    focusedInput = target;
 
     focusDebounceTimer = setTimeout(() => {
-      // Check if it's a login field
-      if (isCredentialField(target)) {
-        injectMenu(target);
+      focusDebounceTimer = null;
+      if (generation !== focusGeneration || focusedInput !== target || !isCredentialField(target)) {
+        return;
       }
+
+      showFieldIcon(target);
+
+      const host = getHost();
+      if (!host) {
+        return;
+      }
+
+      const fieldType = credentialFieldType(target) || 'username';
+      fetchMatchCount(host, getCurrentURL(), fieldType).then((count) => {
+        // Only auto-open when the vault has something to offer and the
+        // field still has focus. The field icon covers every other case.
+        if (count > 0 && generation === focusGeneration && focusedInput === target && isExtensionContextValid) {
+          injectMenu(target);
+        }
+      });
     }, DEBOUNCE_MS);
   }
 
   function handleFocusOut(event) {
+    if (focusedInput && event.target === focusedInput) {
+      focusedInput = null;
+      focusGeneration += 1;
+      if (focusDebounceTimer) {
+        clearTimeout(focusDebounceTimer);
+        focusDebounceTimer = null;
+      }
+    }
+
     // Delay to allow click on menu items
     setTimeout(() => {
-      // Check if focus moved to the menu iframe
-      if (currentMenuFrame && document.activeElement !== currentMenuFrame) {
-        // Check if focus is still on a login field
-        const stillOnLoginField = loginFields.includes(document.activeElement);
-        if (!stillOnLoginField) {
-          removeMenu();
-        }
+      const active = document.activeElement;
+
+      // Focus moved to another login field: let its focusin take over.
+      if (isCredentialField(active)) {
+        return;
       }
+
+      // Focus is inside the menu iframe.
+      if (currentMenuFrame && active === currentMenuFrame) {
+        return;
+      }
+
+      removeMenu();
+      hideFieldIcon();
     }, 150);
   }
 
   function handleClickOutside(event) {
+    // Icon clicks toggle the menu via their own handler.
+    if (fieldIcon && (event.target === fieldIcon ||
+        (fieldIcon.contains && fieldIcon.contains(event.target)))) {
+      return;
+    }
+
     if (!currentMenuFrame) return;
 
     // Check if click is outside the menu and outside login fields
     const target = event.target;
     if (target === currentMenuFrame) return;
-    if (loginFields.includes(target)) return;
+    if (isCredentialField(target)) return;
 
     removeMenu();
   }
@@ -438,6 +653,11 @@
       return;
     }
 
+    const extensionOrigin = getExtensionOrigin();
+    if (!extensionOrigin || event.origin !== extensionOrigin) {
+      return;
+    }
+
     switch (event.data.type) {
       case 'AUTHSIA_FILL':
         handleFillMessage(event.data);
@@ -445,6 +665,60 @@
       case 'AUTHSIA_CLOSE':
         removeMenu();
         break;
+      case 'AUTHSIA_RESIZE': {
+        const height = Number(event.data.height);
+        if (Number.isFinite(height)) {
+          currentMenuHeight = Math.max(MENU_MIN_HEIGHT, Math.min(MENU_MAX_HEIGHT, Math.round(height)));
+          if (activeInput) {
+            positionMenu(activeInput, currentMenuFrame);
+          }
+        }
+        break;
+      }
+      case 'AUTHSIA_REQUEST': {
+        const requestId = event.data.requestId;
+        const requestedMessage = event.data.message;
+        if (typeof requestId !== 'string' || !requestedMessage || typeof requestedMessage !== 'object') {
+          break;
+        }
+        if (requestedMessage.type !== 'AUTHsia_LIST_CREDENTIALS' &&
+            requestedMessage.type !== 'AUTHsia_GET_CREDENTIALS') {
+          break;
+        }
+
+        const frame = currentMenuFrame;
+        const runtimeMessage = {
+          type: requestedMessage.type,
+          host: getHost(),
+          currentURL: getCurrentURL(),
+        };
+        if (requestedMessage.type === 'AUTHsia_GET_CREDENTIALS' &&
+            typeof requestedMessage.credentialId === 'string') {
+          runtimeMessage.credentialId = requestedMessage.credentialId;
+        }
+
+        Promise.resolve(root.chrome.runtime.sendMessage(runtimeMessage))
+          .then((response) => {
+            if (currentMenuFrame === frame) {
+              frame.contentWindow.postMessage({
+                type: 'AUTHSIA_RESPONSE',
+                requestId,
+                response,
+              }, extensionOrigin);
+            }
+          })
+          .catch((error) => {
+            handleContextInvalidated(error);
+            if (currentMenuFrame === frame) {
+              frame.contentWindow.postMessage({
+                type: 'AUTHSIA_RESPONSE',
+                requestId,
+                response: { ok: false, error: 'runtimeMessageFailed' },
+              }, extensionOrigin);
+            }
+          });
+        break;
+      }
     }
   }
 
@@ -487,6 +761,15 @@
     document.addEventListener('focusout', handleFocusOut, true);
     document.addEventListener('click', handleClickOutside, true);
     root.addEventListener('message', handleMessage);
+
+    // Keep the field icon glued to its input while it is visible.
+    const iconRepositionHandler = () => {
+      if (iconInput) {
+        positionIcon(iconInput);
+      }
+    };
+    root.addEventListener('scroll', iconRepositionHandler, { passive: true, capture: true });
+    root.addEventListener('resize', iconRepositionHandler, { passive: true });
 
     // Handle escape key globally
     document.addEventListener('keydown', (event) => {

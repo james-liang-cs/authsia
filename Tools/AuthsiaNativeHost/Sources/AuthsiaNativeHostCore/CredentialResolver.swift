@@ -329,8 +329,6 @@ public struct CredentialResolver {
                 .max()
         }
 
-        let hostParts = host.split(separator: ".").map { normalizeForHostMatch(String($0)) }
-        let normalizedHost = normalizeForHostMatch(host)
         let issuer = normalizeForHostMatch(account.issuer)
         let label = normalizeForHostMatch(account.label)
 
@@ -338,11 +336,6 @@ public struct CredentialResolver {
             label.contains(token) || issuer.contains(token)
         }) {
             score = max(score ?? 0, 0) + 50
-        }
-
-        if (issuer.count >= 3 && (hostParts.contains(issuer) || normalizedHost.contains(issuer))) ||
-            (label.count >= 3 && (hostParts.contains(label) || normalizedHost.contains(label))) {
-            score = max(score ?? 0, 10)
         }
 
         return score

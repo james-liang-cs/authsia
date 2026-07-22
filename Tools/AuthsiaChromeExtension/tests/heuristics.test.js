@@ -405,6 +405,154 @@ function testIsEditableReadOnly() {
 }
 
 // ============================================================================
+// Tests: Negative Keywords & OTP Tightening
+// ============================================================================
+
+function testNegativeKeywordRejectsPromoCodeField() {
+    const H = loadHeuristics();
+
+    const promo = createMockInput({ type: 'text', name: 'promo_code', placeholder: 'Promo code' });
+    assert.strictEqual(H.scoreOTPField(promo), 0, 'promo code field should not score as OTP');
+    assert.strictEqual(H.scoreUsernameField(promo), 0, 'promo code field should not score as username');
+}
+
+function testNegativeKeywordRejectsInviteZipCouponFields() {
+    const H = loadHeuristics();
+
+    const invite = createMockInput({ type: 'text', name: 'invite_code' });
+    const zip = createMockInput({ type: 'text', placeholder: 'ZIP code' });
+    const coupon = createMockInput({ type: 'text', id: 'coupon' });
+    const gift = createMockInput({ type: 'text', placeholder: 'Gift card code' });
+
+    assert.strictEqual(H.scoreOTPField(invite), 0, 'invite code should not score as OTP');
+    assert.strictEqual(H.scoreOTPField(zip), 0, 'ZIP code should not score as OTP');
+    assert.strictEqual(H.scoreOTPField(coupon), 0, 'coupon should not score as OTP');
+    assert.strictEqual(H.scoreOTPField(gift), 0, 'gift card code should not score as OTP');
+}
+
+function testNegativeKeywordRejectsCardAndNewsletterFields() {
+    const H = loadHeuristics();
+
+    const cvv = createMockInput({ type: 'tel', name: 'cvv', placeholder: 'Security code' });
+    const card = createMockInput({ type: 'text', name: 'card_number' });
+    const newsletter = createMockInput({ type: 'email', name: 'newsletter_email' });
+
+    assert.strictEqual(H.scoreOTPField(cvv), 0, 'CVV "security code" should not score as OTP');
+    assert.strictEqual(H.scoreOTPField(card), 0, 'card field should not score as OTP');
+    assert.strictEqual(H.scoreUsernameField(newsletter), 0, 'newsletter email should not score as username');
+}
+
+function testNegativeKeywordsDoNotRejectEmbeddedWords() {
+    const H = loadHeuristics();
+
+    const researcher = createMockInput({ type: 'email', name: 'researcher_email' });
+    const discard = createMockInput({ type: 'text', id: 'discard_username' });
+
+    assert.ok(H.scoreUsernameField(researcher) > 0, 'researcher must not match the search token');
+    assert.ok(H.scoreUsernameField(discard) > 0, 'discard must not match the card token');
+}
+
+function testOTPBareCodeNoLongerScores() {
+    const H = loadHeuristics();
+
+    const bareCode = createMockInput({ type: 'text', name: 'code', placeholder: 'Enter code' });
+    assert.strictEqual(H.scoreOTPField(bareCode), 0, 'bare "code" field should not score as OTP');
+}
+
+function testOTPQualifiedCodeStillScores() {
+    const H = loadHeuristics();
+
+    const verification = createMockInput({ type: 'text', name: 'verification_code' });
+    const authCode = createMockInput({ type: 'text', placeholder: 'Authentication code' });
+    const otp = createMockInput({ type: 'text', name: 'otp' });
+    const autocompleteOTP = createMockInput({ type: 'text', autocomplete: 'one-time-code' });
+
+    assert.ok(H.scoreOTPField(verification) > 0, 'verification code should score as OTP');
+    assert.ok(H.scoreOTPField(authCode) > 0, 'authentication code should score as OTP');
+    assert.ok(H.scoreOTPField(otp) > 0, 'otp name should score as OTP');
+    assert.ok(H.scoreOTPField(autocompleteOTP) > 0, 'autocomplete=one-time-code should score as OTP');
+}
+
+// ============================================================================
+// Tests: Registration / Confirm Password Rejection
+// ============================================================================
+
+function testNewPasswordScoresZero() {
+    const H = loadHeuristics();
+
+    const newPw = createMockInput({ type: 'password', autocomplete: 'new-password' });
+    assert.strictEqual(H.scorePasswordField(newPw), 0, 'new-password should be rejected, not penalized');
+}
+
+function testConfirmPasswordScoresZero() {
+    const H = loadHeuristics();
+
+    const confirmPw = createMockInput({ type: 'password', name: 'confirm_password' });
+    const repeatPw = createMockInput({ type: 'password', id: 'repeat-password' });
+
+    assert.strictEqual(H.scorePasswordField(confirmPw), 0, 'confirm password should be rejected');
+    assert.strictEqual(H.scorePasswordField(repeatPw), 0, 'repeat password should be rejected');
+}
+
+// ============================================================================
+// Tests: Page-Context Classification
+// ============================================================================
+
+function testClassifyEmailFieldRequiresLoginContext() {
+    const H = loadHeuristics();
+
+    const emailInput = createMockInput({ type: 'email', name: 'email' });
+    const docWithoutPassword = createMockDocument([emailInput]);
+    assert.strictEqual(
+        H.classifyCredentialField(emailInput, docWithoutPassword),
+        null,
+        'email field without a password field on the page should not classify'
+    );
+
+    const passwordInput = createMockInput({ type: 'password', name: 'password' });
+    const docWithPassword = createMockDocument([emailInput, passwordInput]);
+    assert.strictEqual(
+        H.classifyCredentialField(emailInput, docWithPassword),
+        'username',
+        'email field with a password field on the page should classify as username'
+    );
+}
+
+function testClassifyAutocompleteUsernameWithoutPasswordContext() {
+    const H = loadHeuristics();
+
+    const usernameInput = createMockInput({ type: 'email', name: 'email', autocomplete: 'username' });
+    const doc = createMockDocument([usernameInput]);
+    assert.strictEqual(
+        H.classifyCredentialField(usernameInput, doc),
+        'username',
+        'autocomplete=username should classify even without a password field (multi-step flow)'
+    );
+}
+
+function testClassifyOTPFieldWithoutPasswordContext() {
+    const H = loadHeuristics();
+
+    const otpInput = createMockInput({ type: 'text', name: 'otp', autocomplete: 'one-time-code' });
+    const doc = createMockDocument([otpInput]);
+    assert.strictEqual(
+        H.classifyCredentialField(otpInput, doc),
+        'otp',
+        'OTP fields classify without any password context'
+    );
+}
+
+function testFindAllLoginFieldsSkipsContextlessEmailField() {
+    const H = loadHeuristics();
+
+    const emailInput = createMockInput({ type: 'email', name: 'email', placeholder: 'Your email' });
+    const doc = createMockDocument([emailInput]);
+
+    const fields = H.findAllLoginFields(doc);
+    assert.strictEqual(fields.length, 0, 'contextless email field should not be a login field');
+}
+
+// ============================================================================
 // Runner
 // ============================================================================
 
@@ -434,6 +582,24 @@ function run() {
     // findAllLoginFields
     testFindAllLoginFieldsReturnsCorrectInputs();
     testFindAllLoginFieldsReturnsEmptyWhenNoLoginForm();
+
+    // Negative keywords & OTP tightening
+    testNegativeKeywordRejectsPromoCodeField();
+    testNegativeKeywordRejectsInviteZipCouponFields();
+    testNegativeKeywordRejectsCardAndNewsletterFields();
+    testNegativeKeywordsDoNotRejectEmbeddedWords();
+    testOTPBareCodeNoLongerScores();
+    testOTPQualifiedCodeStillScores();
+
+    // Registration / confirm password rejection
+    testNewPasswordScoresZero();
+    testConfirmPasswordScoresZero();
+
+    // Page-context classification
+    testClassifyEmailFieldRequiresLoginContext();
+    testClassifyAutocompleteUsernameWithoutPasswordContext();
+    testClassifyOTPFieldWithoutPasswordContext();
+    testFindAllLoginFieldsSkipsContextlessEmailField();
 
     // Visibility
     testIsVisibleDisplayNone();
