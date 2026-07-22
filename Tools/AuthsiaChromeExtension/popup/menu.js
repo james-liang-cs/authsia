@@ -91,11 +91,19 @@
     }
 
     // Tell the content script to size the iframe to the rendered content.
+    // Measure the menu card itself — documentElement.scrollHeight follows the
+    // parent iframe viewport, so it stays stuck at the initial max height and
+    // leaves a blank white band under the card.
     function postResize() {
         var height = 0;
-        if (document.documentElement && document.documentElement.scrollHeight) {
-            height = document.documentElement.scrollHeight;
-        } else if (document.body && document.body.scrollHeight) {
+        var menu = document.getElementById('authsia-menu');
+        if (menu && typeof menu.getBoundingClientRect === 'function') {
+            height = Math.ceil(menu.getBoundingClientRect().height);
+        }
+        if (!height && menu && menu.offsetHeight) {
+            height = menu.offsetHeight;
+        }
+        if (!height && document.body && document.body.scrollHeight) {
             height = document.body.scrollHeight;
         }
         if (height > 0 && window.parent) {
