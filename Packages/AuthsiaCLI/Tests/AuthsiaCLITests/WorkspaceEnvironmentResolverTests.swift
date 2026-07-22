@@ -9,7 +9,7 @@ struct WorkspaceEnvironmentResolverTests {
     private let developmentID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     private let productionID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
 
-    @Test("Default-environment and named selections apply tagged override precedence")
+    @Test("Default-environment and named selections stay isolated")
     func selectionsApplyPrecedence() {
         let candidates = [
             candidate(id: defaultEnvironmentID, environments: []),
@@ -24,8 +24,8 @@ struct WorkspaceEnvironmentResolverTests {
         #expect(`default`.effective.map(\.itemID) == [defaultEnvironmentID])
         #expect(development.effective.map(\.itemID) == [developmentID])
         #expect(production.effective.map(\.itemID) == [productionID])
-        #expect(production.overridden.map(\.itemID) == [defaultEnvironmentID])
-        #expect(production.inactive.map(\.itemID) == [developmentID])
+        #expect(production.overridden.isEmpty)
+        #expect(production.inactive.map(\.itemID) == [defaultEnvironmentID, developmentID])
         #expect(production.issues.isEmpty)
     }
 
@@ -61,8 +61,8 @@ struct WorkspaceEnvironmentResolverTests {
         #expect(result.issues.isEmpty)
     }
 
-    @Test("active environment tag overrides a default item in a deeper folder")
-    func activeEnvironmentOverridesDeeperDefaultItem() {
+    @Test("active environment leaves a default item in a deeper folder inactive")
+    func activeEnvironmentLeavesDeeperDefaultItemInactive() {
         let parent = candidate(
             id: productionID,
             environments: ["Production"],
@@ -81,7 +81,7 @@ struct WorkspaceEnvironmentResolverTests {
         )
 
         #expect(result.effective.map(\.itemID) == [productionID])
-        #expect(result.overridden.map(\.itemID) == [childID])
+        #expect(result.inactive.map(\.itemID) == [childID])
         #expect(result.issues.isEmpty)
     }
 
@@ -124,8 +124,8 @@ struct WorkspaceEnvironmentResolverTests {
         #expect(result.issues.map(\.kind) == [.conflict])
     }
 
-    @Test("active environment tag overrides a default item in an unrelated folder")
-    func activeEnvironmentOverridesUnrelatedDefaultItem() {
+    @Test("active environment leaves a default item in an unrelated folder inactive")
+    func activeEnvironmentLeavesUnrelatedDefaultItemInactive() {
         let siblingID = UUID(uuidString: "88888888-8888-8888-8888-888888888888")!
         let result = WorkspaceEnvironmentResolver.resolve(
             candidates: [
@@ -136,7 +136,7 @@ struct WorkspaceEnvironmentResolverTests {
         )
 
         #expect(result.effective.map(\.itemID) == [productionID])
-        #expect(result.overridden.map(\.itemID) == [siblingID])
+        #expect(result.inactive.map(\.itemID) == [siblingID])
         #expect(result.issues.isEmpty)
     }
 
@@ -152,7 +152,8 @@ struct WorkspaceEnvironmentResolverTests {
 
         #expect(stale.issues.map(\.kind) == [.staleSelection])
         #expect(staleWithDefaultEnvironment.issues.map(\.kind) == [.staleSelection])
-        #expect(staleWithDefaultEnvironment.effective.map(\.itemID) == [defaultEnvironmentID])
+        #expect(staleWithDefaultEnvironment.effective.isEmpty)
+        #expect(staleWithDefaultEnvironment.inactive.map(\.itemID) == [defaultEnvironmentID, productionID])
         #expect(selected.issues.map(\.kind) == [.cliDisabled])
         #expect(selected.effective.isEmpty)
     }

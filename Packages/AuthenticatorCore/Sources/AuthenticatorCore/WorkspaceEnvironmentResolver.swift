@@ -63,6 +63,7 @@ public struct WorkspaceEnvironmentIssue: Equatable, Sendable {
         case conflict
         case cliDisabled
         case missingReference
+        case missingEnvironmentValue
     }
 
     public let kind: Kind
@@ -106,8 +107,18 @@ public enum WorkspaceEnvironmentResolver {
         candidates: [WorkspaceEnvironmentCandidate],
         selection: WorkspaceEnvironmentSelection
     ) -> WorkspaceEnvironmentResolution {
+        resolve(candidates: candidates, selection: selection, availableEnvironments: nil)
+    }
+
+    public static func resolve(
+        candidates: [WorkspaceEnvironmentCandidate],
+        selection: WorkspaceEnvironmentSelection,
+        availableEnvironments workspaceAvailableEnvironments: [String]?
+    ) -> WorkspaceEnvironmentResolution {
         let normalizedSelection = normalize(selection)
-        let available = VaultEnvironmentTags.normalize(candidates.flatMap(\.environments))
+        let available = VaultEnvironmentTags.selectableEnvironments(
+            workspaceAvailableEnvironments ?? candidates.flatMap(\.environments)
+        )
         let isStaleSelection: Bool
         if case .named(let name) = normalizedSelection {
             isStaleSelection = !VaultEnvironmentTags.contains(name, in: available)
@@ -125,22 +136,57 @@ public enum WorkspaceEnvironmentResolver {
             let group = grouped[key] ?? []
             let eligible = group.filter { allows($0, selection: normalizedSelection) }
             inactive.append(contentsOf: group.filter { !allows($0, selection: normalizedSelection) })
-            guard let highestTier = eligible.map(\.sourceTier).max() else { continue }
+            guard let highestTier = eligible.map(\.sourceTier).max() else {
+                if case .named = normalizedSelection, !isStaleSelection {
+                    let missingCandidates = group.filter { !$0.isLiteral }
+                    if !missingCandidates.isEmpty {
+                        issues.append(
+                            WorkspaceEnvironmentIssue(
+                                kind: .missingEnvironmentValue,
+                                variableName: missingCandidates.first?.variableName,
+                                candidateIDs: missingCandidates.map(\.id).sorted()
+                            )
+                        )
+                    }
+                }
+                continue
+            }
 
             let tierCandidates = eligible.filter { $0.sourceTier == highestTier }
             overridden.append(contentsOf: eligible.filter { $0.sourceTier < highestTier })
 
             let environmentSpecific: [WorkspaceEnvironmentCandidate]
             if case .named(let name) = normalizedSelection {
-                let tagged = tierCandidates.filter { VaultEnvironmentTags.contains(name, in: $0.environments) }
-                if tagged.isEmpty {
-                    environmentSpecific = tierCandidates.filter(\.environments.isEmpty)
+                let exact = tierCandidates.filter {
+                    VaultEnvironmentTags.contains(name, in: $0.environments)
+                }
+                let all = tierCandidates.filter {
+                    VaultEnvironmentTags.containsAll(in: $0.environments)
+                        && !VaultEnvironmentTags.contains(name, in: $0.environments)
+                }
+                let literals = tierCandidates.filter {
+                    $0.isLiteral && $0.environments.isEmpty
+                }
+                if !exact.isEmpty {
+                    environmentSpecific = exact
+                    overridden.append(contentsOf: all + literals)
+                } else if !all.isEmpty {
+                    environmentSpecific = all
+                    overridden.append(contentsOf: literals)
                 } else {
-                    environmentSpecific = tagged
-                    overridden.append(contentsOf: tierCandidates.filter(\.environments.isEmpty))
+                    environmentSpecific = literals
                 }
             } else {
-                environmentSpecific = tierCandidates.filter(\.environments.isEmpty)
+                let defaults = tierCandidates.filter(\.environments.isEmpty)
+                let all = tierCandidates.filter {
+                    VaultEnvironmentTags.containsAll(in: $0.environments)
+                }
+                if defaults.isEmpty {
+                    environmentSpecific = all
+                } else {
+                    environmentSpecific = defaults
+                    overridden.append(contentsOf: all)
+                }
             }
 
             let scopeSpecific = mostSpecificSourceScopeCandidates(environmentSpecific)
@@ -211,8 +257,11 @@ public enum WorkspaceEnvironmentResolver {
         switch selection {
         case .defaultOnly:
             return candidate.environments.isEmpty
+                || VaultEnvironmentTags.containsAll(in: candidate.environments)
         case .named(let name):
-            return candidate.environments.isEmpty || VaultEnvironmentTags.contains(name, in: candidate.environments)
+            return (candidate.isLiteral && candidate.environments.isEmpty)
+                || VaultEnvironmentTags.contains(name, in: candidate.environments)
+                || VaultEnvironmentTags.containsAll(in: candidate.environments)
         }
     }
 

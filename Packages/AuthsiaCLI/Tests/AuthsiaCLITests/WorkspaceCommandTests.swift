@@ -2124,6 +2124,37 @@ struct WorkspaceInitPlannerTests {
 
 @Suite("Workspace update planner")
 struct WorkspaceUpdatePlannerTests {
+    @Test("update scopes unscoped named bindings to the workspace folder")
+    func updateScopesUnscopedNamedBindingsToWorkspaceFolder() async throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let uuidReference = "authsia://password/00000000-0000-0000-0000-000000000001/password"
+        let externalReference = "authsia://password/Shared/password?folder=Shared"
+        let config = WorkspaceConfig(
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil,
+            envBindings: [
+                .init(name: "API_KEY", reference: "authsia://api-key/API_KEY/key"),
+                .init(name: "SHARED_PASSWORD", reference: externalReference),
+                .init(name: "UUID_PASSWORD", reference: uuidReference),
+            ]
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+
+        let plan = try await WorkspaceUpdatePlanner.plan(
+            workspaceRoot: root,
+            explicitEnvFiles: [],
+            agents: []
+        )
+
+        #expect(plan.config.envBindings.map(\.reference) == [
+            "authsia://api-key/API_KEY/key?folder=Workspaces%2Fapi",
+            externalReference,
+            uuidReference,
+        ])
+    }
+
     @Test("update reuses config and merges explicit env files")
     func updateReusesConfigAndMergesExplicitEnvFiles() async throws {
         let root = try makeWorkspaceRoot()
@@ -2887,6 +2918,7 @@ struct WorkspaceRunPlannerTests {
             commandArgs: ["/usr/bin/true"]
         )
 
+        #expect(try Workspace.Run.requiresValidationMetadata(for: plan))
         let request = try Workspace.Run.validationMetadataRequest(for: plan)
 
         #expect(request.workspaceFolder == "Workspaces/api")
@@ -2906,6 +2938,89 @@ struct WorkspaceRunPlannerTests {
                 itemType: .note,
                 itemName: "Runbook",
                 folderPath: "Workspaces/api"
+            ),
+        ]))
+    }
+
+    @Test("workspace run skips metadata when every configured value is literal")
+    func workspaceRunSkipsMetadataWhenEveryConfiguredValueIsLiteral() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let nested = root.appendingPathComponent("services/payments", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let explicitEnvFile = root.appendingPathComponent(".env.override")
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [".env", "services/payments/.env"],
+            agents: nil
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        try "ROOT_MODE=local\n".write(
+            to: root.appendingPathComponent(".env"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "PAYMENTS_MODE=sandbox\n".write(
+            to: nested.appendingPathComponent(".env"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "LOG_LEVEL=debug\n".write(
+            to: explicitEnvFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        let plan = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [explicitEnvFile.path],
+            commandArgs: ["/usr/bin/true"]
+        )
+
+        #expect(try !Workspace.Run.requiresValidationMetadata(for: plan))
+    }
+
+    @Test("workspace run requests environment metadata from sibling managed scopes")
+    func workspaceRunRequestsEnvironmentMetadataFromSiblingManagedScopes() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let nested = root.appendingPathComponent("services/payments", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [".env", "services/payments/.env"],
+            agents: nil
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        try "ROOT_KEY=authsia://api-key/ROOT_KEY/key?folder=Workspaces%2Fapi\n".write(
+            to: root.appendingPathComponent(".env"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "PAYMENTS_KEY=authsia://api-key/PAYMENTS_KEY/key?folder=Workspaces%2Fapi%2Fservices\n".write(
+            to: nested.appendingPathComponent(".env"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let plan = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["/usr/bin/true"]
+        )
+
+        let request = try Workspace.Run.validationMetadataRequest(for: plan)
+
+        #expect(Set(request.references) == Set([
+            WorkspaceMetadataReference(
+                itemType: .apiKey,
+                itemName: "ROOT_KEY",
+                folderPath: "Workspaces/api"
+            ),
+            WorkspaceMetadataReference(
+                itemType: .apiKey,
+                itemName: "PAYMENTS_KEY",
+                folderPath: "Workspaces/api/services"
             ),
         ]))
     }
@@ -3937,6 +4052,52 @@ struct WorkspaceRunPlannerTests {
 
 @Suite("Workspace env bindings")
 struct WorkspaceEnvBindingTests {
+    @Test("env add scopes unscoped names while preserving explicit folders and UUIDs")
+    func envAddCanonicalizesOnlyUnscopedNamedReferences() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let knownRootsDirectory = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: knownRootsDirectory) }
+        let knownRootsStore = WorkspaceKnownRootsStore(applicationSupportDirectory: knownRootsDirectory)
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        let externalReference = "authsia://password/Shared/password?folder=Shared"
+        let uuidReference = "authsia://password/00000000-0000-0000-0000-000000000001/password"
+
+        let scoped = try Workspace.Env.addBinding(
+            name: "API_KEY",
+            reference: "authsia://api-key/API_KEY/key",
+            workspaceRoot: root,
+            knownRootsStore: knownRootsStore
+        )
+        let external = try Workspace.Env.addBinding(
+            name: "SHARED_PASSWORD",
+            reference: externalReference,
+            workspaceRoot: root,
+            knownRootsStore: knownRootsStore
+        )
+        let uuid = try Workspace.Env.addBinding(
+            name: "UUID_PASSWORD",
+            reference: uuidReference,
+            workspaceRoot: root,
+            knownRootsStore: knownRootsStore
+        )
+
+        #expect(scoped.reference == "authsia://api-key/API_KEY/key?folder=Workspaces%2Fapi")
+        #expect(external.reference == externalReference)
+        #expect(uuid.reference == uuidReference)
+        #expect(try WorkspaceConfigStore.read(fromWorkspaceRoot: root).envBindings.map(\.reference) == [
+            "authsia://api-key/API_KEY/key?folder=Workspaces%2Fapi",
+            externalReference,
+            uuidReference,
+        ])
+    }
+
     @Test("env add list and remove update workspace config")
     func envAddListAndRemoveUpdateWorkspaceConfig() throws {
         let root = try makeWorkspaceRoot()
@@ -4002,8 +4163,8 @@ struct WorkspaceEnvBindingTests {
         let bindings = try WorkspaceConfigStore.read(fromWorkspaceRoot: root).envBindings
         #expect(bindings.map(\.name) == ["API_KEY", "API_KEY"])
         #expect(bindings.map(\.reference) == [
-            "authsia://password/prod-id/password",
-            "authsia://password/staging-id/password",
+            "authsia://password/prod-id/password?folder=Workspaces%2Fapi",
+            "authsia://password/staging-id/password?folder=Workspaces%2Fapi",
         ])
     }
 
@@ -4314,6 +4475,79 @@ struct WorkspaceSyncPlannerTests {
         #expect(plan.extras.first?.localReference == "authsia://api-key/STRIPE_KEY/key?folder=Workspaces%2Fapi")
     }
 
+    @Test("sync includes descendant folders and excludes sibling folders")
+    func syncIncludesDescendantFoldersOnly() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = workspaceSyncConfig(bindings: [
+            WorkspaceConfig.EnvBinding(
+                name: "NESTED_PASSWORD",
+                reference: "authsia://password/NESTED_PASSWORD/password?folder=Workspaces%2Fapi%2Fservices"
+            ),
+        ])
+
+        let plan = WorkspaceSyncPlanner.plan(
+            workspaceRoot: root,
+            config: config,
+            vaultPayload: workspaceSyncPayload(passwords: [
+                password(
+                    id: "00000000-0000-0000-0000-000000000001",
+                    name: "NESTED_PASSWORD",
+                    folderPath: "Workspaces/api/services"
+                ),
+                password(
+                    id: "00000000-0000-0000-0000-000000000002",
+                    name: "NESTED_EXTRA",
+                    folderPath: "Workspaces/api/services"
+                ),
+                password(
+                    id: "00000000-0000-0000-0000-000000000003",
+                    name: "SIBLING_EXTRA",
+                    folderPath: "Workspaces/api-old"
+                ),
+            ])
+        )
+
+        #expect(plan.satisfied.map(\.envName) == ["NESTED_PASSWORD"])
+        #expect(plan.satisfied.first?.folderPath == "Workspaces/api/services")
+        #expect(plan.extras.map(\.envName) == ["NESTED_EXTRA"])
+        #expect(plan.extras.first?.folderPath == "Workspaces/api/services")
+    }
+
+    @Test("sync preserves explicit external and unscoped UUID references")
+    func syncPreservesExternalReferences() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = workspaceSyncConfig(bindings: [
+            WorkspaceConfig.EnvBinding(
+                name: "SHARED_PASSWORD",
+                reference: "authsia://password/SHARED_PASSWORD/password?folder=Shared"
+            ),
+            WorkspaceConfig.EnvBinding(
+                name: "UUID_PASSWORD",
+                reference: "authsia://password/00000000-0000-0000-0000-000000000001/password"
+            ),
+        ])
+
+        let plan = WorkspaceSyncPlanner.plan(
+            workspaceRoot: root,
+            config: config,
+            vaultPayload: workspaceSyncPayload(passwords: [
+                password(
+                    id: "00000000-0000-0000-0000-000000000002",
+                    name: "SHARED_PASSWORD",
+                    folderPath: "Workspaces/api"
+                ),
+            ])
+        )
+        let externalRows = plan.rows.filter { $0.status == .external }
+
+        #expect(externalRows.map(\.envName) == ["SHARED_PASSWORD", "UUID_PASSWORD"])
+        #expect(externalRows.allSatisfy { !$0.selected && $0.action == .none })
+        #expect(plan.missing.isEmpty)
+        #expect(plan.mismatches.isEmpty)
+    }
+
     @Test("sync treats managed env file references as tracked")
     func syncTreatsManagedEnvFileReferencesAsTracked() throws {
         let root = try makeWorkspaceRoot()
@@ -4351,14 +4585,14 @@ struct WorkspaceSyncPlannerTests {
         #expect(plan.extras.isEmpty)
     }
 
-    @Test("sync reports config mismatch when reference folder or name differs")
-    func syncReportsConfigMismatchWhenReferenceFolderOrNameDiffers() throws {
+    @Test("sync reports config mismatch when a workspace-local reference name differs")
+    func syncReportsConfigMismatchWhenWorkspaceLocalReferenceNameDiffers() throws {
         let root = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let config = workspaceSyncConfig(bindings: [
             WorkspaceConfig.EnvBinding(
                 name: "API_KEY",
-                reference: "authsia://password/API_KEY/password?folder=Workspaces%2Fold-api"
+                reference: "authsia://password/OLD_API_KEY/password?folder=Workspaces%2Fapi"
             ),
         ])
 
@@ -4371,7 +4605,7 @@ struct WorkspaceSyncPlannerTests {
         )
 
         #expect(plan.mismatches.map(\.envName) == ["API_KEY"])
-        #expect(plan.mismatches.first?.expectedReference == "authsia://password/API_KEY/password?folder=Workspaces%2Fold-api")
+        #expect(plan.mismatches.first?.expectedReference == "authsia://password/OLD_API_KEY/password?folder=Workspaces%2Fapi")
         #expect(plan.mismatches.first?.localReference == "authsia://password/API_KEY/password?folder=Workspaces%2Fapi")
         #expect(plan.mismatches.first?.action == .repairConfig)
     }
@@ -4464,7 +4698,7 @@ struct WorkspaceSyncCommandTests {
         let config = workspaceSyncConfig(bindings: [
             WorkspaceConfig.EnvBinding(
                 name: "API_KEY",
-                reference: "authsia://password/API_KEY/password?folder=Workspaces%2Fold-api"
+                reference: "authsia://password/OLD_API_KEY/password?folder=Workspaces%2Fapi"
             ),
         ])
         try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
@@ -4498,7 +4732,7 @@ struct WorkspaceSyncCommandTests {
     func schemaV2SyncRepairReplacesExactMismatchedBinding() throws {
         let root = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let oldReference = "authsia://password/API_KEY/password?folder=Workspaces%2Fold-api"
+        let oldReference = "authsia://password/OLD_API_KEY/password?folder=Workspaces%2Fapi"
         let newReference = "authsia://password/API_KEY/password?folder=Workspaces%2Fapi"
         let config = WorkspaceConfig(
             schemaVersion: 2,
@@ -5210,7 +5444,7 @@ struct WorkspaceGuardedTerminalTests {
         let defaultEnvironment = Workspace.Guard.renderShellExports(plan, activeEnvironment: nil)
 
         #expect(named.contains("Effective environment: Production."))
-        #expect(named.contains("Default environment items remain available."))
+        #expect(named.contains("All-environment items remain available."))
         #expect(!defaultEnvironment.contains("Effective environment:"))
     }
 
@@ -5705,6 +5939,111 @@ struct WorkspaceStatusTests {
         #expect(WorkspaceStatusReporter.renderTable(status).contains("Active environment: Production"))
     }
 
+    @Test("status includes managed env scopes in environment health")
+    func statusIncludesManagedEnvScopesInEnvironmentHealth() async throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [".env", "services/worker/.env.production"],
+            agents: nil
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        try "API_KEY=authsia://password/API_KEY/password?folder=Workspaces%2Fapi\n".write(
+            to: root.appendingPathComponent(".env"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try writeNestedFile(
+            "WORKER_KEY=authsia://password/WORKER_KEY/password?folder=Workspaces%2Fapi\n",
+            relativePath: "services/worker/.env.production",
+            in: root
+        )
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [
+                password(
+                    id: "00000000-0000-0000-0000-000000000001",
+                    name: "API_KEY",
+                    folderPath: "Workspaces/api",
+                    environments: ["All"]
+                ),
+                password(
+                    id: "00000000-0000-0000-0000-000000000002",
+                    name: "WORKER_KEY",
+                    folderPath: "Workspaces/api",
+                    environments: ["Production"]
+                ),
+            ],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        let status = try await WorkspaceStatusReporter.build(
+            workspaceRoot: root,
+            vaultIndex: WorkspaceVaultIndex(payload: payload),
+            activeEnvironment: "Production"
+        )
+
+        #expect(status.availableEnvironments == ["Production"])
+        #expect(status.environmentIssueCount == 0)
+        #expect(status.selectionHealth == "healthy")
+        #expect(WorkspaceStatusReporter.renderTable(status).contains("Status: Ready"))
+    }
+
+    @Test("status health blocks on managed env environment conflicts")
+    func statusHealthBlocksOnManagedEnvEnvironmentConflicts() async throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: ["services/worker/.env.production"],
+            agents: nil
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        try writeNestedFile(
+            "WORKER_KEY=authsia://password/WORKER_KEY/password?folder=Workspaces%2Fapi\n",
+            relativePath: "services/worker/.env.production",
+            in: root
+        )
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [
+                password(
+                    id: "00000000-0000-0000-0000-000000000001",
+                    name: "WORKER_KEY",
+                    folderPath: "Workspaces/api",
+                    environments: ["Production"]
+                ),
+                password(
+                    id: "00000000-0000-0000-0000-000000000002",
+                    name: "WORKER_KEY",
+                    folderPath: "Workspaces/api",
+                    environments: ["Production"]
+                ),
+            ],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        let status = try await WorkspaceStatusReporter.build(
+            workspaceRoot: root,
+            vaultIndex: WorkspaceVaultIndex(payload: payload),
+            activeEnvironment: "Production"
+        )
+        let rendered = WorkspaceStatusReporter.renderTable(status)
+
+        #expect(status.environmentIssueCount == 1)
+        #expect(status.conflictCount == 1)
+        #expect(status.selectionHealth == "needsAttention")
+        #expect(rendered.contains("Status: Needs attention"))
+        #expect(rendered.contains("1 environment resolution issue"))
+    }
+
     @Test("status command fallback loads the local active environment before metadata approval")
     func statusCommandFallbackLoadsLocalEnvironmentBeforeMetadataApproval() async throws {
         let root = try makeWorkspaceRoot()
@@ -5820,6 +6159,9 @@ struct WorkspaceStatusTests {
         #expect(index.existingItem(for: secret, folderPath: "Workspaces/api", environments: ["Development"]) == nil)
         #expect(index.existingItem(for: secret, folderPath: "Workspaces/api", environments: ["Production"]) != nil)
         #expect(index.existingItem(for: secret, folderPath: "Workspaces/api", environments: []) != nil)
+        #expect(!WorkspaceSetupExchange.environmentTiersOverlap(["All"], []))
+        #expect(!WorkspaceSetupExchange.environmentTiersOverlap(["All"], ["Production"]))
+        #expect(WorkspaceSetupExchange.environmentTiersOverlap(["All"], ["All"]))
     }
 
     @Test("status does not report arbitrary rule files as installed")

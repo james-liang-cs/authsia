@@ -213,7 +213,7 @@ final class AuthenticatorCoreTests: XCTestCase {
         XCTAssertEqual(try roundTrip(sshKey), sshKey)
     }
 
-    func testVaultItemsDecodeMissingEnvironmentsAsShared() throws {
+    func testVaultItemsDecodeMissingEnvironmentsAsDefault() throws {
         let password = PasswordItem(name: "Database", username: "service", password: Data("value".utf8))
         let apiKey = APIKeyItem(name: "API", key: Data("value".utf8))
         let certificate = CertificateItem(name: "TLS", certificateData: Data("certificate".utf8))

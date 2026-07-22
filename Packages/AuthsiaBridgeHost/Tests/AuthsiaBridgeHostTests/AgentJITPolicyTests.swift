@@ -74,7 +74,7 @@ final class AgentJITPolicyTests: XCTestCase {
         XCTAssertEqual(filtered, payload)
     }
 
-    func testListPayloadFilterAppliesAutomationEnvironmentScopeAndKeepsDefaultEnvironmentItems() {
+    func testListPayloadFilterAppliesDefaultNamedAndAllEnvironmentScopes() {
         let defaultEnvironment = BridgePassword(
             id: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
             name: "DATABASE_URL",
@@ -101,6 +101,19 @@ final class AgentJITPolicyTests: XCTestCase {
             updatedAt: now,
             environments: ["Production"]
         )
+        let allEnvironments = BridgePassword(
+            id: UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!,
+            name: "DATABASE_URL",
+            username: "svc",
+            website: nil,
+            folderPath: "Team/API",
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false,
+            createdAt: now,
+            updatedAt: now,
+            environments: ["All"]
+        )
         let development = BridgePassword(
             id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
             name: "DATABASE_URL",
@@ -116,7 +129,7 @@ final class AgentJITPolicyTests: XCTestCase {
         )
         let payload = BridgeListPayload(
             accounts: [],
-            passwords: [defaultEnvironment, production, development],
+            passwords: [defaultEnvironment, allEnvironments, production, development],
             certificates: [],
             notes: [],
             sshKeys: []
@@ -140,8 +153,8 @@ final class AgentJITPolicyTests: XCTestCase {
             automationEnvironmentScope: .defaultOnly
         )
 
-        XCTAssertEqual(named.passwords.map(\.id), [defaultEnvironment.id, production.id])
-        XCTAssertEqual(defaultOnly.passwords.map(\.id), [defaultEnvironment.id])
+        XCTAssertEqual(named.passwords.map(\.id), [allEnvironments.id, production.id])
+        XCTAssertEqual(defaultOnly.passwords.map(\.id), [defaultEnvironment.id, allEnvironments.id])
     }
 
     private func request(requestedCommand: String) -> BridgeRequest {

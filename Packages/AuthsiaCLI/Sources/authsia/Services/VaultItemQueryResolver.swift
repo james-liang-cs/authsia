@@ -44,20 +44,23 @@ enum VaultItemQueryResolver {
         let normalizedFolder = normalizeFolderPath(folder)
         var candidates = candidates(type: type, payload: payload).filter { candidate in
             let environmentMatches = environment.map {
-                candidate.environments.isEmpty || VaultEnvironmentTags.contains($0, in: candidate.environments)
+                VaultEnvironmentTags.contains($0, in: candidate.environments)
+                    || VaultEnvironmentTags.containsAll(in: candidate.environments)
             } ?? true
             let folderMatches = normalizedFolder.map { candidate.folderPath == $0 } ?? true
             return environmentMatches && folderMatches
         }
-        if environment != nil {
+        if let environment {
             let exactTaggedNames: Set<String> = Set(candidates.compactMap { candidate -> String? in
-                guard !candidate.environments.isEmpty,
+                guard VaultEnvironmentTags.contains(environment, in: candidate.environments),
                       candidate.name.caseInsensitiveCompare(query) == .orderedSame else { return nil }
                 return candidate.name.lowercased()
             })
             if !exactTaggedNames.isEmpty {
                 candidates.removeAll {
-                    $0.environments.isEmpty && exactTaggedNames.contains($0.name.lowercased())
+                    VaultEnvironmentTags.containsAll(in: $0.environments)
+                        && !VaultEnvironmentTags.contains(environment, in: $0.environments)
+                        && exactTaggedNames.contains($0.name.lowercased())
                 }
             }
         }

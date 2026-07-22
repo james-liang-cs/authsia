@@ -73,16 +73,16 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
             caller: caller,
             now: now
         )
-        let shared = try authorizer.activeGrant(
+        let allEnvironments = try authorizer.activeGrant(
             capability: .exec,
             itemFolderPath: "Team/API",
-            itemEnvironments: [],
+            itemEnvironments: ["All"],
             caller: caller,
             now: now
         )
 
         XCTAssertNil(rejected)
-        XCTAssertEqual(shared?.id, grant.id)
+        XCTAssertEqual(allEnvironments?.id, grant.id)
         XCTAssertEqual(store.grants.first?.lastUsedAt, now)
     }
 
@@ -448,9 +448,10 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
             $0.allows(
                 capability: capability,
                 itemFolderPath: itemFolderPath,
+                itemEnvironments: itemEnvironments,
                 caller: caller,
                 now: now
-            ) && ($0.environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
+            )
         }) else {
             return nil
         }
@@ -514,6 +515,7 @@ private final class RevokingAtomicGrantStore: AgentJITGrantStoring {
         guard revoked.allows(
             capability: capability,
             itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
             caller: caller,
             now: now
         ) else {

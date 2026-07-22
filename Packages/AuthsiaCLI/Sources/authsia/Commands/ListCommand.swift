@@ -53,7 +53,7 @@ struct List: ParsableCommand {
     @Flag(name: .customLong("cli-enabled"), help: "Only show CLI-enabled items")
     var cliEnabledOnly = false
 
-    @Option(name: .long, help: "Only show items tagged with this environment")
+    @Option(name: .long, help: "Only show items available to this environment (exact tag or All)")
     var environment: String?
 
     @Option(name: .long, help: "Output format: json (default), table")
@@ -387,6 +387,7 @@ struct List: ParsableCommand {
     static func environmentMatches(_ environment: String?, itemEnvironments: [String]) -> Bool {
         environment.map {
             VaultEnvironmentTags.contains($0, in: itemEnvironments)
+                || VaultEnvironmentTags.containsAll(in: itemEnvironments)
         } ?? true
     }
 }

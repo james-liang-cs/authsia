@@ -129,7 +129,7 @@ Key properties:
 | `authsia workspace reset` | Preview managed env restore, warn when refs would remain unusable without a scrape backup, and remove repo-local workspace metadata plus Authsia-managed agent rules; `--yes` is for externally confirmed callers | `authsia workspace reset --dry-run` |
 | `authsia workspace sync` | Compare managed env-file references and workspace env bindings with the vault workspace folder, then preview missing, extra, or mismatched refs without printing secrets | `authsia workspace sync --dry-run` |
 | `authsia workspace run` | Run explicit workspace commands; secret-bearing runs use `exec`, while no-secret runs, read-only infra probes, and binding-free commands pass through without JIT | `authsia workspace run -- npm start` |
-| `authsia workspace run --environment <name>` | Use one tagged environment plus default-environment items for this run without changing the saved selection | `authsia workspace run --environment Production -- npm start` |
+| `authsia workspace run --environment <name>` | Use exact-tagged and `All` items for this run without changing the saved selection | `authsia workspace run --environment Production -- npm start` |
 | `authsia workspace run --default-only` | Ignore the saved selection for one run and resolve only default-environment items | `authsia workspace run --default-only -- npm test` |
 | `authsia workspace status` | Show non-secret workspace health, env references, rule state, and recovery guidance | `authsia workspace status --format json` |
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
@@ -1429,8 +1429,8 @@ the command exits non-zero with repair guidance because it cannot replace the ca
 
 `authsia workspace guard` creates a temporary shim directory for common developer/devops tools and
 prints exports for a guarded terminal. With a named workspace environment selected, the first
-guarded-terminal message names the effective environment and confirms that Default-environment
-items remain available; Default-environment selection adds no extra message. Guarded terminal does not export resolved secrets into the
+guarded-terminal message names the effective environment and confirms that `All` items remain
+available; Default-environment selection adds no extra message. Guarded terminal does not export resolved secrets into the
 parent shell. When the exports are evaluated, Authsia also unsets parent-shell variables for
 workspace env bindings and `authsia://` keys in managed env files; unrelated ambient environment
 variables are not scrubbed. It prepends a temporary shim directory to `PATH` so known tools such as `npm`,
@@ -1544,7 +1544,7 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace env validate` | Validate exact configured env refs, including cross-folder bindings and unscoped item IDs, without listing the vault or returning values; unavailable scoped metadata is reported as unverified | `authsia workspace env validate` |
 | `workspace run -- <command>` | Validate exact active workspace refs through exact-reference metadata, then run the command; secret-bearing env refs use `exec` | `authsia workspace run -- npm dev` |
 | `workspace run --env-file <path> -- <command>` | Add an extra env file for one run; its exact applicable refs join the run preflight | `authsia workspace run --env-file .env.production -- npm run deploy` |
-| `workspace run --environment <name> -- <command>` | Use one tagged environment plus default-environment items without persisting the choice | `authsia workspace run --environment Production -- npm run deploy` |
+| `workspace run --environment <name> -- <command>` | Use exact-tagged and `All` items without persisting the choice | `authsia workspace run --environment Production -- npm run deploy` |
 | `workspace run --default-only -- <command>` | Use only default-environment items for one run | `authsia workspace run --default-only -- npm test` |
 | `workspace run --shell -- <command>` | Run a quoted shell command through `/bin/sh -c` with managed env files | `authsia workspace run --shell -- 'curl "$API_KEY"'` |
 | `workspace run --dry-run` | Show env files, command, and direct-vs-`exec` execution path | `authsia workspace run --dry-run -- npm test` |

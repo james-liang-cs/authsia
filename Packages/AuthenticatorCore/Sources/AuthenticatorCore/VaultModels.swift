@@ -1,6 +1,8 @@
 import Foundation
 
 public enum VaultEnvironmentTags {
+    public static let all = "All"
+
     private static let comparisonLocale = Locale(identifier: "en_US_POSIX")
 
     private static func folded(_ value: String) -> String {
@@ -10,8 +12,9 @@ public enum VaultEnvironmentTags {
     public static func normalize(_ values: [String]) -> [String] {
         var displayByFoldedName: [String: String] = [:]
         for value in values {
-            let display = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !display.isEmpty else { continue }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let display = folded(trimmed) == folded(all) ? all : trimmed
             let key = folded(display)
             if displayByFoldedName[key] == nil {
                 displayByFoldedName[key] = display
@@ -24,6 +27,14 @@ public enum VaultEnvironmentTags {
         let needle = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return false }
         return values.contains { folded($0) == folded(needle) }
+    }
+
+    public static func containsAll(in values: [String]) -> Bool {
+        contains(all, in: values)
+    }
+
+    public static func selectableEnvironments(_ values: [String]) -> [String] {
+        normalize(values).filter { !contains(all, in: [$0]) }
     }
 }
 

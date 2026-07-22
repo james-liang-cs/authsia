@@ -405,7 +405,7 @@ final class BridgeCoderTests: XCTestCase {
         )
     }
 
-    func testEnvironmentAccessScopeRoundTripsAndFiltersDefaultEnvironmentPlusNamedItems() throws {
+    func testEnvironmentAccessScopeRoundTripsAndFiltersDefaultAllAndNamedItems() throws {
         let named = EnvironmentAccessScope.named("Production")
         let defaultOnly = EnvironmentAccessScope.defaultOnly
 
@@ -417,10 +417,12 @@ final class BridgeCoderTests: XCTestCase {
             try BridgeCoder.decode(EnvironmentAccessScope.self, from: BridgeCoder.encode(defaultOnly)),
             defaultOnly
         )
-        XCTAssertTrue(named.allows(itemEnvironments: []))
+        XCTAssertFalse(named.allows(itemEnvironments: []))
         XCTAssertTrue(named.allows(itemEnvironments: ["production"]))
+        XCTAssertTrue(named.allows(itemEnvironments: ["all"]))
         XCTAssertFalse(named.allows(itemEnvironments: ["Development"]))
         XCTAssertTrue(defaultOnly.allows(itemEnvironments: []))
+        XCTAssertTrue(defaultOnly.allows(itemEnvironments: ["All"]))
         XCTAssertFalse(defaultOnly.allows(itemEnvironments: ["Production"]))
     }
 

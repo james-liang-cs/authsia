@@ -37,6 +37,7 @@ struct WorkspaceEnvironmentEvaluation {
         config: WorkspaceConfig,
         envFiles: [String],
         explicitEnvFiles: [String] = [],
+        workspaceEnvFiles: [String]? = nil,
         payload: BridgeListPayload,
         selection: WorkspaceEnvironmentSelection
     ) throws -> WorkspaceEnvironmentEvaluation {
@@ -79,10 +80,35 @@ struct WorkspaceEnvironmentEvaluation {
             }
         }
 
+        let workspaceAvailableEnvironments: [String]?
+        if let workspaceEnvFiles {
+            var availabilityCandidates = configured.candidates
+            for (fileIndex, path) in workspaceEnvFiles.enumerated() {
+                for (entryIndex, entry) in try EnvFileParser.parse(contentsOf: path).enumerated() {
+                    availabilityCandidates.append(contentsOf: candidates(
+                        id: "workspace-file-\(fileIndex)-\(entryIndex)",
+                        name: entry.key,
+                        value: entry.value,
+                        sourceTier: .configured,
+                        sourceScopePath: URL(fileURLWithPath: path)
+                            .deletingLastPathComponent()
+                            .standardizedFileURL.path,
+                        payload: payload
+                    ))
+                }
+            }
+            workspaceAvailableEnvironments = VaultEnvironmentTags.normalize(
+                (availabilityCandidates + allCandidates).flatMap(\.environments)
+            )
+        } else {
+            workspaceAvailableEnvironments = nil
+        }
+
         return resolved(
             candidates: allCandidates,
             valueByCandidateID: valueByCandidateID,
-            selection: selection
+            selection: selection,
+            availableEnvironments: workspaceAvailableEnvironments
         )
     }
 
@@ -111,9 +137,14 @@ struct WorkspaceEnvironmentEvaluation {
     private static func resolved(
         candidates: [WorkspaceEnvironmentCandidate],
         valueByCandidateID: [String: (name: String, value: String)],
-        selection: WorkspaceEnvironmentSelection
+        selection: WorkspaceEnvironmentSelection,
+        availableEnvironments: [String]? = nil
     ) -> WorkspaceEnvironmentEvaluation {
-        let resolution = WorkspaceEnvironmentResolver.resolve(candidates: candidates, selection: selection)
+        let resolution = WorkspaceEnvironmentResolver.resolve(
+            candidates: candidates,
+            selection: selection,
+            availableEnvironments: availableEnvironments
+        )
         let overrides = Dictionary(uniqueKeysWithValues: resolution.effective.compactMap { candidate in
             valueByCandidateID[candidate.id].map {
                 ($0.name, runtimeValue(for: candidate, configuredValue: $0.value))

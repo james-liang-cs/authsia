@@ -149,7 +149,8 @@ public enum BridgeWorkspaceMetadataFilter {
         workspaceFolder: String
     ) -> BridgeListPayload {
         let matchesWorkspace: (String?) -> Bool = {
-            normalizeFolderPath($0) == workspaceFolder
+            guard let folder = normalizeFolderPath($0) else { return false }
+            return folder == workspaceFolder || folder.hasPrefix(workspaceFolder + "/")
         }
         return BridgeListPayload(
             accounts: [],

@@ -224,6 +224,66 @@ struct AutomationAccessResolverTests {
         #expect(filtered.passwords.map(\.name) == ["Root", "Nested"])
     }
 
+    @Test("environment filtering prefers exact or Default over All with the same name")
+    func environmentFilteringAppliesAllFallbackPrecedence() {
+        let timestamp = Date(timeIntervalSince1970: 0)
+        func apiKey(_ id: String, name: String, environments: [String]) -> BridgeAPIKey {
+            BridgeAPIKey(
+                id: UUID(uuidString: id)!,
+                name: name,
+                website: nil,
+                isFavorite: false,
+                isCliEnabled: true,
+                isScraped: false,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                environments: environments
+            )
+        }
+        let defaultItem = apiKey(
+            "11111111-1111-1111-1111-111111111111",
+            name: "DATABASE_URL",
+            environments: []
+        )
+        let allItem = apiKey(
+            "22222222-2222-2222-2222-222222222222",
+            name: "DATABASE_URL",
+            environments: ["All"]
+        )
+        let productionItem = apiKey(
+            "33333333-3333-3333-3333-333333333333",
+            name: "DATABASE_URL",
+            environments: ["Production"]
+        )
+        let allOnlyItem = apiKey(
+            "44444444-4444-4444-4444-444444444444",
+            name: "SHARED_TOKEN",
+            environments: ["All"]
+        )
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [],
+            apiKeys: [defaultItem, allItem, productionItem, allOnlyItem],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        let production = AutomationAccessResolver.filterPayload(
+            payload,
+            allowedScope: nil,
+            environmentScope: .named("Production")
+        )
+        let `default` = AutomationAccessResolver.filterPayload(
+            payload,
+            allowedScope: nil,
+            environmentScope: .defaultOnly
+        )
+
+        #expect(production.apiKeys.map(\.id) == [productionItem.id, allOnlyItem.id])
+        #expect(`default`.apiKeys.map(\.id) == [defaultItem.id, allOnlyItem.id])
+    }
+
     @Test("filterPayload treats star as a literal folder scope")
     func filterPayloadTreatsStarAsLiteralFolderScope() {
         let payload = BridgeListPayload(

@@ -35,7 +35,7 @@ final class AutomationAuthorizationPolicyTests: XCTestCase {
         XCTAssertEqual(decision, .allowWithoutApproval(scope: .global))
     }
 
-    func testAutomationAuthorizationRestrictsNamedEnvironmentAndAllowsDefaultEnvironment() {
+    func testAutomationAuthorizationRestrictsNamedEnvironmentAndAllowsAllEnvironment() {
         let credential = makeCredential(environmentScope: .named("Production"))
         let request = makeRequest(type: .getPassword, scope: "Team/API", credentialID: credential.id)
 
@@ -57,8 +57,21 @@ final class AutomationAuthorizationPolicyTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_700_000_100),
             currentMachineId: "machine-1"
         )
+        let allEnvironments = AutomationAuthorizationPolicy.authorization(
+            for: request,
+            itemFolderPath: "Team/API",
+            itemEnvironments: ["All"],
+            itemKind: "password",
+            credentialLookup: { _ in .found(credential) },
+            now: Date(timeIntervalSince1970: 1_700_000_100),
+            currentMachineId: "machine-1"
+        )
 
-        XCTAssertEqual(defaultEnvironment, .allowWithoutApproval(scope: .folder("Team/API")))
+        XCTAssertEqual(
+            defaultEnvironment,
+            .deny("Automation credential environment scope does not allow access to this password.")
+        )
+        XCTAssertEqual(allEnvironments, .allowWithoutApproval(scope: .folder("Team/API")))
         XCTAssertEqual(
             development,
             .deny("Automation credential environment scope does not allow access to this password.")

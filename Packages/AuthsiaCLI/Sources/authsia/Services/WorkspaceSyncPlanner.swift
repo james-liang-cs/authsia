@@ -11,6 +11,7 @@ struct WorkspaceSyncPlan: Equatable {
     var missing: [WorkspaceSyncRow] { rows.filter { $0.status == .missingLocally } }
     var extras: [WorkspaceSyncRow] { rows.filter { $0.status == .localExtra } }
     var mismatches: [WorkspaceSyncRow] { rows.filter { $0.status == .configMismatch } }
+    var external: [WorkspaceSyncRow] { rows.filter { $0.status == .external } }
 }
 
 struct WorkspaceSyncRow: Codable, Equatable, Identifiable {
@@ -32,6 +33,7 @@ enum WorkspaceSyncStatus: String, Codable, Equatable {
     case localExtra
     case configMismatch
     case unverified
+    case external
 }
 
 enum WorkspaceSyncAction: String, Codable, CaseIterable, Equatable {
@@ -66,7 +68,8 @@ enum WorkspaceSyncPlanner {
 
         let vaultItems = syncItems(from: vaultPayload)
         let workspaceItems = vaultItems.filter {
-            $0.folderPath == authsiaFolder && WorkspaceConfigStore.isValidEnvironmentName($0.envName)
+            WorkspaceSyncReferenceBuilder.isWithinFolderTree($0.folderPath, root: authsiaFolder) &&
+                WorkspaceConfigStore.isValidEnvironmentName($0.envName)
         }
         var consumedItemIDs = Set<String>()
 
@@ -81,6 +84,13 @@ enum WorkspaceSyncPlanner {
                 )
             }
 
+            if isExternalReference(reference, authsiaFolder: authsiaFolder) {
+                return externalRow(
+                    binding: binding,
+                    reference: reference
+                )
+            }
+
             if let item = workspaceItems.first(where: { $0.matches(reference) }) {
                 consumedItemIDs.insert(item.id)
                 return row(
@@ -89,7 +99,7 @@ enum WorkspaceSyncPlanner {
                     itemType: item.itemType,
                     expectedReference: binding.reference,
                     localReference: item.reference,
-                    folderPath: authsiaFolder,
+                    folderPath: item.folderPath ?? authsiaFolder,
                     status: .satisfied,
                     selected: false,
                     action: .none
@@ -105,7 +115,7 @@ enum WorkspaceSyncPlanner {
                     itemType: item.itemType,
                     expectedReference: binding.reference,
                     localReference: item.reference,
-                    folderPath: authsiaFolder,
+                    folderPath: item.folderPath ?? authsiaFolder,
                     status: .configMismatch,
                     selected: true,
                     action: .repairConfig
@@ -130,7 +140,7 @@ enum WorkspaceSyncPlanner {
                     itemType: item.itemType,
                     expectedReference: nil,
                     localReference: item.reference,
-                    folderPath: authsiaFolder,
+                    folderPath: item.folderPath ?? authsiaFolder,
                     status: .localExtra,
                     selected: true,
                     action: .addToConfig
@@ -195,6 +205,9 @@ enum WorkspaceSyncPlanner {
         authsiaFolder: String
     ) -> WorkspaceSyncRow {
         let reference = try? SecretReference.parse(binding.reference)
+        if let reference, isExternalReference(reference, authsiaFolder: authsiaFolder) {
+            return externalRow(binding: binding, reference: reference)
+        }
         return row(
             envName: binding.name,
             itemName: reference?.item ?? binding.name,
@@ -206,6 +219,33 @@ enum WorkspaceSyncPlanner {
             selected: false,
             action: .none
         )
+    }
+
+    private static func externalRow(
+        binding: WorkspaceConfig.EnvBinding,
+        reference: SecretReference
+    ) -> WorkspaceSyncRow {
+        row(
+            envName: binding.name,
+            itemName: reference.item,
+            itemType: reference.type.rawValue,
+            expectedReference: binding.reference,
+            localReference: nil,
+            folderPath: WorkspaceSyncReferenceBuilder.normalizeFolderPath(reference.folder) ?? "Unscoped UUID reference",
+            status: .external,
+            selected: false,
+            action: .none
+        )
+    }
+
+    private static func isExternalReference(
+        _ reference: SecretReference,
+        authsiaFolder: String
+    ) -> Bool {
+        if reference.isFolderScoped {
+            return !WorkspaceSyncReferenceBuilder.isWithinFolderTree(reference.folder, root: authsiaFolder)
+        }
+        return UUID(uuidString: reference.item) != nil
     }
 
     private static func missingRow(
@@ -239,7 +279,15 @@ enum WorkspaceSyncPlanner {
         action: WorkspaceSyncAction
     ) -> WorkspaceSyncRow {
         WorkspaceSyncRow(
-            id: "\(status.rawValue):\(envName):\(itemType):\(itemName)",
+            id: [
+                status.rawValue,
+                envName,
+                itemType,
+                itemName,
+                folderPath,
+                expectedReference ?? "",
+                localReference ?? "",
+            ].joined(separator: ":"),
             envName: envName,
             itemName: itemName,
             itemType: itemType,
@@ -260,7 +308,7 @@ enum WorkspaceSyncPlanner {
             return [.addToConfig, .skip].contains(action)
         case .configMismatch:
             return [.repairConfig, .skip].contains(action)
-        case .satisfied, .unverified:
+        case .satisfied, .unverified, .external:
             return [.none, .skip].contains(action)
         }
     }
@@ -328,6 +376,23 @@ private struct WorkspaceSyncItem: Equatable {
 }
 
 enum WorkspaceSyncReferenceBuilder {
+    static func workspaceScopedReference(
+        _ rawReference: String,
+        workspaceFolder: String
+    ) -> String {
+        guard let reference = try? SecretReference.parse(rawReference),
+              !reference.isFolderScoped,
+              UUID(uuidString: reference.item) == nil else {
+            return rawReference
+        }
+        return self.reference(
+            itemType: reference.type.rawValue,
+            itemName: reference.item,
+            field: reference.resolvedField,
+            folderPath: workspaceFolder
+        )
+    }
+
     static func reference(itemType: String, itemName: String, field: String, folderPath: String?) -> String {
         var uri = "authsia://\(itemType)/\(percentEncode(itemName))/\(percentEncode(field))"
         if let folder = normalizeFolderPath(folderPath) {
@@ -343,6 +408,14 @@ enum WorkspaceSyncReferenceBuilder {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return segments.isEmpty ? nil : segments.joined(separator: "/")
+    }
+
+    static func isWithinFolderTree(_ folderPath: String?, root: String) -> Bool {
+        guard let folder = normalizeFolderPath(folderPath),
+              let root = normalizeFolderPath(root) else {
+            return false
+        }
+        return folder == root || folder.hasPrefix(root + "/")
     }
 
     private static func percentEncode(_ value: String) -> String {

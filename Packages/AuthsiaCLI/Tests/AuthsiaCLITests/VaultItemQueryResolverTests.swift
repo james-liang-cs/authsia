@@ -42,25 +42,25 @@ struct VaultItemQueryResolverTests {
         #expect(selected == developmentID)
     }
 
-    @Test("environment falls back to default-environment item and tagged same-name item overrides it")
-    func environmentUsesDefaultFallbackWithTaggedOverride() throws {
-        let defaultFallbackID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
-        let defaultOverrideID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+    @Test("environment falls back to All item and exact same-name item overrides it")
+    func environmentUsesAllFallbackWithExactOverride() throws {
+        let allFallbackID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let allOverrideID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
         let timestamp = Date(timeIntervalSince1970: 0)
         let basePayload = makePayload()
-        let defaultFallback = BridgeAPIKey(
-            id: defaultFallbackID,
-            name: "DEFAULT_ONLY",
+        let allFallback = BridgeAPIKey(
+            id: allFallbackID,
+            name: "ALL_ENVIRONMENTS",
             website: nil,
             isFavorite: false,
             isCliEnabled: true,
             isScraped: false,
             createdAt: timestamp,
             updatedAt: timestamp,
-            environments: []
+            environments: ["All"]
         )
-        let defaultOverride = BridgeAPIKey(
-            id: defaultOverrideID,
+        let allOverride = BridgeAPIKey(
+            id: allOverrideID,
             name: "DATABASE_URL",
             website: nil,
             isFavorite: false,
@@ -68,12 +68,12 @@ struct VaultItemQueryResolverTests {
             isScraped: false,
             createdAt: timestamp,
             updatedAt: timestamp,
-            environments: []
+            environments: ["All"]
         )
         let payload = BridgeListPayload(
             accounts: basePayload.accounts,
             passwords: basePayload.passwords,
-            apiKeys: basePayload.apiKeys + [defaultFallback, defaultOverride],
+            apiKeys: basePayload.apiKeys + [allFallback, allOverride],
             certificates: basePayload.certificates,
             notes: basePayload.notes,
             sshKeys: basePayload.sshKeys
@@ -81,7 +81,7 @@ struct VaultItemQueryResolverTests {
 
         let fallback = try VaultItemQueryResolver.resolve(
             type: .apiKey,
-            query: "DEFAULT_ONLY",
+            query: "ALL_ENVIRONMENTS",
             environment: "Production",
             payload: payload
         )
@@ -92,7 +92,7 @@ struct VaultItemQueryResolverTests {
             payload: payload
         )
 
-        #expect(fallback == defaultFallbackID)
+        #expect(fallback == allFallbackID)
         #expect(overridden == productionID)
     }
 
