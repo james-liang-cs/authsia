@@ -143,9 +143,28 @@ enum AutomationAccessResolver {
     ) -> [T] {
         guard let scope else { return items }
         let eligible = items.filter { scope.allows(itemEnvironments: environments($0)) }
-        guard case .named(let selected) = scope else { return eligible }
-        let taggedNames = Set(eligible.filter { VaultEnvironmentTags.contains(selected, in: environments($0)) }.map { name($0).lowercased() })
-        return eligible.filter { !environments($0).isEmpty || !taggedNames.contains(name($0).lowercased()) }
+        let preferredNames: Set<String>
+        switch scope {
+        case .defaultOnly:
+            preferredNames = Set(
+                eligible.filter { environments($0).isEmpty }.map { name($0).lowercased() }
+            )
+        case .named(let selected):
+            preferredNames = Set(
+                eligible.filter {
+                    VaultEnvironmentTags.contains(selected, in: environments($0))
+                }.map { name($0).lowercased() }
+            )
+        }
+        return eligible.filter { item in
+            guard preferredNames.contains(name(item).lowercased()) else { return true }
+            switch scope {
+            case .defaultOnly:
+                return environments(item).isEmpty
+            case .named(let selected):
+                return VaultEnvironmentTags.contains(selected, in: environments(item))
+            }
+        }
     }
 
     static func authorizeGetType(_ type: Get.ItemType) throws {

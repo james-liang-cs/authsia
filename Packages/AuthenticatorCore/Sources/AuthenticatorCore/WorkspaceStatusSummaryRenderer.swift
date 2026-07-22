@@ -56,6 +56,7 @@ public enum WorkspaceStatusSummaryRenderer {
         envBindings: [WorkspaceStatusEnvBinding] = [],
         agentRules: [WorkspaceStatusAgentRule],
         missingReferenceCount: Int = 0,
+        environmentIssueCount: Int = 0,
         workspaceFolder: WorkspaceStatusWorkspaceFolder? = nil
     ) -> WorkspaceStatusSummary {
         let missingEnvFileCount = managedEnvFiles.filter(\.isMissing).count
@@ -70,12 +71,14 @@ public enum WorkspaceStatusSummaryRenderer {
                 missingEnvFileCount: missingEnvFileCount,
                 missingAgentRuleCount: missingAgentRuleCount,
                 missingReferenceCount: missingReferenceCount,
+                environmentIssueCount: environmentIssueCount,
                 missingWorkspaceFolderCount: missingWorkspaceFolderCount
             ),
             healthDetail: healthDetail(
                 missingEnvFileCount: missingEnvFileCount,
                 missingAgentRuleCount: missingAgentRuleCount,
                 missingReferenceCount: missingReferenceCount,
+                environmentIssueCount: environmentIssueCount,
                 missingWorkspaceFolderCount: missingWorkspaceFolderCount,
                 authsiaReferenceCount: authsiaReferenceCount
             )
@@ -104,11 +107,13 @@ public enum WorkspaceStatusSummaryRenderer {
         missingEnvFileCount: Int,
         missingAgentRuleCount: Int,
         missingReferenceCount: Int = 0,
+        environmentIssueCount: Int = 0,
         missingWorkspaceFolderCount: Int = 0
     ) -> String {
         if missingEnvFileCount > 0 ||
             missingAgentRuleCount > 0 ||
             missingReferenceCount > 0 ||
+            environmentIssueCount > 0 ||
             missingWorkspaceFolderCount > 0 {
             return "Needs attention"
         }
@@ -119,6 +124,7 @@ public enum WorkspaceStatusSummaryRenderer {
         missingEnvFileCount: Int,
         missingAgentRuleCount: Int,
         missingReferenceCount: Int = 0,
+        environmentIssueCount: Int = 0,
         missingWorkspaceFolderCount: Int = 0,
         authsiaReferenceCount: Int
     ) -> String {
@@ -134,6 +140,11 @@ public enum WorkspaceStatusSummaryRenderer {
         if missingReferenceCount > 0 {
             parts.append(
                 "\(missingReferenceCount) missing Authsia reference\(missingReferenceCount == 1 ? "" : "s")"
+            )
+        }
+        if environmentIssueCount > 0 {
+            parts.append(
+                "\(environmentIssueCount) environment resolution issue\(environmentIssueCount == 1 ? "" : "s")"
             )
         }
         if missingWorkspaceFolderCount > 0 {

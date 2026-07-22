@@ -166,7 +166,7 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         XCTAssertTrue(filtered.passwords.isEmpty)
     }
 
-    func testSyncPreviewReturnsOnlyCLIEnabledPasswordAndAPIKeyInExactFolder() throws {
+    func testSyncPreviewReturnsCLIEnabledPasswordAndAPIKeyInWorkspaceTree() throws {
         let request = try makeRequest(
             command: BridgeContext.workspaceSyncPreviewRequestedCommand,
             payload: WorkspaceMetadataRequestPayload(
@@ -178,7 +178,7 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
 
         let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
 
-        XCTAssertEqual(filtered.passwords.map(\.name), ["DB_PASSWORD"])
+        XCTAssertEqual(filtered.passwords.map(\.name), ["DB_PASSWORD", "Nested"])
         XCTAssertEqual(filtered.apiKeys.map(\.name), ["API_KEY"])
         XCTAssertTrue(filtered.accounts.isEmpty)
         XCTAssertTrue(filtered.certificates.isEmpty)

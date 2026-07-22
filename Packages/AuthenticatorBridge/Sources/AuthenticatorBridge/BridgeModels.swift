@@ -9,9 +9,10 @@ public enum EnvironmentAccessScope: Codable, Equatable, Sendable {
         switch self {
         case .defaultOnly:
             return itemEnvironments.isEmpty
+                || VaultEnvironmentTags.containsAll(in: itemEnvironments)
         case .named(let name):
-            return itemEnvironments.isEmpty
-                || VaultEnvironmentTags.contains(name, in: itemEnvironments)
+            return VaultEnvironmentTags.contains(name, in: itemEnvironments)
+                || VaultEnvironmentTags.containsAll(in: itemEnvironments)
         }
     }
 }

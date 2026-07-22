@@ -62,4 +62,15 @@ final class WorkspaceStatusSummaryRendererTests: XCTestCase {
         XCTAssertEqual(summary.healthSummary, "Needs attention")
         XCTAssertEqual(summary.healthDetail, "1 missing Authsia reference - missing Authsia folder - 1 authsia:// ref")
     }
+
+    func testEnvironmentResolutionIssuesNeedAttention() {
+        let summary = WorkspaceStatusSummaryRenderer.render(
+            managedEnvFiles: [],
+            agentRules: [],
+            environmentIssueCount: 2
+        )
+
+        XCTAssertEqual(summary.healthSummary, "Needs attention")
+        XCTAssertEqual(summary.healthDetail, "2 environment resolution issues - 0 authsia:// refs")
+    }
 }

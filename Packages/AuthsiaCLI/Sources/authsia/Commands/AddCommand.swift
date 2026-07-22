@@ -54,7 +54,7 @@ struct AddAPIKey: ParsableCommand {
     var folder: String?
     @Option(name: .customLong("expires-at"), help: "Auto-destroy date (YYYY-MM-DD or ISO-8601 timestamp)")
     var expiresAt: String?
-    @Option(name: .long, help: "Environment tag (repeatable; omit for the Default environment)")
+    @Option(name: .long, help: "Environment tag (repeatable; use All for every environment; omit for Default)")
     var environment: [String] = []
     @Option(name: .long) var format: OutputFormat = .json
 
@@ -101,7 +101,7 @@ struct AddPassword: ParsableCommand {
     var folder: String?
     @Option(name: .customLong("expires-at"), help: "Auto-destroy date (YYYY-MM-DD or ISO-8601 timestamp)")
     var expiresAt: String?
-    @Option(name: .long, help: "Environment tag (repeatable; omit for the Default environment)")
+    @Option(name: .long, help: "Environment tag (repeatable; use All for every environment; omit for Default)")
     var environment: [String] = []
     @Option(name: .long) var format: OutputFormat = .json
 
@@ -146,7 +146,7 @@ struct AddCertificate: ParsableCommand {
         completion: .custom(ShellCompletionMetadata.completeFolders)
     )
     var folder: String?
-    @Option(name: .long, help: "Environment tag (repeatable; omit for the Default environment)")
+    @Option(name: .long, help: "Environment tag (repeatable; use All for every environment; omit for Default)")
     var environment: [String] = []
     @Option(name: .long) var format: OutputFormat = .json
 
@@ -188,7 +188,7 @@ struct AddNote: ParsableCommand {
         completion: .custom(ShellCompletionMetadata.completeFolders)
     )
     var folder: String?
-    @Option(name: .long, help: "Environment tag (repeatable; omit for the Default environment)")
+    @Option(name: .long, help: "Environment tag (repeatable; use All for every environment; omit for Default)")
     var environment: [String] = []
     @Option(name: .long) var format: OutputFormat = .json
 
@@ -231,7 +231,7 @@ struct AddSSH: ParsableCommand {
         completion: .custom(ShellCompletionMetadata.completeFolders)
     )
     var folder: String?
-    @Option(name: .long, help: "Environment tag (repeatable; omit for the Default environment)")
+    @Option(name: .long, help: "Environment tag (repeatable; use All for every environment; omit for Default)")
     var environment: [String] = []
     @Option(name: .long) var format: OutputFormat = .json
 

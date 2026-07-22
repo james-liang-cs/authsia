@@ -470,7 +470,15 @@ enum WorkspaceUpdatePlanner {
             managedEnvFiles: envFiles.map(\.relativePath),
             agents: uniqueAgentList.isEmpty ? nil : WorkspaceConfig.Agents(rules: uniqueAgentList.map(\.configName)),
             guardSettings: existingConfig.guardSettings,
-            envBindings: existingConfig.envBindings
+            envBindings: existingConfig.envBindings.map {
+                WorkspaceConfig.EnvBinding(
+                    name: $0.name,
+                    reference: WorkspaceSyncReferenceBuilder.workspaceScopedReference(
+                        $0.reference,
+                        workspaceFolder: existingConfig.workspace.authsiaFolder
+                    )
+                )
+            }
         )
 
         let scanner = FileScannerService()
@@ -931,6 +939,7 @@ struct WorkspaceStatus: Codable, Equatable {
     var effectiveTaggedCount: Int = 0
     var overrideCount: Int = 0
     var conflictCount: Int = 0
+    var environmentIssueCount: Int = 0
     var selectionHealth: String = "legacy"
     var environmentBindings: [EnvironmentBinding] = []
 }
@@ -945,6 +954,7 @@ enum WorkspaceStatusReporter {
         let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root, fileManager: fileManager)
         let scanner = FileScannerService()
         var envFiles: [WorkspaceStatus.EnvFile] = []
+        var managedEnvFilePaths: [String] = []
         var missingReferences = Set<WorkspaceMissingReference>()
         var unverifiedReferences = Set<WorkspaceMissingReference>()
         for relativePath in config.managedEnvFiles {
@@ -958,6 +968,7 @@ enum WorkspaceStatusReporter {
                 continue
             }
             let refs = await scanner.findURIAuthsiaReferences(in: [absolutePath])
+            managedEnvFilePaths.append(absolutePath)
             if let vaultIndex {
                 for reference in refs where !vaultIndex.contains(reference) {
                     missingReferences.insert(workspaceReference(relativePath: relativePath, reference: reference))
@@ -1006,7 +1017,21 @@ enum WorkspaceStatusReporter {
         }
         if config.schemaVersion >= 2, let payload = vaultIndex?.payload {
             let selection: WorkspaceEnvironmentSelection = activeEnvironment.map(WorkspaceEnvironmentSelection.named) ?? .defaultOnly
-            let evaluation = WorkspaceEnvironmentEvaluation.evaluate(config: config, payload: payload, selection: selection)
+            let evaluation = try WorkspaceEnvironmentEvaluation.evaluate(
+                config: config,
+                envFiles: [],
+                workspaceEnvFiles: managedEnvFilePaths,
+                payload: payload,
+                selection: selection
+            )
+            let scopedResolutions = try workspaceEnvironmentResolutions(
+                config: config,
+                workspaceRoot: root,
+                managedEnvFilePaths: managedEnvFilePaths,
+                payload: payload,
+                selection: selection
+            )
+            let environmentIssues = mergedEnvironmentIssues(scopedResolutions)
             let effectiveIDs = Set(evaluation.resolution.effective.map(\.id))
             let overriddenIDs = Set(evaluation.resolution.overridden.map(\.id))
             let inactiveIDs = Set(evaluation.resolution.inactive.map(\.id))
@@ -1014,8 +1039,11 @@ enum WorkspaceStatusReporter {
             status.effectiveDefaultEnvironmentCount = evaluation.resolution.effective.filter(\.environments.isEmpty).count
             status.effectiveTaggedCount = evaluation.resolution.effective.filter { !$0.environments.isEmpty }.count
             status.overrideCount = evaluation.resolution.overridden.count
-            status.conflictCount = evaluation.resolution.issues.filter { $0.kind == .conflict }.count
-            status.selectionHealth = evaluation.resolution.issues.isEmpty ? "healthy" : "needsAttention"
+            status.conflictCount = environmentIssues.filter { $0.kind == .conflict }.count
+            let missingEnvironmentIssueCount = environmentIssues.filter { $0.kind == .missingReference }.count
+            status.environmentIssueCount = environmentIssues.count - missingEnvironmentIssueCount +
+                max(0, missingEnvironmentIssueCount - status.missingReferences.count)
+            status.selectionHealth = environmentIssues.isEmpty ? "healthy" : "needsAttention"
             let candidateStates = evaluation.resolution.effective
                 .map { ($0, "effective") }
                 + evaluation.resolution.overridden.map { ($0, "overridden") }
@@ -1038,6 +1066,47 @@ enum WorkspaceStatusReporter {
         return status
     }
 
+    private static func workspaceEnvironmentResolutions(
+        config: WorkspaceConfig,
+        workspaceRoot: URL,
+        managedEnvFilePaths: [String],
+        payload: BridgeListPayload,
+        selection: WorkspaceEnvironmentSelection
+    ) throws -> [WorkspaceEnvironmentResolution] {
+        let rootPath = workspaceRoot.standardizedFileURL.path
+        let scopePaths = Set(
+            [rootPath] + managedEnvFilePaths.map {
+                URL(fileURLWithPath: $0).deletingLastPathComponent().standardizedFileURL.path
+            }
+        )
+        return try scopePaths.sorted().map { scopePath in
+            let scopeComponents = URL(fileURLWithPath: scopePath).standardizedFileURL.pathComponents
+            let applicableEnvFiles = managedEnvFilePaths.filter { path in
+                let directoryComponents = URL(fileURLWithPath: path)
+                    .deletingLastPathComponent()
+                    .standardizedFileURL
+                    .pathComponents
+                return scopeComponents.starts(with: directoryComponents)
+            }
+            return try WorkspaceEnvironmentEvaluation.evaluate(
+                config: config,
+                envFiles: applicableEnvFiles,
+                workspaceEnvFiles: managedEnvFilePaths,
+                payload: payload,
+                selection: selection
+            ).resolution
+        }
+    }
+
+    private static func mergedEnvironmentIssues(
+        _ resolutions: [WorkspaceEnvironmentResolution]
+    ) -> [WorkspaceEnvironmentIssue] {
+        var seen = Set<String>()
+        return resolutions.flatMap(\.issues).filter { issue in
+            seen.insert("\(issue.kind.rawValue)|\(issue.variableName ?? "")").inserted
+        }
+    }
+
     static func renderTable(_ status: WorkspaceStatus) -> String {
         let summary = WorkspaceStatusSummaryRenderer.render(
             managedEnvFiles: status.envFiles.map { envFile in
@@ -1056,7 +1125,8 @@ enum WorkspaceStatusReporter {
                     isInstalled: rule.isInstalled
                 )
             },
-            missingReferenceCount: status.missingReferences.count
+            missingReferenceCount: status.missingReferences.count,
+            environmentIssueCount: status.environmentIssueCount
         )
         var lines: [String] = [
             "Workspace: \(status.config.workspace.name)",

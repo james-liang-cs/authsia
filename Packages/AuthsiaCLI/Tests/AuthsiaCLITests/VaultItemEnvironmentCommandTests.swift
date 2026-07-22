@@ -44,6 +44,7 @@ struct VaultItemEnvironmentCommandTests {
     func listEnvironmentFilterRequiresSelectedTag() {
         #expect(!List.environmentMatches("Production", itemEnvironments: []))
         #expect(List.environmentMatches("Production", itemEnvironments: ["Production"]))
+        #expect(List.environmentMatches("Production", itemEnvironments: ["All"]))
         #expect(!List.environmentMatches("Production", itemEnvironments: ["Development"]))
     }
 }

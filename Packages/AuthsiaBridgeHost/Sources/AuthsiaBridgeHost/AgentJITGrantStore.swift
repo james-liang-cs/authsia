@@ -155,9 +155,10 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
                 $0.allows(
                     capability: capability,
                     itemFolderPath: itemFolderPath,
+                    itemEnvironments: itemEnvironments,
                     caller: caller,
                     now: now
-                ) && ($0.environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
+                )
             }) else {
                 if !revoked.isEmpty {
                     try writeUnlocked(grants)

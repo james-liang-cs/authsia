@@ -488,6 +488,122 @@ struct WorkspaceEnvironmentRuntimeTests {
         ])
     }
 
+    @Test("workspace-wide environment remains valid outside its nested file scope")
+    func workspaceWideEnvironmentRemainsValidOutsideNestedFileScope() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let nested = root.appendingPathComponent("services/payments", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaultID = UUID(uuidString: "99999999-9999-9999-9999-999999999999")!
+        let productionID = UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
+        let rootFile = root.appendingPathComponent(".env")
+        let nestedFile = nested.appendingPathComponent(".env")
+        try "DATABASE_URL=authsia://api-key/\(defaultID.uuidString)/key\n".write(
+            to: rootFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        try "PAYMENTS_KEY=authsia://api-key/\(productionID.uuidString)/key\n".write(
+            to: nestedFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        let timestamp = Date(timeIntervalSince1970: 0)
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [],
+            apiKeys: [
+                BridgeAPIKey(id: defaultID, name: "DATABASE_URL", website: nil, folderPath: "Workspaces/api", isFavorite: false, isCliEnabled: true, isScraped: false, createdAt: timestamp, updatedAt: timestamp, environments: ["All"]),
+                BridgeAPIKey(id: productionID, name: "PAYMENTS_KEY", website: nil, folderPath: "Workspaces/api/services", isFavorite: false, isCliEnabled: true, isScraped: false, createdAt: timestamp, updatedAt: timestamp, environments: ["Production"]),
+            ],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [".env", "services/payments/.env"],
+            agents: nil
+        )
+
+        let evaluation = try WorkspaceEnvironmentEvaluation.evaluate(
+            config: config,
+            envFiles: [rootFile.path],
+            workspaceEnvFiles: [rootFile.path, nestedFile.path],
+            payload: payload,
+            selection: .named("Production")
+        )
+
+        #expect(evaluation.resolution.issues.isEmpty)
+        #expect(evaluation.resolution.availableEnvironments == ["Production"])
+        #expect(evaluation.environmentOverrides == [
+            "DATABASE_URL": "authsia://api-key/\(defaultID.uuidString)/key",
+        ])
+    }
+
+    @Test("workspace run applies workspace-wide availability to a root-scoped plan")
+    func workspaceRunAppliesWorkspaceWideAvailabilityToRootScopedPlan() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let nested = root.appendingPathComponent("services/payments", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaultID = UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!
+        let productionID = UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!
+        let rootFile = root.appendingPathComponent(".env")
+        let nestedFile = nested.appendingPathComponent(".env")
+        try "DATABASE_URL=authsia://api-key/\(defaultID.uuidString)/key\n".write(
+            to: rootFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        try "PAYMENTS_KEY=authsia://api-key/\(productionID.uuidString)/key\n".write(
+            to: nestedFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [".env", "services/payments/.env"],
+            agents: nil
+        )
+        let plan = WorkspaceRunPlan(
+            workspaceRoot: root,
+            config: config,
+            envFiles: [rootFile.path],
+            managedEnvFileCount: 1,
+            envBindings: [:],
+            activeEnvironment: nil,
+            defaultOnly: true,
+            commandArgs: ["/usr/bin/true"],
+            usesShell: false
+        )
+        let timestamp = Date(timeIntervalSince1970: 0)
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [],
+            apiKeys: [
+                BridgeAPIKey(id: defaultID, name: "DATABASE_URL", website: nil, folderPath: "Workspaces/api", isFavorite: false, isCliEnabled: true, isScraped: false, createdAt: timestamp, updatedAt: timestamp, environments: ["All"]),
+                BridgeAPIKey(id: productionID, name: "PAYMENTS_KEY", website: nil, folderPath: "Workspaces/api/services", isFavorite: false, isCliEnabled: true, isScraped: false, createdAt: timestamp, updatedAt: timestamp, environments: ["Production"]),
+            ],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        let applied = try Workspace.Run.applyingEnvironment(
+            to: plan,
+            selection: .named("Production"),
+            payload: payload
+        )
+
+        #expect(applied.activeEnvironment == "Production")
+        #expect(applied.envBindings == [
+            "DATABASE_URL": "authsia://api-key/\(defaultID.uuidString)/key",
+        ])
+    }
+
     @Test("explicit one-run env files override configured tagged candidates")
     func explicitOneRunEnvOverridesConfiguredCandidate() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -526,6 +642,49 @@ struct WorkspaceEnvironmentRuntimeTests {
         )
 
         #expect(evaluation.environmentOverrides == ["DATABASE_URL": "local-test-value"])
+    }
+
+    @Test("literal-only workspace resolution preserves values without metadata")
+    func literalOnlyWorkspaceResolutionPreservesValuesWithoutMetadata() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [".env"],
+            agents: nil
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        try "LOG_LEVEL=debug\n".write(
+            to: root.appendingPathComponent(".env"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let built = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["/usr/bin/true"]
+        )
+        let applied = try Workspace.Run.applyingEnvironment(
+            to: built,
+            selection: .defaultOnly,
+            payload: BridgeListPayload(
+                accounts: [],
+                passwords: [],
+                certificates: [],
+                notes: [],
+                sshKeys: []
+            )
+        )
+
+        let environment = try Workspace.Run.directPassthroughEnvironment(
+            parentEnvironment: ["PATH": "/usr/bin"],
+            plan: applied
+        )
+
+        #expect(applied.envBindings == ["LOG_LEVEL": "debug"])
+        #expect(environment["LOG_LEVEL"] == "debug")
     }
 
     @Test("global env command includes workspace show without removing profile commands")

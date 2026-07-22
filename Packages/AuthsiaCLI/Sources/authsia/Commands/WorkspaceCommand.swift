@@ -1109,12 +1109,24 @@ struct Workspace: AsyncParsableCommand {
                     defaultOnly: defaultOnly,
                     workspaceRoot: builtPlan.workspaceRoot
                 )
-                guard let payload = Workspace.loadWorkspaceMetadataPayload(
-                    try Self.validationMetadataRequest(for: builtPlan),
-                    requestedCommand: BridgeContext.workspaceRunRequestedCommand
-                ) else {
-                    throw ValidationError(
-                        "Workspace environment validation is unavailable. Run `authsia workspace env validate`."
+                let payload: BridgeListPayload
+                if try Self.requiresValidationMetadata(for: builtPlan) {
+                    guard let loadedPayload = Workspace.loadWorkspaceMetadataPayload(
+                        try Self.validationMetadataRequest(for: builtPlan),
+                        requestedCommand: BridgeContext.workspaceRunRequestedCommand
+                    ) else {
+                        throw ValidationError(
+                            "Workspace environment validation is unavailable. Run `authsia workspace env validate`."
+                        )
+                    }
+                    payload = loadedPayload
+                } else {
+                    payload = BridgeListPayload(
+                        accounts: [],
+                        passwords: [],
+                        certificates: [],
+                        notes: [],
+                        sshKeys: []
                     )
                 }
                 plan = try Self.applyingEnvironment(
@@ -1157,16 +1169,38 @@ struct Workspace: AsyncParsableCommand {
             try exec.run()
         }
 
+        static func requiresValidationMetadata(for plan: WorkspaceRunPlan) throws -> Bool {
+            if plan.config.envBindings.contains(where: {
+                SecretReference.isSecretReference($0.reference)
+            }) {
+                return true
+            }
+            return try validationEnvironmentFileValues(for: plan).contains(
+                where: SecretReference.isSecretReference
+            )
+        }
+
         static func validationMetadataRequest(
             for plan: WorkspaceRunPlan
         ) throws -> WorkspaceMetadataRequestPayload {
-            let envFileReferences = try plan.envFiles.flatMap { path in
-                try EnvFileParser.parse(contentsOf: path).map(\.value)
-            }
+            let envFileReferences = try validationEnvironmentFileValues(for: plan)
             return Workspace.Env.validationMetadataRequest(
                 plan.config,
                 additionalReferences: envFileReferences
             )
+        }
+
+        private static func validationEnvironmentFileValues(
+            for plan: WorkspaceRunPlan
+        ) throws -> [String] {
+            let workspaceEnvFiles = plan.config.managedEnvFiles.compactMap { relativePath in
+                let path = plan.workspaceRoot.appendingPathComponent(relativePath).path
+                return FileManager.default.fileExists(atPath: path) ? path : nil
+            }
+            let explicitEnvFiles = Array(plan.envFiles.dropFirst(plan.managedEnvFileCount))
+            return try (workspaceEnvFiles + explicitEnvFiles).flatMap { path in
+                try EnvFileParser.parse(contentsOf: path).map(\.value)
+            }
         }
 
         static func environmentSelection(
@@ -1197,6 +1231,10 @@ struct Workspace: AsyncParsableCommand {
                 config: plan.config,
                 envFiles: Array(plan.envFiles.prefix(managedCount)),
                 explicitEnvFiles: Array(plan.envFiles.dropFirst(managedCount)),
+                workspaceEnvFiles: plan.config.managedEnvFiles.compactMap { relativePath in
+                    let path = plan.workspaceRoot.appendingPathComponent(relativePath).path
+                    return FileManager.default.fileExists(atPath: path) ? path : nil
+                },
                 payload: payload,
                 selection: selection
             )
@@ -1275,8 +1313,12 @@ struct Workspace: AsyncParsableCommand {
             for key in try authsiaReferencedEnvNames(from: plan.envFiles) {
                 environment.removeValue(forKey: key)
             }
-            for key in plan.envBindings.keys {
-                environment.removeValue(forKey: key)
+            for (key, value) in plan.envBindings {
+                if SecretReference.isSecretReference(value) {
+                    environment.removeValue(forKey: key)
+                } else {
+                    environment[key] = value
+                }
             }
             return directPassthroughEnvironment(parentEnvironment: environment)
         }
@@ -1670,8 +1712,14 @@ struct Workspace: AsyncParsableCommand {
             fileManager: FileManager = .default,
             knownRootsStore: WorkspaceKnownRootsStore = .shared
         ) throws -> WorkspaceConfig.EnvBinding {
-            let binding = WorkspaceConfig.EnvBinding(name: name, reference: reference)
             var config = try WorkspaceConfigStore.read(fromWorkspaceRoot: workspaceRoot, fileManager: fileManager)
+            let binding = WorkspaceConfig.EnvBinding(
+                name: name,
+                reference: WorkspaceSyncReferenceBuilder.workspaceScopedReference(
+                    reference.trimmingCharacters(in: .whitespacesAndNewlines),
+                    workspaceFolder: config.workspace.authsiaFolder
+                )
+            )
             let bindings: [WorkspaceConfig.EnvBinding]
             if config.schemaVersion >= 2 {
                 bindings = config.envBindings.filter {
@@ -2437,7 +2485,7 @@ struct Workspace: AsyncParsableCommand {
                 return banner
             }
             return banner + " Effective environment: \(activeEnvironment). " +
-                "Default environment items remain available."
+                "All-environment items remain available."
         }
 
         static func toolsForGuard(config: WorkspaceConfig, requestedTools: [String]) -> [String] {

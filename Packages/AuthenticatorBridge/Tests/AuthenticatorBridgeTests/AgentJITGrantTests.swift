@@ -2,14 +2,15 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class AgentJITGrantTests: XCTestCase {
-    func testEnvironmentScopeRestrictsTaggedItemsAndKeepsDefaultEnvironmentEligible() {
+    func testEnvironmentScopeAllowsExactAndAllButRejectsDefaultAndOtherTags() {
         let named = EnvironmentAccessScope.named("Production")
-        XCTAssertTrue(named.allows(itemEnvironments: []))
+        XCTAssertFalse(named.allows(itemEnvironments: []))
+        XCTAssertTrue(named.allows(itemEnvironments: ["All"]))
         XCTAssertTrue(named.allows(itemEnvironments: ["Production"]))
         XCTAssertFalse(named.allows(itemEnvironments: ["Development"]))
     }
 
-    func testGrantAllowsOnlyItsNamedEnvironmentPlusDefaultEnvironmentItems() {
+    func testGrantAllowsOnlyItsNamedEnvironmentPlusAllEnvironmentItems() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let caller = AgentJITCallerFingerprint.fixture()
         let grant = AgentJITGrant.fixture(
@@ -18,7 +19,8 @@ final class AgentJITGrantTests: XCTestCase {
             environmentScope: .named("Production")
         )
 
-        XCTAssertTrue(grant.allows(capability: .exec, itemFolderPath: "Team/API", itemEnvironments: [], caller: caller, now: now))
+        XCTAssertFalse(grant.allows(capability: .exec, itemFolderPath: "Team/API", itemEnvironments: [], caller: caller, now: now))
+        XCTAssertTrue(grant.allows(capability: .exec, itemFolderPath: "Team/API", itemEnvironments: ["All"], caller: caller, now: now))
         XCTAssertTrue(grant.allows(capability: .exec, itemFolderPath: "Team/API", itemEnvironments: ["Production"], caller: caller, now: now))
         XCTAssertFalse(grant.allows(capability: .exec, itemFolderPath: "Team/API", itemEnvironments: ["Development"], caller: caller, now: now))
     }

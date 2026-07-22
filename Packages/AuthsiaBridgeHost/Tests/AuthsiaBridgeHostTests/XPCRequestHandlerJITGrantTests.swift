@@ -3468,9 +3468,10 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
             $0.allows(
                 capability: capability,
                 itemFolderPath: itemFolderPath,
+                itemEnvironments: itemEnvironments,
                 caller: caller,
                 now: now
-            ) && ($0.environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
+            )
         }) else {
             return nil
         }
