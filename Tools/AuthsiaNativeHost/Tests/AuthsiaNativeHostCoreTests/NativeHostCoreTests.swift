@@ -187,6 +187,7 @@ final class NativeHostCoreTests: XCTestCase {
                 id: id,
                 issuer: "GitHub",
                 label: "alice@example.com",
+                hosts: ["https://github.com"],
                 isFavorite: true,
                 isCliEnabled: false,
                 isScraped: false,
@@ -240,6 +241,7 @@ final class NativeHostCoreTests: XCTestCase {
                 id: id,
                 issuer: "GitHub",
                 label: "alice@example.com",
+                hosts: ["https://github.com"],
                 isFavorite: true,
                 isCliEnabled: true,
                 isScraped: false,
@@ -286,6 +288,158 @@ final class NativeHostCoreTests: XCTestCase {
         XCTAssertEqual(getResponse.ok, true)
         XCTAssertEqual(getResponse.credential?.otpCode, "123456")
         XCTAssertEqual(getResponse.match?.kind, "otp")
+    }
+
+    func testCredentialResolverDoesNotSubstringMatchOTPIssuerInHost() throws {
+        let gitId = UUID(uuidString: "73737373-7373-7373-7373-737373737373")!
+        let githubId = UUID(uuidString: "74747474-7474-7474-7474-747474747474")!
+        let accounts = [
+            CLIListAccount(
+                id: gitId,
+                issuer: "Git",
+                label: "synthetic-user",
+                isFavorite: false,
+                isCliEnabled: true,
+                isScraped: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)
+            ),
+            CLIListAccount(
+                id: githubId,
+                issuer: "GitHub",
+                label: "synthetic-user",
+                hosts: ["https://github.com"],
+                isFavorite: false,
+                isCliEnabled: true,
+                isScraped: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)
+            ),
+        ]
+
+        let client = CLIClient { command in
+            switch command {
+            case .listPasswordsJSON:
+                return Data("[]".utf8)
+            case .listOTPJSON:
+                return try self.encodeFixture(accounts)
+            case .getPasswordJSON, .getChromePasswordJSON, .getOTPJSON, .getChromeOTPJSON:
+                XCTFail("Did not expect secret lookup")
+                return Data()
+            }
+        }
+
+        let resolver = CredentialResolver(cliClient: client)
+
+        let digitalResponse = try resolver.listCredentials(forHost: "digital.com")
+        XCTAssertEqual(digitalResponse.credentials?.count ?? 0, 0)
+
+        let githubResponse = try resolver.listCredentials(forHost: "login.github.com")
+        XCTAssertEqual(githubResponse.credentials?.map(\.id), [githubId])
+    }
+
+    func testCredentialResolverDoesNotSubstringMatchShortOTPIssuerInHostLabel() throws {
+        let id = UUID(uuidString: "75757575-7575-7575-7575-757575757575")!
+        let accounts = [
+            CLIListAccount(
+                id: id,
+                issuer: "ING",
+                label: "synthetic-user",
+                isFavorite: false,
+                isCliEnabled: true,
+                isScraped: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)
+            )
+        ]
+
+        let client = CLIClient { command in
+            switch command {
+            case .listPasswordsJSON:
+                return Data("[]".utf8)
+            case .listOTPJSON:
+                return try self.encodeFixture(accounts)
+            case .getPasswordJSON, .getChromePasswordJSON, .getOTPJSON, .getChromeOTPJSON:
+                XCTFail("Did not expect secret lookup")
+                return Data()
+            }
+        }
+
+        let resolver = CredentialResolver(cliClient: client)
+        let response = try resolver.listCredentials(forHost: "boring.com")
+
+        XCTAssertEqual(response.credentials?.count ?? 0, 0)
+    }
+
+    func testCredentialResolverDoesNotHostMatchOTPEmailLabel() throws {
+        let id = UUID(uuidString: "76767676-7676-7676-7676-767676767676")!
+        let accounts = [
+            CLIListAccount(
+                id: id,
+                issuer: "Acme Corp",
+                label: "user@example.com",
+                isFavorite: false,
+                isCliEnabled: true,
+                isScraped: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)
+            )
+        ]
+
+        let client = CLIClient { command in
+            switch command {
+            case .listPasswordsJSON:
+                return Data("[]".utf8)
+            case .listOTPJSON:
+                return try self.encodeFixture(accounts)
+            case .getPasswordJSON, .getChromePasswordJSON, .getOTPJSON, .getChromeOTPJSON:
+                XCTFail("Did not expect secret lookup")
+                return Data()
+            }
+        }
+
+        let resolver = CredentialResolver(cliClient: client)
+        let response = try resolver.listCredentials(forHost: "userexample.com")
+
+        XCTAssertEqual(response.credentials?.count ?? 0, 0)
+    }
+
+    func testCredentialResolverDoesNotAuthorizeOTPFromIssuerMatchingUnknownPublicSuffix() throws {
+        let id = UUID(uuidString: "77777777-7777-7777-7777-777777777777")!
+        let accounts = [
+            CLIListAccount(
+                id: id,
+                issuer: "Cloud",
+                label: "synthetic-user",
+                isFavorite: false,
+                isCliEnabled: true,
+                isScraped: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)
+            )
+        ]
+
+        let client = CLIClient { command in
+            switch command {
+            case .listPasswordsJSON:
+                return Data("[]".utf8)
+            case .listOTPJSON:
+                return try self.encodeFixture(accounts)
+            case .getPasswordJSON, .getChromePasswordJSON, .getOTPJSON, .getChromeOTPJSON:
+                XCTFail("Did not expect secret lookup")
+                return Data()
+            }
+        }
+
+        let resolver = CredentialResolver(cliClient: client)
+        let listResponse = try resolver.listCredentials(forHost: "attacker.cloud")
+        let getResponse = try resolver.getCredential(
+            forHost: "attacker.cloud",
+            credentialId: id
+        )
+
+        XCTAssertEqual(listResponse.credentials?.count ?? 0, 0)
+        XCTAssertEqual(getResponse.error, .accessDenied)
     }
 
     func testCredentialResolverListsOTPByMetadataHost() throws {

@@ -8,6 +8,8 @@
 
     const MESSAGE_TYPE_LIST = 'AUTHsia_LIST_CREDENTIALS';
     const MESSAGE_TYPE_GET = 'AUTHsia_GET_CREDENTIALS';
+    let nextRequestId = 1;
+    const pendingRequests = new Map();
 
     // DOM Elements
     const listContainer = document.getElementById('authsia-list');
@@ -27,6 +29,39 @@
         };
     }
 
+    function pageOrigin() {
+        try {
+            return new URL(getParams().currentURL).origin;
+        } catch (err) {
+            return '*';
+        }
+    }
+
+    function requestRuntime(message) {
+        return new Promise(function (resolve) {
+            const requestId = 'authsia-' + nextRequestId++;
+            pendingRequests.set(requestId, resolve);
+            window.parent.postMessage({
+                type: 'AUTHSIA_REQUEST',
+                requestId: requestId,
+                message: message,
+            }, pageOrigin());
+        });
+    }
+
+    window.addEventListener('message', function (event) {
+        if (event.source !== window.parent || event.origin !== pageOrigin() ||
+            !event.data || event.data.type !== 'AUTHSIA_RESPONSE') {
+            return;
+        }
+        const resolve = pendingRequests.get(event.data.requestId);
+        if (!resolve) {
+            return;
+        }
+        pendingRequests.delete(event.data.requestId);
+        resolve(event.data.response);
+    });
+
     // Show/hide states
     function showState(state, detail) {
         listContainer.style.display = state === 'list' ? 'block' : 'none';
@@ -41,6 +76,44 @@
                 hint.textContent = detail;
             }
         }
+
+        if (state === 'empty') {
+            var params = getParams();
+            var emptyText = emptyState.querySelector('.authsia-empty-text');
+            if (emptyText) {
+                emptyText.textContent = params.host
+                    ? 'No passwords for ' + params.host
+                    : 'No passwords for this site';
+            }
+        }
+
+        postResize();
+    }
+
+    // Tell the content script to size the iframe to the rendered content.
+    function postResize() {
+        var height = 0;
+        if (document.documentElement && document.documentElement.scrollHeight) {
+            height = document.documentElement.scrollHeight;
+        } else if (document.body && document.body.scrollHeight) {
+            height = document.body.scrollHeight;
+        }
+        if (height > 0 && window.parent) {
+            window.parent.postMessage({ type: 'AUTHSIA_RESIZE', height: height }, '*');
+        }
+    }
+
+    // Extract a display host from a stored website URL.
+    function websiteHost(website) {
+        if (!website) return '';
+        try {
+            var withScheme = String(website).indexOf('://') === -1
+                ? 'https://' + website
+                : String(website);
+            return new URL(withScheme).hostname || '';
+        } catch (err) {
+            return '';
+        }
     }
 
     // Generate a deterministic HSL color from a name string
@@ -53,10 +126,11 @@
         return 'hsl(' + hue + ', 45%, 52%)';
     }
 
-    // Create a credential item element (Apple Passwords style)
-    function createCredentialItem(credential, index) {
-        const displayName = credential.username || credential.name || 'Unknown';
-        const kind = credential.kind === 'otp' ? 'otp' : 'password';
+    // Create a credential item element with metadata only. Secrets are fetched
+    // only after the user selects an item.
+    function createCredentialItem(credential) {
+        const title = credential.name || credential.username || 'Unknown';
+        const subtitleText = credential.username || websiteHost(credential.website) || 'Authsia';
 
         const item = document.createElement('div');
         item.className = 'authsia-item';
@@ -64,7 +138,7 @@
         item.setAttribute('role', 'option');
         item.setAttribute(
             'aria-label',
-            'Fill credentials for ' + displayName
+            'Fill credentials for ' + (credential.username || title)
         );
 
         // Letter avatar
@@ -82,11 +156,11 @@
 
         const name = document.createElement('span');
         name.className = 'authsia-item-name';
-        name.textContent = displayName;
+        name.textContent = title;
 
         const subtitle = document.createElement('span');
         subtitle.className = 'authsia-item-username';
-        subtitle.textContent = (kind === 'otp' ? 'OTP' : 'Password') + ' \u00B7 Authsia';
+        subtitle.textContent = subtitleText;
 
         info.appendChild(name);
         info.appendChild(subtitle);
@@ -112,10 +186,8 @@
 
         try {
             // Request full credential (with password) from service worker
-            const response = await chrome.runtime.sendMessage({
+            const response = await requestRuntime({
                 type: MESSAGE_TYPE_GET,
-                host: params.host,
-                currentURL: params.currentURL,
                 credentialId: credential.id,
             });
 
@@ -124,7 +196,7 @@
                     type: 'AUTHSIA_FILL',
                     otpCode: response.credential.otpCode,
                     frameId: params.frameId,
-                }, '*');
+                }, pageOrigin());
             } else if (response && response.ok && response.credential) {
                 // Send fill command to parent content script
                 window.parent.postMessage({
@@ -132,7 +204,7 @@
                     username: response.credential.username,
                     password: response.credential.password,
                     frameId: params.frameId,
-                }, '*');
+                }, pageOrigin());
             } else {
                 showState('error', (response && response.detail) || '');
             }
@@ -157,8 +229,7 @@
         }
 
         for (var i = 0; i < filteredCredentials.length; i++) {
-            var item = createCredentialItem(filteredCredentials[i], i);
-            listContainer.appendChild(item);
+            listContainer.appendChild(createCredentialItem(filteredCredentials[i]));
         }
 
         showState('list');
@@ -182,11 +253,7 @@
         showState('loading');
 
         try {
-            const response = await chrome.runtime.sendMessage({
-                type: MESSAGE_TYPE_LIST,
-                host: params.host,
-                currentURL: params.currentURL,
-            });
+            const response = await requestRuntime({ type: MESSAGE_TYPE_LIST });
 
             if (response && response.ok && Array.isArray(response.credentials)) {
                 renderCredentials(response.credentials);

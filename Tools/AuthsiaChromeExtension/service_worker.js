@@ -34,6 +34,39 @@ function sanitizeCurrentURL(currentURL) {
   }
 }
 
+function comparableURL(currentURL) {
+  const sanitized = sanitizeCurrentURL(currentURL);
+  if (!sanitized) {
+    return null;
+  }
+  const url = new URL(sanitized);
+  url.hash = '';
+  return url.href;
+}
+
+function attestPageRequest(message, sender) {
+  const host = sanitizeHost(message.host);
+  const senderURL = comparableURL(sender && sender.url);
+  if (!host || !senderURL) {
+    return null;
+  }
+
+  const parsedSenderURL = new URL(senderURL);
+  if (parsedSenderURL.hostname.toLowerCase() !== host) {
+    return null;
+  }
+
+  let currentURL = null;
+  if (message.currentURL !== undefined) {
+    currentURL = comparableURL(message.currentURL);
+    if (!currentURL || currentURL !== senderURL) {
+      return null;
+    }
+  }
+
+  return { host, currentURL };
+}
+
 function sendNativeMessage(message) {
   return new Promise((resolve, reject) => {
     let didSettle = false;
@@ -59,25 +92,24 @@ function sendNativeMessage(message) {
   });
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) {
     return false;
   }
 
   // Handle LIST_CREDENTIALS - returns metadata only (no passwords)
   if (message.type === MESSAGE_TYPE_LIST_CREDENTIALS) {
-    const host = sanitizeHost(message.host);
-    if (!host) {
-      sendResponse({ ok: false, error: 'invalidHost' });
+    const requestContext = attestPageRequest(message, sender);
+    if (!requestContext) {
+      sendResponse({ ok: false, error: sanitizeHost(message.host) ? 'senderMismatch' : 'invalidHost' });
       return false;
     }
 
     (async () => {
       try {
-        const requestPayload = { type: 'listCredentials', host };
-        const currentURL = sanitizeCurrentURL(message.currentURL);
-        if (currentURL) {
-          requestPayload.currentURL = currentURL;
+        const requestPayload = { type: 'listCredentials', host: requestContext.host };
+        if (requestContext.currentURL) {
+          requestPayload.currentURL = requestContext.currentURL;
         }
 
         const response = await sendNativeMessage(requestPayload);
@@ -102,18 +134,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   // Handle GET_CREDENTIALS - returns full credential with password
   if (message.type === MESSAGE_TYPE_GET_CREDENTIALS) {
-    const host = sanitizeHost(message.host);
-    if (!host) {
-      sendResponse({ ok: false, error: 'invalidHost' });
+    const requestContext = attestPageRequest(message, sender);
+    if (!requestContext) {
+      sendResponse({ ok: false, error: sanitizeHost(message.host) ? 'senderMismatch' : 'invalidHost' });
       return false;
     }
 
     (async () => {
       try {
-        const requestPayload = { type: 'getCredentials', host };
-        const currentURL = sanitizeCurrentURL(message.currentURL);
-        if (currentURL) {
-          requestPayload.currentURL = currentURL;
+        const requestPayload = { type: 'getCredentials', host: requestContext.host };
+        if (requestContext.currentURL) {
+          requestPayload.currentURL = requestContext.currentURL;
         }
         // If a specific credential ID is provided, include it
         if (message.credentialId) {

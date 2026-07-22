@@ -28,7 +28,7 @@ function loadServiceWorker({ sendNativeMessageImpl, lastErrorMessage = null }) {
   return { onMessageHandler, calls };
 }
 
-function invokeHandler(handler, message) {
+function invokeHandler(handler, message, sender = { url: message.currentURL || `https://${message.host}/` }) {
   return new Promise((resolve) => {
     let keepOpenValue;
     let responseValue;
@@ -42,7 +42,7 @@ function invokeHandler(handler, message) {
       }
     };
 
-    keepOpenValue = handler(message, null, sendResponse);
+    keepOpenValue = handler(message, sender, sendResponse);
 
     if (responded) {
       resolve({ keepOpen: keepOpenValue, response: responseValue });
@@ -113,6 +113,58 @@ async function testInvalidHostRejected() {
   assert.deepStrictEqual(result.response, { ok: false, error: 'invalidHost' });
 }
 
+async function testSenderHostMismatchRejected() {
+  const { onMessageHandler, calls } = loadServiceWorker({
+    sendNativeMessageImpl(_host, _message, callback) {
+      callback({ ok: true });
+    },
+  });
+
+  const result = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_GET_CREDENTIALS',
+    host: 'vault.example.com',
+    currentURL: 'https://vault.example.com/login',
+  }, { url: 'https://attacker.example/login' });
+
+  assert.strictEqual(calls.length, 0, 'mismatched page origins must not reach the native host');
+  assert.deepStrictEqual(result.response, { ok: false, error: 'senderMismatch' });
+}
+
+async function testSenderPathMismatchRejected() {
+  const { onMessageHandler, calls } = loadServiceWorker({
+    sendNativeMessageImpl(_host, _message, callback) {
+      callback({ ok: true });
+    },
+  });
+
+  const result = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_LIST_CREDENTIALS',
+    host: 'example.com',
+    currentURL: 'https://example.com/admin/login',
+  }, { url: 'https://example.com/public/login' });
+
+  assert.strictEqual(calls.length, 0, 'a forged same-origin path must not reach the native host');
+  assert.deepStrictEqual(result.response, { ok: false, error: 'senderMismatch' });
+}
+
+async function testWebAccessibleMenuCannotAssertPageOrigin() {
+  const { onMessageHandler, calls } = loadServiceWorker({
+    sendNativeMessageImpl(_host, _message, callback) {
+      callback({ ok: true });
+    },
+  });
+
+  const result = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_GET_CREDENTIALS',
+    host: 'vault.example.com',
+    currentURL: 'https://vault.example.com/login',
+    credentialId: 'synthetic-id',
+  }, { url: 'chrome-extension://fakeid/popup/menu.html' });
+
+  assert.strictEqual(calls.length, 0, 'extension frames must use the attested content-script bridge');
+  assert.deepStrictEqual(result.response, { ok: false, error: 'senderMismatch' });
+}
+
 async function testNativeMessagingFailureReported() {
   const { onMessageHandler } = loadServiceWorker({
     lastErrorMessage: 'No native host',
@@ -166,6 +218,9 @@ async function run() {
   await testValidHostForwardsNativeResponse();
   await testCurrentUrlIsForwardedToNativeHost();
   await testInvalidHostRejected();
+  await testSenderHostMismatchRejected();
+  await testSenderPathMismatchRejected();
+  await testWebAccessibleMenuCannotAssertPageOrigin();
   await testNativeMessagingFailureReported();
   await testNativeMessagingTimeoutReported();
   console.log('serviceWorker tests passed');

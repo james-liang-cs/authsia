@@ -118,15 +118,28 @@ function createMockContext(opts = {}) {
     const rootListeners = {};
 
     // Sentinel object used as contentWindow for created iframes
-    const iframeContentWindow = {};
+    const iframePostedMessages = [];
+    const iframeContentWindow = {
+        postMessage(message, targetOrigin) {
+            iframePostedMessages.push({ message, targetOrigin });
+        },
+    };
+
+    const body = {
+        appendChild(child) {
+            child.parentNode = body;
+            appendedChildren.push(child);
+        },
+        removeChild(child) {
+            const idx = appendedChildren.indexOf(child);
+            if (idx !== -1) appendedChildren.splice(idx, 1);
+            child.parentNode = null;
+        },
+    };
 
     const document = {
         readyState: 'complete',
-        body: {
-            appendChild(child) {
-                appendedChildren.push(child);
-            },
-        },
+        body,
         createElement(tag) {
             if (tag === 'iframe') {
                 const iframe = {
@@ -135,21 +148,31 @@ function createMockContext(opts = {}) {
                     src: '',
                     style: {},
                     contentWindow: iframeContentWindow,
+                    parentNode: null,
                     setAttribute(name, val) { iframe[name] = val; },
                     getAttribute(name) { return iframe[name] || null; },
                     remove() {
-                        const idx = appendedChildren.indexOf(iframe);
-                        if (idx !== -1) appendedChildren.splice(idx, 1);
+                        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
                     },
                 };
                 return iframe;
             }
-            return {
+            const element = {
                 tagName: tag.toUpperCase(),
+                id: '',
                 style: {},
-                setAttribute() {},
-                getAttribute() { return null; },
+                innerHTML: '',
+                listeners: {},
+                parentNode: null,
+                setAttribute(name, val) { element[name] = val; },
+                getAttribute(name) { return element[name] !== undefined ? element[name] : null; },
+                addEventListener(type, handler) { element.listeners[type] = handler; },
+                contains(node) { return node === element; },
+                remove() {
+                    if (element.parentNode) element.parentNode.removeChild(element);
+                },
             };
+            return element;
         },
         addEventListener(type, handler, captureOpts) {
             if (!docEventListeners[type]) docEventListeners[type] = [];
@@ -174,6 +197,13 @@ function createMockContext(opts = {}) {
         set(v) { activeElement = v; },
         configurable: true,
     });
+
+    // Default vault contents: one password item and one OTP item, so the
+    // match gate auto-opens the menu for any credential field type.
+    const defaultCredentials = [
+        { kind: 'password', id: 'cred-1', name: 'Example', username: 'alice@example.com', website: 'https://' + host },
+        { kind: 'otp', id: 'cred-otp', name: 'Example', username: 'alice', website: null },
+    ];
 
     const context = {
         console,
@@ -227,7 +257,12 @@ function createMockContext(opts = {}) {
                 getURL: opts.runtimeGetURL || function getURL(p) {
                     return 'chrome-extension://fakeid/' + p;
                 },
-                sendMessage() {},
+                sendMessage: opts.sendMessage || function sendMessage() {
+                    const credentials = opts.credentials !== undefined
+                        ? opts.credentials
+                        : defaultCredentials;
+                    return Promise.resolve({ ok: true, credentials });
+                },
             },
         },
         CSS: {
@@ -244,6 +279,7 @@ function createMockContext(opts = {}) {
         appendedChildren,
         docEventListeners,
         iframeContentWindow,
+        iframePostedMessages,
         getMessageHandler() { return messageHandler; },
         setActiveElement(el) { activeElement = el; },
     };
@@ -260,11 +296,35 @@ function loadScripts(ctx, timers) {
     timers.drain();
 }
 
+/**
+ * Flushes queued debounce timers, then lets promise microtasks (the
+ * credential-match gate) settle before assertions run.
+ */
+async function flushAsync(timers) {
+    timers.flush();
+    for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+    }
+}
+
+function findFieldIcon(appendedChildren) {
+    return appendedChildren.find((c) => c.id === 'authsia-field-icon') || null;
+}
+
+function findMenuFrames(appendedChildren) {
+    return appendedChildren.filter((c) => c.tagName === 'IFRAME');
+}
+
+function focusField(docEventListeners, input) {
+    const focusinHandlers = docEventListeners['focusin'] || [];
+    focusinHandlers.forEach((handler) => handler({ target: input }));
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
 
-function testMenuInjectedOnLoginFieldFocus() {
+async function testMenuInjectedOnLoginFieldFocus() {
     const usernameInput = createMockInput({
         type: 'email',
         name: 'email',
@@ -291,7 +351,7 @@ function testMenuInjectedOnLoginFieldFocus() {
     );
 
     // Flush the debounce timer
-    timers.flush();
+    await flushAsync(timers);
 
     // An iframe should have been appended to document.body
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
@@ -307,7 +367,7 @@ function testMenuInjectedOnLoginFieldFocus() {
     assert.strictEqual(iframes[0].style.height, '300px', 'iframe should reserve the full picker height');
 }
 
-function testMenuNotInjectedWhenNoLoginFields() {
+async function testMenuNotInjectedWhenNoLoginFields() {
     const searchInput = createMockInput({ type: 'text', name: 'q' });
 
     const { context, timers, appendedChildren, docEventListeners } = createMockContext({
@@ -322,14 +382,14 @@ function testMenuNotInjectedWhenNoLoginFields() {
         focusinHandlers.forEach((handler) =>
             handler({ target: searchInput })
         );
-        timers.flush();
+        await flushAsync(timers);
     }
 
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 0, 'no menu should be injected for non-login fields');
 }
 
-function testFillMessagePopulatesFields() {
+async function testFillMessagePopulatesFields() {
     const usernameInput = createMockInput({
         type: 'text',
         name: 'username',
@@ -356,7 +416,7 @@ function testFillMessagePopulatesFields() {
     focusinHandlers.forEach((handler) =>
         handler({ target: usernameInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     // Verify menu was injected
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
@@ -369,6 +429,7 @@ function testFillMessagePopulatesFields() {
 
     messageHandler({
         source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
         data: {
             type: 'AUTHSIA_FILL',
             username: 'alice@example.com',
@@ -398,7 +459,7 @@ function testFillMessagePopulatesFields() {
     );
 }
 
-function testOtpMenuInjectedAndFillMessagePopulatesActiveField() {
+async function testOtpMenuInjectedAndFillMessagePopulatesActiveField() {
     const otpInput = createMockInput({
         type: 'text',
         name: 'otp',
@@ -419,7 +480,7 @@ function testOtpMenuInjectedAndFillMessagePopulatesActiveField() {
     focusinHandlers.forEach((handler) =>
         handler({ target: otpInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 1, 'one menu should be injected for OTP fields');
@@ -431,6 +492,7 @@ function testOtpMenuInjectedAndFillMessagePopulatesActiveField() {
     const messageHandler = getMessageHandler();
     messageHandler({
         source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
         data: {
             type: 'AUTHSIA_FILL',
             otpCode: '123456',
@@ -441,7 +503,7 @@ function testOtpMenuInjectedAndFillMessagePopulatesActiveField() {
     assert.ok(otpInput.events.includes('input'), 'OTP field should receive input event');
 }
 
-function testDynamicOTPFieldFocusInjectsMenuBeforeRescan() {
+async function testDynamicOTPFieldFocusInjectsMenuBeforeRescan() {
     const inputs = [];
     const otpInput = createMockInput({
         type: 'text',
@@ -461,13 +523,13 @@ function testDynamicOTPFieldFocusInjectsMenuBeforeRescan() {
     focusinHandlers.forEach((handler) =>
         handler({ target: otpInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 1, 'newly inserted OTP fields should open the menu on focus');
 }
 
-function testPasswordOnlyStepInjectsAndFillsActivePassword() {
+async function testPasswordOnlyStepInjectsAndFillsActivePassword() {
     const passwordInput = createMockInput({
         type: 'password',
         name: 'password',
@@ -488,7 +550,7 @@ function testPasswordOnlyStepInjectsAndFillsActivePassword() {
     focusinHandlers.forEach((handler) =>
         handler({ target: passwordInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 1, 'password-only steps should still open the menu');
@@ -496,6 +558,7 @@ function testPasswordOnlyStepInjectsAndFillsActivePassword() {
     const messageHandler = getMessageHandler();
     messageHandler({
         source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
         data: {
             type: 'AUTHSIA_FILL',
             username: 'alice@example.com',
@@ -506,7 +569,7 @@ function testPasswordOnlyStepInjectsAndFillsActivePassword() {
     assert.strictEqual(passwordInput.value, 'super-secret-123', 'active password field should be filled');
 }
 
-function testUsernameOnlyStepInjectsAndFillsActiveUsername() {
+async function testUsernameOnlyStepInjectsAndFillsActiveUsername() {
     const usernameInput = createMockInput({
         type: 'email',
         name: 'email',
@@ -527,7 +590,7 @@ function testUsernameOnlyStepInjectsAndFillsActiveUsername() {
     focusinHandlers.forEach((handler) =>
         handler({ target: usernameInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 1, 'username-only steps should still open the menu');
@@ -535,6 +598,7 @@ function testUsernameOnlyStepInjectsAndFillsActiveUsername() {
     const messageHandler = getMessageHandler();
     messageHandler({
         source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
         data: {
             type: 'AUTHSIA_FILL',
             username: 'alice@example.com',
@@ -545,7 +609,7 @@ function testUsernameOnlyStepInjectsAndFillsActiveUsername() {
     assert.strictEqual(usernameInput.value, 'alice@example.com', 'active username field should be filled');
 }
 
-function testSplitOTPFillDistributesDigits() {
+async function testSplitOTPFillDistributesDigits() {
     const otpInputs = Array.from({ length: 6 }, (_, index) => createMockInput({
         type: 'text',
         name: 'otp-' + index,
@@ -567,7 +631,7 @@ function testSplitOTPFillDistributesDigits() {
     focusinHandlers.forEach((handler) =>
         handler({ target: otpInputs[0] })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 1, 'split OTP fields should open the menu');
@@ -575,6 +639,7 @@ function testSplitOTPFillDistributesDigits() {
     const messageHandler = getMessageHandler();
     messageHandler({
         source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
         data: {
             type: 'AUTHSIA_FILL',
             otpCode: '123456',
@@ -588,7 +653,7 @@ function testSplitOTPFillDistributesDigits() {
     );
 }
 
-function testFillMessageIgnoredWithoutCredentials() {
+async function testFillMessageIgnoredWithoutCredentials() {
     const usernameInput = createMockInput({
         type: 'text',
         name: 'username',
@@ -614,13 +679,14 @@ function testFillMessageIgnoredWithoutCredentials() {
     focusinHandlers.forEach((handler) =>
         handler({ target: usernameInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     const messageHandler = getMessageHandler();
 
     // Send incomplete fill message (missing password)
     messageHandler({
         source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
         data: {
             type: 'AUTHSIA_FILL',
             username: 'alice@example.com',
@@ -631,7 +697,7 @@ function testFillMessageIgnoredWithoutCredentials() {
     assert.strictEqual(passwordInput.value, '', 'password should not be filled');
 }
 
-function testFillMessageRejectedFromWrongSource() {
+async function testFillMessageRejectedFromWrongSource() {
     const usernameInput = createMockInput({
         type: 'text',
         name: 'username',
@@ -656,13 +722,14 @@ function testFillMessageRejectedFromWrongSource() {
     focusinHandlers.forEach((handler) =>
         handler({ target: usernameInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     const messageHandler = getMessageHandler();
 
     // Send fill message from a WRONG source (not the iframe's contentWindow)
     messageHandler({
         source: {},
+        origin: 'https://example.com',
         data: {
             type: 'AUTHSIA_FILL',
             username: 'alice@example.com',
@@ -674,7 +741,7 @@ function testFillMessageRejectedFromWrongSource() {
     assert.strictEqual(passwordInput.value, '', 'fill from wrong source should be rejected');
 }
 
-function testCloseMessageRemovesMenu() {
+async function testCloseMessageRemovesMenu() {
     const usernameInput = createMockInput({
         type: 'email',
         name: 'email',
@@ -700,7 +767,7 @@ function testCloseMessageRemovesMenu() {
     focusinHandlers.forEach((handler) =>
         handler({ target: usernameInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     assert.strictEqual(
         appendedChildren.filter((c) => c.tagName === 'IFRAME').length,
@@ -712,6 +779,7 @@ function testCloseMessageRemovesMenu() {
     const messageHandler = getMessageHandler();
     messageHandler({
         source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
         data: { type: 'AUTHSIA_CLOSE' },
     });
 
@@ -719,7 +787,7 @@ function testCloseMessageRemovesMenu() {
     assert.strictEqual(iframes.length, 0, 'menu should be removed after AUTHSIA_CLOSE');
 }
 
-function testMenuFieldTypeParameter() {
+async function testMenuFieldTypeParameter() {
     const usernameInput = createMockInput({
         type: 'email',
         name: 'email',
@@ -743,7 +811,7 @@ function testMenuFieldTypeParameter() {
     focusinHandlers.forEach((handler) =>
         handler({ target: usernameInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     let iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.ok(
@@ -755,7 +823,7 @@ function testMenuFieldTypeParameter() {
     focusinHandlers.forEach((handler) =>
         handler({ target: passwordInput })
     );
-    timers.flush();
+    await flushAsync(timers);
 
     iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 1, 'should have exactly one menu after re-focus');
@@ -765,7 +833,7 @@ function testMenuFieldTypeParameter() {
     );
 }
 
-function testInvalidatedExtensionContextDoesNotThrowOnFocus() {
+async function testInvalidatedExtensionContextDoesNotThrowOnFocus() {
     const usernameInput = createMockInput({
         type: 'email',
         name: 'email',
@@ -787,18 +855,16 @@ function testInvalidatedExtensionContextDoesNotThrowOnFocus() {
     loadScripts(context, timers);
 
     const focusinHandlers = docEventListeners['focusin'] || [];
-    assert.doesNotThrow(() => {
-        focusinHandlers.forEach((handler) =>
-            handler({ target: usernameInput })
-        );
-        timers.flush();
-    }, 'stale content script should ignore focus instead of throwing');
+    focusinHandlers.forEach((handler) =>
+        handler({ target: usernameInput })
+    );
+    await flushAsync(timers);
 
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 0, 'no iframe should be injected from a stale context');
 }
 
-function testInitRetriesUntilHeuristicsAvailable() {
+async function testInitRetriesUntilHeuristicsAvailable() {
     const timers = createTimerController();
     const docEventListeners = {};
 
@@ -888,25 +954,291 @@ function testInitRetriesUntilHeuristicsAvailable() {
     assert.ok(hasFocusin, 'focusin handler should be registered after heuristics loads');
 }
 
+async function testMenuNotInjectedWhenNoMatchingCredentials() {
+    const usernameInput = createMockInput({
+        type: 'text',
+        name: 'username',
+        autocomplete: 'username',
+    });
+    const passwordInput = createMockInput({
+        type: 'password',
+        name: 'password',
+    });
+
+    const { context, timers, appendedChildren, docEventListeners } = createMockContext({
+        inputs: [usernameInput, passwordInput],
+        host: 'nomatch.example.com',
+        credentials: [],
+    });
+
+    loadScripts(context, timers);
+
+    focusField(docEventListeners, usernameInput);
+    await flushAsync(timers);
+
+    assert.strictEqual(
+        findMenuFrames(appendedChildren).length,
+        0,
+        'menu should not auto-open when the vault has no matches'
+    );
+    assert.ok(
+        findFieldIcon(appendedChildren),
+        'field icon should still be available when there are no matches'
+    );
+}
+
+async function testFieldIconClickTogglesMenu() {
+    const passwordInput = createMockInput({
+        type: 'password',
+        name: 'password',
+        autocomplete: 'current-password',
+    });
+
+    const { context, timers, appendedChildren, docEventListeners } = createMockContext({
+        inputs: [passwordInput],
+        host: 'accounts.example.com',
+        credentials: [],
+    });
+
+    loadScripts(context, timers);
+
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+
+    assert.strictEqual(
+        findMenuFrames(appendedChildren).length,
+        0,
+        'menu should not auto-open without matches'
+    );
+
+    const icon = findFieldIcon(appendedChildren);
+    assert.ok(icon, 'icon should be rendered for the focused credential field');
+    assert.ok(icon.style.top.endsWith('px'), 'icon should be vertically positioned');
+    assert.ok(icon.style.left.endsWith('px'), 'icon should be horizontally positioned');
+    assert.ok(icon.listeners && icon.listeners.click, 'icon should have a click handler');
+
+    const clickEvent = { preventDefault() {}, stopPropagation() {} };
+    icon.listeners.click(clickEvent);
+    assert.strictEqual(
+        findMenuFrames(appendedChildren).length,
+        1,
+        'icon click should open the menu'
+    );
+
+    icon.listeners.click(clickEvent);
+    assert.strictEqual(
+        findMenuFrames(appendedChildren).length,
+        0,
+        'second icon click should close the menu'
+    );
+}
+
+async function testContextlessEmailFieldShowsNothing() {
+    const emailInput = createMockInput({
+        type: 'email',
+        name: 'email',
+        placeholder: 'Your email',
+    });
+
+    const { context, timers, appendedChildren, docEventListeners } = createMockContext({
+        inputs: [emailInput],
+        host: 'newsletter.example.com',
+    });
+
+    loadScripts(context, timers);
+
+    focusField(docEventListeners, emailInput);
+    await flushAsync(timers);
+
+    assert.strictEqual(
+        findMenuFrames(appendedChildren).length,
+        0,
+        'no menu should appear for a contextless email field'
+    );
+    assert.strictEqual(
+        findFieldIcon(appendedChildren),
+        null,
+        'no icon should appear for a contextless email field'
+    );
+}
+
+async function testResizeMessageClampsMenuHeight() {
+    const passwordInput = createMockInput({
+        type: 'password',
+        name: 'password',
+    });
+
+    const {
+        context, timers, appendedChildren, docEventListeners,
+        iframeContentWindow, getMessageHandler,
+    } = createMockContext({
+        inputs: [passwordInput],
+        host: 'accounts.example.com',
+    });
+
+    loadScripts(context, timers);
+
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+
+    const iframes = findMenuFrames(appendedChildren);
+    assert.strictEqual(iframes.length, 1, 'menu should be injected');
+    assert.strictEqual(iframes[0].style.height, '300px', 'menu should start at max height');
+
+    const messageHandler = getMessageHandler();
+    messageHandler({
+        source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
+        data: { type: 'AUTHSIA_RESIZE', height: 140 },
+    });
+    assert.strictEqual(iframes[0].style.height, '140px', 'resize should shrink the menu');
+
+    messageHandler({
+        source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
+        data: { type: 'AUTHSIA_RESIZE', height: 9999 },
+    });
+    assert.strictEqual(iframes[0].style.height, '300px', 'resize should clamp to max height');
+
+    messageHandler({
+        source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
+        data: { type: 'AUTHSIA_RESIZE', height: 10 },
+    });
+    assert.strictEqual(iframes[0].style.height, '72px', 'resize should clamp to min height');
+}
+
+async function testMatchCacheIsScopedToCurrentURL() {
+    const passwordInput = createMockInput({ type: 'password', name: 'password' });
+    const requests = [];
+    const { context, timers, appendedChildren, docEventListeners } = createMockContext({
+        inputs: [passwordInput],
+        host: 'example.com',
+        sendMessage(message) {
+            requests.push(message.currentURL);
+            const credentials = message.currentURL.endsWith('/login-b')
+                ? [{ kind: 'password', id: 'p1' }]
+                : [];
+            return Promise.resolve({ ok: true, credentials });
+        },
+    });
+
+    context.location.href = 'https://example.com/login-a';
+    loadScripts(context, timers);
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+
+    context.location.href = 'https://example.com/login-b';
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+
+    assert.deepStrictEqual(requests, [
+        'https://example.com/login-a',
+        'https://example.com/login-b',
+    ]);
+    assert.strictEqual(findMenuFrames(appendedChildren).length, 1);
+}
+
+async function testBlurInvalidatesPendingMatchLookup() {
+    const passwordInput = createMockInput({ type: 'password', name: 'password' });
+    const { context, timers, appendedChildren, docEventListeners } = createMockContext({
+        inputs: [passwordInput],
+    });
+
+    loadScripts(context, timers);
+    focusField(docEventListeners, passwordInput);
+    const focusoutHandlers = docEventListeners.focusout || [];
+    focusoutHandlers.forEach((handler) => handler({ target: passwordInput }));
+    await flushAsync(timers);
+
+    assert.strictEqual(
+        findMenuFrames(appendedChildren).length,
+        0,
+        'a field blurred before lookup completion must not reopen its menu'
+    );
+    assert.strictEqual(findFieldIcon(appendedChildren), null);
+}
+
+async function testMenuRequestsAreBridgedWithDocumentContext() {
+    const passwordInput = createMockInput({ type: 'password', name: 'password' });
+    const runtimeMessages = [];
+    const {
+        context, timers, appendedChildren, docEventListeners, iframeContentWindow,
+        iframePostedMessages, getMessageHandler,
+    } = createMockContext({
+        inputs: [passwordInput],
+        host: 'example.com',
+        sendMessage(message) {
+            runtimeMessages.push(message);
+            return Promise.resolve({ ok: true, credentials: [] });
+        },
+    });
+
+    context.location.href = 'https://example.com/actual-login';
+    loadScripts(context, timers);
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+    const icon = findFieldIcon(appendedChildren);
+    icon.listeners.click({ preventDefault() {}, stopPropagation() {} });
+
+    getMessageHandler()({
+        source: iframeContentWindow,
+        origin: 'chrome-extension://fakeid',
+        data: {
+            type: 'AUTHSIA_REQUEST',
+            requestId: 'request-1',
+            message: {
+                type: 'AUTHsia_GET_CREDENTIALS',
+                host: 'forged.example',
+                currentURL: 'https://forged.example/login',
+                credentialId: 'credential-1',
+            },
+        },
+    });
+    await flushAsync(timers);
+
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(runtimeMessages[runtimeMessages.length - 1])), {
+        type: 'AUTHsia_GET_CREDENTIALS',
+        host: 'example.com',
+        currentURL: 'https://example.com/actual-login',
+        credentialId: 'credential-1',
+    });
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(iframePostedMessages[0])), {
+        message: {
+            type: 'AUTHSIA_RESPONSE',
+            requestId: 'request-1',
+            response: { ok: true, credentials: [] },
+        },
+        targetOrigin: 'chrome-extension://fakeid',
+    });
+}
+
 // ============================================================================
 // Runner
 // ============================================================================
 
-function run() {
-    testMenuInjectedOnLoginFieldFocus();
-    testMenuNotInjectedWhenNoLoginFields();
-    testFillMessagePopulatesFields();
-    testOtpMenuInjectedAndFillMessagePopulatesActiveField();
-    testDynamicOTPFieldFocusInjectsMenuBeforeRescan();
-    testPasswordOnlyStepInjectsAndFillsActivePassword();
-    testUsernameOnlyStepInjectsAndFillsActiveUsername();
-    testSplitOTPFillDistributesDigits();
-    testFillMessageIgnoredWithoutCredentials();
-    testFillMessageRejectedFromWrongSource();
-    testCloseMessageRemovesMenu();
-    testMenuFieldTypeParameter();
-    testInvalidatedExtensionContextDoesNotThrowOnFocus();
-    testInitRetriesUntilHeuristicsAvailable();
+async function run() {
+    await testMenuInjectedOnLoginFieldFocus();
+    await testMenuNotInjectedWhenNoLoginFields();
+    await testFillMessagePopulatesFields();
+    await testOtpMenuInjectedAndFillMessagePopulatesActiveField();
+    await testDynamicOTPFieldFocusInjectsMenuBeforeRescan();
+    await testPasswordOnlyStepInjectsAndFillsActivePassword();
+    await testUsernameOnlyStepInjectsAndFillsActiveUsername();
+    await testSplitOTPFillDistributesDigits();
+    await testFillMessageIgnoredWithoutCredentials();
+    await testFillMessageRejectedFromWrongSource();
+    await testCloseMessageRemovesMenu();
+    await testMenuFieldTypeParameter();
+    await testInvalidatedExtensionContextDoesNotThrowOnFocus();
+    await testInitRetriesUntilHeuristicsAvailable();
+    await testMenuNotInjectedWhenNoMatchingCredentials();
+    await testFieldIconClickTogglesMenu();
+    await testContextlessEmailFieldShowsNothing();
+    await testResizeMessageClampsMenuHeight();
+    await testMatchCacheIsScopedToCurrentURL();
+    await testBlurInvalidatesPendingMatchLookup();
+    await testMenuRequestsAreBridgedWithDocumentContext();
     console.log('autofill tests passed');
 }
 

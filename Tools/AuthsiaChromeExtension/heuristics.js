@@ -15,6 +15,19 @@
     };
 
     // ============================================================================
+    // Negative Keywords (hard reject for any credential classification)
+    // ============================================================================
+    // Fields whose name/id/placeholder/aria-label mention these are never
+    // credential fields: search boxes, promo/invite/ZIP "code" fields, card
+    // fields, newsletter signups, and contact-form fields.
+    const NEGATIVE_KEYWORDS = [
+        'search', 'promo', 'coupon', 'discount', 'invite', 'voucher', 'redeem',
+        'gift', 'zip', 'postal', 'country', 'quantity', 'qty',
+        'cvv', 'cvc', 'card', 'expiry', 'expiration',
+        'newsletter', 'subscribe', 'comment', 'message',
+    ];
+
+    // ============================================================================
     // Field Scoring Weights
     // ============================================================================
     const WEIGHTS = {
@@ -103,6 +116,40 @@
         return keywords.some(keyword => lower.includes(keyword));
     }
 
+    function hasNegativeSignal(input) {
+        if (!input) return false;
+        return [
+            input.getAttribute('name'),
+            input.getAttribute('id'),
+            input.getAttribute('placeholder'),
+            input.getAttribute('aria-label'),
+        ].some(value => {
+            if (!value) return false;
+            const tokens = String(value)
+                .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+                .toLowerCase()
+                .split(/[^a-z0-9]+/)
+                .filter(Boolean);
+            return tokens.some(token => NEGATIVE_KEYWORDS.includes(token));
+        });
+    }
+
+    // OTP keywords. A bare "code" is NOT sufficient (promo/invite/ZIP code
+    // fields); it only counts when the same attribute qualifies it, e.g.
+    // "security code" or "authentication code".
+    const OTP_KEYWORDS = ['otp', 'totp', 'mfa', '2fa', 'verification', 'passcode', 'one-time-code'];
+    const OTP_CODE_QUALIFIERS = ['security', 'authentication', 'verification'];
+
+    function containsOTPSignal(value) {
+        if (!value) return false;
+        const lower = value.toLowerCase();
+        if (OTP_KEYWORDS.some(keyword => lower.includes(keyword))) {
+            return true;
+        }
+        return lower.includes('code') &&
+            OTP_CODE_QUALIFIERS.some(qualifier => lower.includes(qualifier));
+    }
+
     // ============================================================================
     // Field Scoring
     // ============================================================================
@@ -113,6 +160,8 @@
         const type = (input.getAttribute('type') || 'text').toLowerCase();
         const validTypes = ['text', 'email', 'tel', 'url', 'search', ''];
         if (!validTypes.includes(type)) return 0;
+
+        if (hasNegativeSignal(input)) return 0;
 
         const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
         const name = (input.getAttribute('name') || '').toLowerCase();
@@ -161,9 +210,18 @@
         const type = (input.getAttribute('type') || '').toLowerCase();
         if (type !== 'password') return 0;
 
+        if (hasNegativeSignal(input)) return 0;
+
         const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
         const name = (input.getAttribute('name') || '').toLowerCase();
         const id = (input.getAttribute('id') || '').toLowerCase();
+
+        // Registration / change-password / confirmation fields are not login
+        // targets: reject them outright instead of merely penalizing.
+        if (autocomplete === 'new-password') return 0;
+        if (containsAny(name, ['confirm', 'retype', 'repeat', 'verify'])) return 0;
+        if (containsAny(id, ['confirm', 'retype', 'repeat', 'verify'])) return 0;
+
         const placeholder = (input.getAttribute('placeholder') || '').toLowerCase();
         const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
         const labelText = getLabelText(input);
@@ -172,16 +230,10 @@
 
         // Autocomplete hints
         if (autocomplete === 'current-password') score += WEIGHTS.autocompleteCurrentPassword;
-        // Penalize new-password fields (registration forms)
-        if (autocomplete === 'new-password') score -= 50;
 
         // Name/ID hints for login vs registration
         if (containsAny(name, ['pass', 'password', 'pwd'])) score += WEIGHTS.nameContainsPass;
         if (containsAny(id, ['pass', 'password', 'pwd'])) score += WEIGHTS.idContainsPass;
-
-        // Penalize confirmation fields
-        if (containsAny(name, ['confirm', 'retype', 'repeat', 'verify'])) score -= 80;
-        if (containsAny(id, ['confirm', 'retype', 'repeat', 'verify'])) score -= 80;
 
         // Placeholder
         if (containsAny(placeholder, ['pass', 'password'])) score += WEIGHTS.placeholderContainsPass;
@@ -202,21 +254,22 @@
         const validTypes = ['text', 'tel', 'number', 'search', ''];
         if (!validTypes.includes(type)) return 0;
 
+        if (hasNegativeSignal(input)) return 0;
+
         const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
         const name = (input.getAttribute('name') || '').toLowerCase();
         const id = (input.getAttribute('id') || '').toLowerCase();
         const placeholder = (input.getAttribute('placeholder') || '').toLowerCase();
         const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
         const labelText = getLabelText(input);
-        const keywords = ['otp', 'totp', 'mfa', '2fa', 'code', 'verification'];
 
         let score = 0;
         if (autocomplete === 'one-time-code') score += WEIGHTS.autocompleteOTP;
-        if (containsAny(name, keywords)) score += WEIGHTS.nameContainsOTP;
-        if (containsAny(id, keywords)) score += WEIGHTS.idContainsOTP;
-        if (containsAny(placeholder, keywords)) score += WEIGHTS.placeholderContainsOTP;
-        if (containsAny(ariaLabel, keywords)) score += WEIGHTS.ariaLabelContainsOTP;
-        if (containsAny(labelText, keywords)) score += WEIGHTS.labelTextContainsOTP;
+        if (containsOTPSignal(name)) score += WEIGHTS.nameContainsOTP;
+        if (containsOTPSignal(id)) score += WEIGHTS.idContainsOTP;
+        if (containsOTPSignal(placeholder)) score += WEIGHTS.placeholderContainsOTP;
+        if (containsOTPSignal(ariaLabel)) score += WEIGHTS.ariaLabelContainsOTP;
+        if (containsOTPSignal(labelText)) score += WEIGHTS.labelTextContainsOTP;
 
         return score;
     }
@@ -280,21 +333,53 @@
     }
 
     function findAllLoginFields(doc) {
-        const loginForms = findLoginForms(doc);
         const fields = new Set();
 
+        const loginForms = findLoginForms(doc);
         for (const form of loginForms) {
             if (form.usernameInput) fields.add(form.usernameInput);
             if (form.passwordInput) fields.add(form.passwordInput);
         }
 
-        const otpInputs = toArray(doc.querySelectorAll('input'))
-            .filter(input => scoreOTPField(input) > 0);
-        for (const input of otpInputs) {
-            fields.add(input);
+        for (const input of toArray(doc.querySelectorAll('input'))) {
+            if (classifyCredentialField(input, doc) !== null) {
+                fields.add(input);
+            }
         }
 
         return Array.from(fields);
+    }
+
+    // ============================================================================
+    // Page-Context Classification
+    // ============================================================================
+    // A bare username/email field is only a login field when the page shows
+    // login intent: a visible password field exists, or the field explicitly
+    // declares autocomplete="username" (multi-step sign-in flows). This keeps
+    // newsletter/contact/email fields from opening the menu.
+
+    function pageHasPasswordField(doc) {
+        return toArray(doc.querySelectorAll('input[type="password"]'))
+            .some(input => scorePasswordField(input) > 0);
+    }
+
+    function usernameContextAllowed(input, doc) {
+        const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
+        if (autocomplete === 'username') return true;
+        return pageHasPasswordField(doc);
+    }
+
+    function classifyCredentialField(input, doc) {
+        if (scoreOTPField(input) > 0) {
+            return 'otp';
+        }
+        if (scorePasswordField(input) > 0) {
+            return 'password';
+        }
+        if (scoreUsernameField(input) > 0 && usernameContextAllowed(input, doc)) {
+            return 'username';
+        }
+        return null;
     }
 
     // ============================================================================
@@ -307,6 +392,8 @@
         scoreOTPField,
         findLoginForms,
         findAllLoginFields,
+        pageHasPasswordField,
+        classifyCredentialField,
         isVisible,
         isEditable,
         SITE_OVERRIDES,
