@@ -233,7 +233,9 @@ enum AutomationAccessResolver {
                 environment: environment,
                 terminalIdentifier: terminalIdentifier,
                 processSessionIdentifier: processSessionIdentifier,
-                ancestralScope: ancestralScope
+                ancestralScope: ancestralScope,
+                processAncestry: processAncestry,
+                requestedCommand: requestedCommand
             ) ?? AgentRuntimeContextResolver.explicitAgentSessionScope(
                 environment: environment,
                 processSessionIdentifier: processSessionIdentifier

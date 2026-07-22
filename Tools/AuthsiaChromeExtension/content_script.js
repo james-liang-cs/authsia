@@ -111,6 +111,36 @@
     return fieldType === 'otp' ? 'otp' : 'password';
   }
 
+  // Autofill already completed for this login form — keep the field icon for
+  // manual access, but do not auto-open the picker again.
+  function loginFormAlreadyFilled(input) {
+    const Heuristics = root.AuthsiaHeuristics;
+    if (!Heuristics || !input) {
+      return false;
+    }
+
+    const forms = Heuristics.findLoginForms(document);
+    for (let index = 0; index < forms.length; index++) {
+      const form = forms[index];
+      if (form.usernameInput !== input && form.passwordInput !== input) {
+        continue;
+      }
+      const usernameFilled = Boolean(
+        form.usernameInput && String(form.usernameInput.value || '').trim()
+      );
+      const passwordFilled = Boolean(
+        form.passwordInput && String(form.passwordInput.value || '')
+      );
+      return usernameFilled && passwordFilled;
+    }
+
+    const fieldType = credentialFieldType(input);
+    if (fieldType === 'otp') {
+      return Boolean(String(input.value || '').trim());
+    }
+    return false;
+  }
+
   function cachedMatchCount(key) {
     const entry = matchCache.get(key);
     if (!entry) {
@@ -301,7 +331,8 @@
     iframe.style.borderRadius = '12px';
     iframe.style.boxShadow = '0 4px 24px rgba(0, 0, 0, 0.3)';
     iframe.style.overflow = 'hidden';
-    iframe.style.colorScheme = 'dark';
+    iframe.style.backgroundColor = 'transparent';
+    iframe.style.colorScheme = 'normal';
   }
 
   // ============================================================================
@@ -320,7 +351,9 @@
     // Remove any existing menu
     removeMenu();
     activeInput = input;
-    currentMenuHeight = MENU_MAX_HEIGHT;
+    // Start compact; AUTHSIA_RESIZE grows to the real card height. Starting at
+    // MENU_MAX_HEIGHT left a blank band under short menus.
+    currentMenuHeight = MENU_MIN_HEIGHT;
 
     const host = getHost();
     if (!host) {
@@ -586,11 +619,21 @@
         return;
       }
 
+      if (loginFormAlreadyFilled(target)) {
+        return;
+      }
+
       const fieldType = credentialFieldType(target) || 'username';
       fetchMatchCount(host, getCurrentURL(), fieldType).then((count) => {
         // Only auto-open when the vault has something to offer and the
         // field still has focus. The field icon covers every other case.
-        if (count > 0 && generation === focusGeneration && focusedInput === target && isExtensionContextValid) {
+        if (
+          count > 0 &&
+          generation === focusGeneration &&
+          focusedInput === target &&
+          isExtensionContextValid &&
+          !loginFormAlreadyFilled(target)
+        ) {
           injectMenu(target);
         }
       });

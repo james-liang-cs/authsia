@@ -189,12 +189,16 @@ struct SessionCache {
     static func scopedKeychainAccount(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         terminalIdentifier: String? = TerminalSessionScope.currentTerminalIdentifier(),
-        processSessionIdentifier: Int32? = TerminalSessionScope.currentProcessSessionIdentifier()
+        processSessionIdentifier: Int32? = TerminalSessionScope.currentProcessSessionIdentifier(),
+        processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
+        requestedCommand: String? = nil
     ) -> String? {
         guard let identity = sessionScope(
             environment: environment,
             terminalIdentifier: terminalIdentifier,
-            processSessionIdentifier: processSessionIdentifier
+            processSessionIdentifier: processSessionIdentifier,
+            processAncestry: processAncestry,
+            requestedCommand: requestedCommand
         ) else {
             return nil
         }
@@ -220,10 +224,16 @@ struct SessionCache {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         terminalIdentifier: String? = TerminalSessionScope.currentTerminalIdentifier(),
         processSessionIdentifier: Int32? = TerminalSessionScope.currentProcessSessionIdentifier(),
-        ancestralScope: () -> String? = TerminalSessionScope.currentAncestralScope
+        ancestralScope: () -> String? = TerminalSessionScope.currentAncestralScope,
+        processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
+        requestedCommand: String? = nil
     ) -> String? {
         guard !hasAutomationCredential(in: environment) else {
             return nil
+        }
+        if requestedCommand == BridgeContext.chromeNativeHostRequestedCommand
+            || BridgeContext.isChromeNativeHostAncestry(processAncestry) {
+            return BridgeContext.chromeNativeHostSessionScope
         }
         if let identity = sessionIdentity(
             terminalIdentifier: terminalIdentifier,

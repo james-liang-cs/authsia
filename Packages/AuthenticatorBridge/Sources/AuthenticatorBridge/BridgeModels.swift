@@ -97,6 +97,10 @@ public struct BridgeOptions: Codable, Equatable {
 public struct BridgeContext: Codable, Equatable {
     public static let chromeNativeHostRequestedCommand = "chromeNativeHost"
     public static let chromeNativeHostProcessName = "AuthsiaNativeHost"
+    /// Stable Bridge session scope for Chrome autofill CLI invocations.
+    /// Chrome native-host has no TTY, so without this each short-lived `authsia`
+    /// process would re-prompt for approval on every list/get.
+    public static let chromeNativeHostSessionScope = "chrome-native-host"
     public static let workspaceStatusRequestedCommand = "workspace status"
     public static let workspaceSyncPreviewRequestedCommand = "workspace sync preview"
     public static let workspaceEnvValidateRequestedCommand = "workspace env validate"
@@ -104,6 +108,10 @@ public struct BridgeContext: Codable, Equatable {
 
     public static func isChromeNativeHostProcessName(_ processName: String?) -> Bool {
         processName == chromeNativeHostProcessName
+    }
+
+    public static func isChromeNativeHostAncestry(_ processAncestry: [AgenticProcessReference]) -> Bool {
+        processAncestry.contains { isChromeNativeHostProcessName($0.processName) }
     }
 
     public let isTTY: Bool

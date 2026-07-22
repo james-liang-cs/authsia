@@ -287,6 +287,49 @@ struct SessionCacheTests {
         #expect(account == nil)
     }
 
+    @Test("chrome native host ancestry uses a stable session scope")
+    func chromeNativeHostAncestryUsesStableSessionScope() {
+        let ancestry = [
+            AgenticProcessReference(processName: "authsia", bundleIdentifier: nil),
+            AgenticProcessReference(
+                processName: BridgeContext.chromeNativeHostProcessName,
+                bundleIdentifier: nil
+            ),
+            AgenticProcessReference(processName: "Google Chrome", bundleIdentifier: "com.google.Chrome"),
+        ]
+
+        let scope = SessionCache.sessionScope(
+            environment: [:],
+            terminalIdentifier: nil,
+            processSessionIdentifier: nil,
+            ancestralScope: { nil },
+            processAncestry: ancestry
+        )
+        let account = SessionCache.scopedKeychainAccount(
+            environment: [:],
+            terminalIdentifier: nil,
+            processSessionIdentifier: nil,
+            processAncestry: ancestry
+        )
+
+        #expect(scope == BridgeContext.chromeNativeHostSessionScope)
+        #expect(account == "terminal:\(BridgeContext.chromeNativeHostSessionScope)")
+    }
+
+    @Test("chrome native host requested command uses a stable session scope")
+    func chromeNativeHostRequestedCommandUsesStableSessionScope() {
+        let scope = SessionCache.sessionScope(
+            environment: [:],
+            terminalIdentifier: nil,
+            processSessionIdentifier: nil,
+            ancestralScope: { nil },
+            processAncestry: [],
+            requestedCommand: BridgeContext.chromeNativeHostRequestedCommand
+        )
+
+        #expect(scope == BridgeContext.chromeNativeHostSessionScope)
+    }
+
     @Test("automation credentials disable bridge session scope")
     func automationCredentialsDisableBridgeSessionScope() {
         let scope = SessionCache.sessionScope(

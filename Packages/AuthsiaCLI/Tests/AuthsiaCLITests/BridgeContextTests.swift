@@ -252,6 +252,27 @@ struct BridgeContextTests {
         #expect(ctx.sessionScope == "tty:/dev/ttys004:sid:94228")
     }
 
+    @Test("chrome native host ancestry uses stable chrome session scope")
+    func chromeNativeHostAncestryUsesStableChromeSessionScope() {
+        let ctx = AutomationAccessResolver.bridgeContext(
+            requestedCommand: "list",
+            environment: [:],
+            terminalIdentifier: nil,
+            processSessionIdentifier: nil,
+            ancestralScope: { nil },
+            processAncestry: [
+                AgenticProcessReference(processName: "authsia", bundleIdentifier: nil),
+                AgenticProcessReference(
+                    processName: BridgeContext.chromeNativeHostProcessName,
+                    bundleIdentifier: nil
+                ),
+            ]
+        )
+
+        #expect(ctx.sessionScope == BridgeContext.chromeNativeHostSessionScope)
+        #expect(ctx.requestedCommand == "list")
+    }
+
     @Test("automation context does not inherit ancestor terminal scope")
     func automationContextDoesNotInheritAncestorTerminalScope() {
         let ctx = AutomationAccessResolver.bridgeContext(

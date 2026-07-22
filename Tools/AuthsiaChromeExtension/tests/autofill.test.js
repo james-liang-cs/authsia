@@ -364,7 +364,7 @@ async function testMenuInjectedOnLoginFieldFocus() {
         iframes[0].src.includes('host=login.example.com'),
         'iframe src should include the host parameter'
     );
-    assert.strictEqual(iframes[0].style.height, '300px', 'iframe should reserve the full picker height');
+    assert.strictEqual(iframes[0].style.height, '72px', 'iframe should start compact until content resizes');
 }
 
 async function testMenuNotInjectedWhenNoLoginFields() {
@@ -387,6 +387,49 @@ async function testMenuNotInjectedWhenNoLoginFields() {
 
     const iframes = appendedChildren.filter((c) => c.tagName === 'IFRAME');
     assert.strictEqual(iframes.length, 0, 'no menu should be injected for non-login fields');
+}
+
+async function testMenuNotAutoOpenedWhenLoginAlreadyFilled() {
+    const usernameInput = createMockInput({
+        type: 'text',
+        name: 'username',
+        autocomplete: 'username',
+    });
+    const passwordInput = createMockInput({
+        type: 'password',
+        name: 'password',
+    });
+    usernameInput.value = 'tianlang8158';
+    passwordInput.value = 'already-filled';
+
+    const { context, timers, appendedChildren, docEventListeners } = createMockContext({
+        inputs: [usernameInput, passwordInput],
+        host: 'github.com',
+    });
+
+    loadScripts(context, timers);
+
+    focusField(docEventListeners, usernameInput);
+    await flushAsync(timers);
+
+    assert.strictEqual(
+        findMenuFrames(appendedChildren).length,
+        0,
+        'menu should not auto-open when username and password are already filled'
+    );
+    assert.ok(
+        findFieldIcon(appendedChildren),
+        'field icon should remain available for manual access'
+    );
+
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+
+    assert.strictEqual(
+        findMenuFrames(appendedChildren).length,
+        0,
+        'menu should not auto-open on password focus after fill'
+    );
 }
 
 async function testFillMessagePopulatesFields() {
@@ -1083,7 +1126,7 @@ async function testResizeMessageClampsMenuHeight() {
 
     const iframes = findMenuFrames(appendedChildren);
     assert.strictEqual(iframes.length, 1, 'menu should be injected');
-    assert.strictEqual(iframes[0].style.height, '300px', 'menu should start at max height');
+    assert.strictEqual(iframes[0].style.height, '72px', 'menu should start compact until content resizes');
 
     const messageHandler = getMessageHandler();
     messageHandler({
@@ -1220,6 +1263,7 @@ async function testMenuRequestsAreBridgedWithDocumentContext() {
 async function run() {
     await testMenuInjectedOnLoginFieldFocus();
     await testMenuNotInjectedWhenNoLoginFields();
+    await testMenuNotAutoOpenedWhenLoginAlreadyFilled();
     await testFillMessagePopulatesFields();
     await testOtpMenuInjectedAndFillMessagePopulatesActiveField();
     await testDynamicOTPFieldFocusInjectsMenuBeforeRescan();

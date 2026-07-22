@@ -149,3 +149,19 @@ swift test
 ```
 
 All tests should pass before manual verification.
+
+### Live E2E (private app harness)
+
+From the private Authenticator app repository (not this public package alone),
+run the opt-in Playwright harness outside the sandbox:
+
+```bash
+bash scripts/test/chrome-autofill-live.sh
+```
+
+That script loads this unpacked extension in Playwright Chromium (branded Chrome
+137+ dropped `--load-extension`), serves local HTTPS fixtures, and runs
+`password`, `redirect`, `redirect-cross`, and `otp` scenarios. Matching uses the
+**post-redirect** page host. OTP is SKIPPED until a CLI-enabled OTP exists with
+matching Hosts/issuer. Details: `scripts/test/chrome-autofill-live/README.md`
+in the private app repo.

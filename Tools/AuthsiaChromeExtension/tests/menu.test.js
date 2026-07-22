@@ -53,6 +53,17 @@ class Element {
         }
         return [];
     }
+
+    getBoundingClientRect() {
+        return {
+            width: 320,
+            height: this._boundingHeight || 0,
+            top: 0,
+            bottom: this._boundingHeight || 0,
+            left: 0,
+            right: 320,
+        };
+    }
 }
 
 function attachDocument(element, document) {
@@ -65,7 +76,7 @@ function createContext(sendMessage, search, documentHeight) {
     const documentListeners = {};
     const document = {
         activeElement: null,
-        documentElement: { scrollHeight: documentHeight || 0 },
+        documentElement: { scrollHeight: 999 },
         getElementById(id) {
             if (!elements.has(id)) {
                 elements.set(id, attachDocument(new Element('div', id), document));
@@ -79,6 +90,9 @@ function createContext(sendMessage, search, documentHeight) {
             documentListeners[type] = handler;
         },
     };
+
+    const menuRoot = document.getElementById('authsia-menu');
+    menuRoot._boundingHeight = documentHeight || 0;
 
     const errorHint = attachDocument(new Element('span'), document);
     errorHint.className = 'authsia-error-hint';
