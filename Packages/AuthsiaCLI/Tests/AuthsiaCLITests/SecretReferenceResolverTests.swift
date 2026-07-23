@@ -70,6 +70,21 @@ struct MockResolverClient: SecretResolverClient {
     }
 }
 
+private final class RejectingResolverClient: SecretResolverClient {
+    private(set) var queries: [String] = []
+
+    func resolveSecret(
+        type: SecretReference.ItemType,
+        query: String,
+        field: String,
+        folder: String?,
+        isFolderScoped: Bool
+    ) throws -> String {
+        queries.append(query)
+        throw BridgeClientError.bridgeError(code: "notAuthorized", message: "", query: query)
+    }
+}
+
 @Suite("SecretReferenceResolver")
 struct SecretReferenceResolverTests {
 
@@ -205,6 +220,25 @@ struct SecretReferenceResolverTests {
         ]
         #expect(throws: SecretResolutionErrors.self) {
             try resolver.resolveEnvironment(env)
+        }
+    }
+
+    @Test("resolveEnvironment stops after the first approval denial")
+    func resolveEnvStopsAfterApprovalDenial() throws {
+        let client = RejectingResolverClient()
+        let resolver = SecretReferenceResolver(client: client)
+        let env: [String: String] = [
+            "ELASTIC_API_KEY": "authsia://api-key/key-1/key",
+            "ES_URL": "authsia://api-key/key-2/key",
+            "KIBANA_URL": "authsia://api-key/key-3/key",
+        ]
+
+        do {
+            _ = try resolver.resolveEnvironment(env)
+            Issue.record("Expected approval denial to abort environment resolution.")
+        } catch {
+            #expect(BridgeClientError.isApprovalDenied(error))
+            #expect(client.queries.count == 1)
         }
     }
 
