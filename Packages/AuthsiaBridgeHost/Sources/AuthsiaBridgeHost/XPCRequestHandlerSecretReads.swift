@@ -272,6 +272,7 @@ extension XPCRequestHandler {
                     for: bridgeRequest, itemFolderPath: match.folderPath, itemEnvironments: match.environments, itemKind: "password", reply: reply
                 ) else { return }
                 let approvalDecision = self.secretReadApprovalDecision(
+                    itemIdentity: AgentJITItemIdentity(type: "password", id: match.id),
                     itemFolderPath: match.folderPath,
                     itemEnvironments: match.environments,
                     request: bridgeRequest,
@@ -462,6 +463,7 @@ extension XPCRequestHandler {
                     for: bridgeRequest, itemFolderPath: match.folderPath, itemEnvironments: match.environments, itemKind: "api-key", reply: reply
                 ) else { return }
                 let approvalDecision = self.secretReadApprovalDecision(
+                    itemIdentity: AgentJITItemIdentity(type: "api-key", id: match.id),
                     itemFolderPath: match.folderPath,
                     itemEnvironments: match.environments,
                     request: bridgeRequest,
@@ -645,6 +647,7 @@ extension XPCRequestHandler {
                     for: bridgeRequest, itemFolderPath: match.folderPath, itemEnvironments: match.environments, itemKind: "certificate", reply: reply
                 ) else { return }
                 let approvalDecision = self.secretReadApprovalDecision(
+                    itemIdentity: AgentJITItemIdentity(type: "certificate", id: match.id),
                     itemFolderPath: match.folderPath,
                     itemEnvironments: match.environments,
                     request: bridgeRequest,
@@ -831,6 +834,7 @@ extension XPCRequestHandler {
                     for: bridgeRequest, itemFolderPath: match.folderPath, itemEnvironments: match.environments, itemKind: "note", reply: reply
                 ) else { return }
                 let approvalDecision = self.secretReadApprovalDecision(
+                    itemIdentity: AgentJITItemIdentity(type: "note", id: match.id),
                     itemFolderPath: match.folderPath,
                     itemEnvironments: match.environments,
                     request: bridgeRequest,

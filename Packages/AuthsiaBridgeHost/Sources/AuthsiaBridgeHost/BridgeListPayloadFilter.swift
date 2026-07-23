@@ -12,12 +12,18 @@ public enum BridgeListPayloadFilter {
         automationEnvironmentScope: EnvironmentAccessScope? = nil,
         activeJITGrants: [AgentJITGrant] = []
     ) -> BridgeListPayload {
-        if !jitScopes.isEmpty {
+        if !jitScopes.isEmpty || !activeJITGrants.isEmpty {
             let cliEnabledPayload = cliEnabledItems(in: payload)
-            let matches: (String?, [String]) -> Bool = { folderPath, environments in
+            let matches: (AgentJITItemIdentity, String?, [String]) -> Bool = {
+                itemIdentity,
+                folderPath,
+                environments in
                 if !activeJITGrants.isEmpty {
                     return activeJITGrants.contains {
-                        $0.folderScope.matches(itemFolderPath: folderPath)
+                        $0.resourceScope.matches(
+                            itemIdentity: itemIdentity,
+                            itemFolderPath: folderPath
+                        )
                             && ($0.environmentScope?.allows(itemEnvironments: environments) ?? true)
                     }
                 }
@@ -25,11 +31,21 @@ public enum BridgeListPayloadFilter {
             }
             return BridgeListPayload(
                 accounts: [],
-                passwords: cliEnabledPayload.passwords.filter { matches($0.folderPath, $0.environments) },
-                apiKeys: cliEnabledPayload.apiKeys.filter { matches($0.folderPath, $0.environments) },
-                certificates: cliEnabledPayload.certificates.filter { matches($0.folderPath, $0.environments) },
-                notes: cliEnabledPayload.notes.filter { matches($0.folderPath, $0.environments) },
-                sshKeys: cliEnabledPayload.sshKeys.filter { matches($0.folderPath, $0.environments) }
+                passwords: cliEnabledPayload.passwords.filter {
+                    matches(.init(type: "password", id: $0.id), $0.folderPath, $0.environments)
+                },
+                apiKeys: cliEnabledPayload.apiKeys.filter {
+                    matches(.init(type: "api-key", id: $0.id), $0.folderPath, $0.environments)
+                },
+                certificates: cliEnabledPayload.certificates.filter {
+                    matches(.init(type: "certificate", id: $0.id), $0.folderPath, $0.environments)
+                },
+                notes: cliEnabledPayload.notes.filter {
+                    matches(.init(type: "note", id: $0.id), $0.folderPath, $0.environments)
+                },
+                sshKeys: cliEnabledPayload.sshKeys.filter {
+                    matches(.init(type: "ssh", id: $0.id), $0.folderPath, $0.environments)
+                }
             )
         }
 

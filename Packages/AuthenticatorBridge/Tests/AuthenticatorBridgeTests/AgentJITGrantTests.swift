@@ -209,6 +209,83 @@ final class AgentJITGrantTests: XCTestCase {
         )
     }
 
+    func testItemScopeUsesStableTypeAndUUIDAcrossFolderMoves() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let caller = AgentJITCallerFingerprint.fixture()
+        let approvedID = UUID()
+        let grant = AgentJITGrant.fixture(
+            expiresAt: now.addingTimeInterval(60),
+            callerFingerprint: caller,
+            requestedItems: [
+                AgentJITGrantItemReference(
+                    type: "api-key",
+                    id: approvedID.uuidString,
+                    name: "Shared",
+                    folderPath: "Team/API"
+                ),
+            ],
+            environmentScope: .named("Production")
+        )
+
+        XCTAssertTrue(grant.allows(
+            capability: .exec,
+            itemIdentity: AgentJITItemIdentity(type: "apiKey", id: approvedID),
+            itemFolderPath: "Renamed/Folder",
+            itemEnvironments: ["Production"],
+            caller: caller,
+            now: now
+        ))
+        XCTAssertFalse(grant.allows(
+            capability: .exec,
+            itemIdentity: AgentJITItemIdentity(type: "api-key", id: UUID()),
+            itemFolderPath: "Team/API",
+            itemEnvironments: ["Production"],
+            caller: caller,
+            now: now
+        ))
+        XCTAssertFalse(grant.allows(
+            capability: .exec,
+            itemIdentity: AgentJITItemIdentity(type: "password", id: approvedID),
+            itemFolderPath: "Team/API",
+            itemEnvironments: ["Production"],
+            caller: caller,
+            now: now
+        ))
+        XCTAssertFalse(grant.allows(
+            capability: .exec,
+            itemIdentity: AgentJITItemIdentity(type: "api-key", id: approvedID),
+            itemFolderPath: "Team/API",
+            itemEnvironments: ["Development"],
+            caller: caller,
+            now: now
+        ))
+    }
+
+    func testMalformedRequestedItemIdentityDoesNotFallBackToFolderScope() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let caller = AgentJITCallerFingerprint.fixture()
+        let grant = AgentJITGrant.fixture(
+            expiresAt: now.addingTimeInterval(60),
+            callerFingerprint: caller,
+            requestedItems: [
+                AgentJITGrantItemReference(
+                    type: "password",
+                    id: "not-a-uuid",
+                    name: "Malformed",
+                    folderPath: "Team/API"
+                ),
+            ]
+        )
+
+        XCTAssertFalse(grant.allows(
+            capability: .exec,
+            itemIdentity: AgentJITItemIdentity(type: "password", id: UUID()),
+            itemFolderPath: "Team/API",
+            caller: caller,
+            now: now
+        ))
+    }
+
     func testAllowsDeniesWrongCaller() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let caller = AgentJITCallerFingerprint.fixture()
@@ -557,6 +634,7 @@ private extension AgentJITGrant {
         folderScope: AgentJITFolderScope = .folder("Team/API"),
         capabilities: Set<AgentJITCapability> = [.exec, .list],
         callerFingerprint: AgentJITCallerFingerprint? = nil,
+        requestedItems: [AgentJITGrantItemReference] = [],
         agentRuntimeContext: AgentRuntimeContext? = nil,
         environmentScope: EnvironmentAccessScope? = nil
     ) -> AgentJITGrant {
@@ -570,7 +648,7 @@ private extension AgentJITGrant {
             expiresAt: expiresAt,
             revokedAt: revokedAt,
             lastUsedAt: nil,
-            requestedItems: [],
+            requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
             approvedBy: "biometric",
             environmentScope: environmentScope

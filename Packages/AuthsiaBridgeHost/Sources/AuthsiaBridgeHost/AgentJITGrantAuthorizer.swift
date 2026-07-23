@@ -11,6 +11,7 @@ public final class AgentJITGrantAuthorizer {
 
     public func activeGrant(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity? = nil,
         itemFolderPath: String?,
         itemEnvironments: [String] = [],
         caller: AgentJITCallerFingerprint,
@@ -18,6 +19,7 @@ public final class AgentJITGrantAuthorizer {
     ) throws -> AgentJITGrant? {
         try store.markUsedIfAllowed(
             capability: capability,
+            itemIdentity: itemIdentity,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             caller: caller,

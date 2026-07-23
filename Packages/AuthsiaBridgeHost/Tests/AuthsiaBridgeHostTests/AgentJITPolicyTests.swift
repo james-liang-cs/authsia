@@ -74,6 +74,47 @@ final class AgentJITPolicyTests: XCTestCase {
         XCTAssertEqual(filtered, payload)
     }
 
+    func testListPayloadFilterKeepsOnlyExactItemIDsForItemGrant() {
+        let approvedID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let caller = AgentJITCallerFingerprint(
+            processName: "authsia",
+            bundleIdentifier: nil,
+            signingTeamId: nil,
+            signingIdentity: nil,
+            parentProcessName: "agent",
+            parentBundleIdentifier: nil,
+            sessionScope: "tty:/dev/ttys001:sid:123",
+            workingDirectory: "/tmp/authsia-test"
+        )
+        let grant = AgentJITGrant(
+            id: UUID(),
+            agentName: "agent",
+            callerFingerprint: caller,
+            folderScope: .folder("Team/API"),
+            resourceScope: .items([
+                AgentJITItemIdentity(type: "password", id: approvedID),
+            ]),
+            capabilities: [.list],
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(60),
+            revokedAt: nil,
+            lastUsedAt: nil,
+            approvedBy: "test"
+        )
+
+        let filtered = BridgeListPayloadFilter.filteredPayload(
+            listPayload(),
+            for: request(requestedCommand: "list"),
+            callerIsAgentic: true,
+            activeJITScopes: [],
+            automationAuthorization: .notAutomation,
+            activeJITGrants: [grant]
+        )
+
+        XCTAssertEqual(filtered.passwords.map(\.id), [approvedID])
+        XCTAssertEqual(filtered.apiKeys, [])
+    }
+
     func testListPayloadFilterAppliesDefaultNamedAndAllEnvironmentScopes() {
         let defaultEnvironment = BridgePassword(
             id: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,

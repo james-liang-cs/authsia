@@ -26,21 +26,30 @@ final class AgentLeakBoundaryContractTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("legacy").path))
     }
 
-    func testRequestedItemDoesNotRestrictAnotherItemInSameFolder() {
+    func testRequestedItemDoesNotAuthorizeAnotherItemInSameFolder() {
         let caller = callerFingerprint()
+        let approvedItemID = UUID()
         let grant = makeGrant(
             requestedItems: [
                 AgentJITGrantItemReference(
                     type: "apiKey",
-                    id: "approved-item",
+                    id: approvedItemID.uuidString,
                     name: "Approved item",
                     folderPath: "Team/API"
                 ),
             ]
         )
 
+        XCTAssertFalse(grant.allows(
+            capability: .exec,
+            itemIdentity: AgentJITItemIdentity(type: "api-key", id: UUID()),
+            itemFolderPath: "Team/API",
+            caller: caller,
+            now: now.addingTimeInterval(60)
+        ))
         XCTAssertTrue(grant.allows(
             capability: .exec,
+            itemIdentity: AgentJITItemIdentity(type: "api-key", id: approvedItemID),
             itemFolderPath: "Team/API",
             caller: caller,
             now: now.addingTimeInterval(60)
@@ -60,6 +69,7 @@ final class AgentLeakBoundaryContractTests: XCTestCase {
 
         let firstUse = try store.markUsedIfAllowed(
             capability: .exec,
+            itemIdentity: nil,
             itemFolderPath: "Team/API",
             itemEnvironments: [],
             caller: caller,
@@ -67,6 +77,7 @@ final class AgentLeakBoundaryContractTests: XCTestCase {
         )
         let secondUse = try store.markUsedIfAllowed(
             capability: .exec,
+            itemIdentity: nil,
             itemFolderPath: "Team/API",
             itemEnvironments: [],
             caller: caller,

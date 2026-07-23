@@ -226,12 +226,14 @@ extension XPCRequestHandler {
     }
 
     func secretReadApprovalDecision(
+        itemIdentity: AgentJITItemIdentity? = nil,
         itemFolderPath: String?,
         itemEnvironments: [String] = [],
         request: BridgeRequest,
         bypassApproval: Bool
     ) -> SecretReadApprovalDecision {
         secretReadApprovalDecision(
+            itemIdentity: itemIdentity,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             request: request,
@@ -241,6 +243,7 @@ extension XPCRequestHandler {
     }
 
     func secretReadApprovalDecision(
+        itemIdentity: AgentJITItemIdentity? = nil,
         itemFolderPath: String?,
         itemEnvironments: [String],
         request: BridgeRequest,
@@ -263,6 +266,7 @@ extension XPCRequestHandler {
             do {
                 if let grant = try agentJITGrant(
                     capability: .exec,
+                    itemIdentity: itemIdentity,
                     itemFolderPath: itemFolderPath,
                     itemEnvironments: itemEnvironments,
                     request: request,
@@ -292,12 +296,14 @@ extension XPCRequestHandler {
 
     func agentJITGrant(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity? = nil,
         itemFolderPath: String?,
         itemEnvironments: [String] = [],
         request: BridgeRequest
     ) throws -> AgentJITGrant? {
         try agentJITGrant(
             capability: capability,
+            itemIdentity: itemIdentity,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             request: request,
@@ -307,6 +313,7 @@ extension XPCRequestHandler {
 
     private func agentJITGrant(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
         itemFolderPath: String?,
         itemEnvironments: [String],
         request: BridgeRequest,
@@ -318,6 +325,7 @@ extension XPCRequestHandler {
         }
         return try agentJITGrantAuthorizer.activeGrant(
             capability: capability,
+            itemIdentity: itemIdentity,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             caller: caller
