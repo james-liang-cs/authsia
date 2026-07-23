@@ -58,7 +58,10 @@ let package = Package(
                 "AuthenticatorCore",
                 "AuthenticatorData"
             ],
-            path: "Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost"
+            path: "Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost",
+            linkerSettings: [
+                .linkedFramework("Security", .when(platforms: [.macOS]))
+            ]
         ),
         .testTarget(
             name: "AuthsiaBridgeHostTests",

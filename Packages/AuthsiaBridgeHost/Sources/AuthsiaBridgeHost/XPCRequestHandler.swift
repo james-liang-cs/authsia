@@ -41,6 +41,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     let apiKeySecretExistenceProvider: SecretExistenceProvider
     let automationCredentialLookupProvider: AutomationCredentialLookupProvider
     let currentMachineIdProvider: CurrentMachineIdProvider
+    let authorityStore: AuthorityStoring
     let agentJITGrantStore: AgentJITGrantStoring
     let agentJITGrantAuthorizer: AgentJITGrantAuthorizer
     let callerIdentityProvider: CallerIdentityProvider
@@ -102,6 +103,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         currentMachineIdProvider: @escaping CurrentMachineIdProvider = {
             AutomationCredentialLookup.currentMachineId()
         },
+        authorityStore: AuthorityStoring = KeychainAuthorityStore(),
         agentJITGrantStore: AgentJITGrantStoring = AgentJITGrantStore(),
         callerIdentityProvider: @escaping CallerIdentityProvider = {
             CallerIdentityExtractor.extract(from: NSXPCConnection.current())
@@ -126,6 +128,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         self.apiKeySecretExistenceProvider = apiKeySecretExistenceProvider
         self.automationCredentialLookupProvider = automationCredentialLookupProvider
         self.currentMachineIdProvider = currentMachineIdProvider
+        self.authorityStore = authorityStore
         self.agentJITGrantStore = agentJITGrantStore
         self.agentJITGrantAuthorizer = AgentJITGrantAuthorizer(store: agentJITGrantStore)
         self.callerIdentityProvider = callerIdentityProvider
