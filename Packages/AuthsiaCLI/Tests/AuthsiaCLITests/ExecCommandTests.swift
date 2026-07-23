@@ -203,7 +203,10 @@ struct ExecCommandTests {
         )
 
         let allowed = try Exec.allowsCredentialOnlyExecForSSH(
-            environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+            environment: [
+                AutomationAccessResolver.environmentKey:
+                    AccessCredentialStoreFixture.token(for: credential)
+            ],
             store: store,
             now: now.addingTimeInterval(60)
         )
@@ -228,7 +231,10 @@ struct ExecCommandTests {
         )
 
         let allowed = try Exec.allowsCredentialOnlyExecForSSH(
-            environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+            environment: [
+                AutomationAccessResolver.environmentKey:
+                    AccessCredentialStoreFixture.token(for: credential)
+            ],
             store: store,
             now: now.addingTimeInterval(60)
         )
@@ -392,6 +398,41 @@ struct ExecCommandTests {
         #expect(result["AUTHSIA_WORKSPACE_ROOT"] == nil)
     }
 
+    @Test("final child environment forwards the SSH bearer token rather than its public id")
+    func finalEnvironmentForwardsSSHBearerToken() throws {
+        let id = UUID()
+        let token = try AutomationCredentialToken.issue(
+            id: id,
+            randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
+        )
+        let credential = AccessCredential(
+            id: id,
+            name: "agent",
+            scope: "Team/API",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            expiresAt: Date(timeIntervalSince1970: 1_700_000_900),
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h",
+            allowedCommands: [.ssh],
+            bearerToken: token
+        )
+
+        let result = Exec.finalEnvironment(
+            entries: [],
+            parentEnvironment: [
+                AutomationAccessResolver.environmentKey: token,
+                AutomationAccessResolver.sshEnvironmentKey: "stale",
+            ],
+            envFileVars: [:],
+            sshAutomationCredential: credential
+        )
+
+        #expect(result[AutomationAccessResolver.environmentKey] == nil)
+        #expect(result[AutomationAccessResolver.sshEnvironmentKey] == token)
+        #expect(result[AutomationAccessResolver.sshEnvironmentKey] != id.uuidString)
+    }
+
     @Test("forwards ssh-only marker when automation credential allows ssh")
     func forwardsSSHAutomationCredentialWhenAllowed() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -405,20 +446,79 @@ struct ExecCommandTests {
             store: store,
             machineIdentity: MachineIdentity(machineId: "m", hostname: "h"),
             now: now,
-            allowedCommands: [.exec, .ssh]
+            allowedCommands: [.ssh]
+        )
+        let token = try AutomationCredentialToken.issue(
+            id: credential.id,
+            randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
         )
         var environment: [String: String] = ["PATH": "/usr/bin"]
 
         let forwarded = try Exec.forwardSSHAutomationCredential(
-            from: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+            from: [AutomationAccessResolver.environmentKey: token],
             to: &environment,
             store: store,
             now: now.addingTimeInterval(60)
         )
 
         #expect(environment[AutomationAccessResolver.environmentKey] == nil)
-        #expect(environment[AutomationAccessResolver.sshEnvironmentKey] == credential.id.uuidString)
+        #expect(environment[AutomationAccessResolver.sshEnvironmentKey] == token)
         #expect(forwarded?.id == credential.id)
+    }
+
+    @Test("dedicated SSH credential takes precedence over the general exec credential")
+    func dedicatedSSHCredentialTakesPrecedence() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let (store, directory) = try AccessCredentialStoreFixture.make(prefix: "exec-ssh-cap")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let execCredential = try Access.createCredential(
+            name: "agent-exec",
+            scope: "Team/API",
+            ttl: "15m",
+            store: store,
+            machineIdentity: MachineIdentity(machineId: "m", hostname: "h"),
+            now: now,
+            allowedCommands: [.exec]
+        )
+        let sshCredential = try Access.createCredential(
+            name: "agent-ssh",
+            scope: "Team/API",
+            ttl: "15m",
+            store: store,
+            machineIdentity: MachineIdentity(machineId: "m", hostname: "h"),
+            now: now,
+            allowedCommands: [.ssh]
+        )
+        let execToken = AccessCredentialStoreFixture.token(for: execCredential)
+        let sshToken = AccessCredentialStoreFixture.token(for: sshCredential)
+        var childEnvironment: [String: String] = [:]
+
+        let forwarded = try Exec.forwardSSHAutomationCredential(
+            from: [
+                AutomationAccessResolver.environmentKey: execToken,
+                AutomationAccessResolver.sshEnvironmentKey: sshToken,
+            ],
+            to: &childEnvironment,
+            store: store,
+            now: now.addingTimeInterval(60)
+        )
+
+        #expect(forwarded?.id == sshCredential.id)
+        #expect(childEnvironment[AutomationAccessResolver.sshEnvironmentKey] == sshToken)
+        #expect(childEnvironment[AutomationAccessResolver.sshEnvironmentKey] != execToken)
+    }
+
+    @Test("SSH bearer tokens are included in output masking inputs")
+    func sshBearerTokensAreMasked() {
+        let token = "authsia_ac1_synthetic-token"
+        let secrets = Exec.collectSecrets(
+            entries: [],
+            resolvedSecrets: [],
+            shellCommand: nil,
+            environment: [AutomationAccessResolver.sshEnvironmentKey: token]
+        )
+
+        #expect(secrets.contains(token))
     }
 
     @Test("does not forward ssh marker when automation credential omits ssh")
@@ -436,10 +536,14 @@ struct ExecCommandTests {
             now: now,
             allowedCommands: [.exec]
         )
+        let token = try AutomationCredentialToken.issue(
+            id: credential.id,
+            randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
+        )
         var environment: [String: String] = ["PATH": "/usr/bin"]
 
         let forwarded = try Exec.forwardSSHAutomationCredential(
-            from: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+            from: [AutomationAccessResolver.environmentKey: token],
             to: &environment,
             store: store,
             now: now.addingTimeInterval(60)
@@ -618,7 +722,10 @@ struct ExecCommandTests {
                 to: payload,
                 scope: .folder("Team/API"),
                 requiredCapability: .exec,
-                environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+                environment: [
+                    AutomationAccessResolver.environmentKey:
+                        AccessCredentialStoreFixture.token(for: credential)
+                ],
                 store: store,
                 now: now.addingTimeInterval(60)
             )

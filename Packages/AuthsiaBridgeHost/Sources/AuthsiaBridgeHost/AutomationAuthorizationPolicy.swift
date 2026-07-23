@@ -9,8 +9,14 @@ public enum AutomationAuthorizationDecision: Equatable {
 }
 
 public enum AutomationAuthorizationPolicy {
+    public typealias CredentialValidation = (
+        String,
+        CapabilityCommand,
+        Bool
+    ) -> AutomationCredentialLookup.Result
+
     public static func isExportDenied(for request: BridgeRequest) -> Bool {
-        request.context.automationCredentialID != nil
+        request.context.hasAutomationCredential
     }
 
     public static func authorization(
@@ -19,10 +25,11 @@ public enum AutomationAuthorizationPolicy {
         itemEnvironments: [String] = [],
         itemKind: String,
         credentialLookup: (UUID) -> AutomationCredentialLookup.Result = { AutomationCredentialLookup.lookup(credentialID: $0) },
+        credentialValidation: CredentialValidation? = nil,
         now: Date = Date(),
         currentMachineId: String? = AutomationCredentialLookup.currentMachineId()
     ) -> AutomationAuthorizationDecision {
-        guard request.context.automationCredentialID != nil else {
+        guard request.context.hasAutomationCredential else {
             return .notAutomation
         }
 
@@ -35,6 +42,7 @@ public enum AutomationAuthorizationPolicy {
             credential = try authorizedAutomationCredential(
                 for: request,
                 credentialLookup: credentialLookup,
+                credentialValidation: credentialValidation,
                 now: now,
                 currentMachineId: currentMachineId
             )
@@ -49,7 +57,11 @@ public enum AutomationAuthorizationPolicy {
         }
 
         if request.type == .list {
-            return .allowWithoutApproval(scope: scope)
+            return consumeIfNeeded(
+                request: request,
+                scope: scope,
+                credentialValidation: credentialValidation
+            )
         }
 
         let scopeName = AutomationCredentialScope.displayName(scope)
@@ -62,13 +74,27 @@ public enum AutomationAuthorizationPolicy {
             return .deny("Automation credential environment scope does not allow access to this \(itemKind).")
         }
 
-        return .allowWithoutApproval(scope: scope)
+        return consumeIfNeeded(
+            request: request,
+            scope: scope,
+            credentialValidation: credentialValidation
+        )
     }
 
     public static func environmentScope(
         for request: BridgeRequest,
-        credentialLookup: (UUID) -> AutomationCredentialLookup.Result
+        credentialLookup: (UUID) -> AutomationCredentialLookup.Result,
+        credentialValidation: CredentialValidation? = nil
     ) -> EnvironmentAccessScope? {
+        if let credentialValidation {
+            guard let token = request.context.automationCredentialToken,
+                  let rawCommand = request.context.requestedCommand,
+                  let command = CapabilityCommand(rawValue: rawCommand),
+                  case .found(let credential) = credentialValidation(token, command, false) else {
+                return nil
+            }
+            return credential.environmentScope
+        }
         guard let rawID = request.context.automationCredentialID,
               let credentialID = UUID(uuidString: rawID),
               case .found(let credential) = credentialLookup(credentialID) else { return nil }
@@ -82,14 +108,10 @@ public enum AutomationAuthorizationPolicy {
     private static func authorizedAutomationCredential(
         for request: BridgeRequest,
         credentialLookup: (UUID) -> AutomationCredentialLookup.Result,
+        credentialValidation: CredentialValidation?,
         now: Date,
         currentMachineId: String?
     ) throws -> AutomationCredentialLookup.CredentialRecord {
-        guard let rawID = request.context.automationCredentialID,
-              let credentialID = UUID(uuidString: rawID) else {
-            throw AuthorizationError(message: "Automation request is missing a valid credential ID.")
-        }
-
         guard let rawCommand = request.context.requestedCommand else {
             throw AuthorizationError(message: "Automation request is missing 'requestedCommand'. Upgrade the CLI.")
         }
@@ -97,7 +119,23 @@ public enum AutomationAuthorizationPolicy {
             throw AuthorizationError(message: "Automation request has unknown 'requestedCommand' '\(rawCommand)'.")
         }
 
-        switch credentialLookup(credentialID) {
+        let lookupResult: AutomationCredentialLookup.Result
+        if let credentialValidation {
+            guard let token = request.context.automationCredentialToken else {
+                throw AuthorizationError(
+                    message: "Legacy UUID automation credentials are disabled. Create a new credential."
+                )
+            }
+            lookupResult = credentialValidation(token, command, false)
+        } else {
+            guard let rawID = request.context.automationCredentialID,
+                  let credentialID = UUID(uuidString: rawID) else {
+                throw AuthorizationError(message: "Automation request is missing a valid credential ID.")
+            }
+            lookupResult = credentialLookup(credentialID)
+        }
+
+        switch lookupResult {
         case .fileMissing:
             throw AuthorizationError(
                 message: "Automation credential store is missing or unreadable. Recreate the credential."
@@ -126,6 +164,23 @@ public enum AutomationAuthorizationPolicy {
             }
             return credential
         }
+    }
+
+    private static func consumeIfNeeded(
+        request: BridgeRequest,
+        scope: AutomationCredentialScope.Normalized,
+        credentialValidation: CredentialValidation?
+    ) -> AutomationAuthorizationDecision {
+        guard let credentialValidation else {
+            return .allowWithoutApproval(scope: scope)
+        }
+        guard let token = request.context.automationCredentialToken,
+              let rawCommand = request.context.requestedCommand,
+              let command = CapabilityCommand(rawValue: rawCommand),
+              case .found = credentialValidation(token, command, true) else {
+            return .deny("Automation credential could not be consumed.")
+        }
+        return .allowWithoutApproval(scope: scope)
     }
 }
 #endif

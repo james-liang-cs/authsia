@@ -107,7 +107,7 @@ extension XPCRequestHandler {
         itemKind: String,
         callerIdentity: CallerIdentity?
     ) -> SecretReadApprovalDecision {
-        if request.context.automationCredentialID != nil {
+        if request.context.hasAutomationCredential {
             return .allowed(approvedBy: "automation", needsApproval: false, agentJITGrantID: nil)
         }
         if Self.interactiveHumanBootstrapEligible(request: request)
@@ -380,6 +380,7 @@ extension XPCRequestHandler {
             itemFolderPath: nil,
             itemKind: "list",
             credentialLookup: automationCredentialLookupProvider,
+            credentialValidation: automationCredentialValidationProvider,
             currentMachineId: currentMachineIdProvider()
         )
         let jitGrants = activeJITGrants ?? {
@@ -395,7 +396,8 @@ extension XPCRequestHandler {
             automationAuthorization: automationDecision,
             automationEnvironmentScope: AutomationAuthorizationPolicy.environmentScope(
                 for: request,
-                credentialLookup: automationCredentialLookupProvider
+                credentialLookup: automationCredentialLookupProvider,
+                credentialValidation: automationCredentialValidationProvider
             ),
             activeJITGrants: jitGrants
         )
@@ -418,6 +420,7 @@ extension XPCRequestHandler {
             itemEnvironments: itemEnvironments,
             itemKind: itemKind,
             credentialLookup: automationCredentialLookupProvider,
+            credentialValidation: automationCredentialValidationProvider,
             currentMachineId: currentMachineIdProvider()
         )
         if case .deny(let message) = decision {

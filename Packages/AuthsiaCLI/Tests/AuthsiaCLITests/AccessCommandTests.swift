@@ -209,7 +209,7 @@ struct AccessCommandTests {
             store: store,
             machineIdentity: machine,
             now: now,
-            allowedCommands: [.exec, .ssh],
+            allowedCommands: [.exec, .load],
             approvalClient: approver
         )
 
@@ -218,8 +218,12 @@ struct AccessCommandTests {
         #expect(approver.requests.first?.scope == "Team/API")
         #expect(approver.requests.first?.ttlSeconds == 900)
         #expect(approver.requests.first?.expiresAt == created.expiresAt)
-        #expect(approver.requests.first?.allowedCommands == [.exec, .ssh])
-        #expect(try store.loadAll() == [created])
+        #expect(approver.requests.first?.allowedCommands == [.exec, .load])
+        #expect(created.bearerToken?.hasPrefix(AutomationCredentialToken.prefix) == true)
+        let stored = try #require(store.loadAll().first)
+        #expect(stored.id == created.id)
+        #expect(stored.scope == created.scope)
+        #expect(stored.bearerToken == nil)
     }
 
     @Test("create with approval does not persist when approval is denied")
@@ -317,6 +321,68 @@ struct AccessCommandTests {
         #expect(items.count == 2)
         #expect(items.contains(where: { $0.id == active.id }))
         #expect(items.contains(where: { $0.id == revoked.id && $0.status == .revoked }))
+    }
+
+    @Test("list all shows legacy records as disabled without overriding authority")
+    func listAllShowsLegacyRecordsAsDisabled() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let authority = AccessCredential(
+            id: UUID(),
+            name: "current",
+            scope: "Team/API",
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(900),
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h"
+        )
+        let duplicateLegacy = AccessCredential(
+            id: authority.id,
+            name: "forged replacement",
+            scope: nil,
+            createdAt: now,
+            expiresAt: .distantFuture,
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h"
+        )
+        let disabledLegacy = AccessCredential(
+            id: UUID(),
+            name: "old-ci",
+            scope: "Legacy",
+            createdAt: now,
+            expiresAt: .distantFuture,
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h"
+        )
+
+        let items = Access.listItems(
+            credentials: [
+                AutomationCredentialMetadata(
+                    id: authority.id,
+                    name: authority.name,
+                    scope: authority.scope,
+                    createdAt: authority.createdAt,
+                    expiresAt: authority.expiresAt,
+                    revokedAt: authority.revokedAt,
+                    machineId: authority.machineId,
+                    machineName: authority.machineName,
+                    allowedCommands: authority.allowedCommands,
+                    environmentScope: authority.environmentScope
+                )
+            ],
+            disabledLegacy: [duplicateLegacy, disabledLegacy],
+            includeAll: true,
+            now: now
+        )
+
+        #expect(items.count == 2)
+        let authorityItem = items.first { $0.id == authority.id }
+        let legacyItem = items.first { $0.id == disabledLegacy.id }
+        #expect(authorityItem?.name == "current")
+        #expect(authorityItem?.status == Access.ListItem.Status.active)
+        #expect(legacyItem?.status == Access.ListItem.Status.legacyDisabled)
     }
 
     @Test("revoke marks a credential as revoked")
@@ -441,6 +507,15 @@ struct AccessCommandTests {
         }
     }
 
+    @Test("parseAllowedCommands requires ssh to use a separate credential")
+    func parseAllowedCommandsRejectsMixedSSHCapabilities() {
+        #expect(throws: (any Error).self) {
+            try Access.Create.parseAllowedCommands("exec,ssh")
+        }
+        let sshOnly = try? Access.Create.parseAllowedCommands("ssh")
+        #expect(sshOnly == [.ssh])
+    }
+
     @Test("parseAllowedCommands rejects empty string")
     func parseAllowedCommandsRejectsEmpty() {
         #expect(throws: (any Error).self) {
@@ -486,17 +561,18 @@ struct AccessCommandTests {
         let credential = makeCredential(allowedCommands: [.load, .read])
         let message = Access.renderCreateMessage(credential)
 
-        #expect(message.contains("export AUTHSIA_ACCESS_CREDENTIAL=\(credential.id.uuidString)"))
+        #expect(message.contains("export AUTHSIA_ACCESS_CREDENTIAL=\(credential.bearerToken!)"))
         #expect(!message.contains("AUTHSIA_SSH_ACCESS_CREDENTIAL"))
     }
 
-    @Test("renderCreateMessage shows both variables when SSH is allowed with other capabilities")
-    func renderCreateMessageShowsBothVariablesForMixedSSHCredential() {
+    @Test("renderCreateMessage does not export a mixed SSH credential")
+    func renderCreateMessageDoesNotExportMixedSSHCredential() {
         let credential = makeCredential(allowedCommands: [.load, .ssh])
         let message = Access.renderCreateMessage(credential)
 
-        #expect(message.contains("export AUTHSIA_ACCESS_CREDENTIAL=\(credential.id.uuidString)"))
-        #expect(message.contains("export AUTHSIA_SSH_ACCESS_CREDENTIAL=\(credential.id.uuidString)"))
+        #expect(!message.contains(credential.bearerToken!))
+        #expect(!message.contains("AUTHSIA_ACCESS_CREDENTIAL"))
+        #expect(!message.contains("AUTHSIA_SSH_ACCESS_CREDENTIAL"))
     }
 
     @Test("renderCreateMessage shows only SSH variable for SSH-only credentials")
@@ -505,7 +581,7 @@ struct AccessCommandTests {
         let message = Access.renderCreateMessage(credential)
 
         #expect(!message.contains("AUTHSIA_ACCESS_CREDENTIAL"))
-        #expect(message.contains("export AUTHSIA_SSH_ACCESS_CREDENTIAL=\(credential.id.uuidString)"))
+        #expect(message.contains("export AUTHSIA_SSH_ACCESS_CREDENTIAL=\(credential.bearerToken!)"))
     }
 
     @Test("list items include sorted allowedCommands")
@@ -538,8 +614,13 @@ struct AccessCommandTests {
     }
 
     private func makeCredential(allowedCommands: Set<CapabilityCommand>) -> AccessCredential {
-        AccessCredential(
-            id: UUID(),
+        let id = UUID()
+        let token = try! AutomationCredentialToken.issue(
+            id: id,
+            randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
+        )
+        return AccessCredential(
+            id: id,
             name: "n",
             scope: "s",
             createdAt: Date(timeIntervalSince1970: 1_700_000_000),
@@ -547,7 +628,8 @@ struct AccessCommandTests {
             revokedAt: nil,
             machineId: "m",
             machineName: "h",
-            allowedCommands: allowedCommands
+            allowedCommands: allowedCommands,
+            bearerToken: token
         )
     }
 }
@@ -565,10 +647,31 @@ private final class AccessCreateApprovalRecorder: AccessCreateApproving {
         self.result = result
     }
 
-    func approveAccessCreate(_ request: AccessCreateApprovalRequest) throws {
+    func approveAccessCreate(
+        _ request: AccessCreateApprovalRequest
+    ) throws -> AutomationCredentialIssuedPayload {
         requests.append(request)
         if result == .denied {
             throw BridgeClientError.bridgeError(code: "notAuthorized", message: "Access denied", query: nil)
         }
+        let id = UUID()
+        return AutomationCredentialIssuedPayload(
+            credential: AutomationCredentialMetadata(
+                id: id,
+                name: request.name,
+                scope: request.scope,
+                createdAt: request.expiresAt.addingTimeInterval(-request.ttlSeconds),
+                expiresAt: request.expiresAt,
+                revokedAt: nil,
+                machineId: request.machineId,
+                machineName: request.machineName,
+                allowedCommands: request.allowedCommands,
+                environmentScope: request.environmentScope
+            ),
+            token: try AutomationCredentialToken.issue(
+                id: id,
+                randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
+            )
+        )
     }
 }

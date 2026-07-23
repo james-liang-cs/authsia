@@ -4,11 +4,16 @@ import AuthenticatorBridge
 @testable import authsia
 
 final class AgentLeakBoundaryContractTests: XCTestCase {
-    func testAutomationCredentialIsDiscoverableInCurrentLocalStore() throws {
+    func testAutomationCredentialFileContainsMetadataButNeverBearerToken() throws {
         let (store, directory) = try AccessCredentialStoreFixture.make(prefix: "agent-leak-contract")
         defer { try? FileManager.default.removeItem(at: directory) }
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let token = try AutomationCredentialToken.issue(
+            id: id,
+            randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
+        )
         let credential = AccessCredential(
-            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            id: id,
             name: "synthetic automation",
             scope: "Team/API",
             createdAt: Date(timeIntervalSince1970: 1_700_000_000),
@@ -16,14 +21,17 @@ final class AgentLeakBoundaryContractTests: XCTestCase {
             revokedAt: nil,
             machineId: "synthetic-machine",
             machineName: "Synthetic Host",
-            allowedCommands: [.exec]
+            allowedCommands: [.exec],
+            bearerToken: token
         )
         try store.save(credential)
 
         let onDiskData = try Data(contentsOf: store.fileURL)
         let decoded = try JSONDecoder.authsiaISO8601.decode([AccessCredential].self, from: onDiskData)
 
-        XCTAssertEqual(decoded, [credential])
+        XCTAssertEqual(decoded.map(\.id), [credential.id])
+        XCTAssertNil(decoded.first?.bearerToken)
+        XCTAssertFalse(onDiskData.contains(Data(token.utf8)))
     }
 
     func testNonUTF8OutputPassesThroughStreamingMasker() {

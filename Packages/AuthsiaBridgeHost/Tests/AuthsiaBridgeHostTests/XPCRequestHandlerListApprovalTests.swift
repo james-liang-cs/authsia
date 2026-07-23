@@ -925,17 +925,20 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
             machineId: "machine-1",
             allowedCommands: [.list]
         )
+        let token = "authsia_ac1_synthetic"
         let handler = XPCRequestHandler(
             listProvider: listProvider,
             approver: approver,
-            automationCredentialLookupProvider: { id in
-                XCTAssertEqual(id, credentialID)
+            automationCredentialValidationProvider: { suppliedToken, command, _ in
+                XCTAssertEqual(suppliedToken, token)
+                XCTAssertEqual(command, .list)
                 return .found(credential)
             },
             currentMachineIdProvider: { "machine-1" }
         )
         let requestData = makeListRequest(
             automationCredentialID: credentialID.uuidString,
+            automationCredentialToken: token,
             automationScope: "Team/Forged",
             requestedCommand: "list"
         )
@@ -1014,14 +1017,20 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
             machineId: "machine-1",
             allowedCommands: [.list]
         )
+        let token = "authsia_ac1_synthetic"
         let handler = XPCRequestHandler(
             listProvider: listProvider,
             approver: approver,
-            automationCredentialLookupProvider: { _ in .found(credential) },
+            automationCredentialValidationProvider: { suppliedToken, command, _ in
+                XCTAssertEqual(suppliedToken, token)
+                XCTAssertEqual(command, .list)
+                return .found(credential)
+            },
             currentMachineIdProvider: { "machine-1" }
         )
         let requestData = makeListRequest(
             automationCredentialID: credentialID.uuidString,
+            automationCredentialToken: token,
             automationScope: nil,
             requestedCommand: "list"
         )
@@ -1047,6 +1056,7 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         isCI: Bool = false,
         sessionToken: String? = nil,
         automationCredentialID: String? = nil,
+        automationCredentialToken: String? = nil,
         automationScope: String? = nil,
         requestedCommand: String? = nil,
         sessionScope: String? = nil
@@ -1063,6 +1073,7 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
                 isCI: isCI,
                 timestamp: Date(),
                 automationCredentialID: automationCredentialID,
+                automationCredentialToken: automationCredentialToken,
                 automationScope: automationScope,
                 requestedCommand: requestedCommand,
                 sessionScope: sessionScope

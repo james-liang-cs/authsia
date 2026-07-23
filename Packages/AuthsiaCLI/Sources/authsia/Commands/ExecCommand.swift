@@ -660,8 +660,9 @@ struct Exec: ParsableCommand {
         }
         removeAutomationCredentials(from: &environment)
         removeGuardedTerminalShim(from: &environment)
-        if let sshAutomationCredential {
-            environment[AutomationAccessResolver.sshEnvironmentKey] = sshAutomationCredential.id.uuidString
+        if sshAutomationCredential?.allowedCommands == [.ssh],
+           let token = sshAutomationCredential?.bearerToken {
+            environment[AutomationAccessResolver.sshEnvironmentKey] = token
         }
         return environment
     }
@@ -750,14 +751,14 @@ struct Exec: ParsableCommand {
         store: AccessCredentialStore = AccessCredentialStore(),
         now: Date = Date()
     ) throws -> AccessCredential? {
-        guard let credential = try AutomationAccessResolver.resolveActiveCredential(
+        guard let credential = try AutomationAccessResolver.resolveActiveSSHCredential(
             environment: parentEnvironment,
             store: store,
             now: now
         ) else {
             return nil
         }
-        guard credential.allowedCommands.contains(.ssh) else { return nil }
+        guard credential.allowedCommands == [.ssh] else { return nil }
         return credential
     }
 
@@ -777,7 +778,8 @@ struct Exec: ParsableCommand {
         ) else {
             return nil
         }
-        childEnvironment[AutomationAccessResolver.sshEnvironmentKey] = credential.id.uuidString
+        guard let token = credential.bearerToken else { return nil }
+        childEnvironment[AutomationAccessResolver.sshEnvironmentKey] = token
         return credential
     }
 
@@ -807,6 +809,9 @@ struct Exec: ParsableCommand {
         environment: [String: String]
     ) -> [String] {
         var secrets = collectSecrets(entries: entries, resolvedSecrets: resolvedSecrets)
+        if let sshToken = environment[AutomationAccessResolver.sshEnvironmentKey] {
+            secrets.append(sshToken)
+        }
         guard let shellCommand else { return secrets }
         secrets.append(
             contentsOf: shellSubstringMaskTokens(
@@ -2079,15 +2084,7 @@ struct Exec: ParsableCommand {
             StandardError.writeLine("Error: Failed to execute '\(command.first ?? "<unknown>")': \(error.localizedDescription)")
             return 1
         }
-        let grant = saveSSHAutomationProcessGrant(
-            credential: sshAutomationCredential,
-            processID: process.processIdentifier
-        )
-        defer {
-            if let grant {
-                SSHAutomationGrantStore.clearGrant(id: grant.id)
-            }
-        }
+        _ = sshAutomationCredential
 
         let group = DispatchGroup()
 
@@ -2110,19 +2107,6 @@ struct Exec: ParsableCommand {
             return 128 + process.terminationStatus
         }
         return process.terminationStatus
-    }
-
-    private static func saveSSHAutomationProcessGrant(
-        credential: AccessCredential?,
-        processID: Int32
-    ) -> SSHAutomationGrantRecord? {
-        guard let credential else { return nil }
-        return try? SSHAutomationGrantStore.saveGrant(
-            credentialID: credential.id,
-            sessionScope: nil,
-            rootProcessID: processID,
-            expiresAt: credential.expiresAt
-        )
     }
 
     private static func streamPipe(

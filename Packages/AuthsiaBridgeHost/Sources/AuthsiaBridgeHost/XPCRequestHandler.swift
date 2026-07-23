@@ -28,6 +28,12 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     public typealias WorkspaceMetadataProvider = () async throws -> Data
     public typealias SecretExistenceProvider = (UUID) -> Bool?
     public typealias AutomationCredentialLookupProvider = (UUID) -> AutomationCredentialLookup.Result
+    public typealias AutomationCredentialAuthorityProvider = () throws -> AutomationCredentialAuthority
+    public typealias AutomationCredentialValidationProvider = (
+        String,
+        CapabilityCommand,
+        Bool
+    ) -> AutomationCredentialLookup.Result
     public typealias CurrentMachineIdProvider = () -> String?
     public typealias CallerIdentityProvider = () -> CallerIdentity?
     
@@ -40,6 +46,8 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     let passwordSecretExistenceProvider: SecretExistenceProvider
     let apiKeySecretExistenceProvider: SecretExistenceProvider
     let automationCredentialLookupProvider: AutomationCredentialLookupProvider
+    let automationCredentialAuthorityProvider: AutomationCredentialAuthorityProvider
+    let automationCredentialValidationProvider: AutomationCredentialValidationProvider
     let currentMachineIdProvider: CurrentMachineIdProvider
     let authorityStore: AuthorityStoring
     let agentJITGrantStore: AgentJITGrantStoring
@@ -100,6 +108,8 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         automationCredentialLookupProvider: @escaping AutomationCredentialLookupProvider = {
             AutomationCredentialLookup.lookup(credentialID: $0)
         },
+        automationCredentialAuthorityProvider: AutomationCredentialAuthorityProvider? = nil,
+        automationCredentialValidationProvider: AutomationCredentialValidationProvider? = nil,
         currentMachineIdProvider: @escaping CurrentMachineIdProvider = {
             AutomationCredentialLookup.currentMachineId()
         },
@@ -127,6 +137,32 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         self.passwordSecretExistenceProvider = passwordSecretExistenceProvider
         self.apiKeySecretExistenceProvider = apiKeySecretExistenceProvider
         self.automationCredentialLookupProvider = automationCredentialLookupProvider
+        let resolvedAutomationCredentialAuthorityProvider = automationCredentialAuthorityProvider ?? {
+            AutomationCredentialAuthority(
+                authorityStore: authorityStore,
+                digestKey: try AutomationCredentialDigestKeyStore().loadOrCreate()
+            )
+        }
+        self.automationCredentialAuthorityProvider = resolvedAutomationCredentialAuthorityProvider
+        self.automationCredentialValidationProvider = automationCredentialValidationProvider ?? {
+            token,
+            command,
+            consumingUse in
+            guard let machineId = currentMachineIdProvider() else { return .credentialNotFound }
+            do {
+                let metadata = try resolvedAutomationCredentialAuthorityProvider().validate(
+                    token: token,
+                    requestedCommand: command,
+                    currentMachineId: machineId,
+                    consumingUse: consumingUse
+                )
+                return .found(AutomationCredentialLookup.CredentialRecord(metadata: metadata))
+            } catch AutomationCredentialAuthorityError.corruptedStore {
+                return .corruptedStore
+            } catch {
+                return .credentialNotFound
+            }
+        }
         self.currentMachineIdProvider = currentMachineIdProvider
         self.authorityStore = authorityStore
         let resolvedAgentJITGrantStore = agentJITGrantStore

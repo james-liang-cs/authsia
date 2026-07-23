@@ -81,8 +81,30 @@ extension XPCRequestHandler {
                     return
                 }
 
-                let result = WriteResultPayload(id: bridgeRequest.id.uuidString, message: "Access credential approved")
-                replyWriteSuccess(id: bridgeRequest.id, payload: result, reply: reply)
+                do {
+                    let issued = try self.automationCredentialAuthorityProvider().create(
+                        payload: payload,
+                        now: self.agentJITApprovalClock()
+                    )
+                    self.recordAudit(
+                        command: .createAccess,
+                        itemId: issued.credential.id.uuidString,
+                        itemName: issued.credential.name,
+                        approvedBy: "biometric",
+                        caller: callerIdentity,
+                        requestedCommand: bridgeRequest.context.requestedCommand
+                    )
+                    let response: BridgeResponse<AutomationCredentialIssuedPayload> =
+                        BridgeResponseBuilder.success(id: bridgeRequest.id, payload: issued)
+                    reply(encodeResponse(response), nil)
+                } catch {
+                    replyError(
+                        id: bridgeRequest.id,
+                        code: .appUnavailable,
+                        message: "Access credential could not be created",
+                        reply: reply
+                    )
+                }
                 return
             }
 

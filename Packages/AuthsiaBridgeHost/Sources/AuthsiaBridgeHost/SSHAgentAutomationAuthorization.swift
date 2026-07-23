@@ -15,6 +15,7 @@ public enum SSHAgentAutomationAuthorization {
         sessionScope: String? = nil,
         ancestryPIDs: [Int32] = [],
         credentialLookup: (UUID) -> AutomationCredentialLookup.Result = { AutomationCredentialLookup.lookup(credentialID: $0) },
+        credentialValidation: XPCRequestHandler.AutomationCredentialValidationProvider? = nil,
         grantCredentialLookup: (String?, [Int32], Date) -> UUID? = {
             SSHAutomationGrantStore.activeCredentialID(sessionScope: $0, ancestryPIDs: $1, currentDate: $2)
         },
@@ -30,12 +31,17 @@ public enum SSHAgentAutomationAuthorization {
         ) else {
             return .notAutomation
         }
-        guard let credentialID = UUID(uuidString: rawID) else {
-            return .deny("SSH automation credential marker is invalid.")
-        }
-
         let credential: AutomationCredentialLookup.CredentialRecord
-        switch credentialLookup(credentialID) {
+        let lookupResult: AutomationCredentialLookup.Result
+        if let credentialValidation {
+            lookupResult = credentialValidation(rawID, .ssh, false)
+        } else {
+            guard let credentialID = UUID(uuidString: rawID) else {
+                return .deny("SSH automation credential marker is invalid.")
+            }
+            lookupResult = credentialLookup(credentialID)
+        }
+        switch lookupResult {
         case .fileMissing:
             return .deny("Automation credential store is missing or unreadable. Recreate the credential.")
         case .credentialNotFound:
@@ -58,8 +64,8 @@ public enum SSHAgentAutomationAuthorization {
         guard let currentMachineId, credential.machineId == currentMachineId else {
             return .deny("Automation credential is not valid for this machine.")
         }
-        guard credential.allowedCommands.contains(.ssh) else {
-            return .deny("Automation credential does not permit 'ssh'.")
+        guard credential.allowedCommands == [.ssh] else {
+            return .deny("SSH automation requires a separate SSH-only credential.")
         }
         guard let scope = AutomationCredentialScope.normalizeStored(credential.scope) else {
             return .deny("Automation credential scope is invalid.")

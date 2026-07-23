@@ -12,15 +12,44 @@ public final class SSHAgentListener: @unchecked Sendable {
     private let auditLogger = BridgeAuditLogger()
     private let approvalProvider: SSHAgentApprovalProviding
     private let passphraseProvider: SSHKeyPassphraseProviding
+    private let automationCredentialValidationProvider:
+        XPCRequestHandler.AutomationCredentialValidationProvider
     private let acceptQueue = DispatchQueue(label: "com.authsia.ssh-agent.accept", qos: .userInitiated)
     private let connectionQueue = DispatchQueue(label: "com.authsia.ssh-agent.connection", qos: .userInitiated, attributes: .concurrent)
 
     public init(
         approvalProvider: SSHAgentApprovalProviding,
-        passphraseProvider: SSHKeyPassphraseProviding
+        passphraseProvider: SSHKeyPassphraseProviding,
+        automationCredentialValidationProvider:
+            @escaping XPCRequestHandler.AutomationCredentialValidationProvider = {
+                token,
+                command,
+                consumingUse in
+                guard let machineId = AutomationCredentialLookup.currentMachineId() else {
+                    return .credentialNotFound
+                }
+                do {
+                    let authority = AutomationCredentialAuthority(
+                        authorityStore: KeychainAuthorityStore(),
+                        digestKey: try AutomationCredentialDigestKeyStore().loadOrCreate()
+                    )
+                    let metadata = try authority.validate(
+                        token: token,
+                        requestedCommand: command,
+                        currentMachineId: machineId,
+                        consumingUse: consumingUse
+                    )
+                    return .found(AutomationCredentialLookup.CredentialRecord(metadata: metadata))
+                } catch AutomationCredentialAuthorityError.corruptedStore {
+                    return .corruptedStore
+                } catch {
+                    return .credentialNotFound
+                }
+            }
     ) {
         self.approvalProvider = approvalProvider
         self.passphraseProvider = passphraseProvider
+        self.automationCredentialValidationProvider = automationCredentialValidationProvider
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         socketPath = "\(home)/.authsia/agent.sock"
     }
@@ -303,11 +332,13 @@ public final class SSHAgentListener: @unchecked Sendable {
             // since SSH clients don't transmit host info in the agent protocol
         }
 
+        let processEnvironment = resolveProcessEnvironment(fd: clientFD)
         let automationDecision = SSHAgentAutomationAuthorization.authorize(
-            environment: resolveProcessEnvironment(fd: clientFD),
+            environment: processEnvironment,
             keyFolderPath: keyItem.folderPath,
             sessionScope: requester.sessionScope,
-            ancestryPIDs: requester.ancestry.map { Int32($0.pid) }
+            ancestryPIDs: requester.ancestry.map { Int32($0.pid) },
+            credentialValidation: automationCredentialValidationProvider
         )
         let keyIsEncrypted = isEncryptedPrivateKey(keyItem.privateKey)
         let approvalRequest = SSHAgentApprovalRequest(
@@ -346,6 +377,13 @@ public final class SSHAgentListener: @unchecked Sendable {
         ) else {
             return SSHAgentResponse.failure.serialize()
         }
+        guard Self.consumeAutomationCredentialIfNeeded(
+            decision: automationDecision,
+            environment: processEnvironment,
+            validation: automationCredentialValidationProvider
+        ) else {
+            return SSHAgentResponse.failure.serialize()
+        }
 
         recordSSHAgentAudit(
             keyItem: keyItem,
@@ -354,6 +392,25 @@ public final class SSHAgentListener: @unchecked Sendable {
         )
 
         return SSHAgentResponse.signResponse(signature: authorized.signature).serialize()
+    }
+
+    static func consumeAutomationCredentialIfNeeded(
+        decision: SSHAgentAutomationAuthorizationDecision,
+        environment: [String: String],
+        validation: XPCRequestHandler.AutomationCredentialValidationProvider
+    ) -> Bool {
+        guard case .allowWithoutApproval = decision else { return true }
+        let token = [
+            AutomationCredentialEnvironment.sshCredentialKey,
+            AutomationCredentialEnvironment.generalCredentialKey,
+        ].compactMap { environment[$0] }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        guard let token,
+              case .found = validation(token, .ssh, true) else {
+            return false
+        }
+        return true
     }
 
     func authorizedSignature(

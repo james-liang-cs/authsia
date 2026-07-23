@@ -56,7 +56,7 @@ public enum BridgePolicy {
     ) -> BridgePolicyDecision {
         if context.isSSH { return .deny("ssh") }
         if context.isCI { return .deny("ci") }
-        if context.automationCredentialID != nil {
+        if context.hasAutomationCredential {
             return .allow
         }
         if requiresApproval { return .requireApproval }

@@ -35,15 +35,52 @@ struct AutomationAccessResolverTests {
             machineIdentity: machine,
             now: now
         )
+        let token = try AutomationCredentialToken.issue(
+            id: created.id,
+            randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
+        )
 
         let credential = try AutomationAccessResolver.resolveActiveCredential(
-            environment: [AutomationAccessResolver.environmentKey: created.id.uuidString],
+            environment: [AutomationAccessResolver.environmentKey: token],
             store: store,
             now: now.addingTimeInterval(60)
         )
 
         #expect(credential?.id == created.id)
         #expect(credential?.scope == "Team/API")
+        #expect(credential?.bearerToken == token)
+    }
+
+    @Test("resolver errors never echo an expired bearer token")
+    func resolverErrorsNeverEchoExpiredBearerToken() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let (store, directory) = try AccessCredentialStoreFixture.make(prefix: "automation-access")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let credential = AccessCredential(
+            id: UUID(),
+            name: "expired-ci",
+            scope: "Team/API",
+            createdAt: now.addingTimeInterval(-120),
+            expiresAt: now.addingTimeInterval(-60),
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h"
+        )
+        try store.save(credential)
+        let token = AccessCredentialStoreFixture.token(for: credential)
+
+        do {
+            _ = try AutomationAccessResolver.resolveActiveCredential(
+                environment: [AutomationAccessResolver.environmentKey: token],
+                store: store,
+                now: now
+            )
+            Issue.record("Expected expired credential to fail")
+        } catch {
+            let description = String(describing: error)
+            #expect(!description.contains(token))
+            #expect(description.contains(credential.id.uuidString))
+        }
     }
 
     @Test("validateScopeSelection rejects global scope for automation credentials")

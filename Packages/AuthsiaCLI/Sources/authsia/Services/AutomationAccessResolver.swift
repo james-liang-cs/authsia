@@ -38,29 +38,35 @@ enum AutomationAccessResolver {
         store: AccessCredentialStore,
         now: Date
     ) throws -> AccessCredential {
-        guard let id = UUID(uuidString: rawValue) else {
+        let parsedToken: AutomationCredentialToken.Parsed
+        do {
+            parsedToken = try AutomationCredentialToken.parse(rawValue)
+        } catch {
             throw ValidationError(
-                "Invalid automation credential id '\(rawValue)'. Run `authsia access list` and copy an ID."
+                "Invalid automation credential token. Legacy UUID credentials are disabled; " +
+                    "create a new one with `authsia access create`."
             )
         }
 
-        guard let credential = try store.load(id: id) else {
+        guard let credential = try store.load(id: parsedToken.id) else {
             throw ValidationError(
-                "No automation credential found for '\(rawValue)'. Run `authsia access list --all`, " +
+                "No local metadata found for this automation credential. Run `authsia access list --all`, " +
                     "or create a new one with `authsia access create`."
             )
         }
 
         switch credential.status(asOf: now) {
         case .active:
-            return credential
+            return credential.withBearerToken(rawValue)
         case .expired:
             throw ValidationError(
-                "Automation credential '\(rawValue)' has expired. Create a new one with `authsia access create`."
+                "Automation credential '\(credential.name)' (\(credential.id.uuidString)) has expired. " +
+                    "Create a new one with `authsia access create`."
             )
         case .revoked:
             throw ValidationError(
-                "Automation credential '\(rawValue)' has been revoked. Create a new one with `authsia access create`."
+                "Automation credential '\(credential.name)' (\(credential.id.uuidString)) has been revoked. " +
+                    "Create a new one with `authsia access create`."
             )
         }
     }
@@ -226,6 +232,7 @@ enum AutomationAccessResolver {
             isCI: ProcessInfo.processInfo.environment["CI"] != nil,
             timestamp: now,
             automationCredentialID: credential?.id.uuidString,
+            automationCredentialToken: credential?.bearerToken,
             automationScope: credential?.scope,
             requestedCommand: requestedCommand,
             fullCommand: fullCommand,

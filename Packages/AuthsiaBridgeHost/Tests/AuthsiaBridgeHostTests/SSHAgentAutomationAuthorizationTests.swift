@@ -5,9 +5,81 @@ import AuthenticatorBridge
 import AuthenticatorData
 
 final class SSHAgentAutomationAuthorizationTests: XCTestCase {
+    func testBearerTokenIsConsumedOnlyAfterSSHPolicyAndSigningSucceed() throws {
+        let credentialID = UUID()
+        let token = try AutomationCredentialToken.issue(
+            id: credentialID,
+            randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
+        )
+        let credential = makeCredential(
+            id: credentialID,
+            scope: "Team/API",
+            allowedCommands: [.ssh]
+        )
+        var consumptionModes: [Bool] = []
+        let validation: XPCRequestHandler.AutomationCredentialValidationProvider = {
+            suppliedToken,
+            command,
+            consumingUse in
+            XCTAssertEqual(suppliedToken, token)
+            XCTAssertEqual(command, .ssh)
+            consumptionModes.append(consumingUse)
+            return .found(credential)
+        }
+        let environment = [AutomationCredentialEnvironment.sshCredentialKey: token]
+
+        let decision = SSHAgentAutomationAuthorization.authorize(
+            environment: environment,
+            keyFolderPath: "Team/API/Prod",
+            credentialValidation: validation,
+            currentMachineId: "machine-1"
+        )
+
+        XCTAssertEqual(decision, .allowWithoutApproval(scope: .folder("Team/API")))
+        XCTAssertEqual(consumptionModes, [false])
+        XCTAssertTrue(
+            SSHAgentListener.consumeAutomationCredentialIfNeeded(
+                decision: decision,
+                environment: environment,
+                validation: validation
+            )
+        )
+        XCTAssertEqual(consumptionModes, [false, true])
+    }
+
+    func testOutOfScopeBearerTokenIsNotConsumed() throws {
+        let credentialID = UUID()
+        let token = try AutomationCredentialToken.issue(
+            id: credentialID,
+            randomBytes: Data(repeating: 0x41, count: AutomationCredentialToken.randomByteCount)
+        )
+        let credential = makeCredential(
+            id: credentialID,
+            scope: "Team/API",
+            allowedCommands: [.ssh]
+        )
+        var consumptionModes: [Bool] = []
+
+        let decision = SSHAgentAutomationAuthorization.authorize(
+            environment: [AutomationCredentialEnvironment.sshCredentialKey: token],
+            keyFolderPath: "Team/Other",
+            credentialValidation: { _, _, consumingUse in
+                consumptionModes.append(consumingUse)
+                return .found(credential)
+            },
+            currentMachineId: "machine-1"
+        )
+
+        XCTAssertEqual(
+            decision,
+            .deny("Automation credential scope 'Team/API' does not allow access to this SSH key.")
+        )
+        XCTAssertEqual(consumptionModes, [false])
+    }
+
     func testAllowsInScopeSSHCredential() {
         let credentialID = UUID()
-        let credential = makeCredential(id: credentialID, scope: "Team/API", allowedCommands: [.exec, .ssh])
+        let credential = makeCredential(id: credentialID, scope: "Team/API", allowedCommands: [.ssh])
 
         let decision = SSHAgentAutomationAuthorization.authorize(
             environment: [AutomationCredentialEnvironment.sshCredentialKey: credentialID.uuidString],
@@ -65,7 +137,7 @@ final class SSHAgentAutomationAuthorizationTests: XCTestCase {
             currentMachineId: "machine-1"
         )
 
-        XCTAssertEqual(decision, .deny("Automation credential does not permit 'ssh'."))
+        XCTAssertEqual(decision, .deny("SSH automation requires a separate SSH-only credential."))
     }
 
     func testDeniesOutOfScopeSSHKey() {

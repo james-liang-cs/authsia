@@ -139,7 +139,10 @@ struct InjectCommandTests {
 
         do {
             try Inject.authorizeAutomationAccess(
-                environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+                environment: [
+                    AutomationAccessResolver.environmentKey:
+                        AccessCredentialStoreFixture.token(for: credential)
+                ],
                 store: store,
                 now: now.addingTimeInterval(60)
             )

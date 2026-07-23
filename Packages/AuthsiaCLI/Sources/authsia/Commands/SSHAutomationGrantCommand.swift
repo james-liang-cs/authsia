@@ -34,18 +34,15 @@ struct SSHAutomationGrantCommand: ParsableCommand {
         ) else {
             return
         }
-        guard credential.allowedCommands.contains(.ssh) else {
-            throw ValidationError("Automation credential '\(credential.name)' does not permit 'ssh'.")
+        guard credential.allowedCommands == [.ssh] else {
+            throw ValidationError(
+                "SSH automation requires a separate SSH-only credential created with --allow ssh."
+            )
         }
-        guard let sessionScope else { return }
-        try SSHAutomationGrantStore.saveGrant(
-            credentialID: credential.id,
-            sessionScope: sessionScope,
-            rootProcessID: nil,
-            expiresAt: credential.expiresAt,
-            fileURL: grantFileURL,
-            currentDate: now
-        )
+        // Bearer tokens are intentionally never copied into the user-writable
+        // transient grant file. SSH children inherit the scoped token directly.
+        _ = sessionScope
+        _ = grantFileURL
     }
 
     static func clearCurrentSessionGrant(
