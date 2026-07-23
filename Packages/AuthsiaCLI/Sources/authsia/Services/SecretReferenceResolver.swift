@@ -301,7 +301,7 @@ struct SecretReferenceResolver {
 
     /// Scan an env dict for `authsia://` values, resolve them all.
     /// Returns (resolved dict, list of secret values for masking).
-    /// Collects ALL errors before failing — never stops at first error.
+    /// Collects item-specific errors, but stops immediately after an approval denial.
     func resolveEnvironment(
         _ env: [String: String]
     ) throws -> (resolved: [String: String], secrets: [String]) {
@@ -317,6 +317,9 @@ struct SecretReferenceResolver {
                 resolved[key] = secret
                 secrets.append(secret)
             } catch {
+                if BridgeClientError.isApprovalDenied(error) {
+                    throw error
+                }
                 errors.append(.init(envKey: key, uri: value, error: error))
             }
         }
