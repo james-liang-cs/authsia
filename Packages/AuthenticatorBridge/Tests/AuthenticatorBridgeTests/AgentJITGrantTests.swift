@@ -286,6 +286,50 @@ final class AgentJITGrantTests: XCTestCase {
         ))
     }
 
+    func testApprovalDescriptorCarriesExactRedactedDisplayMetadata() throws {
+        let itemID = UUID()
+        let descriptor = AgentJITApprovalDescriptor(
+            callerFingerprint: .fixture(workingDirectory: "/repo/project"),
+            capabilities: [.exec, .list],
+            resourceScope: .items([
+                AgentJITItemIdentity(type: "apiKey", id: itemID),
+            ]),
+            environmentScope: .named("Production"),
+            requestedItems: [
+                AgentJITGrantItemReference(
+                    type: "api-key",
+                    id: itemID.uuidString,
+                    name: "Deploy\nToken",
+                    folderPath: "Team/API"
+                ),
+            ],
+            requestIssuedAtMilliseconds: 1_700_000_000_000,
+            grantExpiresAtMilliseconds: 1_700_000_300_000
+        )
+
+        XCTAssertEqual(descriptor.callerDisplayName, "Claude")
+        XCTAssertEqual(descriptor.workspaceLabel, "project")
+        XCTAssertEqual(descriptor.reuseDescription, "Exact items only")
+        XCTAssertEqual(descriptor.durationSeconds, 300)
+        XCTAssertEqual(descriptor.requestedItems.map(\.name), ["Unnamed item"])
+        XCTAssertEqual(descriptor.requestedItems.map(\.type), ["API key"])
+        XCTAssertEqual(descriptor.requestedItems.map(\.id), [itemID])
+    }
+
+    func testApprovalDescriptorLabelsExplicitFolderReuse() {
+        let descriptor = AgentJITApprovalDescriptor(
+            callerFingerprint: .fixture(workingDirectory: "/repo"),
+            capabilities: [.list],
+            resourceScope: .folder(.folder("Team/API")),
+            environmentScope: nil,
+            requestedItems: [],
+            requestIssuedAtMilliseconds: 1_700_000_000_000,
+            grantExpiresAtMilliseconds: 1_700_000_060_000
+        )
+
+        XCTAssertEqual(descriptor.reuseDescription, "Folder reuse: Team/API")
+    }
+
     func testAllowsDeniesWrongCaller() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let caller = AgentJITCallerFingerprint.fixture()

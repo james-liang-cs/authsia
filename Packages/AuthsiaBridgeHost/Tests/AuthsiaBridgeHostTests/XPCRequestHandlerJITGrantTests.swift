@@ -204,6 +204,13 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(input.requestedItems.first?.kind, .password)
         XCTAssertEqual(input.requestedItems.first?.id, stableUUID("password:API:Team/API"))
         XCTAssertEqual(input.requestedItems.first?.folderPath, "Team/API")
+        let approvalDescriptor = try XCTUnwrap(approver.requests.first?.approvalDescriptors.first)
+        XCTAssertEqual(approvalDescriptor.callerDisplayName, "Claude")
+        XCTAssertEqual(approvalDescriptor.workspaceLabel, "repo")
+        XCTAssertEqual(approvalDescriptor.environmentScope, .named("Production"))
+        XCTAssertEqual(approvalDescriptor.reuseDescription, "Exact items only")
+        XCTAssertEqual(approvalDescriptor.requestedItems.map(\.name), ["API"])
+        XCTAssertEqual(approvalDescriptor.requestedItems.map(\.type), ["Password"])
         XCTAssertEqual(approver.requests.first?.remoteRequests.map(\.descriptor.input), [input])
         XCTAssertEqual(store.grants.first?.createdAt, Date(timeIntervalSince1970: 1_700_000_000.123))
         XCTAssertEqual(store.grants.first?.expiresAt, Date(timeIntervalSince1970: 1_700_000_015.123))
@@ -3661,12 +3668,13 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
     }
 }
 
-private final class JITApprovalTracker: BridgeApprover {
+private final class JITApprovalTracker: AgentJITDescriptorApproving {
     struct Request: Equatable {
         let prompt: String
         let command: BridgeRequestType
         let itemLabel: String?
         let field: String?
+        let approvalDescriptors: [AgentJITApprovalDescriptor]
         let remoteRequests: [RemoteJITApprovalRequest]
     }
 
@@ -3696,6 +3704,7 @@ private final class JITApprovalTracker: BridgeApprover {
         itemLabel: String?,
         field: String?,
         callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        approvalDescriptors: [AgentJITApprovalDescriptor],
         remoteRequests: [RemoteJITApprovalRequest]
     ) async -> RemoteJITApprovalOutcome {
         requests.append(
@@ -3704,6 +3713,7 @@ private final class JITApprovalTracker: BridgeApprover {
                 command: command,
                 itemLabel: itemLabel,
                 field: field,
+                approvalDescriptors: approvalDescriptors,
                 remoteRequests: remoteRequests
             )
         )

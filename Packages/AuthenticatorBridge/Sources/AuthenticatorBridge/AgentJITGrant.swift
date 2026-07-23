@@ -176,6 +176,97 @@ public enum AgentJITResourceScope: Codable, Equatable, Sendable {
     }
 }
 
+public struct AgentJITApprovalItem: Equatable, Sendable {
+    public let id: UUID
+    public let type: String
+    public let name: String
+    public let folderPath: String?
+
+    init?(reference: AgentJITGrantItemReference) {
+        guard let identity = reference.itemIdentity else { return nil }
+        id = identity.id
+        type = Self.displayType(identity.type)
+        name = Self.safeDisplayText(reference.name, fallback: "Unnamed item")
+        folderPath = reference.folderPath.map {
+            Self.safeDisplayText($0, fallback: "Root")
+        }
+    }
+
+    private static func displayType(_ type: String) -> String {
+        switch type {
+        case "api-key": return "API key"
+        case "certificate": return "Certificate"
+        case "note": return "Note"
+        case "password": return "Password"
+        case "ssh": return "SSH key"
+        default: return "Vault item"
+        }
+    }
+
+    private static func safeDisplayText(_ value: String, fallback: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0)
+              }) else {
+            return fallback
+        }
+        return String(trimmed.prefix(256))
+    }
+}
+
+public struct AgentJITApprovalDescriptor: Equatable, Sendable {
+    public let callerFingerprint: AgentJITCallerFingerprint
+    public let capabilities: [AgentJITCapability]
+    public let resourceScope: AgentJITResourceScope
+    public let environmentScope: EnvironmentAccessScope?
+    public let requestedItems: [AgentJITApprovalItem]
+    public let requestIssuedAtMilliseconds: Int64
+    public let grantExpiresAtMilliseconds: Int64
+
+    public init(
+        callerFingerprint: AgentJITCallerFingerprint,
+        capabilities: [AgentJITCapability],
+        resourceScope: AgentJITResourceScope,
+        environmentScope: EnvironmentAccessScope?,
+        requestedItems: [AgentJITGrantItemReference],
+        requestIssuedAtMilliseconds: Int64,
+        grantExpiresAtMilliseconds: Int64
+    ) {
+        self.callerFingerprint = callerFingerprint
+        self.capabilities = Array(Set(capabilities)).sorted { $0.rawValue < $1.rawValue }
+        self.resourceScope = resourceScope
+        self.environmentScope = environmentScope
+        self.requestedItems = requestedItems.compactMap(AgentJITApprovalItem.init(reference:))
+        self.requestIssuedAtMilliseconds = requestIssuedAtMilliseconds
+        self.grantExpiresAtMilliseconds = grantExpiresAtMilliseconds
+    }
+
+    public var callerDisplayName: String {
+        callerFingerprint.displayName
+    }
+
+    public var workspaceLabel: String {
+        guard let path = callerFingerprint.workingDirectory, path != "/" else {
+            return "/"
+        }
+        return String(path.split(separator: "/").last ?? "/")
+    }
+
+    public var durationSeconds: Int {
+        max(0, Int((grantExpiresAtMilliseconds - requestIssuedAtMilliseconds) / 1_000))
+    }
+
+    public var reuseDescription: String {
+        switch resourceScope {
+        case .items:
+            return "Exact items only"
+        case .folder(let folderScope):
+            return "Folder reuse: \(folderScope.displayName)"
+        }
+    }
+}
+
 public struct AgentJITCallerFingerprint: Codable, Equatable, Sendable {
     public let processName: String
     public let bundleIdentifier: String?

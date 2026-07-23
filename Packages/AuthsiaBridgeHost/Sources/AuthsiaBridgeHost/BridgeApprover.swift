@@ -30,3 +30,37 @@ public extension BridgeApprover {
         )
     }
 }
+
+@MainActor
+public protocol AgentJITDescriptorApproving: BridgeApprover {
+    func requestApproval(
+        prompt: String,
+        command: BridgeRequestType,
+        itemLabel: String?,
+        field: String?,
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        approvalDescriptors: [AgentJITApprovalDescriptor],
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome
+}
+
+public extension AgentJITDescriptorApproving {
+    func requestApproval(
+        prompt: String,
+        command: BridgeRequestType,
+        itemLabel: String?,
+        field: String?,
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome {
+        await requestApproval(
+            prompt: prompt,
+            command: command,
+            itemLabel: itemLabel,
+            field: field,
+            callback: callback,
+            approvalDescriptors: [],
+            remoteRequests: remoteRequests
+        )
+    }
+}

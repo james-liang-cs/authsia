@@ -231,7 +231,7 @@ extension XPCRequestHandler {
                 environmentScope: payload.environmentScope,
                 resolutions: pendingResolutions
             )
-            let outcome = await approver.requestApproval(
+            let outcome = await requestAgentJITApproval(
                 prompt: agentJITBroadListPreflightPrompt(
                     caller: caller,
                     duration: duration,
@@ -243,6 +243,13 @@ extension XPCRequestHandler {
                 itemLabel: "All folders",
                 field: nil,
                 callback: callback,
+                approvalDescriptors: agentJITApprovalDescriptors(
+                    timing: timing,
+                    caller: caller,
+                    capabilities: grantCapabilities,
+                    environmentScope: payload.environmentScope,
+                    resolutions: pendingResolutions
+                ),
                 remoteRequests: remoteRequests
             )
             let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
@@ -288,7 +295,7 @@ extension XPCRequestHandler {
                     environmentScope: payload.environmentScope,
                     resolutions: [resolution]
                 )
-                let outcome = await approver.requestApproval(
+                let outcome = await requestAgentJITApproval(
                     prompt: agentJITPreflightPrompt(
                         caller: caller,
                         scope: scope,
@@ -301,6 +308,13 @@ extension XPCRequestHandler {
                     itemLabel: scope.displayName,
                     field: nil,
                     callback: callback,
+                    approvalDescriptors: agentJITApprovalDescriptors(
+                        timing: timing,
+                        caller: caller,
+                        capabilities: grantCapabilities,
+                        environmentScope: payload.environmentScope,
+                        resolutions: [resolution]
+                    ),
                     remoteRequests: remoteRequests
                 )
                 let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
@@ -484,6 +498,57 @@ extension XPCRequestHandler {
                     }
                 )
             }
+        )
+    }
+
+    private func agentJITApprovalDescriptors(
+        timing: AgentJITFixedApprovalTiming,
+        caller: AgentJITCallerFingerprint,
+        capabilities: [AgentJITCapability],
+        environmentScope: EnvironmentAccessScope?,
+        resolutions: [AgentJITScopeResolution]
+    ) -> [AgentJITApprovalDescriptor] {
+        resolutions.map { resolution in
+            AgentJITApprovalDescriptor(
+                callerFingerprint: caller,
+                capabilities: capabilities,
+                resourceScope: .items(Set(resolution.requestedItems.compactMap(\.itemIdentity))),
+                environmentScope: environmentScope,
+                requestedItems: resolution.requestedItems,
+                requestIssuedAtMilliseconds: timing.issuedAtMilliseconds,
+                grantExpiresAtMilliseconds: timing.grantExpiresAtMilliseconds
+            )
+        }
+    }
+
+    @MainActor
+    private func requestAgentJITApproval(
+        prompt: String,
+        command: BridgeRequestType,
+        itemLabel: String?,
+        field: String?,
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        approvalDescriptors: [AgentJITApprovalDescriptor],
+        remoteRequests: [RemoteJITApprovalRequest]
+    ) async -> RemoteJITApprovalOutcome {
+        if let descriptorApprover = approver as? any AgentJITDescriptorApproving {
+            return await descriptorApprover.requestApproval(
+                prompt: prompt,
+                command: command,
+                itemLabel: itemLabel,
+                field: field,
+                callback: callback,
+                approvalDescriptors: approvalDescriptors,
+                remoteRequests: remoteRequests
+            )
+        }
+        return await approver.requestApproval(
+            prompt: prompt,
+            command: command,
+            itemLabel: itemLabel,
+            field: field,
+            callback: callback,
+            remoteRequests: remoteRequests
         )
     }
 
