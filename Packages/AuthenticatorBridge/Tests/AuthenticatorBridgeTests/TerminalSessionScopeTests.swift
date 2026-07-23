@@ -45,6 +45,21 @@ struct TerminalSessionScopeTests {
         #expect(unknown == .unknown)
     }
 
+    @Test("liveness uses agent host process when present")
+    func livenessUsesAgentHostProcessWhenPresent() {
+        let active = TerminalSessionScope.liveness(
+            for: "agent:cursor:pid:1001",
+            isProcessRunning: { $0 == 1001 }
+        )
+        let closed = TerminalSessionScope.liveness(
+            for: "agent:cursor:pid:1001",
+            isProcessRunning: { _ in false }
+        )
+
+        #expect(active == .active)
+        #expect(closed == .closed)
+    }
+
     @Test("current process scope matches pid scope")
     func currentProcessScopeMatchesPIDScope() {
         let current = TerminalSessionScope.currentProcess()

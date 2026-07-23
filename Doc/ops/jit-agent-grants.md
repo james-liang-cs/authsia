@@ -478,6 +478,11 @@ Grants can become inactive in three ways:
 - lazy revocation when the associated terminal/session scope is detected as
   closed
 
+Cursor extension-host grants replace the short-lived CLI process-session
+component with the Bridge-observed extension-host PID. Repeated calls from the
+same Cursor host and working directory therefore reuse the grant, while closing
+that host triggers the same lazy revocation path as a closed terminal session.
+
 Access Center shows the resolved grant folder, the concrete vault items that
 were resolved during preflight, and terminal status so the user can see what was
 approved and whether the originating terminal still appears alive. Expired and

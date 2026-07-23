@@ -68,11 +68,19 @@ public enum TerminalSessionScope {
         for scope: String?,
         isProcessRunning: (Int32) -> Bool
     ) -> TerminalSessionLiveness {
-        guard let sessionID = components(from: scope)?.processSessionIdentifier,
-              sessionID > 1 else {
+        let processIdentifier: Int32?
+        if let sessionID = components(from: scope)?.processSessionIdentifier {
+            processIdentifier = sessionID
+        } else if let scope, scope.hasPrefix("agent:cursor:pid:") {
+            processIdentifier = Int32(scope.dropFirst("agent:cursor:pid:".count))
+        } else {
+            processIdentifier = nil
+        }
+
+        guard let processIdentifier, processIdentifier > 1 else {
             return .unknown
         }
-        return isProcessRunning(sessionID) ? .active : .closed
+        return isProcessRunning(processIdentifier) ? .active : .closed
     }
 
     public static func currentProcess() -> String? {
