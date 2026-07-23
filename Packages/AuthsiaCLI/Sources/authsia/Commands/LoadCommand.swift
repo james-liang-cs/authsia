@@ -942,7 +942,7 @@ struct Load: ParsableCommand {
                     )
                 )
             } catch {
-                if references.count == 1 {
+                if references.count == 1 || BridgeClientError.isApprovalDenied(error) {
                     throw error
                 }
                 failures.append("\(reference.name): \(error.localizedDescription)")
