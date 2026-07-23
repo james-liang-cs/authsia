@@ -573,22 +573,26 @@ struct Exec: ParsableCommand {
     ) throws {
         guard shouldRunJITPreflight(environment: parentEnvironment, processAncestry: processAncestry),
               !references.isEmpty else { return }
-        recordAgentCommandHistory(
-            parentEnvironment: parentEnvironment,
-            processAncestry: processAncestry,
-            store: commandHistoryStore,
-            now: now,
-            currentDirectoryPath: currentDirectoryPath,
-            terminalSessionScope: terminalSessionScope,
-            commandLine: commandLine
-        )
-        _ = try client.agentJITPreflight(
+        var grantIDs: [UUID] = []
+        defer {
+            recordAgentCommandHistory(
+                parentEnvironment: parentEnvironment,
+                processAncestry: processAncestry,
+                store: commandHistoryStore,
+                now: now,
+                currentDirectoryPath: currentDirectoryPath,
+                terminalSessionScope: terminalSessionScope,
+                commandLine: commandLine,
+                grantIDs: grantIDs
+            )
+        }
+        grantIDs = try client.agentJITPreflight(
             AgentJITPreflightPayload(
                 requestedCommand: "exec",
                 references: references,
                 environmentScope: environmentScope
             )
-        )
+        ).grantIDs
     }
 
     private static func recordAgentCommandHistory(
@@ -598,7 +602,8 @@ struct Exec: ParsableCommand {
         now: Date,
         currentDirectoryPath: String,
         terminalSessionScope: String?,
-        commandLine: [String]
+        commandLine: [String],
+        grantIDs: [UUID]
     ) {
         let context = AgentRuntimeContextResolver.resolve(
             now: now,
@@ -608,24 +613,28 @@ struct Exec: ParsableCommand {
         )
         let command = commandLine.isEmpty ? nil : commandLine.joined(separator: " ")
         let executable = commandLine.first.map { URL(fileURLWithPath: $0).lastPathComponent }
-        let event = AgentCommandEvent(
-            recordedAt: now,
-            agentPlatform: context?.platform,
-            sessionID: context?.sessionID,
-            turnID: context?.turnID,
-            agentID: context?.agentID,
-            agentType: context?.agentType,
-            toolUseID: context?.toolUseID,
-            captureSource: .process,
-            contextExpiresAt: now.addingTimeInterval(60 * 60),
-            workingDirectory: currentDirectoryPath,
-            terminalSessionScope: terminalSessionScope,
-            executable: executable,
-            arguments: commandLine,
-            command: command,
-            exitStatus: nil
-        )
-        try? store.record(event)
+        let historyGrantIDs: [UUID?] = grantIDs.isEmpty ? [nil] : grantIDs.map(Optional.some)
+        for grantID in historyGrantIDs {
+            let event = AgentCommandEvent(
+                recordedAt: now,
+                agentPlatform: context?.platform,
+                sessionID: context?.sessionID,
+                turnID: context?.turnID,
+                agentID: context?.agentID,
+                agentType: context?.agentType,
+                toolUseID: context?.toolUseID,
+                agentJITGrantID: grantID,
+                captureSource: .process,
+                contextExpiresAt: now.addingTimeInterval(60 * 60),
+                workingDirectory: currentDirectoryPath,
+                terminalSessionScope: terminalSessionScope,
+                executable: executable,
+                arguments: commandLine,
+                command: command,
+                exitStatus: nil
+            )
+            try? store.record(event)
+        }
     }
 
     static func jitEnvPreflightEnvironment(
