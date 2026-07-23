@@ -1,44 +1,27 @@
+import Foundation
 import XCTest
 @testable import AuthsiaBridgeHost
 import AuthenticatorBridge
 
 #if os(macOS)
 final class AgentJITGrantStoreTests: XCTestCase {
-    func testSaveAllEmptyBatchDoesNotCreateStoreOrCallWriter() throws {
-        let tempDir = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        let fileURL = tempDir.appendingPathComponent("agent-jit-grants.json")
-        var writeCount = 0
-        let store = AgentJITGrantStore(fileURL: fileURL, atomicWriter: { _ in
-            writeCount += 1
-        })
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
-        try store.saveAll([])
-
-        XCTAssertEqual(writeCount, 0)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
-    }
-
-    func testSaveAllReplacesInPlaceAndAppendsInBatchOrder() throws {
-        let tempDir = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        let store = AgentJITGrantStore(fileURL: tempDir.appendingPathComponent("agent-jit-grants.json"))
+    func testSaveAllPersistsAcrossStoreRestart() throws {
+        let authority = KeychainAuthorityStore(blobStore: JITTestAuthorityBlobStore())
+        let legacyURL = temporaryDirectory().appendingPathComponent("agent-jit-grants.json")
+        defer { try? FileManager.default.removeItem(at: legacyURL.deletingLastPathComponent()) }
         let first = grant(id: "00000000-0000-0000-0000-000000000001", folder: "Team/One")
         let second = grant(id: "00000000-0000-0000-0000-000000000002", folder: "Team/Two")
-        let appendedFirst = grant(id: "00000000-0000-0000-0000-000000000003", folder: "Team/Three")
-        let updatedFirst = grant(id: "00000000-0000-0000-0000-000000000001", folder: "Team/Updated")
-        let appendedSecond = grant(id: "00000000-0000-0000-0000-000000000004", folder: "Team/Four")
-        try store.saveAll([first, second])
+        try AgentJITGrantStore(authorityStore: authority, legacyFileURL: legacyURL).saveAll([first, second])
 
-        try store.saveAll([appendedFirst, updatedFirst, appendedSecond])
+        let restarted = AgentJITGrantStore(authorityStore: authority, legacyFileURL: legacyURL)
 
-        XCTAssertEqual(try store.loadAll(), [updatedFirst, second, appendedFirst, appendedSecond])
+        XCTAssertEqual(try restarted.loadAll(), [first, second])
     }
 
     func testSaveRetainsSingleGrantUpsertCompatibility() throws {
-        let tempDir = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        let store = AgentJITGrantStore(fileURL: tempDir.appendingPathComponent("agent-jit-grants.json"))
+        let store = makeStore()
         let original = grant(id: "00000000-0000-0000-0000-000000000001", folder: "Team/One")
         let updated = grant(id: "00000000-0000-0000-0000-000000000001", folder: "Team/Updated")
 
@@ -48,24 +31,70 @@ final class AgentJITGrantStoreTests: XCTestCase {
         XCTAssertEqual(try store.loadAll(), [updated])
     }
 
-    func testSaveAllWriteFailureLeavesPriorContentsUnchanged() throws {
-        let tempDir = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        let fileURL = tempDir.appendingPathComponent("agent-jit-grants.json")
-        let persistedStore = AgentJITGrantStore(fileURL: fileURL)
+    func testLegacyJSONCannotCreateAuthorityAndIsRenamed() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacyURL = directory.appendingPathComponent("agent-jit-grants.json")
+        let forged = grant(id: "00000000-0000-0000-0000-000000000001", folder: "Forged")
+        try JSONEncoder().encode([forged]).write(to: legacyURL)
+        let store = AgentJITGrantStore(
+            authorityStore: KeychainAuthorityStore(blobStore: JITTestAuthorityBlobStore()),
+            legacyFileURL: legacyURL
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.appendingPathExtension("legacy").path))
+        XCTAssertEqual(try store.loadAll(), [])
+    }
+
+    func testRevokeAndRevokeAllPersistHistory() throws {
+        let store = makeStore()
         let first = grant(id: "00000000-0000-0000-0000-000000000001", folder: "Team/One")
         let second = grant(id: "00000000-0000-0000-0000-000000000002", folder: "Team/Two")
-        try persistedStore.saveAll([first, second])
-        let updatedFirst = grant(id: "00000000-0000-0000-0000-000000000001", folder: "Team/Updated")
-        let appended = grant(id: "00000000-0000-0000-0000-000000000003", folder: "Team/Three")
-        let failingStore = AgentJITGrantStore(fileURL: fileURL, atomicWriter: { _ in
-            throw InjectedWriteError.failed
-        })
+        try store.saveAll([first, second])
 
-        XCTAssertThrowsError(try failingStore.saveAll([updatedFirst, appended])) { error in
-            XCTAssertEqual(error as? InjectedWriteError, .failed)
+        let revoked = try store.revoke(id: first.id, revokedAt: now)
+        let allRevoked = try store.revokeAll(revokedAt: now.addingTimeInterval(1))
+
+        XCTAssertEqual(revoked.revokedAt, now)
+        XCTAssertEqual(allRevoked.map(\.id), [second.id])
+        let history = try store.loadAll()
+        XCTAssertEqual(history.first(where: { $0.id == first.id })?.revokedAt, now)
+        XCTAssertEqual(
+            history.first(where: { $0.id == second.id })?.revokedAt,
+            now.addingTimeInterval(1)
+        )
+    }
+
+    func testMissingPayloadFailsClosed() throws {
+        let authority = KeychainAuthorityStore(blobStore: JITTestAuthorityBlobStore())
+        try authority.insert(
+            AuthorityRecord(
+                type: .agentJITGrant,
+                id: UUID(),
+                createdAt: now.addingTimeInterval(-60),
+                expiresAt: now.addingTimeInterval(300),
+                revokedAt: nil,
+                maximumUses: .max,
+                consumedUses: 0,
+                bindingDigest: Data(repeating: 0x11, count: 32),
+                displayMetadata: [:]
+            )
+        )
+
+        XCTAssertThrowsError(
+            try AgentJITGrantStore(authorityStore: authority).loadAll()
+        ) {
+            XCTAssertEqual($0 as? AgentJITGrantStoreError, .corruptedStore)
         }
-        XCTAssertEqual(try persistedStore.loadAll(), [first, second])
+    }
+
+    private func makeStore() -> AgentJITGrantStore {
+        AgentJITGrantStore(
+            authorityStore: KeychainAuthorityStore(blobStore: JITTestAuthorityBlobStore()),
+            legacyFileURL: temporaryDirectory().appendingPathComponent("agent-jit-grants.json")
+        )
     }
 
     private func temporaryDirectory() -> URL {
@@ -88,8 +117,8 @@ final class AgentJITGrantStoreTests: XCTestCase {
             ),
             folderScope: .folder(folder),
             capabilities: [.exec],
-            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
-            expiresAt: Date(timeIntervalSince1970: 1_700_000_300),
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(300),
             revokedAt: nil,
             lastUsedAt: nil,
             approvedBy: "macBiometric"
@@ -97,7 +126,18 @@ final class AgentJITGrantStoreTests: XCTestCase {
     }
 }
 
-private enum InjectedWriteError: Error, Equatable {
-    case failed
+private final class JITTestAuthorityBlobStore: AuthorityBlobStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var data: Data?
+
+    func load() throws -> Data? {
+        lock.withLock { data }
+    }
+
+    func save(_ data: Data) throws {
+        lock.withLock {
+            self.data = data
+        }
+    }
 }
 #endif

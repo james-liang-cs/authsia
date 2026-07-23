@@ -9,12 +9,69 @@ final class AuthorityStoreTests: XCTestCase {
 
     func testInsertAndLoadRoundTrip() throws {
         let store = makeStore()
-        let record = makeRecord()
+        let record = makeRecord(payload: Data("synthetic-policy".utf8))
 
         try store.insert(record)
 
         XCTAssertEqual(try store.record(id: record.id, asOf: now), record)
         XCTAssertEqual(try store.activeRecords(asOf: now), [record])
+        XCTAssertEqual(try store.allRecords(), [record])
+    }
+
+    func testUpsertReplacesExistingRecord() throws {
+        let store = makeStore()
+        let record = makeRecord()
+        let replacement = AuthorityRecord(
+            type: record.type,
+            id: record.id,
+            createdAt: record.createdAt,
+            expiresAt: record.expiresAt,
+            revokedAt: now,
+            maximumUses: record.maximumUses,
+            consumedUses: record.consumedUses,
+            bindingDigest: record.bindingDigest,
+            displayMetadata: record.displayMetadata,
+            payload: Data("updated-policy".utf8)
+        )
+        try store.insert(record)
+
+        try store.upsert(replacement)
+
+        XCTAssertEqual(try store.allRecords(), [replacement])
+    }
+
+    func testBatchUpsertCommitsAllRecordsTogetherInStableOrder() throws {
+        let store = makeStore()
+        let first = makeRecord()
+        let second = AuthorityRecord(
+            type: .agentJITGrant,
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            createdAt: first.createdAt,
+            expiresAt: first.expiresAt,
+            revokedAt: nil,
+            maximumUses: 1,
+            consumedUses: 0,
+            bindingDigest: Data(repeating: 0x22, count: 32),
+            displayMetadata: [:],
+            payload: Data("second".utf8)
+        )
+        let replacement = AuthorityRecord(
+            type: first.type,
+            id: first.id,
+            createdAt: first.createdAt,
+            expiresAt: first.expiresAt,
+            revokedAt: nil,
+            maximumUses: first.maximumUses,
+            consumedUses: first.consumedUses,
+            bindingDigest: first.bindingDigest,
+            displayMetadata: first.displayMetadata,
+            payload: Data("replacement".utf8)
+        )
+        try store.insert(first)
+
+        try store.upsert([second, replacement])
+
+        XCTAssertEqual(try store.allRecords(), [replacement, second])
     }
 
     func testConsumeAtomicallyIncrementsUseCount() throws {
@@ -170,7 +227,8 @@ final class AuthorityStoreTests: XCTestCase {
 
     private func makeRecord(
         expiresAt: Date? = nil,
-        maximumUses: Int = 1
+        maximumUses: Int = 1,
+        payload: Data? = nil
     ) -> AuthorityRecord {
         AuthorityRecord(
             type: .executionLease,
@@ -184,7 +242,8 @@ final class AuthorityStoreTests: XCTestCase {
             displayMetadata: [
                 "agent": "Synthetic Agent",
                 "scope": "Team/API",
-            ]
+            ],
+            payload: payload
         )
     }
 }

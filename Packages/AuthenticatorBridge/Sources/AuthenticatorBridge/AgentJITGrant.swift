@@ -371,3 +371,29 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
             && callerFingerprint.matches(caller)
     }
 }
+
+public struct AgentJITGrantSnapshotPayload: Codable, Equatable, Sendable {
+    public let active: [AgentJITGrant]
+    public let history: [AgentJITGrant]
+
+    public init(active: [AgentJITGrant], history: [AgentJITGrant]) {
+        self.active = active
+        self.history = history
+    }
+}
+
+public struct AgentJITGrantRevokePayload: Codable, Equatable, Sendable {
+    public let id: UUID
+
+    public init(id: UUID) {
+        self.id = id
+    }
+}
+
+public struct AgentJITGrantMutationPayload: Codable, Equatable, Sendable {
+    public let revokedGrantIDs: [UUID]
+
+    public init(revokedGrantIDs: [UUID]) {
+        self.revokedGrantIDs = revokedGrantIDs
+    }
+}

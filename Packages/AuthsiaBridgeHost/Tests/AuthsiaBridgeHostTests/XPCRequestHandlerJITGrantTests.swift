@@ -35,6 +35,14 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
     )
 
+    private let appCallerIdentity = CallerIdentity(
+        pid: 40,
+        processName: "Authsia",
+        bundleIdentifier: "app.authsia",
+        signingTeamId: "TEAM",
+        signingIdentity: "Developer ID Application"
+    )
+
     private let vscodeTerminalCallerIdentity = CallerIdentity(
         pid: 42,
         processName: "authsia",
@@ -85,6 +93,80 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
     )
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    func testGrantSnapshotSeparatesActiveFromHistoryWithoutSessionToken() async throws {
+        let active = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/One"),
+            capabilities: [.exec],
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(300)
+        )
+        let revoked = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/Two"),
+            capabilities: [.exec],
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(300),
+            revokedAt: now.addingTimeInterval(-1)
+        )
+        let handler = makeHandler(
+            store: MemoryAgentJITGrantStore([active, revoked]),
+            callerIdentity: appCallerIdentity,
+            clock: AgentJITApprovalClockSpy([now]).callAsFunction
+        )
+
+        let response: BridgeResponse<AgentJITGrantSnapshotPayload> = try await grantSnapshot(handler)
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(response.payload?.active, [active])
+        XCTAssertEqual(response.payload?.history, [revoked])
+        XCTAssertNil(response.sessionToken)
+    }
+
+    func testRevokeGrantAndRevokeAllUseBridgeOwnedStore() async throws {
+        let first = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/One"),
+            capabilities: [.exec],
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(300)
+        )
+        let second = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/Two"),
+            capabilities: [.exec],
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(300)
+        )
+        let store = MemoryAgentJITGrantStore([first, second])
+        let handler = makeHandler(
+            store: store,
+            callerIdentity: appCallerIdentity,
+            clock: AgentJITApprovalClockSpy([now, now.addingTimeInterval(1)]).callAsFunction
+        )
+
+        let single: BridgeResponse<AgentJITGrantMutationPayload> = try await revokeGrant(handler, id: first.id)
+        let all: BridgeResponse<AgentJITGrantMutationPayload> = try await revokeAllGrants(handler)
+
+        XCTAssertNil(single.error)
+        XCTAssertEqual(single.payload?.revokedGrantIDs, [first.id])
+        XCTAssertNil(all.error)
+        XCTAssertEqual(all.payload?.revokedGrantIDs, [second.id])
+        XCTAssertEqual(store.grants.filter { $0.revokedAt != nil }.count, 2)
+    }
+
+    func testGrantControlRejectsCLICaller() async throws {
+        let handler = makeHandler(store: MemoryAgentJITGrantStore())
+
+        let response: BridgeResponse<AgentJITGrantSnapshotPayload> = try await grantSnapshot(handler)
+
+        XCTAssertEqual(response.error?.code, .policyDenied)
+    }
 
     func testRemoteBuilderReceivesExactMappedAuthorityAndFixedTiming() async throws {
         let restoreTTL = setCLIApprovalTTL(15)
@@ -794,7 +876,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let store = AgentJITGrantStore(
-            fileURL: tempDir.appendingPathComponent("grants.json"),
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: tempDir.appendingPathComponent("grants.json"),
             terminalSessionLiveness: { _ in .closed }
         )
         let existing = AgentJITGrant.fixture(
@@ -828,7 +911,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
         var liveness = TerminalSessionLiveness.active
         let store = AgentJITGrantStore(
-            fileURL: tempDir.appendingPathComponent("grants.json"),
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: tempDir.appendingPathComponent("grants.json"),
             terminalSessionLiveness: { _ in liveness }
         )
         let existing = AgentJITGrant.fixture(
@@ -867,7 +951,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let store = AgentJITGrantStore(
-            fileURL: tempDir.appendingPathComponent("grants.json"),
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: tempDir.appendingPathComponent("grants.json"),
             terminalSessionLiveness: { _ in .active }
         )
         let existing = AgentJITGrant.fixture(
@@ -2904,6 +2989,67 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 1)
         return try BridgeCoder.decode(
             BridgeResponse<AgentJITPreflightResultPayload>.self,
+            from: try XCTUnwrap(responseData)
+        )
+    }
+
+    private func grantSnapshot(
+        _ handler: XPCRequestHandler
+    ) async throws -> BridgeResponse<AgentJITGrantSnapshotPayload> {
+        try await invokeGrantControl(
+            handler,
+            type: .agentJITSnapshot,
+            body: Optional<String>.none,
+            action: handler.agentJITSnapshot
+        )
+    }
+
+    private func revokeGrant(
+        _ handler: XPCRequestHandler,
+        id: UUID
+    ) async throws -> BridgeResponse<AgentJITGrantMutationPayload> {
+        try await invokeGrantControl(
+            handler,
+            type: .agentJITRevoke,
+            body: AgentJITGrantRevokePayload(id: id),
+            action: handler.revokeAgentJITGrant
+        )
+    }
+
+    private func revokeAllGrants(
+        _ handler: XPCRequestHandler
+    ) async throws -> BridgeResponse<AgentJITGrantMutationPayload> {
+        try await invokeGrantControl(
+            handler,
+            type: .agentJITRevokeAll,
+            body: Optional<String>.none,
+            action: handler.revokeAllAgentJITGrants
+        )
+    }
+
+    private func invokeGrantControl<Response: Codable & Equatable, Body: Codable>(
+        _ handler: XPCRequestHandler,
+        type: BridgeRequestType,
+        body: Body?,
+        action: (Data, @escaping (Data?, NSError?) -> Void) -> Void
+    ) async throws -> BridgeResponse<Response> {
+        let request = BridgeRequest(
+            id: UUID(),
+            type: type,
+            query: "",
+            options: .init(field: nil, copy: false),
+            context: execContext(requestedCommand: type.rawValue),
+            body: try body.map(BridgeCoder.encode)
+        )
+        let expectation = XCTestExpectation(description: "\(type.rawValue) reply")
+        var responseData: Data?
+        action(try BridgeCoder.encode(request)) { data, _ in
+            responseData = data
+            expectation.fulfill()
+        }
+        await fulfillment(of: [expectation], timeout: 1)
+        return try BridgeCoder.decode(
+            BridgeResponse<Response>.self,
             from: try XCTUnwrap(responseData)
         )
     }

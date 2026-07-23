@@ -104,7 +104,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
             AutomationCredentialLookup.currentMachineId()
         },
         authorityStore: AuthorityStoring = KeychainAuthorityStore(),
-        agentJITGrantStore: AgentJITGrantStoring = AgentJITGrantStore(),
+        agentJITGrantStore: AgentJITGrantStoring? = nil,
         callerIdentityProvider: @escaping CallerIdentityProvider = {
             CallerIdentityExtractor.extract(from: NSXPCConnection.current())
         },
@@ -129,8 +129,10 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         self.automationCredentialLookupProvider = automationCredentialLookupProvider
         self.currentMachineIdProvider = currentMachineIdProvider
         self.authorityStore = authorityStore
-        self.agentJITGrantStore = agentJITGrantStore
-        self.agentJITGrantAuthorizer = AgentJITGrantAuthorizer(store: agentJITGrantStore)
+        let resolvedAgentJITGrantStore = agentJITGrantStore
+            ?? AgentJITGrantStore(authorityStore: authorityStore)
+        self.agentJITGrantStore = resolvedAgentJITGrantStore
+        self.agentJITGrantAuthorizer = AgentJITGrantAuthorizer(store: resolvedAgentJITGrantStore)
         self.callerIdentityProvider = callerIdentityProvider
         self.callerIdentityRevalidationProvider = callerIdentityRevalidationProvider
         self.remoteJITApprovalRequestBuilder = remoteJITApprovalRequestBuilder

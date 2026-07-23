@@ -17,6 +17,9 @@ import Foundation
     func addItem(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func updateItem(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func deleteItem(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func agentJITSnapshot(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func revokeAgentJITGrant(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func revokeAllAgentJITGrants(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
 }
 
 @objc public protocol AuthsiaBridgeApprovalCallbackProtocol {
