@@ -32,16 +32,16 @@ struct LoadCommandFailureTests {
         }
     }
 
-    @Test("all selected item failures return an explicit load failure")
-    func allSelectedItemFailuresThrowExplicitFailure() throws {
+    @Test("approval denial stops loading the remaining selected items")
+    func approvalDenialStopsLoadingRemainingItems() throws {
         let references = [
             Self.reference(id: "pw-1", name: "API One"),
             Self.reference(id: "pw-2", name: "API Two"),
+            Self.reference(id: "pw-3", name: "API Three"),
         ]
         let client = LoadVaultClientStub(
             passwordErrors: [
                 "pw-1": BridgeClientError.bridgeError(code: "notAuthorized", message: "", query: "pw-1"),
-                "pw-2": BridgeClientError.bridgeError(code: "notAuthorized", message: "", query: "pw-2"),
             ]
         )
 
@@ -54,8 +54,8 @@ struct LoadCommandFailureTests {
             )
             Issue.record("Expected all-failed load to throw.")
         } catch {
-            #expect(error.localizedDescription.contains("No password values were loaded"))
             #expect(error.localizedDescription.contains("Access denied"))
+            #expect(client.passwordQueries == ["pw-1"])
         }
     }
 
@@ -140,15 +140,25 @@ struct LoadCommandFailureTests {
     }
 }
 
-private struct LoadVaultClientStub: LoadVaultClient {
+private final class LoadVaultClientStub: LoadVaultClient {
     var passwordResults: [String: PasswordResult] = [:]
     var passwordErrors: [String: Error] = [:]
+    var passwordQueries: [String] = []
+
+    init(
+        passwordResults: [String: PasswordResult] = [:],
+        passwordErrors: [String: Error] = [:]
+    ) {
+        self.passwordResults = passwordResults
+        self.passwordErrors = passwordErrors
+    }
 
     func list() throws -> BridgeListPayload {
         BridgeListPayload(accounts: [], passwords: [], certificates: [], notes: [], sshKeys: [])
     }
 
     func getPassword(query: String, field: String?) throws -> PasswordResult {
+        passwordQueries.append(query)
         if let error = passwordErrors[query] {
             throw error
         }
