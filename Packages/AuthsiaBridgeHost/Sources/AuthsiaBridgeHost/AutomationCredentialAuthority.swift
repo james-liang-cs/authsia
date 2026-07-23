@@ -12,9 +12,35 @@ public enum AutomationCredentialAuthorityError: Error, Equatable, Sendable {
     case consumed
     case machineMismatch
     case commandDenied
+    case repeatedDeniedTokenUse(UUID)
     case rateLimited
     case corruptedStore
     case randomGenerationFailed
+}
+
+public final class AutomationCredentialDeniedUseLimiter: @unchecked Sendable {
+    public static let shared = AutomationCredentialDeniedUseLimiter()
+
+    private let lock = NSLock()
+    private let maximumAttempts: Int
+    private let window: TimeInterval
+    private var attemptsByCredentialID: [UUID: [Date]] = [:]
+
+    public init(maximumAttempts: Int = 3, window: TimeInterval = 60) {
+        self.maximumAttempts = maximumAttempts
+        self.window = window
+    }
+
+    func recordDeniedUse(for credentialID: UUID, at date: Date) -> Bool {
+        lock.withLock {
+            let cutoff = date.addingTimeInterval(-window)
+            var attempts = attemptsByCredentialID[credentialID, default: []]
+                .filter { $0 > cutoff }
+            attempts.append(date)
+            attemptsByCredentialID[credentialID] = attempts
+            return attempts.count >= maximumAttempts
+        }
+    }
 }
 
 public final class AutomationCredentialInvalidAttemptLimiter: @unchecked Sendable {
@@ -60,16 +86,19 @@ public final class AutomationCredentialAuthority: @unchecked Sendable {
     private let digestKey: SymmetricKey
     private let randomBytes: RandomBytes
     private let invalidAttemptLimiter: AutomationCredentialInvalidAttemptLimiter
+    private let deniedUseLimiter: AutomationCredentialDeniedUseLimiter
 
     public init(
         authorityStore: AuthorityStoring,
         digestKey: Data,
         invalidAttemptLimiter: AutomationCredentialInvalidAttemptLimiter = .shared,
+        deniedUseLimiter: AutomationCredentialDeniedUseLimiter = .shared,
         randomBytes: @escaping RandomBytes = AutomationCredentialAuthority.secureRandomBytes
     ) {
         self.authorityStore = authorityStore
         self.digestKey = SymmetricKey(data: digestKey)
         self.invalidAttemptLimiter = invalidAttemptLimiter
+        self.deniedUseLimiter = deniedUseLimiter
         self.randomBytes = randomBytes
     }
 
@@ -176,6 +205,10 @@ public final class AutomationCredentialAuthority: @unchecked Sendable {
             throw AutomationCredentialAuthorityError.machineMismatch
         }
         guard metadata.allowedCommands.contains(requestedCommand) else {
+            if deniedUseLimiter.recordDeniedUse(for: record.id, at: now) {
+                try authorityStore.revoke(id: record.id, at: now)
+                throw AutomationCredentialAuthorityError.repeatedDeniedTokenUse(record.id)
+            }
             throw AutomationCredentialAuthorityError.commandDenied
         }
         guard consumingUse else { return metadata }

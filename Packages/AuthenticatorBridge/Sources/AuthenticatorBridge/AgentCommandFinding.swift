@@ -14,6 +14,7 @@ public enum AgentCommandFindingType: String, Codable, Equatable, Sendable {
     case processFallbackUsed
     case sensitiveFileActivity
     case outsideWorkspaceFileActivity
+    case mediatedResponse
 }
 
 public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
@@ -257,6 +258,10 @@ public enum AgentCommandFindingDetector {
             if isPossibleEnvironmentExposure(event), grant.status(asOf: event.recordedAt) == .active {
                 findings.append(possibleEnvironmentExposureFinding(for: event, grant: grant))
             }
+
+            if let responseOutcome = event.responseOutcome, responseOutcome != .allow {
+                findings.append(mediatedResponseFinding(for: event, grant: grant))
+            }
         }
 
         for record in auditRecords where record.agentJITGrantID == grant.id && isDeniedDirectSecretRead(record) {
@@ -374,6 +379,28 @@ public enum AgentCommandFindingDetector {
             title: "Process fallback used",
             detail: "Authsia recorded this command through local process monitoring.",
             recommendedAction: "Use this as supporting evidence when hook capture is unavailable."
+        )
+    }
+
+    private static func mediatedResponseFinding(
+        for event: AgentCommandEvent,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        let prevented = event.responsePreventedAction == true
+        let outcome = event.responseOutcome ?? .warn
+        return AgentCommandFinding(
+            severity: outcome == .warn ? .review : .warning,
+            type: .mediatedResponse,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [event.id],
+            recordedAt: event.recordedAt,
+            title: prevented ? "Mediated tool action stopped" : "Mediated tool risk observed",
+            detail: prevented
+                ? "Authsia's pre-tool hook stopped or held a matching action before it ran."
+                : "Authsia recorded a matching action without claiming it was prevented.",
+            recommendedAction: outcome == .revokeAndDeny
+                ? "Review the incident before creating new agent authority."
+                : "Review the tool action and workspace response mode."
         )
     }
 

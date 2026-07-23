@@ -203,4 +203,43 @@ struct OutputMaskerTests {
         let data = Data([0xFF, 0xFE, 0x00])  // invalid UTF-8
         #expect(masker.mask(data) == data)
     }
+
+    @Test("strict stream rejects invalid UTF-8 without emitting it")
+    func strictStreamRejectsInvalidUTF8() {
+        var stream = OutputMasker(secrets: ["secret"]).makeStream()
+
+        let result = stream.mask(Data([0xFF, 0xFE, 0x00]), policy: .strict)
+
+        #expect(result == .failure(.invalidUTF8))
+    }
+
+    @Test("strict stream accepts a UTF-8 scalar split across buffers")
+    func strictStreamAcceptsSplitUTF8Scalar() {
+        var stream = OutputMasker(secrets: ["secret"]).makeStream()
+        let bytes = Array("€".utf8)
+
+        let first = stream.mask(Data(bytes.prefix(1)), policy: .strict)
+        let second = stream.mask(Data(bytes.dropFirst()), policy: .strict)
+        let flushed = stream.flush(policy: .strict)
+
+        #expect(first == .success(Data()))
+        #expect(second == .success(Data("€".utf8)))
+        #expect(flushed == .success(Data()))
+    }
+
+    @Test("strict stream rejects an incomplete UTF-8 scalar at EOF")
+    func strictStreamRejectsIncompleteUTF8AtEOF() {
+        var stream = OutputMasker(secrets: ["secret"]).makeStream()
+
+        #expect(stream.mask(Data([0xE2]), policy: .strict) == .success(Data()))
+        #expect(stream.flush(policy: .strict) == .failure(.invalidUTF8))
+    }
+
+    @Test("compatibility stream explicitly preserves invalid bytes")
+    func compatibilityStreamPreservesInvalidBytes() {
+        var stream = OutputMasker(secrets: ["secret"]).makeStream()
+        let data = Data([0xFF, 0xFE, 0x00])
+
+        #expect(stream.mask(data, policy: .maskedCompatibility) == .success(data))
+    }
 }

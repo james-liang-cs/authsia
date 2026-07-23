@@ -110,6 +110,79 @@ struct AgentCommandTests {
         #expect(event.arguments == ["npm", "run", "deploy", "--token", "[REDACTED]"])
     }
 
+    @Test("Claude pre-tool hook blocks environment dump in block mode")
+    func claudePreToolHookBlocksEnvironmentDumpInBlockMode() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-claude-response-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentCommandHistoryStore(fileURL: directory.appendingPathComponent("events.jsonl"))
+        let command = try Agent.RecordCommand.parse([
+            "--platform", "claude-code",
+            "--source", "hook",
+        ])
+        let payload = Data("""
+        {
+          "hook_event_name": "PreToolUse",
+          "tool_name": "Bash",
+          "tool_input": {"command": "env"},
+          "cwd": "/tmp/project"
+        }
+        """.utf8)
+        var output = Data()
+
+        let decision = try command.run(
+            store: store,
+            stdinData: payload,
+            responseMode: .block,
+            decisionOutput: { output.append($0) }
+        )
+
+        #expect(decision.outcome == .deny)
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: output) as? [String: Any]
+        )
+        let hookOutput = try #require(object["hookSpecificOutput"] as? [String: Any])
+        #expect(hookOutput["permissionDecision"] as? String == "deny")
+        let event = try #require(try store.loadAll().first)
+        #expect(event.responseOutcome == .deny)
+        #expect(event.responsePreventedAction == true)
+    }
+
+    @Test("Copilot pre-tool hook asks before env file read in confirm mode")
+    func copilotPreToolHookAsksBeforeEnvFileReadInConfirmMode() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-copilot-response-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentCommandHistoryStore(fileURL: directory.appendingPathComponent("events.jsonl"))
+        let command = try Agent.RecordCommand.parse([
+            "--platform", "copilot",
+            "--source", "hook",
+        ])
+        let payload = Data("""
+        {
+          "hook_event_name": "PreToolUse",
+          "tool_name": "Read",
+          "tool_input": {"file_path": "/tmp/project/.env"},
+          "cwd": "/tmp/project"
+        }
+        """.utf8)
+        var output = Data()
+
+        let decision = try command.run(
+            store: store,
+            stdinData: payload,
+            responseMode: .confirm,
+            decisionOutput: { output.append($0) }
+        )
+
+        #expect(decision.hookPermissionDecision == .ask)
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: output) as? [String: Any]
+        )
+        #expect(object["permissionDecision"] as? String == "ask")
+        #expect(try store.loadAll().first?.responseEvidence == .environmentFileRead)
+    }
+
     @Test("hidden recorder parses Claude file tool payload")
     func hiddenRecorderParsesClaudeFileToolPayload() throws {
         let directory = FileManager.default.temporaryDirectory

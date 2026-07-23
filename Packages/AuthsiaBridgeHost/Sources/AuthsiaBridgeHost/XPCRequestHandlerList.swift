@@ -101,7 +101,10 @@ extension XPCRequestHandler {
             guard let bypassApproval = self.resolveAutomationApproval(
                 for: bridgeRequest, itemFolderPath: nil, itemKind: "list", reply: reply
             ) else { return }
-            let interactiveHumanBootstrap = Self.interactiveHumanBootstrapEligible(request: bridgeRequest)
+            let interactiveHumanBootstrap = Self.interactiveHumanBootstrapEligible(
+                request: bridgeRequest,
+                callerIdentity: callerIdentity
+            )
             let callerUsesAgentJIT = !bypassApproval
                 && Self.isAgentJITCaller(request: bridgeRequest, callerIdentity: callerIdentity)
                 && !interactiveHumanBootstrap
@@ -202,12 +205,11 @@ extension XPCRequestHandler {
                     return
                 }
                 interactiveApprovalAttribution = attribution
-                guard let session = Self.sharedSessionManager.createSessionOrNil(
-                    ttlSeconds: Self.configuredSessionTTL,
-                    scope: bridgeRequest.context.sessionScope,
-                    workingDirectory: bridgeRequest.context.workingDirectory,
-                    origin: sessionOrigin(from: callerIdentity)
-                ) else {
+                let session = self.issueReusableHumanSession(
+                    for: bridgeRequest,
+                    callerIdentity: callerIdentity
+                )
+                guard !session.failed else {
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                         id: bridgeRequest.id,
                         code: .appUnavailable,
@@ -216,7 +218,7 @@ extension XPCRequestHandler {
                     reply(self.encodeResponse(response), nil)
                     return
                 }
-                newSessionToken = session.sessionToken
+                newSessionToken = session.token
                 newSessionExpiresAt = session.expiresAt
             }
 

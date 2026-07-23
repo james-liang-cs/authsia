@@ -88,7 +88,7 @@ final class AgentLeakBoundaryContractTests: XCTestCase {
         XCTAssertNotNil(secondUse)
     }
 
-    func testValidatedHumanSessionIsClassifiedBeforeAgentAncestry() throws {
+    func testAgentAncestryWinsOverPresentedHumanSession() throws {
         let scope = "tty:/dev/ttys-agent-leak-contract"
         let session = try BridgeSessionManager.shared.createSession(ttlSeconds: 60, scope: scope)
         let request = BridgeRequest(
@@ -121,7 +121,7 @@ final class AgentLeakBoundaryContractTests: XCTestCase {
             )
         )
 
-        XCTAssertFalse(XPCRequestHandler.isAgentJITCaller(
+        XCTAssertTrue(XPCRequestHandler.isAgentJITCaller(
             request: request,
             callerIdentity: agentCaller
         ))

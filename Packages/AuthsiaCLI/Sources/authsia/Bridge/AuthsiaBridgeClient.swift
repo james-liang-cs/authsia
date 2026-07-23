@@ -10,6 +10,7 @@ enum BridgeClientError: LocalizedError {
     case timeout
     case invalidResponse
     case appUnavailable
+    case incompatibleSecurityProtocol(expected: String, actual: String)
     case bridgeError(code: String, message: String, query: String?)
 
     var errorDescription: String? {
@@ -22,6 +23,8 @@ enum BridgeClientError: LocalizedError {
             return "Received an invalid response from Authsia."
         case .appUnavailable:
             return Self.cliUnavailableMessage
+        case .incompatibleSecurityProtocol(let expected, let actual):
+            return "Authsia CLI requires Bridge security protocol \(expected), but the running app reports \(actual). Upgrade and reopen Authsia before retrying."
         case .bridgeError(let code, let message, let query):
             return Self.friendlyMessage(for: code, query: query, serverMessage: message)
         }
@@ -142,6 +145,17 @@ extension BridgeRequestType {
             return true
         }
     }
+
+    var requiresCurrentSecurityProtocol: Bool {
+        switch self {
+        case .list, .workspaceMetadata,
+             .getOTP, .getPassword, .getAPIKey, .getCertificate, .getNote, .getSSH,
+             .createAccess, .validateAccess, .agentJITPreflight:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 // MARK: - AuthsiaBridgeClient
@@ -182,7 +196,7 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
     // MARK: - Public API
 
     func ping() throws -> BridgePingPayload {
-        try Self.withBridgeRecovery(
+        return try Self.withBridgeRecovery(
             retryDelays: retryDelays,
             recover: { self.recoverBridgeAvailability() },
             operation: { try self.executePing() }
@@ -1345,7 +1359,14 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
     // MARK: - XPC Request Handling
 
     func sendRequest<T: Codable>(_ request: BridgeRequest) throws -> T {
-        try Self.withBridgeRecovery(
+        if request.type.requiresCurrentSecurityProtocol {
+            let expected = String(BridgeContext.securityProtocolVersion)
+            let actual = try ping().protocolVersion
+            guard actual == expected else {
+                throw BridgeClientError.incompatibleSecurityProtocol(expected: expected, actual: actual)
+            }
+        }
+        return try Self.withBridgeRecovery(
             retryDelays: retryDelays,
             recover: { self.recoverBridgeAvailability() },
             operation: { try self.executeXPCRequest(request) },
@@ -1552,7 +1573,7 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
             switch bridgeError {
             case .connectionFailed, .timeout, .appUnavailable:
                 return true
-            case .invalidResponse, .bridgeError:
+            case .invalidResponse, .incompatibleSecurityProtocol, .bridgeError:
                 return false
             }
         }

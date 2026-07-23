@@ -126,12 +126,11 @@ extension XPCRequestHandler {
                         return
                     }
                     interactiveApprovalAttribution = attribution
-                    guard let session = Self.sharedSessionManager.createSessionOrNil(
-                        ttlSeconds: Self.configuredSessionTTL,
-                        scope: bridgeRequest.context.sessionScope,
-                        workingDirectory: bridgeRequest.context.workingDirectory,
-                        origin: sessionOrigin(from: callerIdentity)
-                    ) else {
+                    let session = self.issueReusableHumanSession(
+                        for: bridgeRequest,
+                        callerIdentity: callerIdentity
+                    )
+                    guard !session.failed else {
                         let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                             id: bridgeRequest.id,
                             code: .appUnavailable,
@@ -140,7 +139,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
-                    newSessionToken = session.sessionToken
+                    newSessionToken = session.token
                     newSessionExpiresAt = session.expiresAt
                 }
 
@@ -328,12 +327,11 @@ extension XPCRequestHandler {
                         return
                     }
                     interactiveApprovalAttribution = attribution
-                    guard let session = Self.sharedSessionManager.createSessionOrNil(
-                        ttlSeconds: Self.configuredSessionTTL,
-                        scope: bridgeRequest.context.sessionScope,
-                        workingDirectory: bridgeRequest.context.workingDirectory,
-                        origin: sessionOrigin(from: callerIdentity)
-                    ) else {
+                    let session = self.issueReusableHumanSession(
+                        for: bridgeRequest,
+                        callerIdentity: callerIdentity
+                    )
+                    guard !session.failed else {
                         let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                             id: bridgeRequest.id,
                             code: .appUnavailable,
@@ -342,7 +340,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
-                    newSessionToken = session.sessionToken
+                    newSessionToken = session.token
                     newSessionExpiresAt = session.expiresAt
                 }
                 let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
@@ -520,12 +518,11 @@ extension XPCRequestHandler {
                         return
                     }
                     interactiveApprovalAttribution = attribution
-                    guard let session = Self.sharedSessionManager.createSessionOrNil(
-                        ttlSeconds: Self.configuredSessionTTL,
-                        scope: bridgeRequest.context.sessionScope,
-                        workingDirectory: bridgeRequest.context.workingDirectory,
-                        origin: sessionOrigin(from: callerIdentity)
-                    ) else {
+                    let session = self.issueReusableHumanSession(
+                        for: bridgeRequest,
+                        callerIdentity: callerIdentity
+                    )
+                    guard !session.failed else {
                         let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                             id: bridgeRequest.id,
                             code: .appUnavailable,
@@ -534,7 +531,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
-                    newSessionToken = session.sessionToken
+                    newSessionToken = session.token
                     newSessionExpiresAt = session.expiresAt
                 }
                 let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
@@ -703,12 +700,11 @@ extension XPCRequestHandler {
                         return
                     }
                     interactiveApprovalAttribution = attribution
-                    guard let session = Self.sharedSessionManager.createSessionOrNil(
-                        ttlSeconds: Self.configuredSessionTTL,
-                        scope: bridgeRequest.context.sessionScope,
-                        workingDirectory: bridgeRequest.context.workingDirectory,
-                        origin: sessionOrigin(from: callerIdentity)
-                    ) else {
+                    let session = self.issueReusableHumanSession(
+                        for: bridgeRequest,
+                        callerIdentity: callerIdentity
+                    )
+                    guard !session.failed else {
                         let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                             id: bridgeRequest.id,
                             code: .appUnavailable,
@@ -717,7 +713,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
-                    newSessionToken = session.sessionToken
+                    newSessionToken = session.token
                     newSessionExpiresAt = session.expiresAt
                 }
                 let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
@@ -890,12 +886,11 @@ extension XPCRequestHandler {
                         return
                     }
                     interactiveApprovalAttribution = attribution
-                    guard let session = Self.sharedSessionManager.createSessionOrNil(
-                        ttlSeconds: Self.configuredSessionTTL,
-                        scope: bridgeRequest.context.sessionScope,
-                        workingDirectory: bridgeRequest.context.workingDirectory,
-                        origin: sessionOrigin(from: callerIdentity)
-                    ) else {
+                    let session = self.issueReusableHumanSession(
+                        for: bridgeRequest,
+                        callerIdentity: callerIdentity
+                    )
+                    guard !session.failed else {
                         let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                             id: bridgeRequest.id,
                             code: .appUnavailable,
@@ -904,7 +899,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
-                    newSessionToken = session.sessionToken
+                    newSessionToken = session.token
                     newSessionExpiresAt = session.expiresAt
                 }
                 let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
@@ -1064,12 +1059,11 @@ extension XPCRequestHandler {
                         return
                     }
                     interactiveApprovalAttribution = attribution
-                    guard let session = Self.sharedSessionManager.createSessionOrNil(
-                        ttlSeconds: Self.configuredSessionTTL,
-                        scope: bridgeRequest.context.sessionScope,
-                        workingDirectory: bridgeRequest.context.workingDirectory,
-                        origin: sessionOrigin(from: callerIdentity)
-                    ) else {
+                    let session = self.issueReusableHumanSession(
+                        for: bridgeRequest,
+                        callerIdentity: callerIdentity
+                    )
+                    guard !session.failed else {
                         let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                             id: bridgeRequest.id,
                             code: .appUnavailable,
@@ -1078,7 +1072,7 @@ extension XPCRequestHandler {
                         reply(self.encodeResponse(response), nil)
                         return
                     }
-                    newSessionToken = session.sessionToken
+                    newSessionToken = session.token
                     newSessionExpiresAt = session.expiresAt
                 }
 

@@ -23,10 +23,18 @@ final class BridgeRequestPolicyTests: XCTestCase {
         XCTAssertNil(denial)
     }
 
+    func testRejectsLegacySensitiveRequestWithoutSecurityBindings() {
+        let denial = BridgeRequestPolicy.denial(for: makeRequest(securityProtocolVersion: nil))
+
+        XCTAssertEqual(denial?.code, .policyDenied)
+        XCTAssertTrue(denial?.message.contains("Upgrade both") == true)
+    }
+
     private func makeRequest(
         isPiped: Bool = false,
         isSSH: Bool = false,
-        isCI: Bool = false
+        isCI: Bool = false,
+        securityProtocolVersion: Int? = BridgeContext.securityProtocolVersion
     ) -> BridgeRequest {
         BridgeRequest(
             id: UUID(),
@@ -38,7 +46,8 @@ final class BridgeRequestPolicyTests: XCTestCase {
                 isPiped: isPiped,
                 isSSH: isSSH,
                 isCI: isCI,
-                timestamp: Date()
+                timestamp: Date(),
+                securityProtocolVersion: securityProtocolVersion
             )
         )
     }

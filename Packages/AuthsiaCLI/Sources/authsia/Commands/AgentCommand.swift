@@ -153,22 +153,37 @@ struct Agent: ParsableCommand {
         var exitStatus: Int32?
 
         func run() throws {
-            try run(
+            _ = try run(
                 store: AgentCommandHistoryStore(),
                 fileActivityStore: AgentFileActivityStore(),
                 stdinData: Self.stdinDataIfPiped()
             )
         }
 
-        func run(store: AgentCommandHistoryStore, stdinData: Data? = nil) throws {
-            try run(store: store, fileActivityStore: nil, stdinData: stdinData)
+        @discardableResult
+        func run(
+            store: AgentCommandHistoryStore,
+            stdinData: Data? = nil,
+            responseMode: AgentLeakResponseMode? = nil,
+            decisionOutput: (Data) -> Void = { FileHandle.standardOutput.write($0) }
+        ) throws -> AgentLeakResponseDecision {
+            try run(
+                store: store,
+                fileActivityStore: nil,
+                stdinData: stdinData,
+                responseMode: responseMode,
+                decisionOutput: decisionOutput
+            )
         }
 
+        @discardableResult
         func run(
             store: AgentCommandHistoryStore,
             fileActivityStore: AgentFileActivityStore?,
-            stdinData: Data? = nil
-        ) throws {
+            stdinData: Data? = nil,
+            responseMode: AgentLeakResponseMode? = nil,
+            decisionOutput: (Data) -> Void = { FileHandle.standardOutput.write($0) }
+        ) throws -> AgentLeakResponseDecision {
             let hookPayload = AgentCommandHookPayload(data: stdinData)
             let arguments = try Self.arguments(from: argvJSON) ?? hookPayload.arguments
             let commandText = command ?? hookPayload.command
@@ -198,8 +213,17 @@ struct Agent: ParsableCommand {
                 ?? hookPayload.terminalSessionScope
                 ?? TerminalSessionScope.currentAncestralScope()
             let resolvedExitStatus = exitStatus ?? hookPayload.exitStatus
+            let resolvedResponseMode = responseMode ?? Self.responseMode(
+                for: resolvedWorkingDirectory
+            )
+            let responseDecision = AgentLeakResponsePolicy.decision(
+                command: hookPayload.policyCommand ?? commandText,
+                hookEventName: hookPayload.hookEventName,
+                mode: resolvedResponseMode
+            )
 
-            if commandText != nil || !arguments.isEmpty {
+            if commandText != nil || !arguments.isEmpty || responseDecision.evidence != nil {
+                let recordedCommand = commandText ?? hookPayload.policyCommand
                 let event = AgentCommandEvent(
                     recordedAt: now,
                     agentPlatform: resolvedPlatform,
@@ -212,30 +236,50 @@ struct Agent: ParsableCommand {
                     contextExpiresAt: now.addingTimeInterval(60 * 60),
                     workingDirectory: resolvedWorkingDirectory,
                     terminalSessionScope: resolvedTerminalSessionScope,
-                    executable: executable ?? hookPayload.executable ?? Self.executable(from: arguments, command: commandText),
+                    executable: executable ?? hookPayload.executable ?? Self.executable(
+                        from: arguments,
+                        command: recordedCommand
+                    ),
                     arguments: arguments,
-                    command: commandText,
-                    exitStatus: resolvedExitStatus
+                    command: recordedCommand,
+                    exitStatus: resolvedExitStatus,
+                    responseOutcome: responseDecision.outcome,
+                    responseEvidence: responseDecision.evidence,
+                    responsePreventedAction: responseDecision.preventedAction
                 )
                 try store.record(event)
+                if responseDecision.evidence != nil {
+                    DistributedNotificationCenter.default().post(
+                        name: .agentLeakIncidentDidRecord,
+                        object: nil
+                    )
+                }
             }
 
-            guard captureSource == .hook, let fileActivityStore else { return }
-            let fileActivities = hookPayload.fileActivities(
-                recordedAt: now,
-                agentPlatform: resolvedPlatform,
-                sessionID: resolvedSessionID,
-                turnID: resolvedTurnID,
-                agentID: resolvedAgentID,
-                agentType: resolvedAgentType,
-                toolUseID: resolvedToolUseID,
-                workingDirectory: resolvedWorkingDirectory,
-                terminalSessionScope: resolvedTerminalSessionScope,
-                exitStatus: resolvedExitStatus
-            )
-            for activity in fileActivities {
-                try fileActivityStore.record(activity)
+            if captureSource == .hook, let fileActivityStore {
+                let fileActivities = hookPayload.fileActivities(
+                    recordedAt: now,
+                    agentPlatform: resolvedPlatform,
+                    sessionID: resolvedSessionID,
+                    turnID: resolvedTurnID,
+                    agentID: resolvedAgentID,
+                    agentType: resolvedAgentType,
+                    toolUseID: resolvedToolUseID,
+                    workingDirectory: resolvedWorkingDirectory,
+                    terminalSessionScope: resolvedTerminalSessionScope,
+                    exitStatus: resolvedExitStatus
+                )
+                for activity in fileActivities {
+                    try fileActivityStore.record(activity)
+                }
             }
+            try Self.emitHookDecision(
+                responseDecision,
+                platform: resolvedPlatform,
+                hookEventName: hookPayload.hookEventName,
+                output: decisionOutput
+            )
+            return responseDecision
         }
 
         private static func stdinDataIfPiped() -> Data? {
@@ -273,6 +317,47 @@ struct Agent: ParsableCommand {
             guard let command else { return nil }
             return command.split(whereSeparator: \.isWhitespace).first.map { String($0) }
         }
+
+        private static func responseMode(for workingDirectory: String) -> AgentLeakResponseMode {
+            let start = URL(fileURLWithPath: workingDirectory, isDirectory: true)
+            guard let root = WorkspaceRootResolver.findWorkspaceRoot(startingAt: start),
+                  let config = try? WorkspaceConfigStore.read(fromWorkspaceRoot: root) else {
+                return .observe
+            }
+            return config.guardSettings.responseMode
+        }
+
+        private static func emitHookDecision(
+            _ decision: AgentLeakResponseDecision,
+            platform: String?,
+            hookEventName: String?,
+            output: (Data) -> Void
+        ) throws {
+            guard decision.phase == .preTool,
+                  let permission = decision.hookPermissionDecision,
+                  permission != .allow else {
+                return
+            }
+            let reason = decision.reason
+            let object: [String: Any]
+            if platform?.lowercased().contains("copilot") == true {
+                object = [
+                    "permissionDecision": permission.rawValue,
+                    "permissionDecisionReason": reason,
+                ]
+            } else {
+                object = [
+                    "hookSpecificOutput": [
+                        "hookEventName": hookEventName ?? "PreToolUse",
+                        "permissionDecision": permission.rawValue,
+                        "permissionDecisionReason": reason,
+                    ],
+                ]
+            }
+            var data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            data.append(0x0A)
+            output(data)
+        }
     }
 }
 
@@ -294,6 +379,18 @@ private struct AgentCommandHookPayload {
     let toolName: String?
     let toolInput: [String: Any]?
     let toolResponse: [String: Any]?
+
+    var policyCommand: String? {
+        if let command { return command }
+        guard toolName?.lowercased() == "read",
+              let path = Self.string(
+                toolInput,
+                keys: ["file_path", "filePath", "path"]
+              ) else {
+            return nil
+        }
+        return "cat \(path)"
+    }
 
     init(data: Data?) {
         guard let data,

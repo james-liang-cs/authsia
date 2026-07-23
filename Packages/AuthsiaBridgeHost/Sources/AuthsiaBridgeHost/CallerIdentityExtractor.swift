@@ -175,14 +175,24 @@ public enum CallerIdentityExtractor {
             guard ppid > 1 else { return parentProcessContext(from: ancestry) }
 
             let name = processName(for: ppid) ?? "unknown"
-            let info = ParentProcessInfo(pid: ppid, processName: name, bundleIdentifier: bundleIdentifier(for: ppid))
+            let signing = processSigningInfo(for: ppid)
+            let info = ParentProcessInfo(
+                pid: ppid,
+                processName: name,
+                bundleIdentifier: signing?.identifier,
+                signingTeamId: signing?.teamID,
+                signingIdentity: signing?.identity,
+                isPlatformBinary: signing?.isPlatformBinary
+            )
             ancestry.append(info)
             currentPID = ppid
         }
         return parentProcessContext(from: ancestry)
     }
 
-    private static func bundleIdentifier(for pid: pid_t) -> String? {
+    private static func processSigningInfo(
+        for pid: pid_t
+    ) -> (identifier: String?, teamID: String?, identity: String?, isPlatformBinary: Bool)? {
         var code: SecCode?
         let pidAttr = [kSecGuestAttributePid as String: pid] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, pidAttr, SecCSFlags(), &code) == errSecSuccess,
@@ -199,7 +209,29 @@ public enum CallerIdentityExtractor {
               let signingInfo = info as? [String: Any] else {
             return nil
         }
-        return signingInfo[kSecCodeInfoIdentifier as String] as? String
+        let certificates = signingInfo[kSecCodeInfoCertificates as String] as? [SecCertificate]
+        var commonName: CFString?
+        let identity = certificates?.first.flatMap {
+            SecCertificateCopyCommonName($0, &commonName) == errSecSuccess
+                ? commonName as String?
+                : nil
+        }
+        var appleRequirement: SecRequirement?
+        let isAppleSigned =
+            SecRequirementCreateWithString(
+                "anchor apple" as CFString,
+                SecCSFlags(),
+                &appleRequirement
+            ) == errSecSuccess
+            && appleRequirement.map {
+                SecCodeCheckValidity(guestCode, SecCSFlags(), $0) == errSecSuccess
+            } == true
+        return (
+            signingInfo[kSecCodeInfoIdentifier as String] as? String,
+            signingInfo[kSecCodeInfoTeamIdentifier as String] as? String,
+            identity,
+            isAppleSigned
+        )
     }
 }
 #endif

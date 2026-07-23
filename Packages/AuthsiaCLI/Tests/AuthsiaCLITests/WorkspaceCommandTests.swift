@@ -334,6 +334,7 @@ struct WorkspaceConfigTests {
 
         #expect(config.envBindings.isEmpty)
         #expect(config.guardSettings.autoTabs)
+        #expect(config.guardSettings.responseMode == .observe)
     }
 
     @Test("store writes guarded terminal auto tab setting")
@@ -680,6 +681,7 @@ struct WorkspaceInitPlannerTests {
 
         #expect(plan.config.workspace.name == root.lastPathComponent)
         #expect(plan.config.workspace.authsiaFolder == "Workspaces/\(root.lastPathComponent)")
+        #expect(plan.config.guardSettings.responseMode == .confirm)
         #expect(plan.envFiles.map(\.relativePath) == [".env", ".env.local"])
         let password = try #require(plan.envFiles.first?.secrets.first { $0.secret.key == "DB_PASSWORD" })
         #expect(password.selectedByDefault)
@@ -5147,6 +5149,28 @@ struct WorkspaceGuardedTerminalTests {
         #expect(tools.contains("npm"))
         #expect(!reloaded.guardSettings.tools.contains("curl"))
         #expect(!reloaded.guardSettings.tools.contains("npm"))
+    }
+
+    @Test("workspace guard persists an explicit response mode")
+    func workspaceGuardPersistsExplicitResponseMode() throws {
+        let command = try Workspace.Guard.parse([
+            "--response-mode", "block",
+            "--dry-run",
+        ])
+        let config = WorkspaceConfig(
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: WorkspaceConfig.Agents(rules: ["claude-code"]),
+            guardSettings: WorkspaceConfig.GuardSettings(responseMode: .confirm)
+        )
+
+        let updated = try Workspace.Guard.configPersistingResponseMode(
+            config,
+            requestedMode: command.responseMode
+        )
+
+        #expect(updated.guardSettings.responseMode == .block)
+        #expect(updated.guardSettings.autoTabs)
     }
 
     @Test("print env clears aliases for all shimmed tools")

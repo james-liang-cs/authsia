@@ -70,12 +70,34 @@ struct OutputMasker {
     struct Stream {
         private let masker: OutputMasker
         private var pending = ""
+        private var pendingUTF8Bytes = Data()
 
         init(masker: OutputMasker) {
             self.masker = masker
         }
 
         mutating func mask(_ data: Data) -> Data {
+            switch mask(data, policy: .maskedCompatibility) {
+            case .success(let output):
+                return output
+            case .failure:
+                return data
+            }
+        }
+
+        mutating func mask(
+            _ data: Data,
+            policy: OutputDisclosurePolicy
+        ) -> Result<Data, OutputDisclosureFailure> {
+            switch policy {
+            case .strict:
+                return maskStrict(data)
+            case .maskedCompatibility:
+                return .success(maskCompatibility(data))
+            }
+        }
+
+        private mutating func maskCompatibility(_ data: Data) -> Data {
             guard !masker.sortedSecrets.isEmpty else { return data }
             guard let text = String(data: data, encoding: .utf8) else {
                 return flush() + data
@@ -100,6 +122,84 @@ struct OutputMasker {
             let output = Data(masker.mask(pending).utf8)
             pending = ""
             return output
+        }
+
+        mutating func flush(
+            policy: OutputDisclosurePolicy
+        ) -> Result<Data, OutputDisclosureFailure> {
+            if policy == .strict, !pendingUTF8Bytes.isEmpty {
+                return .failure(.invalidUTF8)
+            }
+            return .success(flush())
+        }
+
+        private mutating func maskStrict(_ data: Data) -> Result<Data, OutputDisclosureFailure> {
+            pendingUTF8Bytes.append(data)
+            switch Self.validUTF8PrefixLength(in: pendingUTF8Bytes) {
+            case .failure(let failure):
+                pendingUTF8Bytes.removeAll(keepingCapacity: false)
+                return .failure(failure)
+            case .success(let prefixLength):
+                guard prefixLength > 0 else { return .success(Data()) }
+                let prefix = pendingUTF8Bytes.prefix(prefixLength)
+                pendingUTF8Bytes.removeFirst(prefixLength)
+                guard let text = String(data: prefix, encoding: .utf8) else {
+                    return .failure(.invalidUTF8)
+                }
+                return .success(maskCompatibility(Data(text.utf8)))
+            }
+        }
+
+        private static func validUTF8PrefixLength(
+            in data: Data
+        ) -> Result<Int, OutputDisclosureFailure> {
+            let bytes = Array(data)
+            var index = 0
+            while index < bytes.count {
+                let first = bytes[index]
+                if first <= 0x7F {
+                    index += 1
+                    continue
+                }
+
+                let length: Int
+                switch first {
+                case 0xC2...0xDF:
+                    length = 2
+                case 0xE0...0xEF:
+                    length = 3
+                case 0xF0...0xF4:
+                    length = 4
+                default:
+                    return .failure(.invalidUTF8)
+                }
+
+                guard index + length <= bytes.count else {
+                    let available = bytes[(index + 1)..<bytes.count]
+                    guard available.allSatisfy({ (0x80...0xBF).contains($0) }) else {
+                        return .failure(.invalidUTF8)
+                    }
+                    return .success(index)
+                }
+                let continuation = bytes[(index + 1)..<(index + length)]
+                guard continuation.allSatisfy({ (0x80...0xBF).contains($0) }) else {
+                    return .failure(.invalidUTF8)
+                }
+                if first == 0xE0, bytes[index + 1] < 0xA0 {
+                    return .failure(.invalidUTF8)
+                }
+                if first == 0xED, bytes[index + 1] > 0x9F {
+                    return .failure(.invalidUTF8)
+                }
+                if first == 0xF0, bytes[index + 1] < 0x90 {
+                    return .failure(.invalidUTF8)
+                }
+                if first == 0xF4, bytes[index + 1] > 0x8F {
+                    return .failure(.invalidUTF8)
+                }
+                index += length
+            }
+            return .success(index)
         }
 
         private func pendingSecretPrefixCharacterCount() -> Int {

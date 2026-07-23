@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticatorBridge
 
 struct WorkspaceConfig: Codable, Equatable {
     struct Workspace: Codable, Equatable {
@@ -23,22 +24,33 @@ struct WorkspaceConfig: Codable, Equatable {
     struct GuardSettings: Codable, Equatable {
         let autoTabs: Bool
         let tools: [String]
+        let responseMode: AgentLeakResponseMode
 
-        init(autoTabs: Bool = true, tools: [String] = []) {
+        init(
+            autoTabs: Bool = true,
+            tools: [String] = [],
+            responseMode: AgentLeakResponseMode = .observe
+        ) {
             self.autoTabs = autoTabs
             self.tools = Self.uniqueTools(tools)
+            self.responseMode = responseMode
         }
 
         enum CodingKeys: String, CodingKey {
             case autoTabs
             case tools
+            case responseMode
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             let autoTabs = try container.decodeIfPresent(Bool.self, forKey: .autoTabs) ?? true
             let tools = try container.decodeIfPresent([String].self, forKey: .tools) ?? []
-            self.init(autoTabs: autoTabs, tools: tools)
+            let responseMode = try container.decodeIfPresent(
+                AgentLeakResponseMode.self,
+                forKey: .responseMode
+            ) ?? .observe
+            self.init(autoTabs: autoTabs, tools: tools, responseMode: responseMode)
         }
 
         private static func uniqueTools(_ tools: [String]) -> [String] {

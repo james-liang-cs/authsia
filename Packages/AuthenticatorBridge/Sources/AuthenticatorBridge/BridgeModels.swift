@@ -101,6 +101,7 @@ public struct BridgeOptions: Codable, Equatable {
 }
 
 public struct BridgeContext: Codable, Equatable {
+    public static let securityProtocolVersion = 2
     public static let chromeNativeHostRequestedCommand = "chromeNativeHost"
     public static let chromeNativeHostProcessName = "AuthsiaNativeHost"
     /// Stable Bridge session scope for Chrome autofill CLI invocations.
@@ -134,6 +135,9 @@ public struct BridgeContext: Codable, Equatable {
     public let workingDirectory: String?
     public let agentRuntimeContext: AgentRuntimeContext?
     public let workspaceContext: WorkspaceRuntimeContext?
+    /// Required for requests whose authority depends on exact item, caller,
+    /// environment, reuse, use-count, or output-policy bindings.
+    public let securityProtocolVersion: Int?
 
     public var hasAutomationCredential: Bool {
         automationCredentialID != nil || automationCredentialToken != nil
@@ -153,7 +157,8 @@ public struct BridgeContext: Codable, Equatable {
         sessionScope: String? = nil,
         workingDirectory: String? = nil,
         agentRuntimeContext: AgentRuntimeContext? = nil,
-        workspaceContext: WorkspaceRuntimeContext? = nil
+        workspaceContext: WorkspaceRuntimeContext? = nil,
+        securityProtocolVersion: Int? = Self.securityProtocolVersion
     ) {
         self.isTTY = isTTY
         self.isPiped = isPiped
@@ -169,6 +174,7 @@ public struct BridgeContext: Codable, Equatable {
         self.workingDirectory = workingDirectory
         self.agentRuntimeContext = agentRuntimeContext
         self.workspaceContext = workspaceContext
+        self.securityProtocolVersion = securityProtocolVersion
     }
 }
 
