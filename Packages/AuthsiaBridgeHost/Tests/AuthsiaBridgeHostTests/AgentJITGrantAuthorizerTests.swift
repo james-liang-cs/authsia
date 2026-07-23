@@ -252,59 +252,62 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
         XCTAssertEqual(store.batchCallCount, 1)
     }
 
-    func testFileBackedStoreSaveLoadRoundTripAndPermissions() throws {
+    func testAuthorityBackedStoreSaveLoadRoundTripWithoutWritingLegacyFile() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let fileURL = tempDir.appendingPathComponent("agent-jit-grants.json")
-        let store = AgentJITGrantStore(fileURL: fileURL)
+        let store = AgentJITGrantStore(authorityStore: TestAuthorityStore(), legacyFileURL: fileURL)
         let grant = AgentJITGrant.fixture(folderScope: .folder("Team/API"))
 
         try store.save(grant)
         let loaded = try store.loadAll()
 
         XCTAssertEqual(loaded, [grant])
-        let fileMode = try mode(at: fileURL)
-        let directoryMode = try mode(at: tempDir)
-        XCTAssertEqual(fileMode & 0o777, 0o600)
-        XCTAssertEqual(directoryMode & 0o777, 0o700)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
-    func testFileBackedStoreReturnsEmptyArrayForMissingFile() throws {
+    func testAuthorityBackedStoreReturnsEmptyArrayWithMissingLegacyFile() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        let store = AgentJITGrantStore(fileURL: tempDir.appendingPathComponent("agent-jit-grants.json"))
+        let store = AgentJITGrantStore(
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: tempDir.appendingPathComponent("agent-jit-grants.json")
+        )
 
         XCTAssertEqual(try store.loadAll(), [])
     }
 
-    func testFileBackedStoreReturnsEmptyArrayForEmptyFile() throws {
+    func testAuthorityBackedStoreQuarantinesEmptyLegacyFile() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let fileURL = tempDir.appendingPathComponent("agent-jit-grants.json")
         try Data().write(to: fileURL)
-        let store = AgentJITGrantStore(fileURL: fileURL)
+        let store = AgentJITGrantStore(authorityStore: TestAuthorityStore(), legacyFileURL: fileURL)
 
         XCTAssertEqual(try store.loadAll(), [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("legacy").path))
     }
 
-    func testFileBackedStoreThrowsCorruptedStoreForInvalidJSON() throws {
+    func testAuthorityBackedStoreIgnoresInvalidLegacyJSON() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let fileURL = tempDir.appendingPathComponent("agent-jit-grants.json")
         try Data("not json".utf8).write(to: fileURL)
-        let store = AgentJITGrantStore(fileURL: fileURL)
+        let store = AgentJITGrantStore(authorityStore: TestAuthorityStore(), legacyFileURL: fileURL)
 
-        XCTAssertThrowsError(try store.loadAll()) { error in
-            XCTAssertEqual(error as? AgentJITGrantStoreError, .corruptedStore)
-        }
+        XCTAssertEqual(try store.loadAll(), [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("legacy").path))
     }
 
-    func testFileBackedStoreSaveUpsertsByID() throws {
+    func testAuthorityBackedStoreSaveUpsertsByID() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        let store = AgentJITGrantStore(fileURL: tempDir.appendingPathComponent("agent-jit-grants.json"))
+        let store = AgentJITGrantStore(
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: tempDir.appendingPathComponent("agent-jit-grants.json")
+        )
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000099")!
         let original = AgentJITGrant.fixture(id: id, folderScope: .folder("Team/API"))
         let updated = AgentJITGrant.fixture(id: id, folderScope: .folder("Team/Web"))
@@ -315,10 +318,13 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
         XCTAssertEqual(try store.loadAll(), [updated])
     }
 
-    func testFileBackedStoreThrowsNotFoundForMissingGrantUpdates() throws {
+    func testAuthorityBackedStoreThrowsNotFoundForMissingGrantUpdates() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        let store = AgentJITGrantStore(fileURL: tempDir.appendingPathComponent("agent-jit-grants.json"))
+        let store = AgentJITGrantStore(
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: tempDir.appendingPathComponent("agent-jit-grants.json")
+        )
         let missingID = UUID(uuidString: "00000000-0000-0000-0000-000000000404")!
 
         XCTAssertThrowsError(try store.markUsed(id: missingID, at: Date())) { error in
@@ -329,12 +335,13 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
         }
     }
 
-    func testFileBackedStoreLoadsAndRevokesClosedTerminalGrantsAtomically() throws {
+    func testAuthorityBackedStoreLoadsAndRevokesClosedTerminalGrants() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let store = AgentJITGrantStore(
-            fileURL: tempDir.appendingPathComponent("agent-jit-grants.json"),
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: tempDir.appendingPathComponent("agent-jit-grants.json"),
             terminalSessionLiveness: { _ in .closed }
         )
         let caller = AgentJITCallerFingerprint.fixture(sessionScope: "tty:/dev/ttys001:sid:10")
@@ -352,12 +359,13 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
         XCTAssertEqual(try store.loadAll().first?.revokedAt, now)
     }
 
-    func testFileBackedStoreRevokesClosedTerminalGrantBeforeUse() throws {
+    func testAuthorityBackedStoreRevokesClosedTerminalGrantBeforeUse() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let store = AgentJITGrantStore(
-            fileURL: tempDir.appendingPathComponent("agent-jit-grants.json"),
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: tempDir.appendingPathComponent("agent-jit-grants.json"),
             terminalSessionLiveness: { _ in .closed }
         )
         let caller = AgentJITCallerFingerprint.fixture(sessionScope: "tty:/dev/ttys001:sid:10")
@@ -382,10 +390,6 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
         XCTAssertNil(storedGrant.lastUsedAt)
     }
 
-    private func mode(at url: URL) throws -> Int {
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        return (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
-    }
 }
 
 private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {

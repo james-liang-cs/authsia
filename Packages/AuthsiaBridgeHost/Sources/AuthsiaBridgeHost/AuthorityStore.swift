@@ -18,6 +18,8 @@ public struct AuthorityRecord: Codable, Equatable, Identifiable, Sendable {
     public let bindingDigest: Data
     /// Non-secret labels for approval and audit display. Never store credentials here.
     public let displayMetadata: [String: String]
+    /// Authenticated, non-secret policy state owned by the Bridge.
+    public let payload: Data?
 
     public init(
         type: AuthorityRecordType,
@@ -28,7 +30,8 @@ public struct AuthorityRecord: Codable, Equatable, Identifiable, Sendable {
         maximumUses: Int,
         consumedUses: Int,
         bindingDigest: Data,
-        displayMetadata: [String: String]
+        displayMetadata: [String: String],
+        payload: Data? = nil
     ) {
         self.type = type
         self.id = id
@@ -39,6 +42,7 @@ public struct AuthorityRecord: Codable, Equatable, Identifiable, Sendable {
         self.consumedUses = consumedUses
         self.bindingDigest = bindingDigest
         self.displayMetadata = displayMetadata
+        self.payload = payload
     }
 
     func consumingOneUse() -> AuthorityRecord {
@@ -51,7 +55,8 @@ public struct AuthorityRecord: Codable, Equatable, Identifiable, Sendable {
             maximumUses: maximumUses,
             consumedUses: consumedUses + 1,
             bindingDigest: bindingDigest,
-            displayMetadata: displayMetadata
+            displayMetadata: displayMetadata,
+            payload: payload
         )
     }
 
@@ -65,7 +70,8 @@ public struct AuthorityRecord: Codable, Equatable, Identifiable, Sendable {
             maximumUses: maximumUses,
             consumedUses: consumedUses,
             bindingDigest: bindingDigest,
-            displayMetadata: displayMetadata
+            displayMetadata: displayMetadata,
+            payload: payload
         )
     }
 }
@@ -84,10 +90,13 @@ public enum AuthorityStoreError: Error, Equatable, Sendable {
 
 public protocol AuthorityStoring: Sendable {
     func insert(_ record: AuthorityRecord) throws
+    func upsert(_ record: AuthorityRecord) throws
+    func upsert(_ records: [AuthorityRecord]) throws
     func record(id: UUID, asOf date: Date) throws -> AuthorityRecord?
     func consume(id: UUID, bindingDigest: Data, asOf date: Date) throws -> AuthorityRecord
     func revoke(id: UUID, at date: Date) throws
     func activeRecords(asOf date: Date) throws -> [AuthorityRecord]
+    func allRecords() throws -> [AuthorityRecord]
 }
 
 struct AuthorityEnvelope: Codable, Equatable, Sendable {

@@ -53,6 +53,9 @@ public enum BridgeRequestType: String, Codable {
     case sshAgentSign
     case createAccess
     case agentJITPreflight
+    case agentJITSnapshot
+    case agentJITRevoke
+    case agentJITRevokeAll
 }
 
 public struct BridgeRequest: Codable, Equatable {

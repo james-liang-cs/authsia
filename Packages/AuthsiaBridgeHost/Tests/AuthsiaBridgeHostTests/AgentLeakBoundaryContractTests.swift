@@ -7,7 +7,7 @@ import AuthenticatorBridge
 final class AgentLeakBoundaryContractTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
-    func testUnsignedJSONGrantIsAcceptedByCurrentStore() throws {
+    func testUnsignedJSONGrantCannotCreateBridgeAuthority() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -17,9 +17,13 @@ final class AgentLeakBoundaryContractTests: XCTestCase {
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode([grant]).write(to: fileURL)
 
-        let loaded = try AgentJITGrantStore(fileURL: fileURL).loadAll()
+        let loaded = try AgentJITGrantStore(
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: fileURL
+        ).loadAll()
 
-        XCTAssertEqual(loaded, [grant])
+        XCTAssertEqual(loaded, [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("legacy").path))
     }
 
     func testRequestedItemDoesNotRestrictAnotherItemInSameFolder() {
@@ -47,7 +51,8 @@ final class AgentLeakBoundaryContractTests: XCTestCase {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = AgentJITGrantStore(
-            fileURL: directory.appendingPathComponent("agent-jit-grants.json"),
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: directory.appendingPathComponent("agent-jit-grants.json"),
             terminalSessionLiveness: { _ in .active }
         )
         let caller = callerFingerprint()

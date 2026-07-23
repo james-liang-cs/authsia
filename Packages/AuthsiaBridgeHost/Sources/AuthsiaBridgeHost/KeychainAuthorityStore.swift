@@ -86,6 +86,26 @@ public final class KeychainAuthorityStore: AuthorityStoring, @unchecked Sendable
         }
     }
 
+    public func upsert(_ record: AuthorityRecord) throws {
+        try upsert([record])
+    }
+
+    public func upsert(_ records: [AuthorityRecord]) throws {
+        guard !records.isEmpty else { return }
+        try Self.mutationLock.withLock {
+            var envelope = try loadEnvelope()
+            for record in records {
+                try validate(record)
+                if let index = envelope.records.firstIndex(where: { $0.id == record.id }) {
+                    envelope.records[index] = record
+                } else {
+                    envelope.records.append(record)
+                }
+            }
+            try save(envelope)
+        }
+    }
+
     public func record(id: UUID, asOf date: Date) throws -> AuthorityRecord? {
         try Self.mutationLock.withLock {
             let envelope = try loadEnvelope()
@@ -139,6 +159,12 @@ public final class KeychainAuthorityStore: AuthorityStoring, @unchecked Sendable
                     && record.expiresAt > date
                     && record.consumedUses < record.maximumUses
             }
+        }
+    }
+
+    public func allRecords() throws -> [AuthorityRecord] {
+        try Self.mutationLock.withLock {
+            try loadEnvelope().records
         }
     }
 

@@ -106,7 +106,8 @@ enum BridgeClientError: LocalizedError {
 extension BridgeRequestType {
     var mayRequireUserApproval: Bool {
         switch self {
-        case .ping, .status, .lock, .workspaceMetadata, .auditVerify, .sshAgentSign:
+        case .ping, .status, .lock, .workspaceMetadata, .auditVerify, .sshAgentSign,
+             .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll:
             return false
         case .unlock,
              .list,
@@ -1350,6 +1351,12 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
                     message: "SSH-agent sign audit entries are not bridge requests.",
                     query: nil
                 ))
+            case .agentJITSnapshot:
+                service.agentJITSnapshot(requestData, replyHandler)
+            case .agentJITRevoke:
+                service.revokeAgentJITGrant(requestData, replyHandler)
+            case .agentJITRevokeAll:
+                service.revokeAllAgentJITGrants(requestData, replyHandler)
             }
         }
 
