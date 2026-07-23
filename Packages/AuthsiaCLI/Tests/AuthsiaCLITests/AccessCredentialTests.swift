@@ -71,6 +71,71 @@ struct AccessCredentialTests {
 
 @Suite("AccessCredentialStore revocation")
 struct AccessCredentialStoreRevocationTests {
+    @Test("legacy credential files are display-only and never populate the active cache")
+    func legacyCredentialFilesAreDisplayOnly() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acs-legacy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheURL = directory.appendingPathComponent("access-credential-metadata.json")
+        let legacyURL = directory.appendingPathComponent("access-credentials.json")
+        let legacy = AccessCredential(
+            id: UUID(),
+            name: "old-ci",
+            scope: "Team/API",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            expiresAt: Date(timeIntervalSince1970: 1_800_000_000),
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h",
+            allowedCommands: [.exec]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode([legacy]).write(to: legacyURL)
+        let store = AccessCredentialStore(fileURL: cacheURL, legacyFileURL: legacyURL)
+
+        #expect(try store.load(id: legacy.id) == nil)
+        #expect(try store.loadDisabledLegacy().map(\.id) == [legacy.id])
+    }
+
+    @Test("authority snapshot replaces stale local metadata without persisting bearer tokens")
+    func authoritySnapshotReplacesStaleMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acs-snapshot-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AccessCredentialStore(fileURL: directory.appendingPathComponent("cache.json"))
+        let stale = AccessCredential(
+            id: UUID(),
+            name: "stale",
+            scope: nil,
+            createdAt: .distantPast,
+            expiresAt: .distantFuture,
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h"
+        )
+        try store.save(stale)
+        let current = AccessCredential(
+            id: UUID(),
+            name: "current",
+            scope: "Team/API",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            expiresAt: Date(timeIntervalSince1970: 1_800_000_000),
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h",
+            bearerToken: "must-not-persist"
+        )
+
+        try store.replaceAll(with: [current])
+
+        #expect(try store.loadAll().map(\.id) == [current.id])
+        #expect(try store.load(id: current.id)?.bearerToken == nil)
+        let persisted = try Data(contentsOf: store.fileURL)
+        #expect(!persisted.contains(Data("must-not-persist".utf8)))
+    }
 
     @Test("revoke preserves allowedCommands")
     func revokePreservesAllowedCommands() throws {
@@ -104,8 +169,8 @@ struct AccessCredentialStoreRevocationTests {
 
 @Suite("SSH automation grant command")
 struct SSHAutomationGrantCommandTests {
-    @Test("activate writes a session grant for ssh credential marker")
-    func activateWritesSessionGrantForSSHCredentialMarker() throws {
+    @Test("bearer credentials are never persisted as SSH session grants")
+    func bearerCredentialsAreNeverPersistedAsSSHSessionGrants() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let (store, directory) = try AccessCredentialStoreFixture.make(prefix: "ssh-grant-command")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -122,7 +187,10 @@ struct SSHAutomationGrantCommandTests {
         let grantFileURL = directory.appendingPathComponent("ssh-automation-grants.json")
 
         try SSHAutomationGrantCommand.activateCurrentSessionGrant(
-            environment: [AutomationAccessResolver.sshEnvironmentKey: credential.id.uuidString],
+            environment: [
+                AutomationAccessResolver.sshEnvironmentKey:
+                    AccessCredentialStoreFixture.token(for: credential)
+            ],
             store: store,
             now: now.addingTimeInterval(60),
             sessionScope: "tty:/dev/ttys001:sid:100",
@@ -136,7 +204,8 @@ struct SSHAutomationGrantCommandTests {
             fileURL: grantFileURL
         )
 
-        #expect(grantCredentialID == credential.id)
+        #expect(grantCredentialID == nil)
+        #expect(!FileManager.default.fileExists(atPath: grantFileURL.path))
     }
 
     @Test("activate rejects credentials without ssh capability")
@@ -157,7 +226,10 @@ struct SSHAutomationGrantCommandTests {
 
         #expect(throws: (any Error).self) {
             try SSHAutomationGrantCommand.activateCurrentSessionGrant(
-                environment: [AutomationAccessResolver.sshEnvironmentKey: credential.id.uuidString],
+                environment: [
+                    AutomationAccessResolver.sshEnvironmentKey:
+                        AccessCredentialStoreFixture.token(for: credential)
+                ],
                 store: store,
                 now: now.addingTimeInterval(60),
                 sessionScope: "tty:/dev/ttys001:sid:100",

@@ -2,15 +2,11 @@
 import Foundation
 import AuthenticatorBridge
 
-/// Reads the CLI's on-disk automation-credential file and returns the
-/// authoritative credential record for a given credential ID.
-///
-/// Lives in the main-app target so `XPCRequestHandler` can re-validate
-/// capability grants server-side — tampered CLI binaries can lie in their
-/// `BridgeContext`, but can't forge the file contents that both they and
-/// the app read.
+/// Legacy file lookup retained for compatibility tests and decoding disabled
+/// display records. Production Bridge and SSH authorization use
+/// `AutomationCredentialAuthority`; this file never grants authority.
 public enum AutomationCredentialLookup {
-    /// Default file path. Override via parameter for tests.
+    /// Legacy display-only path. Override via parameter for tests.
     public static var defaultFileURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".authsia", isDirectory: true)
@@ -52,6 +48,18 @@ public enum AutomationCredentialLookup {
             self.machineId = machineId
             self.allowedCommands = allowedCommands
             self.environmentScope = environmentScope
+        }
+
+        public init(metadata: AutomationCredentialMetadata) {
+            self.init(
+                id: metadata.id,
+                scope: metadata.scope,
+                expiresAt: metadata.expiresAt,
+                revokedAt: metadata.revokedAt,
+                machineId: metadata.machineId,
+                allowedCommands: metadata.allowedCommands,
+                environmentScope: metadata.environmentScope
+            )
         }
 
         public init(from decoder: Decoder) throws {

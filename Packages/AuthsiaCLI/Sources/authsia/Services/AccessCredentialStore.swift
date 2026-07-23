@@ -16,17 +16,27 @@ enum AccessCredentialStoreError: LocalizedError {
 
 final class AccessCredentialStore {
     let fileURL: URL
+    let legacyFileURL: URL?
     private let fileManager: FileManager
     private static let directoryPermissions = 0o700
     private static let filePermissions = 0o600
 
-    init(fileURL: URL, fileManager: FileManager = .default) {
+    init(
+        fileURL: URL,
+        legacyFileURL: URL? = nil,
+        fileManager: FileManager = .default
+    ) {
         self.fileURL = fileURL
+        self.legacyFileURL = legacyFileURL
         self.fileManager = fileManager
     }
 
     convenience init(fileManager: FileManager = .default) {
-        self.init(fileURL: Self.defaultFileURL(), fileManager: fileManager)
+        self.init(
+            fileURL: Self.defaultFileURL(),
+            legacyFileURL: Self.defaultLegacyFileURL(),
+            fileManager: fileManager
+        )
     }
 
     func loadAll() throws -> [AccessCredential] {
@@ -59,6 +69,27 @@ final class AccessCredentialStore {
         try loadAll().first(where: { $0.id == id })
     }
 
+    func loadDisabledLegacy() throws -> [AccessCredential] {
+        guard let legacyFileURL,
+              fileManager.fileExists(atPath: legacyFileURL.path) else {
+            return []
+        }
+        let data = try Data(contentsOf: legacyFileURL)
+        guard !data.isEmpty else { return [] }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            return try decoder.decode([AccessCredential].self, from: data)
+        } catch {
+            throw AccessCredentialStoreError.corruptedStore
+        }
+    }
+
+    func replaceAll(with credentials: [AccessCredential]) throws {
+        try saveAll(credentials)
+    }
+
     func revoke(id: UUID, revokedAt: Date = Date()) throws -> AccessCredential {
         var credentials = try loadAll()
         guard let index = credentials.firstIndex(where: { $0.id == id }) else {
@@ -76,7 +107,8 @@ final class AccessCredentialStore {
             machineId: existing.machineId,
             machineName: existing.machineName,
             allowedCommands: existing.allowedCommands,
-            environmentScope: existing.environmentScope
+            environmentScope: existing.environmentScope,
+            bearerToken: nil
         )
         credentials[index] = updated
         try saveAll(credentials)
@@ -100,6 +132,12 @@ final class AccessCredentialStore {
     }
 
     private static func defaultFileURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".authsia", isDirectory: true)
+            .appendingPathComponent("access-credential-metadata.json")
+    }
+
+    private static func defaultLegacyFileURL() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".authsia", isDirectory: true)
             .appendingPathComponent("access-credentials.json")

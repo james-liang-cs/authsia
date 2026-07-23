@@ -161,7 +161,10 @@ struct ScrapedItemMachineSupportTests {
 
         #expect(throws: (any Error).self) {
             try List.authorizeAutomationAccess(
-                environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+                environment: [
+                    AutomationAccessResolver.environmentKey:
+                        AccessCredentialStoreFixture.token(for: credential)
+                ],
                 store: store,
                 now: now.addingTimeInterval(60)
             )
@@ -184,7 +187,10 @@ struct ScrapedItemMachineSupportTests {
         )
 
         try List.authorizeAutomationAccess(
-            environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+            environment: [
+                AutomationAccessResolver.environmentKey:
+                    AccessCredentialStoreFixture.token(for: credential)
+            ],
             store: store,
             now: now.addingTimeInterval(60)
         )

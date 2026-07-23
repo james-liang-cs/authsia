@@ -123,7 +123,10 @@ struct ReadCommandTests {
             try ReadCmd.authorizeAutomationAccess(
                 ref: ref,
                 payload: payload,
-                environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+                environment: [
+                    AutomationAccessResolver.environmentKey:
+                        AccessCredentialStoreFixture.token(for: credential)
+                ],
                 store: store,
                 now: now.addingTimeInterval(60),
                 currentMachineId: "m"

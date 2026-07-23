@@ -14,5 +14,8 @@ final class BridgeProtocolTests: XCTestCase {
         _ = #selector(AuthsiaBridgeXPCProtocol.agentJITSnapshot(_:_:))
         _ = #selector(AuthsiaBridgeXPCProtocol.revokeAgentJITGrant(_:_:))
         _ = #selector(AuthsiaBridgeXPCProtocol.revokeAllAgentJITGrants(_:_:))
+        _ = #selector(AuthsiaBridgeXPCProtocol.listAccessCredentials(_:_:))
+        _ = #selector(AuthsiaBridgeXPCProtocol.revokeAccessCredential(_:_:))
+        _ = #selector(AuthsiaBridgeXPCProtocol.validateAccessCredential(_:_:))
     }
 }

@@ -3,6 +3,101 @@ import XCTest
 import AuthenticatorBridge
 
 final class AutomationAuthorizationPolicyTests: XCTestCase {
+    func testProductionValidationUsesBearerTokenAndRejectsLegacyUUIDOnlyContext() {
+        let credential = makeCredential(scope: "Team/API")
+        let token = "authsia_ac1_synthetic"
+        let tokenRequest = makeRequest(
+            type: .getPassword,
+            scope: "Team/API",
+            credentialID: credential.id,
+            credentialToken: token
+        )
+        var consumptionModes: [Bool] = []
+        let validation: AutomationAuthorizationPolicy.CredentialValidation = {
+            suppliedToken,
+            command,
+            consumingUse in
+            XCTAssertEqual(suppliedToken, token)
+            XCTAssertEqual(command, .get)
+            consumptionModes.append(consumingUse)
+            return .found(credential)
+        }
+
+        XCTAssertEqual(
+            AutomationAuthorizationPolicy.authorization(
+                for: tokenRequest,
+                itemFolderPath: "Team/API",
+                itemKind: "password",
+                credentialValidation: validation,
+                currentMachineId: "machine-1"
+            ),
+            .allowWithoutApproval(scope: .folder("Team/API"))
+        )
+        XCTAssertEqual(consumptionModes, [false, true])
+        XCTAssertEqual(
+            AutomationAuthorizationPolicy.authorization(
+                for: makeRequest(
+                    type: .getPassword,
+                    scope: "Team/API",
+                    credentialID: credential.id
+                ),
+                itemFolderPath: "Team/API",
+                itemKind: "password",
+                credentialValidation: validation,
+                currentMachineId: "machine-1"
+            ),
+            .deny("Legacy UUID automation credentials are disabled. Create a new credential.")
+        )
+    }
+
+    func testProductionValidationDoesNotConsumeOutOfScopeCredential() {
+        let credential = makeCredential(scope: "Team/API")
+        var consumptionModes: [Bool] = []
+        let request = makeRequest(
+            type: .getPassword,
+            scope: "Team/API",
+            credentialID: credential.id,
+            credentialToken: "authsia_ac1_synthetic"
+        )
+
+        let decision = AutomationAuthorizationPolicy.authorization(
+            for: request,
+            itemFolderPath: "Team/Other",
+            itemKind: "password",
+            credentialValidation: { _, _, consumingUse in
+                consumptionModes.append(consumingUse)
+                return .found(credential)
+            },
+            currentMachineId: "machine-1"
+        )
+
+        XCTAssertEqual(
+            decision,
+            .deny("Automation credential scope 'Team/API' does not allow access to this password.")
+        )
+        XCTAssertEqual(consumptionModes, [false])
+    }
+
+    func testProductionEnvironmentScopeNeverFallsBackToLegacyFileLookup() {
+        let credential = makeCredential(environmentScope: .named("Production"))
+        var legacyLookupCalled = false
+        let scope = AutomationAuthorizationPolicy.environmentScope(
+            for: makeRequest(
+                type: .getPassword,
+                scope: "Team/API",
+                credentialID: credential.id
+            ),
+            credentialLookup: { _ in
+                legacyLookupCalled = true
+                return .found(credential)
+            },
+            credentialValidation: { _, _, _ in .credentialNotFound }
+        )
+
+        XCTAssertNil(scope)
+        XCTAssertFalse(legacyLookupCalled)
+    }
+
     func testAutomationAuthorizationAllowsInScopeFolder() {
         let credential = makeCredential(scope: "Team/API")
         let request = makeRequest(type: .getPassword, scope: "Team/API", credentialID: credential.id)
@@ -327,6 +422,7 @@ final class AutomationAuthorizationPolicyTests: XCTestCase {
         type: BridgeRequestType,
         scope: String?,
         credentialID: UUID = UUID(),
+        credentialToken: String? = nil,
         requestedCommand: String? = "get"
     ) -> BridgeRequest {
         BridgeRequest(
@@ -341,6 +437,7 @@ final class AutomationAuthorizationPolicyTests: XCTestCase {
                 isCI: false,
                 timestamp: Date(),
                 automationCredentialID: credentialID.uuidString,
+                automationCredentialToken: credentialToken,
                 automationScope: scope,
                 requestedCommand: requestedCommand
             )

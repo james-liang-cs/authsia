@@ -2599,8 +2599,10 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         let handler = makeHandler(
             store: MemoryAgentJITGrantStore(),
             approver: approver,
-            automationCredentialLookupProvider: { id in
-                id == credentialID ? .found(credential) : .credentialNotFound
+            automationCredentialValidationProvider: { token, command, _ in
+                token == "authsia_ac1_test" && command == .load
+                    ? .found(credential)
+                    : .credentialNotFound
             },
             currentMachineIdProvider: { "machine-1" }
         )
@@ -2608,7 +2610,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         let response = try await list(
             handler,
             requestedCommand: "load",
-            automationCredentialID: credentialID.uuidString
+            automationCredentialID: credentialID.uuidString,
+            automationCredentialToken: "authsia_ac1_test"
         )
 
         XCTAssertNil(response.error)
@@ -2892,6 +2895,9 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         automationCredentialLookupProvider: @escaping XPCRequestHandler.AutomationCredentialLookupProvider = {
             _ in .fileMissing
         },
+        automationCredentialValidationProvider: @escaping XPCRequestHandler.AutomationCredentialValidationProvider = {
+            _, _, _ in .fileMissing
+        },
         currentMachineIdProvider: @escaping XPCRequestHandler.CurrentMachineIdProvider = {
             nil
         },
@@ -2909,6 +2915,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             approver: approver,
             repository: repository ?? EmptyVaultRepository(),
             automationCredentialLookupProvider: automationCredentialLookupProvider,
+            automationCredentialValidationProvider: automationCredentialValidationProvider,
             currentMachineIdProvider: currentMachineIdProvider,
             agentJITGrantStore: store,
             callerIdentityProvider: { resolvedCallerIdentity },
@@ -3058,12 +3065,14 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         _ handler: XPCRequestHandler,
         requestedCommand: String,
         automationCredentialID: String? = nil,
+        automationCredentialToken: String? = nil,
         agentRuntimeContext: AgentRuntimeContext? = nil
     ) async throws -> BridgeResponse<BridgeListPayload> {
         let request = makeRequest(
             type: .list,
             requestedCommand: requestedCommand,
             automationCredentialID: automationCredentialID,
+            automationCredentialToken: automationCredentialToken,
             agentRuntimeContext: agentRuntimeContext
         )
         let requestData = try BridgeCoder.encode(request)
@@ -3106,6 +3115,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         body: Data? = nil,
         sessionToken: String? = nil,
         automationCredentialID: String? = nil,
+        automationCredentialToken: String? = nil,
         agentRuntimeContext: AgentRuntimeContext? = nil
     ) -> BridgeRequest {
         BridgeRequest(
@@ -3116,6 +3126,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             context: execContext(
                 requestedCommand: requestedCommand,
                 automationCredentialID: automationCredentialID,
+                automationCredentialToken: automationCredentialToken,
                 agentRuntimeContext: agentRuntimeContext
             ),
             body: body,
@@ -3126,6 +3137,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
     private func execContext(
         requestedCommand: String? = "exec",
         automationCredentialID: String? = nil,
+        automationCredentialToken: String? = nil,
         agentRuntimeContext: AgentRuntimeContext? = nil
     ) -> BridgeContext {
         BridgeContext(
@@ -3135,6 +3147,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             isCI: false,
             timestamp: now,
             automationCredentialID: automationCredentialID,
+            automationCredentialToken: automationCredentialToken,
             requestedCommand: requestedCommand,
             sessionScope: "tty:/dev/ttys001",
             workingDirectory: "/repo",

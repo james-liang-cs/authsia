@@ -11,10 +11,11 @@ struct AccessCreateApprovalRequest: Equatable {
     let machineName: String
     let allowedCommands: Set<CapabilityCommand>
     let environmentScope: EnvironmentAccessScope?
+    let maximumUses: Int?
 }
 
 protocol AccessCreateApproving {
-    func approveAccessCreate(_ request: AccessCreateApprovalRequest) throws
+    func approveAccessCreate(_ request: AccessCreateApprovalRequest) throws -> AutomationCredentialIssuedPayload
 }
 
 struct Access: ParsableCommand {
@@ -47,7 +48,7 @@ struct Access: ParsableCommand {
                   authsia access create --name claude --scope Team/API --ttl 15m --allow exec
                   authsia access create --name claude --env Production --ttl 15m --allow exec
                   authsia access create --name ci --scope CI --ttl 1h --allow exec,list
-                  authsia access create --name agent --scope Team/API --ttl 15m --allow exec,ssh
+                  authsia access create --name agent-ssh --scope Team/API --ttl 15m --allow ssh
                 """
         )
 
@@ -108,6 +109,12 @@ struct Access: ParsableCommand {
             guard !result.isEmpty else {
                 throw ValidationError("--allow must include at least one capability. Example: --allow exec")
             }
+            if result.contains(.ssh), result != [.ssh] {
+                throw ValidationError(
+                    "The ssh capability must use a separate SSH-only credential. " +
+                        "Create one with --allow ssh."
+                )
+            }
             return result
         }
     }
@@ -125,8 +132,17 @@ struct Access: ParsableCommand {
         var all = false
 
         func run() throws {
-            let items = try Access.listItems(includeAll: all)
-            print(try Access.renderList(items: items, format: format))
+            try AuthsiaBridgeClient.shared.withRequestedCommand("access", includeAutomationCredential: false) {
+                let store = AccessCredentialStore()
+                let credentials = try AuthsiaBridgeClient.shared.listAccessCredentials(includeAll: true)
+                try store.replaceAll(with: credentials.map { AccessCredential(metadata: $0) })
+                let items = try Access.listItems(
+                    credentials: credentials,
+                    disabledLegacy: all ? store.loadDisabledLegacy() : [],
+                    includeAll: all
+                )
+                print(try Access.renderList(items: items, format: format))
+            }
         }
     }
 
@@ -143,8 +159,11 @@ struct Access: ParsableCommand {
             guard let uuid = UUID(uuidString: id) else {
                 throw ValidationError("Invalid credential id '\(id)'. Run `authsia access list` and copy an ID.")
             }
-            let credential = try Access.revokeCredential(id: uuid)
-            print("Revoked access credential \(credential.id.uuidString).")
+            try AuthsiaBridgeClient.shared.withRequestedCommand("access", includeAutomationCredential: false) {
+                let credential = try AuthsiaBridgeClient.shared.revokeAccessCredential(id: uuid)
+                try? AccessCredentialStore().save(AccessCredential(metadata: credential))
+                print("Revoked access credential \(credential.id.uuidString).")
+            }
         }
     }
 
@@ -153,6 +172,8 @@ struct Access: ParsableCommand {
             case active
             case expired
             case revoked
+            case consumed
+            case legacyDisabled
         }
 
         let id: UUID
@@ -232,6 +253,7 @@ struct Access: ParsableCommand {
         machineIdentity: MachineIdentity = MachineIdentity.load(),
         now: Date = Date(),
         allowedCommands: Set<CapabilityCommand> = [.exec],
+        maximumUses: Int? = nil,
         approvalClient: AccessCreateApproving
     ) throws -> AccessCredential {
         let draft = try buildCredential(
@@ -253,11 +275,13 @@ struct Access: ParsableCommand {
             machineId: draft.credential.machineId,
             machineName: draft.credential.machineName,
             allowedCommands: draft.credential.allowedCommands,
-            environmentScope: draft.credential.environmentScope
+            environmentScope: draft.credential.environmentScope,
+            maximumUses: maximumUses
         )
-        try approvalClient.approveAccessCreate(approvalRequest)
-        try store.save(draft.credential)
-        return draft.credential
+        let issued = try approvalClient.approveAccessCreate(approvalRequest)
+        let credential = AccessCredential(metadata: issued.credential, bearerToken: issued.token)
+        try store.save(credential)
+        return credential
     }
 
     private static func buildCredential(
@@ -386,6 +410,51 @@ struct Access: ParsableCommand {
         }
     }
 
+    static func listItems(
+        credentials: [AutomationCredentialMetadata],
+        disabledLegacy: [AccessCredential] = [],
+        includeAll: Bool = true,
+        now: Date = Date()
+    ) -> [ListItem] {
+        let authoritativeIDs = Set(credentials.map(\.id))
+        let authorityItems = credentials
+            .filter { includeAll || $0.status(asOf: now) == .active }
+            .map { credential in
+            ListItem(
+                id: credential.id,
+                name: credential.name,
+                scope: credential.scope,
+                status: ListItem.Status(rawValue: credential.status(asOf: now).rawValue) ?? .revoked,
+                createdAt: credential.createdAt,
+                expiresAt: credential.expiresAt,
+                revokedAt: credential.revokedAt,
+                machineId: credential.machineId,
+                machineName: credential.machineName,
+                allowedCommands: credential.allowedCommands.map(\.rawValue).sorted()
+            )
+        }
+        let legacyItems = disabledLegacy
+            .filter { !authoritativeIDs.contains($0.id) }
+            .map { credential in
+                ListItem(
+                    id: credential.id,
+                    name: credential.name,
+                    scope: credential.scope,
+                    status: .legacyDisabled,
+                    createdAt: credential.createdAt,
+                    expiresAt: credential.expiresAt,
+                    revokedAt: credential.revokedAt,
+                    machineId: credential.machineId,
+                    machineName: credential.machineName,
+                    allowedCommands: credential.allowedCommands.map(\.rawValue).sorted()
+                )
+            }
+        return (authorityItems + legacyItems).sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
     static func renderList(items: [ListItem], format: OutputFormat) throws -> String {
         switch format {
         case .json:
@@ -410,15 +479,15 @@ struct Access: ParsableCommand {
     }
 
     private static func environmentExportLines(for credential: AccessCredential) -> [String] {
-        let id = credential.id.uuidString
-        let allowsSSH = credential.allowedCommands.contains(.ssh)
-        let allowsNonSSH = credential.allowedCommands.contains { $0 != .ssh }
+        guard let token = credential.bearerToken else { return [] }
+        let allowsSSH = credential.allowedCommands == [.ssh]
+        let allowsNonSSH = !credential.allowedCommands.contains(.ssh)
         var lines: [String] = []
         if allowsNonSSH {
-            lines.append("export AUTHSIA_ACCESS_CREDENTIAL=\(id)")
+            lines.append("export AUTHSIA_ACCESS_CREDENTIAL=\(token)")
         }
         if allowsSSH {
-            lines.append("export AUTHSIA_SSH_ACCESS_CREDENTIAL=\(id)")
+            lines.append("export AUTHSIA_SSH_ACCESS_CREDENTIAL=\(token)")
         }
         return lines
     }
@@ -438,7 +507,9 @@ struct Access: ParsableCommand {
                 item.id.uuidString,
                 item.name,
                 AutomationCredentialScope.displayName(item.scope),
-                item.status.rawValue.capitalized,
+                item.status == .legacyDisabled
+                    ? "Legacy disabled"
+                    : item.status.rawValue.capitalized,
                 formatter.string(from: item.expiresAt),
                 item.machineName,
                 item.allowedCommands.joined(separator: ",")

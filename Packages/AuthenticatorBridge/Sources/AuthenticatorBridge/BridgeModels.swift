@@ -52,6 +52,9 @@ public enum BridgeRequestType: String, Codable {
     case deleteVaultFolder
     case sshAgentSign
     case createAccess
+    case listAccess
+    case revokeAccess
+    case validateAccess
     case agentJITPreflight
     case agentJITSnapshot
     case agentJITRevoke
@@ -123,6 +126,7 @@ public struct BridgeContext: Codable, Equatable {
     public let isCI: Bool
     public let timestamp: Date
     public let automationCredentialID: String?
+    public let automationCredentialToken: String?
     public let automationScope: String?
     public let requestedCommand: String?
     public let fullCommand: String?
@@ -131,6 +135,10 @@ public struct BridgeContext: Codable, Equatable {
     public let agentRuntimeContext: AgentRuntimeContext?
     public let workspaceContext: WorkspaceRuntimeContext?
 
+    public var hasAutomationCredential: Bool {
+        automationCredentialID != nil || automationCredentialToken != nil
+    }
+
     public init(
         isTTY: Bool,
         isPiped: Bool,
@@ -138,6 +146,7 @@ public struct BridgeContext: Codable, Equatable {
         isCI: Bool,
         timestamp: Date,
         automationCredentialID: String? = nil,
+        automationCredentialToken: String? = nil,
         automationScope: String? = nil,
         requestedCommand: String? = nil,
         fullCommand: String? = nil,
@@ -152,6 +161,7 @@ public struct BridgeContext: Codable, Equatable {
         self.isCI = isCI
         self.timestamp = timestamp
         self.automationCredentialID = automationCredentialID
+        self.automationCredentialToken = automationCredentialToken
         self.automationScope = automationScope
         self.requestedCommand = requestedCommand
         self.fullCommand = fullCommand
@@ -312,6 +322,7 @@ public struct AccessCreateApprovalPayload: Codable, Equatable, Sendable {
     public let machineName: String
     public let allowedCommands: [String]
     public let environmentScope: EnvironmentAccessScope?
+    public let maximumUses: Int?
 
     public init(
         name: String,
@@ -321,7 +332,8 @@ public struct AccessCreateApprovalPayload: Codable, Equatable, Sendable {
         machineId: String,
         machineName: String,
         allowedCommands: [String],
-        environmentScope: EnvironmentAccessScope? = nil
+        environmentScope: EnvironmentAccessScope? = nil,
+        maximumUses: Int? = nil
     ) {
         self.name = name
         self.scope = scope
@@ -331,6 +343,7 @@ public struct AccessCreateApprovalPayload: Codable, Equatable, Sendable {
         self.machineName = machineName
         self.allowedCommands = allowedCommands
         self.environmentScope = environmentScope
+        self.maximumUses = maximumUses
     }
 }
 

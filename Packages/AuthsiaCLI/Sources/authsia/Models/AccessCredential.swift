@@ -18,6 +18,7 @@ struct AccessCredential: Codable, Equatable, Identifiable {
     let machineName: String
     let allowedCommands: Set<CapabilityCommand>
     let environmentScope: EnvironmentAccessScope?
+    let bearerToken: String?
 
     init(
         id: UUID,
@@ -29,7 +30,8 @@ struct AccessCredential: Codable, Equatable, Identifiable {
         machineId: String,
         machineName: String,
         allowedCommands: Set<CapabilityCommand> = [.exec],
-        environmentScope: EnvironmentAccessScope? = nil
+        environmentScope: EnvironmentAccessScope? = nil,
+        bearerToken: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,6 +43,7 @@ struct AccessCredential: Codable, Equatable, Identifiable {
         self.machineName = machineName
         self.allowedCommands = allowedCommands
         self.environmentScope = environmentScope
+        self.bearerToken = bearerToken
     }
 
     var isRevoked: Bool { revokedAt != nil }
@@ -71,5 +74,38 @@ struct AccessCredential: Codable, Equatable, Identifiable {
         self.allowedCommands = try c.decodeIfPresent(Set<CapabilityCommand>.self, forKey: .allowedCommands)
             ?? [.exec]
         self.environmentScope = try c.decodeIfPresent(EnvironmentAccessScope.self, forKey: .environmentScope)
+        self.bearerToken = nil
+    }
+
+    func withBearerToken(_ token: String) -> AccessCredential {
+        AccessCredential(
+            id: id,
+            name: name,
+            scope: scope,
+            createdAt: createdAt,
+            expiresAt: expiresAt,
+            revokedAt: revokedAt,
+            machineId: machineId,
+            machineName: machineName,
+            allowedCommands: allowedCommands,
+            environmentScope: environmentScope,
+            bearerToken: token
+        )
+    }
+
+    init(metadata: AutomationCredentialMetadata, bearerToken: String? = nil) {
+        self.init(
+            id: metadata.id,
+            name: metadata.name,
+            scope: metadata.scope,
+            createdAt: metadata.createdAt,
+            expiresAt: metadata.expiresAt,
+            revokedAt: metadata.revokedAt,
+            machineId: metadata.machineId,
+            machineName: metadata.machineName,
+            allowedCommands: metadata.allowedCommands,
+            environmentScope: metadata.environmentScope,
+            bearerToken: bearerToken
+        )
     }
 }

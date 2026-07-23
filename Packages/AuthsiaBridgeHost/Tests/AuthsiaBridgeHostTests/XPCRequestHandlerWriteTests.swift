@@ -13,7 +13,26 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         defer { UserDefaults.standard.set(previousValue, forKey: "cliAccessEnabled") }
 
         let approver = ApprovalTracker(result: true)
-        let handler = XPCRequestHandler(approver: approver, repository: TestVaultRepository())
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let authority = AutomationCredentialAuthority(
+            authorityStore: TestAuthorityStore(),
+            digestKey: Data(repeating: 0x42, count: 32),
+            randomBytes: { count in Data(repeating: 0x41, count: count) }
+        )
+        let auditURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("audit.log")
+        let auditLogger = BridgeAuditLogger(
+            fileURL: auditURL,
+            hmacKeyProvider: { SymmetricKey(data: Data(repeating: 0x24, count: 32)) }
+        )
+        let handler = XPCRequestHandler(
+            approver: approver,
+            repository: TestVaultRepository(),
+            automationCredentialAuthorityProvider: { authority },
+            agentJITApprovalClock: { now },
+            auditLogger: auditLogger
+        )
         let payload = AccessCreateApprovalPayload(
             name: "Claude",
             scope: "Team/API",
@@ -21,22 +40,26 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
             expiresAt: Date(timeIntervalSince1970: 1_700_000_900),
             machineId: "machine-123",
             machineName: "Example-MacBook",
-            allowedCommands: ["exec", "ssh"]
+            allowedCommands: ["ssh"]
         )
         let request = BridgeRequest(
             id: UUID(),
             type: .createAccess,
             query: "Team/API",
             options: .init(field: nil, copy: false),
-            context: .init(isTTY: true, isPiped: false, isSSH: false, isCI: false, timestamp: Date()),
+            context: .init(isTTY: true, isPiped: false, isSSH: false, isCI: false, timestamp: now),
             body: try BridgeCoder.encode(payload)
         )
         let requestData = try BridgeCoder.encode(request)
 
         let expectation = XCTestExpectation(description: "reply")
         handler.addItem(requestData) { data, _ in
-            let response = try? BridgeCoder.decode(BridgeResponse<WriteResultPayload>.self, from: data ?? Data())
-            XCTAssertEqual(response?.payload?.message, "Access credential approved")
+            let response = try? BridgeCoder.decode(
+                BridgeResponse<AutomationCredentialIssuedPayload>.self,
+                from: data ?? Data()
+            )
+            XCTAssertEqual(response?.payload?.credential.name, "Claude")
+            XCTAssertEqual(response?.payload?.token.hasPrefix(AutomationCredentialToken.prefix), true)
             expectation.fulfill()
         }
         await fulfillment(of: [expectation], timeout: 1)
@@ -47,7 +70,14 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         XCTAssertEqual(approver.requests.first?.field, nil)
         XCTAssertEqual(approver.requests.first?.remoteRequests, [])
         XCTAssertEqual(approver.requests.first?.prompt.contains("Example-MacBook"), true)
-        XCTAssertEqual(approver.requests.first?.prompt.contains("allow=exec,ssh"), true)
+        XCTAssertEqual(approver.requests.first?.prompt.contains("allow=ssh"), true)
+        let auditRecords = try auditLogger.loadRecords()
+        XCTAssertEqual(auditRecords.count, 1)
+        let auditRecord = try XCTUnwrap(auditRecords.first)
+        XCTAssertEqual(auditRecord.command, .createAccess)
+        XCTAssertEqual(auditRecord.itemName, "Claude")
+        XCTAssertNotNil(UUID(uuidString: auditRecord.itemId))
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(auditRecord), as: UTF8.self).contains("authsia_ac1_"))
     }
 
     func testCreateAccessDenialReturnsNotAuthorized() async throws {

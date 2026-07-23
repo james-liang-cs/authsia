@@ -107,7 +107,8 @@ extension BridgeRequestType {
     var mayRequireUserApproval: Bool {
         switch self {
         case .ping, .status, .lock, .workspaceMetadata, .auditVerify, .sshAgentSign,
-             .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll:
+             .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll,
+             .listAccess, .revokeAccess, .validateAccess:
             return false
         case .unlock,
              .list,
@@ -1014,7 +1015,9 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
         return try handleWriteResponse(request, query: path)
     }
 
-    func approveAccessCreate(_ accessRequest: AccessCreateApprovalRequest) throws {
+    func approveAccessCreate(
+        _ accessRequest: AccessCreateApprovalRequest
+    ) throws -> AutomationCredentialIssuedPayload {
         let payload = AccessCreateApprovalPayload(
             name: accessRequest.name,
             scope: accessRequest.scope,
@@ -1023,7 +1026,8 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
             machineId: accessRequest.machineId,
             machineName: accessRequest.machineName,
             allowedCommands: accessRequest.allowedCommands.map(\.rawValue).sorted(),
-            environmentScope: accessRequest.environmentScope
+            environmentScope: accessRequest.environmentScope,
+            maximumUses: accessRequest.maximumUses
         )
         let body = try BridgeCoder.encode(payload)
         let request = BridgeRequest(
@@ -1035,13 +1039,73 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
             body: body,
             sessionToken: nil
         )
-        let response: BridgeResponse<WriteResultPayload> = try sendRequest(request)
+        let response: BridgeResponse<AutomationCredentialIssuedPayload> = try sendRequest(request)
         if let error = response.error {
             throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: nil)
         }
-        guard response.payload != nil else {
+        guard let payload = response.payload else {
             throw BridgeClientError.invalidResponse
         }
+        return payload
+    }
+
+    func listAccessCredentials(includeAll: Bool) throws -> [AutomationCredentialMetadata] {
+        let body = try BridgeCoder.encode(AutomationCredentialListRequestPayload(includeAll: includeAll))
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .listAccess,
+            query: "",
+            options: BridgeOptions(field: nil, copy: false),
+            context: currentContext(),
+            body: body
+        )
+        let response: BridgeResponse<AutomationCredentialListPayload> = try sendRequest(request)
+        if let error = response.error {
+            throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: nil)
+        }
+        guard let payload = response.payload else { throw BridgeClientError.invalidResponse }
+        return payload.credentials
+    }
+
+    func revokeAccessCredential(id: UUID) throws -> AutomationCredentialMetadata {
+        let body = try BridgeCoder.encode(AutomationCredentialRevokePayload(id: id))
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .revokeAccess,
+            query: id.uuidString,
+            options: BridgeOptions(field: nil, copy: false),
+            context: currentContext(),
+            body: body
+        )
+        let response: BridgeResponse<AutomationCredentialMetadata> = try sendRequest(request)
+        if let error = response.error {
+            throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: nil)
+        }
+        guard let payload = response.payload else { throw BridgeClientError.invalidResponse }
+        return payload
+    }
+
+    func validateAccessCredential(
+        token: String,
+        requestedCommand: CapabilityCommand
+    ) throws -> AutomationCredentialMetadata {
+        let body = try BridgeCoder.encode(
+            AutomationCredentialValidatePayload(token: token, requestedCommand: requestedCommand)
+        )
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .validateAccess,
+            query: "",
+            options: BridgeOptions(field: nil, copy: false),
+            context: currentContext(),
+            body: body
+        )
+        let response: BridgeResponse<AutomationCredentialValidationPayload> = try sendRequest(request)
+        if let error = response.error {
+            throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: nil)
+        }
+        guard let payload = response.payload else { throw BridgeClientError.invalidResponse }
+        return payload.credential
     }
 
     // MARK: - Private Helpers
@@ -1138,6 +1202,7 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
             isCI: context.isCI,
             timestamp: context.timestamp,
             automationCredentialID: context.automationCredentialID,
+            automationCredentialToken: context.automationCredentialToken,
             automationScope: context.automationScope,
             requestedCommand: context.requestedCommand,
             fullCommand: context.fullCommand,
@@ -1244,7 +1309,7 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
         if requestType == .list, context.requestedCommand != "list" {
             return nil
         }
-        guard context.automationCredentialID == nil || requestType == .createAccess else {
+        guard !context.hasAutomationCredential || requestType == .createAccess else {
             return nil
         }
         if requestType == .agentJITPreflight {
@@ -1357,6 +1422,12 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
                 service.revokeAgentJITGrant(requestData, replyHandler)
             case .agentJITRevokeAll:
                 service.revokeAllAgentJITGrants(requestData, replyHandler)
+            case .listAccess:
+                service.listAccessCredentials(requestData, replyHandler)
+            case .revokeAccess:
+                service.revokeAccessCredential(requestData, replyHandler)
+            case .validateAccess:
+                service.validateAccessCredential(requestData, replyHandler)
             }
         }
 

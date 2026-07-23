@@ -20,6 +20,9 @@ import Foundation
     func agentJITSnapshot(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func revokeAgentJITGrant(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func revokeAllAgentJITGrants(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func listAccessCredentials(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func revokeAccessCredential(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func validateAccessCredential(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
 }
 
 @objc public protocol AuthsiaBridgeApprovalCallbackProtocol {

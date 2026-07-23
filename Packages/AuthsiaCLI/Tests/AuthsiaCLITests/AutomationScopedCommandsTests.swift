@@ -202,7 +202,10 @@ struct AutomationScopedCommandsTests {
                 type: .password,
                 query: "anything",
                 payload: payload,
-                environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+                environment: [
+                    AutomationAccessResolver.environmentKey:
+                        AccessCredentialStoreFixture.token(for: credential)
+                ],
                 store: store,
                 now: now.addingTimeInterval(60),
                 currentMachineId: "m1"
@@ -236,7 +239,10 @@ struct AutomationScopedCommandsTests {
             _ = try Load.applyAutomationAccess(
                 to: payload,
                 scope: .folder("Team/API"),
-                environment: [AutomationAccessResolver.environmentKey: credential.id.uuidString],
+                environment: [
+                    AutomationAccessResolver.environmentKey:
+                        AccessCredentialStoreFixture.token(for: credential)
+                ],
                 store: store,
                 now: now.addingTimeInterval(60)
             )
@@ -264,7 +270,10 @@ struct AutomationScopedCommandsTests {
             now: now,
             allowedCommands: allowedCommands
         )
-        let environment = [AutomationAccessResolver.environmentKey: credential.id.uuidString]
+        let environment = [
+            AutomationAccessResolver.environmentKey:
+                AccessCredentialStoreFixture.token(for: credential)
+        ]
         return (store, directory, environment)
     }
 
