@@ -37,6 +37,56 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertEqual(fingerprint?.workingDirectory, "/tmp/project")
     }
 
+    func testCursorExtensionHostFingerprintReusesParentProcessScopeAcrossChildSessions() {
+        let caller = cursorHostedCaller()
+        let first = AgentJITCallerContext.fingerprint(
+            for: makeRequest(sessionScope: "agent:cursor:sid:1001", workingDirectory: "/tmp/project"),
+            caller: caller
+        )
+        let second = AgentJITCallerContext.fingerprint(
+            for: makeRequest(sessionScope: "agent:cursor:sid:1002", workingDirectory: "/tmp/project"),
+            caller: caller
+        )
+
+        XCTAssertEqual(first?.sessionScope, "agent:cursor:pid:41")
+        XCTAssertEqual(second?.sessionScope, first?.sessionScope)
+    }
+
+    func testCursorExtensionHostFingerprintIsolatesDifferentParentProcesses() {
+        let request = makeRequest(sessionScope: "agent:cursor:sid:1001", workingDirectory: "/tmp/project")
+
+        let first = AgentJITCallerContext.fingerprint(for: request, caller: cursorHostedCaller(parentPID: 41))
+        let second = AgentJITCallerContext.fingerprint(for: request, caller: cursorHostedCaller(parentPID: 43))
+
+        XCTAssertEqual(first?.sessionScope, "agent:cursor:pid:41")
+        XCTAssertEqual(second?.sessionScope, "agent:cursor:pid:43")
+    }
+
+    func testCursorExtensionHostFingerprintPreservesScopeWhenIdentityIsAmbiguous() {
+        let cases: [(scope: String, caller: CallerIdentity)] = [
+            ("agent:cursor:sid:not-a-pid", cursorHostedCaller()),
+            (
+                "agent:cursor:sid:1001",
+                cursorHostedCaller(parentProcessName: "evil Cursor Helper (Plugin)")
+            ),
+            (
+                "agent:cursor:sid:1001",
+                cursorHostedCaller(hostBundleIdentifier: "evil.com.cursor.fake")
+            ),
+            ("agent:cursor:sid:1001", cursorHostedCaller(includeHost: false)),
+            ("agent:cursor:sid:1001", cursorHostedCaller(parentPID: 1)),
+        ]
+
+        for testCase in cases {
+            let fingerprint = AgentJITCallerContext.fingerprint(
+                for: makeRequest(sessionScope: testCase.scope, workingDirectory: "/tmp/project"),
+                caller: testCase.caller
+            )
+
+            XCTAssertEqual(fingerprint?.sessionScope, testCase.scope)
+        }
+    }
+
     func testParentContextPromotesKnownAgentAncestorAsHost() {
         let context = CallerIdentityExtractor.parentProcessContext(from: [
             ParentProcessInfo(pid: 41, processName: "authsia", bundleIdentifier: "com.authsia.cli"),
@@ -126,6 +176,32 @@ final class AgentJITCallerContextTests: XCTestCase {
                 processName: "Code Helper",
                 bundleIdentifier: "com.microsoft.VSCode"
             )
+        )
+    }
+
+    private func cursorHostedCaller(
+        parentPID: Int32 = 41,
+        parentProcessName: String = "Cursor Helper (Plugin)",
+        hostProcessName: String = "Cursor",
+        hostBundleIdentifier: String? = "com.todesktop.230313mzl4w4u92",
+        includeHost: Bool = true
+    ) -> CallerIdentity {
+        CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: parentPID,
+                processName: parentProcessName,
+                bundleIdentifier: "com.github.Electron.helper"
+            ),
+            hostProcess: includeHost ? ParentProcessInfo(
+                pid: 40,
+                processName: hostProcessName,
+                bundleIdentifier: hostBundleIdentifier
+            ) : nil
         )
     }
 }
