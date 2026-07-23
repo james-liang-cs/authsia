@@ -9,6 +9,7 @@
   - [Findings and attempted fixes](#findings-and-attempted-fixes)
   - [Blockers and residual risks](#blockers-and-residual-risks)
 - [Why This Exists](#why-this-exists)
+- [Current Exfiltration Coverage](#current-exfiltration-coverage)
 - [When JIT Runs](#when-jit-runs)
 - [Process Detection](#process-detection)
 - [Grant Flow](#grant-flow)
@@ -286,6 +287,34 @@ JIT grants split those cases:
   authorize this bootstrap or the human list path.
 - Background or unattended automation should use explicit automation credentials
   instead of JIT.
+
+## Current Exfiltration Coverage
+
+This matrix describes current behavior, not the stronger execution-lease and
+broker targets. Each channel receives one primary classification:
+
+- **prevented** — the Authsia boundary rejects the channel;
+- **mediated** — Authsia is in the data path, but mediation is not a complete
+  leak-prevention guarantee;
+- **detected** — Authsia can record best-effort evidence but does not block it;
+- **out of scope** — Authsia neither owns nor reliably observes the channel.
+
+| Exfiltration channel | Current classification | Current boundary and limitation |
+| --- | --- | --- |
+| Standard output | Mediated | `authsia exec` masks known secret values and common transforms; novel transforms can bypass masking. |
+| Standard error | Mediated | Uses the same masking boundary and has the same limitations as stdout. |
+| Binary output | Mediated | It crosses `OutputMasker.Stream`, but invalid UTF-8 currently passes through unchanged. |
+| File writes | Detected | Agent file-activity evidence can show best-effort writes in a managed scope; it does not block or inspect arbitrary content. |
+| Network | Out of scope | Arbitrary child network traffic is not mediated; only future explicit broker operations can enforce destination policy. |
+| Subprocesses | Detected | Command and ancestry evidence can identify supported activity; child-process behavior is not contained. |
+| Clipboard | Out of scope | Authsia does not monitor arbitrary child clipboard access. |
+| IPC | Out of scope | Authsia validates its own XPC boundary but does not police arbitrary same-user IPC. |
+| Agent transcripts | Out of scope | Hook attribution is metadata, not transcript inspection or sanitization. |
+| Process memory | Out of scope | Root, debugger, injection, and arbitrary same-user memory inspection are not application-level guarantees. |
+
+Full operating-system filesystem, process, and network DLP is intentionally
+outside Authsia's responsibility. Future work must describe protection only for
+Authsia-owned CLI, hook, workspace, execution, and broker surfaces.
 
 ## When JIT Runs
 
