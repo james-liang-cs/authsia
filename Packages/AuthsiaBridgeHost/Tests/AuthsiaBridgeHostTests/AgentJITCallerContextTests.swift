@@ -12,6 +12,103 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertFalse(AgentJITCallerContext.hasAgenticCaller(humanTerminalCaller()))
     }
 
+    func testTrustsSignedTerminalAndShellAncestry() {
+        XCTAssertTrue(AgentJITCallerContext.isTrustedHumanTerminal(humanTerminalCaller()))
+    }
+
+    func testDoesNotTrustIDEHostedShellAsHumanTerminal() {
+        XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(vscodeHostedCaller()))
+    }
+
+    func testTrustsSupportedSignedTerminalHostsWithShellAncestry() {
+        for bundleIdentifier in [
+            "com.googlecode.iterm2",
+            "dev.warp.Warp",
+            "dev.warp.Warp-Stable",
+        ] {
+            XCTAssertTrue(
+                AgentJITCallerContext.isTrustedHumanTerminal(
+                    terminalHostedCaller(bundleIdentifier: bundleIdentifier)
+                ),
+                bundleIdentifier
+            )
+        }
+    }
+
+    func testIDEHostsDefaultToAutomationSuspect() {
+        for (name, bundleIdentifier) in [
+            ("Code Helper", "com.microsoft.VSCode"),
+            ("Cursor Helper", "com.todesktop.230313mzl4w4u92"),
+            ("IntelliJ IDEA", "com.jetbrains.intellij"),
+            ("Zed Helper", "dev.zed.Zed"),
+        ] {
+            XCTAssertTrue(
+                AgentJITCallerContext.hasAutomationSuspectCaller(
+                    terminalHostedCaller(
+                        hostProcessName: name,
+                        bundleIdentifier: bundleIdentifier
+                    )
+                ),
+                bundleIdentifier
+            )
+        }
+    }
+
+    func testWrapperRuntimeBetweenCLIAndTerminalIsNotTrustedHumanAncestry() {
+        XCTAssertFalse(
+            AgentJITCallerContext.isTrustedHumanTerminal(
+                terminalHostedCaller(parentProcessName: "node")
+            )
+        )
+    }
+
+    func testDoesNotTrustRenamedOrUnsignedTerminalHosts() {
+        let renamed = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: "Terminal",
+                bundleIdentifier: "example.fake-terminal"
+            )
+        )
+        let unsignedCLI = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: nil,
+            signingIdentity: nil,
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: "Terminal",
+                bundleIdentifier: "com.apple.Terminal",
+                isPlatformBinary: true
+            )
+        )
+        let imitatedAppleTerminal = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: "Terminal",
+                bundleIdentifier: "com.apple.Terminal",
+                signingTeamId: "ATTACKER",
+                signingIdentity: "Ad Hoc",
+                isPlatformBinary: false
+            )
+        )
+
+        XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(renamed))
+        XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(unsignedCLI))
+        XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(imitatedAppleTerminal))
+    }
+
     func testDetectsAgenticParentProcess() {
         XCTAssertTrue(AgentJITCallerContext.hasAgenticCaller(claudeCaller()))
     }
@@ -139,7 +236,8 @@ final class AgentJITCallerContextTests: XCTestCase {
             parentProcess: ParentProcessInfo(
                 pid: 41,
                 processName: "Terminal",
-                bundleIdentifier: "com.apple.Terminal"
+                bundleIdentifier: "com.apple.Terminal",
+                isPlatformBinary: true
             )
         )
     }
@@ -175,6 +273,33 @@ final class AgentJITCallerContextTests: XCTestCase {
                 pid: 40,
                 processName: "Code Helper",
                 bundleIdentifier: "com.microsoft.VSCode"
+            )
+        )
+    }
+
+    private func terminalHostedCaller(
+        parentProcessName: String = "zsh",
+        hostProcessName: String = "Terminal",
+        bundleIdentifier: String = "com.apple.Terminal"
+    ) -> CallerIdentity {
+        CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: parentProcessName,
+                bundleIdentifier: nil
+            ),
+            hostProcess: ParentProcessInfo(
+                pid: 40,
+                processName: hostProcessName,
+                bundleIdentifier: bundleIdentifier,
+                signingTeamId: bundleIdentifier == "com.apple.Terminal" ? nil : "TERMINAL_TEAM",
+                signingIdentity: bundleIdentifier == "com.apple.Terminal" ? nil : "Developer ID Application",
+                isPlatformBinary: bundleIdentifier == "com.apple.Terminal"
             )
         )
     }

@@ -152,6 +152,12 @@ struct Exec: ParsableCommand {
     var allMachines = false
 
     @Option(
+        name: .customLong("output-policy"),
+        help: "Output handling: strict or masked-compatibility"
+    )
+    var outputPolicy: OutputDisclosurePolicy = .strict
+
+    @Option(
         name: .long,
         help: "Field to load (defaults: password/certificate/content)",
         completion: .custom(ShellCompletionMetadata.completeExecFields)
@@ -341,13 +347,24 @@ struct Exec: ParsableCommand {
 
             // Phase 7: Spawn child process with output masking
             let masker = OutputMasker(secrets: allSecrets)
-            let exitCode = Self.runChildProcess(
+            if outputPolicy == .maskedCompatibility {
+                StandardError.writeLine(
+                    "Warning: masked-compatibility cannot prevent disclosure through files, network, IPC, or arbitrary output transforms."
+                )
+            }
+            let result = Self.runChildProcess(
                 command: childCommand,
                 environment: environment,
                 masker: masker,
+                outputPolicy: outputPolicy,
                 sshAutomationCredential: sshAutomationCredential
             )
-            Darwin.exit(exitCode)
+            if result.outputFailure != nil {
+                StandardError.writeLine(
+                    "Error: Child output failed strict disclosure validation; unverified bytes were withheld."
+                )
+            }
+            Darwin.exit(result.exitCode)
         }
     }
 
@@ -2059,12 +2076,33 @@ struct Exec: ParsableCommand {
 
     // MARK: - Child process with output masking
 
+    static let outputDisclosureFailureExitCode: Int32 = 74
+
+    struct ChildRunResult: Equatable {
+        let terminationStatus: Int32
+        let terminationReason: Process.TerminationReason
+        let outputFailure: OutputDisclosureFailure?
+
+        var exitCode: Int32 {
+            if outputFailure != nil {
+                return Exec.outputDisclosureFailureExitCode
+            }
+            if terminationReason == .uncaughtSignal {
+                return 128 + terminationStatus
+            }
+            return terminationStatus
+        }
+    }
+
     static func runChildProcess(
         command: [String],
         environment: [String: String],
         masker: OutputMasker,
-        sshAutomationCredential: AccessCredential? = nil
-    ) -> Int32 {
+        outputPolicy: OutputDisclosurePolicy = .strict,
+        sshAutomationCredential: AccessCredential? = nil,
+        standardOutput: FileHandle = .standardOutput,
+        standardError: FileHandle = .standardError
+    ) -> ChildRunResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = command
@@ -2082,37 +2120,55 @@ struct Exec: ParsableCommand {
             try process.run()
         } catch {
             StandardError.writeLine("Error: Failed to execute '\(command.first ?? "<unknown>")': \(error.localizedDescription)")
-            return 1
+            return ChildRunResult(
+                terminationStatus: 1,
+                terminationReason: .exit,
+                outputFailure: nil
+            )
         }
         _ = sshAutomationCredential
 
         let group = DispatchGroup()
+        let outputCoordinator = ChildOutputCoordinator(process: process)
 
         group.enter()
-        streamPipe(stdoutPipe, to: FileHandle.standardOutput, masker: masker) {
+        streamPipe(
+            stdoutPipe,
+            to: standardOutput,
+            masker: masker,
+            policy: outputPolicy,
+            coordinator: outputCoordinator
+        ) {
             group.leave()
         }
 
         group.enter()
-        streamPipe(stderrPipe, to: FileHandle.standardError, masker: masker) {
+        streamPipe(
+            stderrPipe,
+            to: standardError,
+            masker: masker,
+            policy: outputPolicy,
+            coordinator: outputCoordinator
+        ) {
             group.leave()
         }
 
         process.waitUntilExit()
         group.wait()
 
-        // Shell convention: signal-killed process exits with 128 + signum
-        // so callers can distinguish `kill -INT` (130) from normal failure (1).
-        if process.terminationReason == .uncaughtSignal {
-            return 128 + process.terminationStatus
-        }
-        return process.terminationStatus
+        return ChildRunResult(
+            terminationStatus: process.terminationStatus,
+            terminationReason: process.terminationReason,
+            outputFailure: outputCoordinator.failure
+        )
     }
 
     private static func streamPipe(
         _ source: Pipe,
         to destination: FileHandle,
         masker: OutputMasker,
+        policy: OutputDisclosurePolicy,
+        coordinator: ChildOutputCoordinator,
         completion: @escaping @Sendable () -> Void
     ) {
         let stream = MaskingStreamBox(masker.makeStream())
@@ -2120,11 +2176,21 @@ struct Exec: ParsableCommand {
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
-                destination.write(stream.flush())
+                switch stream.flush(policy: policy) {
+                case .success(let output):
+                    coordinator.write(output, to: destination)
+                case .failure(let failure):
+                    coordinator.fail(failure)
+                }
                 completion()
                 return
             }
-            destination.write(stream.mask(data))
+            switch stream.mask(data, policy: policy) {
+            case .success(let output):
+                coordinator.write(output, to: destination)
+            case .failure(let failure):
+                coordinator.fail(failure)
+            }
         }
     }
 
@@ -2142,6 +2208,42 @@ struct Exec: ParsableCommand {
     }
 }
 
+private final class ChildOutputCoordinator: @unchecked Sendable {
+    private let lock = NSLock()
+    private let process: Process
+    private var storedFailure: OutputDisclosureFailure?
+
+    init(process: Process) {
+        self.process = process
+    }
+
+    var failure: OutputDisclosureFailure? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedFailure
+    }
+
+    func write(_ data: Data, to destination: FileHandle) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        guard storedFailure == nil else { return }
+        destination.write(data)
+    }
+
+    func fail(_ failure: OutputDisclosureFailure) {
+        lock.lock()
+        let shouldTerminate = storedFailure == nil
+        if shouldTerminate {
+            storedFailure = failure
+        }
+        lock.unlock()
+        if shouldTerminate, process.isRunning {
+            process.terminate()
+        }
+    }
+}
+
 private final class MaskingStreamBox: @unchecked Sendable {
     private let lock = NSLock()
     private var stream: OutputMasker.Stream
@@ -2150,15 +2252,20 @@ private final class MaskingStreamBox: @unchecked Sendable {
         self.stream = stream
     }
 
-    func mask(_ data: Data) -> Data {
+    func mask(
+        _ data: Data,
+        policy: OutputDisclosurePolicy
+    ) -> Result<Data, OutputDisclosureFailure> {
         lock.lock()
         defer { lock.unlock() }
-        return stream.mask(data)
+        return stream.mask(data, policy: policy)
     }
 
-    func flush() -> Data {
+    func flush(
+        policy: OutputDisclosurePolicy
+    ) -> Result<Data, OutputDisclosureFailure> {
         lock.lock()
         defer { lock.unlock() }
-        return stream.flush()
+        return stream.flush(policy: policy)
     }
 }

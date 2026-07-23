@@ -182,6 +182,15 @@ extension XPCRequestHandler {
             reply(nil, makeNSError(code: .invalidRequest, message: "Invalid access validation request"))
             return
         }
+        if let policyError = BridgeRequestPolicy.denial(for: bridgeRequest) {
+            replyError(
+                id: bridgeRequest.id,
+                code: policyError.code,
+                message: policyError.message,
+                reply: reply
+            )
+            return
+        }
         guard let machineId = currentMachineIdProvider() else {
             replyError(
                 id: bridgeRequest.id,
@@ -213,6 +222,21 @@ extension XPCRequestHandler {
                     payload: AutomationCredentialValidationPayload(credential: credential)
                 )
             reply(encodeResponse(response), nil)
+        } catch AutomationCredentialAuthorityError.repeatedDeniedTokenUse(let credentialID) {
+            recordAudit(
+                command: .validateAccess,
+                itemId: credentialID.uuidString,
+                approvedBy: "incident:\(AgentLeakEvidence.repeatedDeniedTokenUse.rawValue):revokeAndDeny",
+                caller: callerIdentityProvider(),
+                requestedCommand: bridgeRequest.context.requestedCommand,
+                workspaceContext: bridgeRequest.context.workspaceContext
+            )
+            replyError(
+                id: bridgeRequest.id,
+                code: .policyDenied,
+                message: "Automation credential is invalid or unavailable",
+                reply: reply
+            )
         } catch {
             replyError(
                 id: bridgeRequest.id,

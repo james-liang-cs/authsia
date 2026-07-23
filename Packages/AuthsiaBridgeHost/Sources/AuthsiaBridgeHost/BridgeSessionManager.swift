@@ -33,6 +33,7 @@ public final class BridgeSessionManager: @unchecked Sendable {
     private struct StoredSession {
         let session: BridgeSession
         let createdAt: Date
+        let origin: BridgeSessionOrigin?
         var usedRequestIds: Set<UUID> = []
     }
 
@@ -155,7 +156,7 @@ public final class BridgeSessionManager: @unchecked Sendable {
             workingDirectory: workingDirectory,
             origin: origin
         )
-        sessionsByScope[key] = StoredSession(session: newSession, createdAt: now)
+        sessionsByScope[key] = StoredSession(session: newSession, createdAt: now, origin: origin)
         return newSession
     }
 
@@ -222,7 +223,12 @@ public final class BridgeSessionManager: @unchecked Sendable {
 
     /// Validates a request ID to prevent replay attacks
     /// Returns true if the request ID is new and valid, false if it's been used or there's no valid session
-    public func validateRequestId(_ requestId: UUID, sessionToken: String, scope: String?) -> Bool {
+    public func validateRequestId(
+        _ requestId: UUID,
+        sessionToken: String,
+        scope: String?,
+        origin: BridgeSessionOrigin? = nil
+    ) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
@@ -236,6 +242,9 @@ public final class BridgeSessionManager: @unchecked Sendable {
         }
 
         guard stored.session.sessionToken == sessionToken else {
+            return false
+        }
+        guard stored.origin == origin else {
             return false
         }
 
@@ -255,6 +264,18 @@ public final class BridgeSessionManager: @unchecked Sendable {
 
         sessionsByScope[key] = stored
         return true
+    }
+
+    public func hasOrigin(_ origin: BridgeSessionOrigin, scope: String?) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = sessionKey(for: scope)
+        guard let stored = sessionsByScope[key],
+              isEffectivelyValid(session: stored.session, createdAt: stored.createdAt),
+              statusStoreContainsSession(scope: key) else {
+            return false
+        }
+        return stored.origin == origin
     }
 
     // MARK: - Effective Validity

@@ -31,7 +31,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         parentProcess: ParentProcessInfo(
             pid: 41,
             processName: "Terminal",
-            bundleIdentifier: "com.apple.Terminal"
+            bundleIdentifier: "com.apple.Terminal",
+            isPlatformBinary: true
         )
     )
 
@@ -89,6 +90,24 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             pid: 40,
             processName: "Code Helper",
             bundleIdentifier: "com.microsoft.VSCode"
+        )
+    )
+
+    private let unknownInteractiveCallerIdentity = CallerIdentity(
+        pid: 42,
+        processName: "authsia",
+        bundleIdentifier: "com.authsia.cli",
+        signingTeamId: "TEAM",
+        signingIdentity: "Developer ID Application",
+        parentProcess: ParentProcessInfo(
+            pid: 41,
+            processName: "zsh",
+            bundleIdentifier: nil
+        ),
+        hostProcess: ParentProcessInfo(
+            pid: 40,
+            processName: "ExampleTerm",
+            bundleIdentifier: "example.terminal"
         )
     )
 
@@ -1901,11 +1920,12 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertNil(result)
     }
 
-    func testExecSecretReadWithValidInteractiveSessionKeepsSessionBehavior() throws {
+    func testKnownAgentCannotReuseValidInteractiveSession() throws {
         let handler = makeHandler(store: MemoryAgentJITGrantStore())
         let session = try BridgeSessionManager.shared.createSession(
             ttlSeconds: 60,
-            scope: execContext(requestedCommand: "exec").sessionScope
+            scope: execContext(requestedCommand: "exec").sessionScope,
+            origin: XPCRequestHandler.sessionOrigin(from: callerIdentity)
         )
         let request = makeRequest(type: .getPassword, requestedCommand: "exec", sessionToken: session.sessionToken)
 
@@ -1915,14 +1935,21 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             bypassApproval: false
         )
 
-        XCTAssertEqual(decision, .allowed(approvedBy: "session", needsApproval: false, agentJITGrantID: nil))
+        XCTAssertEqual(
+            decision,
+            .denied(
+                code: .policyDenied,
+                message: "Agent exec secret reads require a valid JIT preflight grant for this item scope."
+            )
+        )
     }
 
     func testHumanExecSecretReadWithoutJITKeepsSessionBehavior() throws {
         let handler = makeHandler(store: MemoryAgentJITGrantStore(), callerIdentity: humanCallerIdentity)
         let session = try BridgeSessionManager.shared.createSession(
             ttlSeconds: 60,
-            scope: execContext(requestedCommand: "exec").sessionScope
+            scope: execContext(requestedCommand: "exec").sessionScope,
+            origin: XPCRequestHandler.sessionOrigin(from: humanCallerIdentity)
         )
         let request = makeRequest(type: .getPassword, requestedCommand: "exec", sessionToken: session.sessionToken)
 
@@ -1935,11 +1962,12 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(decision, .allowed(approvedBy: "session", needsApproval: false, agentJITGrantID: nil))
     }
 
-    func testIDEHelperExecSecretReadWithValidSessionKeepsSessionBehavior() throws {
+    func testIDEHelperExecSecretReadWithValidSessionCannotReuseHumanAuthority() throws {
         let handler = makeHandler(store: MemoryAgentJITGrantStore(), callerIdentity: ideHelperCallerIdentity)
         let session = try BridgeSessionManager.shared.createSession(
             ttlSeconds: 60,
-            scope: execContext(requestedCommand: "exec").sessionScope
+            scope: execContext(requestedCommand: "exec").sessionScope,
+            origin: XPCRequestHandler.sessionOrigin(from: ideHelperCallerIdentity)
         )
         let request = makeRequest(type: .getPassword, requestedCommand: "exec", sessionToken: session.sessionToken)
 
@@ -1949,7 +1977,13 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             bypassApproval: false
         )
 
-        XCTAssertEqual(decision, .allowed(approvedBy: "session", needsApproval: false, agentJITGrantID: nil))
+        XCTAssertEqual(
+            decision,
+            .denied(
+                code: .policyDenied,
+                message: "Agent exec secret reads require a valid JIT preflight grant for this item scope."
+            )
+        )
     }
 
     func testIDEHelperTTYAncestryWithoutSessionRemainsAgentClassified() {
@@ -1961,10 +1995,11 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         ))
     }
 
-    func testIDEHelperTTYWithCurrentMatchingSessionIsHumanClassified() throws {
+    func testIDEHelperTTYWithCurrentMatchingSessionRemainsAgentClassified() throws {
         let session = try BridgeSessionManager.shared.createSession(
             ttlSeconds: 60,
-            scope: execContext(requestedCommand: "exec").sessionScope
+            scope: execContext(requestedCommand: "exec").sessionScope,
+            origin: XPCRequestHandler.sessionOrigin(from: ideHelperCallerIdentity)
         )
         let request = makeRequest(
             type: .getPassword,
@@ -1972,7 +2007,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             sessionToken: session.sessionToken
         )
 
-        XCTAssertFalse(XPCRequestHandler.isAgentJITCaller(
+        XCTAssertTrue(XPCRequestHandler.isAgentJITCaller(
             request: request,
             callerIdentity: ideHelperCallerIdentity
         ))
@@ -2017,10 +2052,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         ))
     }
 
-    func testIDEHelperExecSecretReadWithoutSessionBootstrapsViaBiometric() throws {
-        // An IDE-terminal request without a validated session remains agent-classified. Separate
-        // bootstrap eligibility lets this stdin-TTY request reach the ordinary biometric gate;
-        // it is not a human-session authorization or an auto-allow.
+    func testIDEHelperExecSecretReadWithoutSessionRequiresJIT() throws {
         let handler = makeHandler(store: MemoryAgentJITGrantStore(), callerIdentity: ideHelperCallerIdentity)
         let request = makeRequest(type: .getPassword, requestedCommand: "exec")
 
@@ -2030,10 +2062,16 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             bypassApproval: false
         )
 
-        XCTAssertEqual(decision, .allowed(approvedBy: "biometric", needsApproval: true, agentJITGrantID: nil))
+        XCTAssertEqual(
+            decision,
+            .denied(
+                code: .policyDenied,
+                message: "Agent exec secret reads require a valid JIT preflight grant for this item scope."
+            )
+        )
     }
 
-    func testIDEHelperRedirectedStdoutExecSecretReadBootstrapsViaBiometric() throws {
+    func testIDEHelperRedirectedStdoutExecSecretReadRequiresJIT() throws {
         let handler = makeHandler(store: MemoryAgentJITGrantStore(), callerIdentity: ideHelperCallerIdentity)
         let request = BridgeRequest(
             id: UUID(),
@@ -2049,7 +2087,13 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             bypassApproval: false
         )
 
-        XCTAssertEqual(decision, .allowed(approvedBy: "biometric", needsApproval: true, agentJITGrantID: nil))
+        XCTAssertEqual(
+            decision,
+            .denied(
+                code: .policyDenied,
+                message: "Agent exec secret reads require a valid JIT preflight grant for this item scope."
+            )
+        )
     }
 
     func testIDEHelperRedirectedStdoutWithRuntimeContextRemainsJITOnly() throws {
@@ -2279,11 +2323,12 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(execDecision, .allowed(approvedBy: "jit", needsApproval: false, agentJITGrantID: grant.id))
     }
 
-    func testAgentDirectSecretReadWithValidInteractiveSessionKeepsSessionBehavior() throws {
+    func testAgentDirectSecretReadCannotReuseValidInteractiveSession() throws {
         let handler = makeHandler(store: MemoryAgentJITGrantStore())
         let session = try BridgeSessionManager.shared.createSession(
             ttlSeconds: 60,
-            scope: execContext(requestedCommand: "get").sessionScope
+            scope: execContext(requestedCommand: "get").sessionScope,
+            origin: XPCRequestHandler.sessionOrigin(from: callerIdentity)
         )
         let request = makeRequest(type: .getPassword, requestedCommand: "get", sessionToken: session.sessionToken)
 
@@ -2293,7 +2338,13 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             bypassApproval: false
         )
 
-        XCTAssertEqual(decision, .allowed(approvedBy: "session", needsApproval: false, agentJITGrantID: nil))
+        XCTAssertEqual(
+            decision,
+            .denied(
+                code: .policyDenied,
+                message: "Agent JIT grants do not allow authsia get. Use authsia exec with an approved JIT grant to inject secrets into a command."
+            )
+        )
     }
 
     func testAgentDirectSecretReadWithRuntimeContextFailsClosed() throws {
@@ -2324,7 +2375,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         let handler = makeHandler(store: MemoryAgentJITGrantStore(), callerIdentity: humanCallerIdentity)
         let session = try BridgeSessionManager.shared.createSession(
             ttlSeconds: 60,
-            scope: execContext(requestedCommand: "get").sessionScope
+            scope: execContext(requestedCommand: "get").sessionScope,
+            origin: XPCRequestHandler.sessionOrigin(from: humanCallerIdentity)
         )
         let request = makeRequest(type: .getPassword, requestedCommand: "get", sessionToken: session.sessionToken)
 
@@ -2337,7 +2389,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(decision, .allowed(approvedBy: "session", needsApproval: false, agentJITGrantID: nil))
     }
 
-    func testVSCodeTerminalDirectOTPReadWithoutJITReportsBiometricBootstrap() throws {
+    func testVSCodeTerminalDirectOTPReadWithoutJITFailsClosed() throws {
         let handler = makeHandler(store: MemoryAgentJITGrantStore(), callerIdentity: vscodeTerminalCallerIdentity)
         let request = makeRequest(type: .getOTP, requestedCommand: "get")
 
@@ -2346,7 +2398,13 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             itemKind: "otp"
         )
 
-        XCTAssertEqual(decision, .allowed(approvedBy: "biometric", needsApproval: true, agentJITGrantID: nil))
+        XCTAssertEqual(
+            decision,
+            .denied(
+                code: .policyDenied,
+                message: "Agent JIT grants do not allow authsia get. Use authsia exec with an approved JIT grant to inject secrets into a command."
+            )
+        )
     }
 
     func testAgentExecOTPAndSSHReadsFailClosedWithoutJITSupport() throws {
@@ -2506,7 +2564,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(response.payload?.sshKeys.map(\.name), ["API SSH", "Nested SSH"])
     }
 
-    func testTTYBootstrapIgnoresMatchingActiveJITGrantAndRequiresBiometric() async throws {
+    func testUnknownInteractiveCallerGetsOneRequestBiometricWithoutReusableSession() async throws {
         let caller = callerFingerprint(requestedCommand: "list")
         let grant = AgentJITGrant.fixture(
             callerFingerprint: caller,
@@ -2515,13 +2573,17 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             expiresAt: Date().addingTimeInterval(60)
         )
         let approver = JITApprovalTracker(result: true)
-        let handler = makeHandler(store: MemoryAgentJITGrantStore([grant]), approver: approver)
+        let handler = makeHandler(
+            store: MemoryAgentJITGrantStore([grant]),
+            approver: approver,
+            callerIdentity: unknownInteractiveCallerIdentity
+        )
 
         let response = try await list(handler, requestedCommand: "list")
 
         XCTAssertNil(response.error)
         XCTAssertEqual(approver.requests.map(\.command), [.list])
-        XCTAssertNotNil(response.sessionToken)
+        XCTAssertNil(response.sessionToken)
         XCTAssertEqual(response.payload?.accounts.map(\.issuer), ["OTP"])
         XCTAssertEqual(
             response.payload?.passwords.map(\.name),
@@ -2719,7 +2781,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertNil(response.payload)
     }
 
-    func testIDEHelperTTYUnlockWithoutSessionReachesBiometricApproval() async throws {
+    func testIDEHelperTTYUnlockWithoutSessionIsDeniedBeforeApproval() async throws {
         let approver = JITApprovalTracker(result: true)
         let handler = makeHandler(
             store: MemoryAgentJITGrantStore(),
@@ -2735,9 +2797,9 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             handler.unlock(requestData, reply)
         }
 
-        XCTAssertNil(response.error)
-        XCTAssertNotNil(response.payload?.sessionToken)
-        XCTAssertEqual(approver.requests.map(\.command), [.unlock])
+        XCTAssertEqual(response.error?.code, .policyDenied)
+        XCTAssertNil(response.payload)
+        XCTAssertEqual(approver.requests, [])
     }
 
     func testAgentRuntimeWriteAndExportCommandsAreDeniedBeforeApproval() async throws {

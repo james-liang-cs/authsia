@@ -2,6 +2,18 @@
 import Foundation
 import AuthenticatorBridge
 
+public enum AgentJITAuthorityViolation: Equatable {
+    case callerBindingMismatch(AgentJITGrant)
+    case outsideApprovedItemScope(AgentJITGrant)
+
+    public var grant: AgentJITGrant {
+        switch self {
+        case .callerBindingMismatch(let grant), .outsideApprovedItemScope(let grant):
+            return grant
+        }
+    }
+}
+
 public final class AgentJITGrantAuthorizer {
     private let store: AgentJITGrantStoring
 
@@ -45,6 +57,24 @@ public final class AgentJITGrantAuthorizer {
                 && $0.capabilities.contains(capability)
                 && $0.callerFingerprint.matches(caller)
         }
+    }
+
+    public func revokeOnAuthorityViolation(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        now: Date = Date()
+    ) throws -> AgentJITAuthorityViolation? {
+        try store.revokeOnAuthorityViolation(
+            capability: capability,
+            itemIdentity: itemIdentity,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            now: now
+        )
     }
 }
 #endif

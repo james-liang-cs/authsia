@@ -107,6 +107,33 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    func testCallerBindingViolationRevokesRelatedGrant() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let storedCaller = AgentJITCallerFingerprint.fixture(parentProcessName: "Claude")
+        let currentCaller = AgentJITCallerFingerprint.fixture(parentProcessName: "Terminal")
+        let grant = AgentJITGrant.fixture(
+            callerFingerprint: storedCaller,
+            expiresAt: now.addingTimeInterval(60)
+        )
+        let store = MemoryAgentJITGrantStore([grant])
+        let authorizer = AgentJITGrantAuthorizer(store: store)
+
+        let violation = try authorizer.revokeOnAuthorityViolation(
+            capability: .exec,
+            itemIdentity: nil,
+            itemFolderPath: "Team/API",
+            itemEnvironments: [],
+            caller: currentCaller,
+            now: now
+        )
+
+        guard case .callerBindingMismatch(let revoked) = violation else {
+            return XCTFail("Expected caller binding mismatch")
+        }
+        XCTAssertEqual(revoked.id, grant.id)
+        XCTAssertEqual(store.grants.first?.revokedAt, now)
+    }
+
     func testActiveGrantAllowsExtensionHostCallerWithoutTerminalSessionScope() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let caller = AgentJITCallerFingerprint(

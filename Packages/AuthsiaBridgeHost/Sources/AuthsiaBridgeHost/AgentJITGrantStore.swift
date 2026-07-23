@@ -38,6 +38,14 @@ public nonisolated protocol AgentJITGrantStoring {
         caller: AgentJITCallerFingerprint,
         now: Date
     ) throws -> [AgentJITFolderScope]
+    func revokeOnAuthorityViolation(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation?
 }
 
 public extension AgentJITGrantStoring {
@@ -45,6 +53,34 @@ public extension AgentJITGrantStoring {
         try loadAll()
             .filter { $0.status(asOf: date) == .active }
             .map { try revoke(id: $0.id, revokedAt: date) }
+    }
+
+    func revokeOnAuthorityViolation(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation? {
+        let active = try loadAll().filter {
+            $0.status(asOf: now) == .active && $0.capabilities.contains(capability)
+        }
+        let resourceMatches: (AgentJITGrant) -> Bool = {
+            $0.resourceScope.matches(itemIdentity: itemIdentity, itemFolderPath: itemFolderPath)
+                && ($0.environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
+        }
+        if let grant = active.first(where: {
+            resourceMatches($0) && !$0.callerFingerprint.matches(caller)
+        }) {
+            return .callerBindingMismatch(try revoke(id: grant.id, revokedAt: now))
+        }
+        if let grant = active.first(where: {
+            $0.callerFingerprint.matches(caller) && !resourceMatches($0)
+        }) {
+            return .outsideApprovedItemScope(try revoke(id: grant.id, revokedAt: now))
+        }
+        return nil
     }
 }
 
@@ -139,6 +175,42 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
                 try persistUnlocked(grants)
             }
             return revoked
+        }
+    }
+
+    public func revokeOnAuthorityViolation(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation? {
+        try locked {
+            let grants = try loadAllUnlocked()
+            let active = grants.filter {
+                $0.status(asOf: now) == .active && $0.capabilities.contains(capability)
+            }
+            let resourceMatches: (AgentJITGrant) -> Bool = {
+                $0.resourceScope.matches(itemIdentity: itemIdentity, itemFolderPath: itemFolderPath)
+                    && ($0.environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
+            }
+            let violation: AgentJITAuthorityViolation?
+            if let grant = active.first(where: {
+                resourceMatches($0) && !$0.callerFingerprint.matches(caller)
+            }) {
+                violation = .callerBindingMismatch(grant.copy(revokedAt: now))
+            } else if let grant = active.first(where: {
+                $0.callerFingerprint.matches(caller) && !resourceMatches($0)
+            }) {
+                violation = .outsideApprovedItemScope(grant.copy(revokedAt: now))
+            } else {
+                violation = nil
+            }
+            if let violation {
+                try persistUnlocked([violation.grant])
+            }
+            return violation
         }
     }
 

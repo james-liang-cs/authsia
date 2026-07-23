@@ -266,6 +266,47 @@ final class AutomationCredentialAuthorityTests: XCTestCase {
         }
     }
 
+    func testRepeatedAuthenticatedCommandDenialRevokesCredential() throws {
+        let store = TestAuthorityStore()
+        let authority = AutomationCredentialAuthority(
+            authorityStore: store,
+            digestKey: key,
+            deniedUseLimiter: AutomationCredentialDeniedUseLimiter(
+                maximumAttempts: 3,
+                window: 60
+            ),
+            randomBytes: { count in Data(repeating: 0x7a, count: count) }
+        )
+        let issued = try authority.create(payload: payload(), now: now)
+
+        for offset in 0..<2 {
+            XCTAssertThrowsError(
+                try authority.validate(
+                    token: issued.token,
+                    requestedCommand: .get,
+                    currentMachineId: "machine-1",
+                    now: now.addingTimeInterval(TimeInterval(offset))
+                )
+            ) {
+                XCTAssertEqual($0 as? AutomationCredentialAuthorityError, .commandDenied)
+            }
+        }
+        XCTAssertThrowsError(
+            try authority.validate(
+                token: issued.token,
+                requestedCommand: .get,
+                currentMachineId: "machine-1",
+                now: now.addingTimeInterval(2)
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? AutomationCredentialAuthorityError,
+                .repeatedDeniedTokenUse(issued.credential.id)
+            )
+        }
+        XCTAssertNotNil(store.allRecords().first?.revokedAt)
+    }
+
     private func makeAuthority(store: AuthorityStoring) -> AutomationCredentialAuthority {
         AutomationCredentialAuthority(
             authorityStore: store,

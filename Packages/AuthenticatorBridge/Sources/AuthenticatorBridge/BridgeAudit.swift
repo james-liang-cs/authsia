@@ -35,11 +35,24 @@ public struct ParentProcessInfo: Codable, Equatable {
     public let pid: Int32
     public let processName: String
     public let bundleIdentifier: String?
+    public let signingTeamId: String?
+    public let signingIdentity: String?
+    public let isPlatformBinary: Bool?
 
-    public init(pid: Int32, processName: String, bundleIdentifier: String?) {
+    public init(
+        pid: Int32,
+        processName: String,
+        bundleIdentifier: String?,
+        signingTeamId: String? = nil,
+        signingIdentity: String? = nil,
+        isPlatformBinary: Bool? = nil
+    ) {
         self.pid = pid
         self.processName = processName
         self.bundleIdentifier = bundleIdentifier
+        self.signingTeamId = signingTeamId
+        self.signingIdentity = signingIdentity
+        self.isPlatformBinary = isPlatformBinary
     }
 }
 

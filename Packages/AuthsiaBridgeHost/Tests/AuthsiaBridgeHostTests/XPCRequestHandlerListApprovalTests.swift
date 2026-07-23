@@ -10,6 +10,19 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
     private let cliAccessEnabledKey = "cliAccessEnabled"
     private var hadCLISetting = false
     private var previousCLISetting = false
+    private let trustedTerminalCaller = CallerIdentity(
+        pid: 42,
+        processName: "authsia",
+        bundleIdentifier: "com.authsia.cli",
+        signingTeamId: "TEAM",
+        signingIdentity: "Developer ID Application",
+        parentProcess: ParentProcessInfo(
+            pid: 41,
+            processName: "Terminal",
+            bundleIdentifier: "com.apple.Terminal",
+            isPlatformBinary: true
+        )
+    )
 
     override func setUp() {
         super.setUp()
@@ -32,7 +45,8 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         let listProvider = ListProvider()
         let handler = XPCRequestHandler(
             listProvider: listProvider.fetch,
-            approver: approver
+            approver: approver,
+            callerIdentityProvider: { self.trustedTerminalCaller }
         )
 
         let firstRequestData = makeListRequest()
@@ -66,7 +80,8 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         let listProvider = ListProvider()
         let handler = XPCRequestHandler(
             listProvider: listProvider.fetch,
-            approver: approver
+            approver: approver,
+            callerIdentityProvider: { self.trustedTerminalCaller }
         )
         let expectation = XCTestExpectation(description: "disabled CLI reply")
         var responseData: Data?
@@ -91,7 +106,8 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         let listProvider = ListProvider()
         let handler = XPCRequestHandler(
             listProvider: listProvider.fetch,
-            approver: approver
+            approver: approver,
+            callerIdentityProvider: { self.trustedTerminalCaller }
         )
         let expectation = XCTestExpectation(description: "missing callback reply")
         var responseData: Data?
@@ -117,7 +133,8 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         let listProvider = ListProvider()
         let handler = XPCRequestHandler(
             listProvider: listProvider.fetch,
-            approver: approver
+            approver: approver,
+            callerIdentityProvider: { self.trustedTerminalCaller }
         )
 
         let firstRequestData = makeListRequest(sessionScope: "tty:/dev/ttys001")
@@ -149,7 +166,8 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         let listProvider = ListProvider()
         let handler = XPCRequestHandler(
             listProvider: listProvider.fetch,
-            approver: approver
+            approver: approver,
+            callerIdentityProvider: { self.trustedTerminalCaller }
         )
 
         let requestData = makeListRequest(requestedCommand: "completion")
@@ -172,7 +190,7 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         XCTAssertNil(response.error)
     }
 
-    func testRedirectedStdoutExecBootstrapListMintsSessionForIDECaller() async throws {
+    func testRedirectedStdoutExecFromIDERequiresJITWithoutBiometricBootstrap() async throws {
         let approver = ApprovalTracker(result: true)
         // A NON-EMPTY provider so we can prove the just-bootstrapped human sees the full payload.
         // The empty-payload regression (folder-scoped refs failing on first run) would otherwise go
@@ -194,9 +212,6 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
             callerIdentityProvider: { ideCaller }
         )
 
-        // Bootstrap list carrying the real verb "exec", stdin TTY, redirected stdout, no session.
-        // Ancestry still classifies this caller as agentic; separate bootstrap eligibility must
-        // allow the biometric path and keep its approved list payload intact.
         let requestData = makeListRequest(isPiped: true, requestedCommand: "exec")
         let expectation = XCTestExpectation(description: "bootstrap list reply")
         var responseData: Data?
@@ -211,19 +226,15 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
             from: try XCTUnwrap(responseData)
         )
         XCTAssertNil(response.error)
-        XCTAssertNotNil(response.sessionToken)      // biometric bootstrap minted a session
-        XCTAssertEqual(approver.callCount, 1)
-        // The bootstrapped human must see the real payload, not an empty one.
-        XCTAssertEqual(response.payload?.passwords.map(\.name), ["Bootstrap PW"])
-        XCTAssertEqual(response.payload?.sshKeys.map(\.name), ["Bootstrap SSH"])
+        XCTAssertNil(response.sessionToken)
+        XCTAssertEqual(approver.callCount, 0)
+        XCTAssertEqual(response.payload?.passwords, [])
+        XCTAssertEqual(response.payload?.apiKeys, [])
     }
 
-    func testInteractiveCodexBootstrapListMintsSession() async throws {
+    func testInteractiveCodexListRequiresJITWithoutBiometricBootstrap() async throws {
         let approver = ApprovalTracker(result: true)
         let listProvider = NonEmptyListProvider()
-        // A human typing in a Codex integrated terminal has agentic ancestry. With no session yet
-        // and no confirmed agentRuntimeContext, it remains agent-classified, but its stdin TTY is
-        // separately bootstrap-eligible and must still reach biometric before receiving data.
         let codexCaller = CallerIdentity(
             pid: 42,
             processName: "authsia",
@@ -238,7 +249,6 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
             callerIdentityProvider: { codexCaller }
         )
 
-        // Bootstrap list carrying the real verb "exec", interactive TTY, no session yet.
         let requestData = makeListRequest(requestedCommand: "exec")
         let expectation = XCTestExpectation(description: "codex bootstrap list reply")
         var responseData: Data?
@@ -253,18 +263,20 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
             from: try XCTUnwrap(responseData)
         )
         XCTAssertNil(response.error)
-        XCTAssertNotNil(response.sessionToken)      // biometric bootstrap minted a session
-        XCTAssertEqual(approver.callCount, 1)
-        // The bootstrapped human must see the real payload, not an empty one.
-        XCTAssertEqual(response.payload?.passwords.map(\.name), ["Bootstrap PW"])
-        XCTAssertEqual(response.payload?.sshKeys.map(\.name), ["Bootstrap SSH"])
+        XCTAssertNil(response.sessionToken)
+        XCTAssertEqual(approver.callCount, 0)
+        XCTAssertEqual(response.payload?.passwords, [])
+        XCTAssertEqual(response.payload?.apiKeys, [])
     }
 
     func testStatusReportsCurrentTerminalScopeOnly() async throws {
         let scope = "tty:/dev/ttys-status-\(UUID().uuidString)"
         let otherScope = "tty:/dev/ttys-status-\(UUID().uuidString)"
         let approver = ApprovalTracker(result: true)
-        let handler = XPCRequestHandler(approver: approver)
+        let handler = XPCRequestHandler(
+            approver: approver,
+            callerIdentityProvider: { self.trustedTerminalCaller }
+        )
 
         let unlock = XCTestExpectation(description: "unlock reply")
         var unlockResponseData: Data?

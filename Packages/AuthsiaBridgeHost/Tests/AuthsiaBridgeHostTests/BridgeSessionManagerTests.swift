@@ -155,6 +155,39 @@ final class BridgeSessionManagerTests: XCTestCase {
         XCTAssertFalse(manager.validateRequestId(UUID(), sessionToken: session.sessionToken, scope: scope))
     }
 
+    func testSessionRejectsTokenFromDifferentHostOrigin() throws {
+        let scope = "tty:/dev/ttys001:sid:123"
+        let terminal = BridgeSessionOrigin(
+            processIdentifier: 1234,
+            processName: "Terminal",
+            bundleIdentifier: "com.apple.Terminal"
+        )
+        let differentHost = BridgeSessionOrigin(
+            processIdentifier: 5678,
+            processName: "Code Helper",
+            bundleIdentifier: "com.microsoft.VSCode"
+        )
+        let manager = makeManager()
+        let session = try manager.createSession(ttlSeconds: 60, scope: scope, origin: terminal)
+
+        XCTAssertFalse(
+            manager.validateRequestId(
+                UUID(),
+                sessionToken: session.sessionToken,
+                scope: scope,
+                origin: differentHost
+            )
+        )
+        XCTAssertTrue(
+            manager.validateRequestId(
+                UUID(),
+                sessionToken: session.sessionToken,
+                scope: scope,
+                origin: terminal
+            )
+        )
+    }
+
     func testInvalidateScopeClearsSharedStatusWithoutLocalSession() throws {
         let scope = "tty:/dev/ttys001:sid:123"
         try BridgeSessionStatusStore.save(

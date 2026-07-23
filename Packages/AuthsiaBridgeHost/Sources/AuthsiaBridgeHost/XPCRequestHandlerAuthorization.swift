@@ -87,7 +87,8 @@ extension XPCRequestHandler {
         return Self.sharedSessionManager.validateRequestId(
             request.id,
             sessionToken: token,
-            scope: request.context.sessionScope
+            scope: request.context.sessionScope,
+            origin: Self.sessionOrigin(from: callerIdentityProvider())
         )
     }
 
@@ -110,8 +111,8 @@ extension XPCRequestHandler {
         if request.context.hasAutomationCredential {
             return .allowed(approvedBy: "automation", needsApproval: false, agentJITGrantID: nil)
         }
-        if Self.interactiveHumanBootstrapEligible(request: request)
-            && !Self.hasValidatedInteractiveHumanSession(request: request) {
+        if Self.interactiveHumanBootstrapEligible(request: request, callerIdentity: callerIdentity)
+            && !Self.hasValidatedInteractiveHumanSession(request: request, callerIdentity: callerIdentity) {
             return .allowed(approvedBy: "biometric", needsApproval: true, agentJITGrantID: nil)
         }
         guard Self.isAgentJITCaller(request: request, callerIdentity: callerIdentity) else {
@@ -151,38 +152,47 @@ extension XPCRequestHandler {
     }
 
     static func isAgentJITCaller(request: BridgeRequest, callerIdentity: CallerIdentity?) -> Bool {
-        // Confirmed agent context (an AUTHSIA_AGENT_* marker or a recorded agent-command event) is
-        // absolute and unforgeable — always the agent-JIT path.
         if request.context.agentRuntimeContext != nil {
             return true
-        }
-        // Only a server-current token for this stdin-TTY terminal scope establishes a human
-        // session. This read-only check does not consume the request ID; downstream authority
-        // remains validateSessionAndRequest so replay protection is unchanged.
-        if hasValidatedInteractiveHumanSession(request: request) {
-            return false
         }
         if AgentJITCallerContext.hasAgenticCaller(callerIdentity) {
             return true
         }
-        guard request.context.requestedCommand == "exec" || request.context.requestedCommand == "list" else {
+        if AgentJITCallerContext.hasAutomationSuspectCaller(callerIdentity) {
+            return true
+        }
+        if AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity),
+           hasValidatedInteractiveHumanSession(request: request, callerIdentity: callerIdentity) {
             return false
         }
-        return AgentJITCallerContext.hasAutomationSuspectCaller(callerIdentity)
+        guard request.context.requestedCommand != nil else { return false }
+        return !AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
     }
 
-    private static func hasValidatedInteractiveHumanSession(request: BridgeRequest) -> Bool {
+    private static func hasValidatedInteractiveHumanSession(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> Bool {
         guard request.context.isTTY,
               let sessionToken = request.sessionToken,
               !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let origin = sessionOrigin(from: callerIdentity),
               let currentSession = sharedSessionManager.currentSession(scope: request.context.sessionScope) else {
             return false
         }
-        return currentSession.sessionToken == sessionToken
+        return AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
+            && currentSession.sessionToken == sessionToken
+            && sharedSessionManager.hasOrigin(origin, scope: request.context.sessionScope)
     }
 
-    static func interactiveHumanBootstrapEligible(request: BridgeRequest) -> Bool {
-        request.context.isTTY && request.context.agentRuntimeContext == nil
+    static func interactiveHumanBootstrapEligible(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity? = nil
+    ) -> Bool {
+        request.context.isTTY
+            && request.context.agentRuntimeContext == nil
+            && !AgentJITCallerContext.hasAgenticCaller(callerIdentity)
+            && !AgentJITCallerContext.hasAutomationSuspectCaller(callerIdentity)
     }
 
     static func unsupportedAgentJITBridgeCommandDenial(
@@ -190,7 +200,10 @@ extension XPCRequestHandler {
         callerIdentity: CallerIdentity?
     ) -> BridgeErrorPayload? {
         guard Self.isAgentJITCaller(request: request, callerIdentity: callerIdentity),
-              !Self.interactiveHumanBootstrapEligible(request: request) else {
+              !Self.interactiveHumanBootstrapEligible(
+                request: request,
+                callerIdentity: callerIdentity
+              ) else {
             return nil
         }
         guard request.type != .agentJITPreflight else {
@@ -255,7 +268,10 @@ extension XPCRequestHandler {
         }
 
         if Self.isAgentJITCaller(request: request, callerIdentity: callerIdentity)
-            && !Self.interactiveHumanBootstrapEligible(request: request) {
+            && !Self.interactiveHumanBootstrapEligible(
+                request: request,
+                callerIdentity: callerIdentity
+            ) {
             guard request.context.requestedCommand == "exec" else {
                 return .denied(
                     code: .policyDenied,
@@ -273,6 +289,34 @@ extension XPCRequestHandler {
                     callerIdentity: callerIdentity
                 ) {
                     return .allowed(approvedBy: "jit", needsApproval: false, agentJITGrantID: grant.id)
+                }
+                if let caller = AgentJITCallerContext.fingerprint(
+                    for: request,
+                    caller: callerIdentity
+                ), let violation = try agentJITGrantAuthorizer.revokeOnAuthorityViolation(
+                    capability: .exec,
+                    itemIdentity: itemIdentity,
+                    itemFolderPath: itemFolderPath,
+                    itemEnvironments: itemEnvironments,
+                    caller: caller
+                ) {
+                    let evidence: AgentLeakEvidence
+                    switch violation {
+                    case .callerBindingMismatch:
+                        evidence = .callerBindingMismatch
+                    case .outsideApprovedItemScope:
+                        evidence = .outsideApprovedItemScope
+                    }
+                    recordAudit(
+                        command: request.type,
+                        itemId: itemIdentity?.id.uuidString ?? "unknown-item",
+                        approvedBy: "incident:\(evidence.rawValue):revokeAndDeny",
+                        caller: callerIdentity,
+                        requestedCommand: request.context.requestedCommand,
+                        agentJITGrantID: violation.grant.id,
+                        agentRuntimeContext: request.context.agentRuntimeContext,
+                        workspaceContext: request.context.workspaceContext
+                    )
                 }
             } catch {
                 return .denied(
@@ -372,7 +416,10 @@ extension XPCRequestHandler {
     ) -> BridgeListPayload {
         let callerUsesAgentJIT = callerUsesAgentJIT ?? (
             Self.isAgentJITCaller(request: request, callerIdentity: callerIdentity)
-                && !Self.interactiveHumanBootstrapEligible(request: request)
+                && !Self.interactiveHumanBootstrapEligible(
+                    request: request,
+                    callerIdentity: callerIdentity
+                )
         )
         let jitScopes = activeJITScopes ?? (
             callerUsesAgentJIT
@@ -490,20 +537,16 @@ extension XPCRequestHandler {
             callback: callback
         )
         if case .allowed = authorization {
-            guard let session = Self.sharedSessionManager.createSessionOrNil(
-                ttlSeconds: Self.configuredSessionTTL,
-                scope: request.context.sessionScope,
-                workingDirectory: request.context.workingDirectory,
-                origin: sessionOrigin(from: callerIdentity)
-            ) else {
+            let session = issueReusableHumanSession(for: request, callerIdentity: callerIdentity)
+            guard !session.failed else {
                 return (false, nil, nil)
             }
-            return (true, session.sessionToken, session.expiresAt)
+            return (true, session.token, session.expiresAt)
         }
         return (false, nil, nil)
     }
 
-    func sessionOrigin(from callerIdentity: CallerIdentity?) -> BridgeSessionOrigin? {
+    static func sessionOrigin(from callerIdentity: CallerIdentity?) -> BridgeSessionOrigin? {
         guard let callerIdentity else { return nil }
         if let hostProcess = callerIdentity.hostProcess {
             return BridgeSessionOrigin(
@@ -524,6 +567,24 @@ extension XPCRequestHandler {
             processName: callerIdentity.processName,
             bundleIdentifier: callerIdentity.bundleIdentifier
         )
+    }
+
+    func issueReusableHumanSession(
+        for request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> (token: String?, expiresAt: Date?, failed: Bool) {
+        guard AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity) else {
+            return (nil, nil, false)
+        }
+        guard let session = Self.sharedSessionManager.createSessionOrNil(
+            ttlSeconds: Self.configuredSessionTTL,
+            scope: request.context.sessionScope,
+            workingDirectory: request.context.workingDirectory,
+            origin: Self.sessionOrigin(from: callerIdentity)
+        ) else {
+            return (nil, nil, true)
+        }
+        return (session.sessionToken, session.expiresAt, false)
     }
 
     func makeNSError(code: BridgeErrorCode, message: String) -> NSError {

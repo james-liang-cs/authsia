@@ -1087,14 +1087,14 @@ struct Workspace: AsyncParsableCommand {
                parentEnvironment[WorkspaceGuardedTerminal.shimInvocationEnvironmentName] == "1",
                WorkspaceRootResolver.findWorkspaceRoot(startingAt: startingURL) == nil {
                 try Exec.validateCommand(commandArgs)
-                let exitCode = Exec.runChildProcess(
+                let result = Exec.runChildProcess(
                     command: Exec.childCommandArguments(command: commandArgs, shell: false),
                     environment: Self.guardedPassthroughEnvironmentOutsideWorkspace(
                         parentEnvironment: parentEnvironment
                     ),
                     masker: OutputMasker(secrets: [])
                 )
-                Darwin.exit(exitCode)
+                Darwin.exit(result.exitCode)
             }
             let builtPlan = try WorkspaceRunPlan.build(
                 startingAt: startingURL,
@@ -1154,7 +1154,7 @@ struct Workspace: AsyncParsableCommand {
                 Self.isBindingFreeInvocation(plan: plan, bindingNames: bindingNames) ||
                 Self.isAgentShimInvocation(parentEnvironment: parentEnvironment) ||
                 !Self.shouldDelegateToExec(plan: plan, parentEnvironment: parentEnvironment) {
-                let exitCode = Exec.runChildProcess(
+                let result = Exec.runChildProcess(
                     command: Exec.childCommandArguments(command: plan.commandArgs, shell: plan.usesShell),
                     environment: try Self.directPassthroughEnvironment(
                         parentEnvironment: parentEnvironment,
@@ -1162,7 +1162,7 @@ struct Workspace: AsyncParsableCommand {
                     ),
                     masker: OutputMasker(secrets: [])
                 )
-                Darwin.exit(exitCode)
+                Darwin.exit(result.exitCode)
             }
 
             let exec = Self.configuredExec(for: plan)
@@ -2324,6 +2324,9 @@ struct Workspace: AsyncParsableCommand {
         @Option(name: .long, parsing: .upToNextOption, help: "Additional tool to shim")
         var tool: [String] = []
 
+        @Option(name: .long, help: "Agent response mode: observe, confirm, or block")
+        var responseMode: String?
+
         @Option(name: .long, help: "Authsia executable path for generated shims")
         var authsiaPath: String?
 
@@ -2344,7 +2347,11 @@ struct Workspace: AsyncParsableCommand {
             if auto, !Self.shouldPrintAutoEnv(config: config, environment: environment) {
                 return
             }
-            let effectiveConfig = Self.configPersistingRequestedTools(config, requestedTools: tool)
+            let toolConfig = Self.configPersistingRequestedTools(config, requestedTools: tool)
+            let effectiveConfig = try Self.configPersistingResponseMode(
+                toolConfig,
+                requestedMode: responseMode
+            )
             if !dryRun, effectiveConfig != config {
                 try WorkspaceConfigStore.write(effectiveConfig, toWorkspaceRoot: root)
             }
@@ -2502,7 +2509,8 @@ struct Workspace: AsyncParsableCommand {
             guard !requested.isEmpty else { return config }
             let tools = WorkspaceConfig.GuardSettings(
                 autoTabs: config.guardSettings.autoTabs,
-                tools: config.guardSettings.tools + requested
+                tools: config.guardSettings.tools + requested,
+                responseMode: config.guardSettings.responseMode
             ).tools
             guard tools != config.guardSettings.tools else { return config }
             return WorkspaceConfig(
@@ -2512,7 +2520,32 @@ struct Workspace: AsyncParsableCommand {
                 agents: config.agents,
                 guardSettings: WorkspaceConfig.GuardSettings(
                     autoTabs: config.guardSettings.autoTabs,
-                    tools: tools
+                    tools: tools,
+                    responseMode: config.guardSettings.responseMode
+                ),
+                envBindings: config.envBindings
+            )
+        }
+
+        static func configPersistingResponseMode(
+            _ config: WorkspaceConfig,
+            requestedMode: String?
+        ) throws -> WorkspaceConfig {
+            guard let requestedMode else { return config }
+            let normalized = requestedMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let mode = AgentLeakResponseMode(rawValue: normalized) else {
+                throw ValidationError("--response-mode must be observe, confirm, or block.")
+            }
+            guard mode != config.guardSettings.responseMode else { return config }
+            return WorkspaceConfig(
+                schemaVersion: config.schemaVersion,
+                workspace: config.workspace,
+                managedEnvFiles: config.managedEnvFiles,
+                agents: config.agents,
+                guardSettings: WorkspaceConfig.GuardSettings(
+                    autoTabs: config.guardSettings.autoTabs,
+                    tools: config.guardSettings.tools,
+                    responseMode: mode
                 ),
                 envBindings: config.envBindings
             )

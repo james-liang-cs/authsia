@@ -172,6 +172,55 @@ struct ExecCommandTests {
         }
     }
 
+    @Test("strict output disclosure is the default")
+    func strictOutputDisclosureIsDefault() throws {
+        let command = try Exec.parse(["--env-file", ".env", "--", "npm", "start"])
+
+        #expect(command.outputPolicy == .strict)
+    }
+
+    @Test("masked compatibility requires an explicit option")
+    func parsesMaskedCompatibilityOutputPolicy() throws {
+        let command = try Exec.parse([
+            "--env-file", ".env",
+            "--output-policy", "masked-compatibility",
+            "--", "npm", "start",
+        ])
+
+        #expect(command.outputPolicy == .maskedCompatibility)
+    }
+
+    @Test("output disclosure failure has a distinct exit status")
+    func outputDisclosureFailureExitStatus() {
+        let result = Exec.ChildRunResult(
+            terminationStatus: SIGTERM,
+            terminationReason: .uncaughtSignal,
+            outputFailure: .invalidUTF8
+        )
+
+        #expect(result.exitCode == Exec.outputDisclosureFailureExitCode)
+    }
+
+    @Test("strict child output failure terminates and withholds invalid bytes")
+    func strictChildOutputFailureTerminatesAndWithholdsInvalidBytes() throws {
+        let output = Pipe()
+        let error = Pipe()
+        let result = Exec.runChildProcess(
+            command: ["/bin/sh", "-c", "printf '\\377'; sleep 1"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            masker: OutputMasker(secrets: []),
+            outputPolicy: .strict,
+            standardOutput: output.fileHandleForWriting,
+            standardError: error.fileHandleForWriting
+        )
+        try output.fileHandleForWriting.close()
+        try error.fileHandleForWriting.close()
+
+        #expect(result.outputFailure == .invalidUTF8)
+        #expect(result.exitCode == Exec.outputDisclosureFailureExitCode)
+        #expect(((try output.fileHandleForReading.readToEnd()) ?? Data()) == Data())
+    }
+
     @Test("type parser rejects unsupported SSH type")
     func typeParserRejectsUnsupportedSSHType() {
         #expect(throws: (any Error).self) {

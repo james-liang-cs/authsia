@@ -731,3 +731,25 @@ If JIT does not prompt, check:
   `Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost/BridgeListPayloadFactory.swift`
 - Grant persistence and closed-terminal revocation:
   `Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost/AgentJITGrantStore.swift`
+
+## GA Hardening Contract
+
+- Agent/suspect ancestry is evaluated before human-session reuse. Reusable
+  human sessions require a signed supported terminal host and are bound to that
+  observed host origin; an unknown interactive caller may receive one-request
+  biometric approval but no reusable session.
+- Approval descriptors carry exact stable item identities, caller, workspace,
+  environment, duration, and reuse semantics. Local and remote approval use the
+  same versioned descriptor and reject mixed canonical versions.
+- Bridge-owned authority is the only active authority. Unsigned legacy JIT JSON
+  and legacy automation metadata are non-authoritative and require reapproval
+  or credential recreation.
+- Sensitive requests require security protocol version 2. A new Bridge rejects
+  omitted bindings, while a new CLI checks the Bridge version before sending.
+- Caller-binding or exact-scope violations revoke the related JIT grant in the
+  same Bridge store mutation and add an HMAC-backed redacted audit marker.
+- Supported Claude Code and Copilot pre-tool hooks support workspace
+  `observe`, `confirm`, and `block` response modes. Post-tool evidence may alert
+  or revoke but never claims that a completed action was prevented.
+- This boundary is not full OS process DLP. An approved child can still write,
+  encode, or transmit values through channels Authsia does not mediate.

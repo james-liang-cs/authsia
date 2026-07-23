@@ -12,7 +12,7 @@ extension XPCRequestHandler {
         let reply = XPCReply(rawReply)
         let currentSession = Self.sharedSessionManager.currentSession
         let payload = BridgePingPayload(
-            protocolVersion: "1",
+            protocolVersion: String(BridgeContext.securityProtocolVersion),
             appVersion: runningAppVersion(),
             bundledCLIPath: bundledCLIHelperPath(),
             sessionActive: currentSession != nil,
@@ -38,7 +38,7 @@ extension XPCRequestHandler {
 
         let currentSession = Self.sharedSessionManager.currentSession(scope: bridgeRequest.context.sessionScope)
         let payload = BridgePingPayload(
-            protocolVersion: "1",
+            protocolVersion: String(BridgeContext.securityProtocolVersion),
             appVersion: runningAppVersion(),
             bundledCLIPath: bundledCLIHelperPath(),
             sessionActive: currentSession != nil,
@@ -99,6 +99,15 @@ extension XPCRequestHandler {
             replyError(id: bridgeRequest.id, code: denial.code, message: denial.message, reply: reply)
             return
         }
+        guard AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity) else {
+            replyError(
+                id: bridgeRequest.id,
+                code: .policyDenied,
+                message: "Reusable CLI sessions require a signed, supported terminal host.",
+                reply: reply
+            )
+            return
+        }
 
         let callback = NSXPCConnection.current()?.remoteObjectProxy as? AuthsiaBridgeApprovalCallbackProtocol
         Task { @MainActor [weak self] in
@@ -127,7 +136,7 @@ extension XPCRequestHandler {
                 ttlSeconds: ttlSeconds,
                 scope: bridgeRequest.context.sessionScope,
                 workingDirectory: bridgeRequest.context.workingDirectory,
-                origin: sessionOrigin(from: callerIdentity)
+                origin: Self.sessionOrigin(from: callerIdentity)
             ) else {
                 let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                     id: bridgeRequest.id,

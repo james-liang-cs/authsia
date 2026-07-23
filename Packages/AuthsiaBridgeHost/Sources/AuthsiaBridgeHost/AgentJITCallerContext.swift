@@ -60,6 +60,55 @@ public enum AgentJITCallerContext {
         AgenticProcessDetector.containsAutomationSuspectProcess(ancestry(for: callerIdentity))
     }
 
+    public static func isTrustedHumanTerminal(_ callerIdentity: CallerIdentity?) -> Bool {
+        guard let callerIdentity,
+              callerIdentity.bundleIdentifier == "com.authsia.cli",
+              callerIdentity.signingTeamId?.isEmpty == false,
+              callerIdentity.signingIdentity?.isEmpty == false else {
+            return false
+        }
+
+        if let host = callerIdentity.hostProcess {
+            guard isTrustedTerminalHost(host) else {
+                return false
+            }
+            return callerIdentity.parentProcess.map {
+                trustedShellProcessNames.contains($0.processName.lowercased())
+            } ?? false
+        }
+
+        guard let parent = callerIdentity.parentProcess else { return false }
+        return isTrustedTerminalHost(parent)
+    }
+
+    private static func isTrustedTerminalHost(_ process: ParentProcessInfo) -> Bool {
+        guard let bundleIdentifier = process.bundleIdentifier,
+              trustedTerminalBundleIdentifiers.contains(bundleIdentifier) else {
+            return false
+        }
+        if bundleIdentifier == "com.apple.Terminal" {
+            return process.isPlatformBinary == true
+        }
+        return process.signingTeamId?.isEmpty == false
+            && process.signingIdentity?.isEmpty == false
+    }
+
+    private static let trustedTerminalBundleIdentifiers: Set<String> = [
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "dev.warp.Warp",
+        "dev.warp.Warp-Stable",
+    ]
+
+    private static let trustedShellProcessNames: Set<String> = [
+        "bash",
+        "fish",
+        "nu",
+        "sh",
+        "tcsh",
+        "zsh",
+    ]
+
     private static func ancestry(for callerIdentity: CallerIdentity?) -> [AgenticProcessReference] {
         guard let callerIdentity else { return [] }
 

@@ -158,7 +158,10 @@ enum WorkspaceInitPlanner {
             schemaVersion: 2,
             workspace: WorkspaceConfig.Workspace(name: root.lastPathComponent, authsiaFolder: folder),
             managedEnvFiles: envFiles.map(\.relativePath),
-            agents: uniqueAgentList.isEmpty ? nil : WorkspaceConfig.Agents(rules: uniqueAgentList.map(\.configName))
+            agents: uniqueAgentList.isEmpty ? nil : WorkspaceConfig.Agents(rules: uniqueAgentList.map(\.configName)),
+            guardSettings: WorkspaceConfig.GuardSettings(
+                responseMode: uniqueAgentList.isEmpty ? .observe : .confirm
+            )
         )
 
         let scanner = FileScannerService()

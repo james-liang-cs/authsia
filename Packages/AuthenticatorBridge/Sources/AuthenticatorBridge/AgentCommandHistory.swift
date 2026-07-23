@@ -23,6 +23,9 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
     public let arguments: [String]
     public let command: String?
     public let exitStatus: Int32?
+    public let responseOutcome: AgentLeakResponseOutcome?
+    public let responseEvidence: AgentLeakEvidence?
+    public let responsePreventedAction: Bool?
 
     public init(
         id: UUID = UUID(),
@@ -41,7 +44,10 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         executable: String? = nil,
         arguments: [String] = [],
         command: String? = nil,
-        exitStatus: Int32? = nil
+        exitStatus: Int32? = nil,
+        responseOutcome: AgentLeakResponseOutcome? = nil,
+        responseEvidence: AgentLeakEvidence? = nil,
+        responsePreventedAction: Bool? = nil
     ) {
         self.id = id
         self.recordedAt = recordedAt
@@ -60,6 +66,9 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         self.arguments = AgentCommandRedactor.redactedArguments(arguments)
         self.command = AgentCommandRedactor.redactedCommand(command)
         self.exitStatus = exitStatus
+        self.responseOutcome = responseOutcome
+        self.responseEvidence = responseEvidence
+        self.responsePreventedAction = responsePreventedAction
     }
 }
 
