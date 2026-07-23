@@ -27,6 +27,7 @@ public nonisolated protocol AgentJITGrantStoring {
     func revokeClosedTerminalGrants(now: Date) throws -> [AgentJITGrant]
     func markUsedIfAllowed(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
@@ -143,6 +144,7 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
 
     public func markUsedIfAllowed(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
@@ -154,6 +156,7 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
             guard let index = grants.firstIndex(where: {
                 $0.allows(
                     capability: capability,
+                    itemIdentity: itemIdentity,
                     itemFolderPath: itemFolderPath,
                     itemEnvironments: itemEnvironments,
                     caller: caller,
@@ -192,7 +195,10 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
                 return []
             }
 
-            let scopes = matchingIndices.map { grants[$0].folderScope }
+            let scopes = matchingIndices.compactMap { index -> AgentJITFolderScope? in
+                guard case .folder(let scope) = grants[index].resourceScope else { return nil }
+                return scope
+            }
             let updated = matchingIndices.map { index in
                 grants[index].copy(lastUsedAt: now)
             }
@@ -325,6 +331,7 @@ private extension AgentJITGrant {
             agentName: agentName,
             callerFingerprint: callerFingerprint,
             folderScope: folderScope,
+            resourceScope: resourceScope,
             capabilities: capabilities,
             createdAt: createdAt,
             expiresAt: expiresAt,

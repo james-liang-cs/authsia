@@ -378,6 +378,7 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
         try store.save(grant)
         let result = try store.markUsedIfAllowed(
             capability: .exec,
+            itemIdentity: nil,
             itemFolderPath: "Team/API",
             itemEnvironments: [],
             caller: caller,
@@ -443,6 +444,7 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
 
     func markUsedIfAllowed(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
@@ -451,6 +453,7 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
         guard let grant = grants.first(where: {
             $0.allows(
                 capability: capability,
+                itemIdentity: itemIdentity,
                 itemFolderPath: itemFolderPath,
                 itemEnvironments: itemEnvironments,
                 caller: caller,
@@ -510,6 +513,7 @@ private final class RevokingAtomicGrantStore: AgentJITGrantStoring {
 
     func markUsedIfAllowed(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
@@ -518,6 +522,7 @@ private final class RevokingAtomicGrantStore: AgentJITGrantStoring {
         let revoked = grant.copy(revokedAt: now)
         guard revoked.allows(
             capability: capability,
+            itemIdentity: itemIdentity,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             caller: caller,
@@ -567,6 +572,7 @@ private final class BatchOnlyScopeStore: AgentJITGrantStoring {
 
     func markUsedIfAllowed(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,

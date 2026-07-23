@@ -106,14 +106,26 @@ extension XPCRequestHandler {
                 && Self.isAgentJITCaller(request: bridgeRequest, callerIdentity: callerIdentity)
                 && !interactiveHumanBootstrap
             let jitListScopes: [AgentJITFolderScope]
+            let jitListGrants: [AgentJITGrant]
             if !callerUsesAgentJIT {
                 jitListScopes = []
+                jitListGrants = []
             } else {
                 do {
                     jitListScopes = try self.activeAgentJITScopes(
                         capability: .list,
                         request: bridgeRequest,
                         callerIdentity: callerIdentity
+                    )
+                    guard let caller = AgentJITCallerContext.fingerprint(
+                        for: bridgeRequest,
+                        caller: callerIdentity
+                    ) else {
+                        throw AgentJITGrantStoreError.corruptedStore
+                    }
+                    jitListGrants = try self.agentJITGrantAuthorizer.activeGrants(
+                        capability: .list,
+                        caller: caller
                     )
                 } catch {
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
@@ -127,10 +139,12 @@ extension XPCRequestHandler {
             }
             let agentCommandListWithoutJIT = bridgeRequest.context.requestedCommand != "list"
                 && jitListScopes.isEmpty
+                && jitListGrants.isEmpty
                 && !bypassApproval
                 && callerUsesAgentJIT
             let agentDirectListWithoutJIT = bridgeRequest.context.requestedCommand == "list"
                 && jitListScopes.isEmpty
+                && jitListGrants.isEmpty
                 && !bypassApproval
                 && callerUsesAgentJIT
             if agentDirectListWithoutJIT {
@@ -156,6 +170,7 @@ extension XPCRequestHandler {
             }
             let needsApproval = !bypassApproval
                 && jitListScopes.isEmpty
+                && jitListGrants.isEmpty
                 && !agentCommandListWithoutJIT
                 && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
             var interactiveApprovalAttribution: String?
@@ -211,6 +226,7 @@ extension XPCRequestHandler {
                     for: bridgeRequest,
                     callerIdentity: callerIdentity,
                     activeJITScopes: jitListScopes,
+                    activeJITGrants: jitListGrants,
                     callerUsesAgentJIT: callerUsesAgentJIT
                 )
                 let response: BridgeResponse<BridgeListPayload> = BridgeResponseBuilder.success(

@@ -126,6 +126,56 @@ public enum AgentJITFolderScope: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+public struct AgentJITItemIdentity: Codable, Equatable, Hashable, Sendable {
+    public let type: String
+    public let id: UUID
+
+    public init(type: String, id: UUID) {
+        self.type = Self.normalizedType(type)
+        self.id = id
+    }
+
+    private static func normalizedType(_ type: String) -> String {
+        switch type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "apikey", "api-key": return "api-key"
+        case "cert", "certificate": return "certificate"
+        case "ssh", "sshkey", "ssh-key": return "ssh"
+        default: return type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+    }
+}
+
+public enum AgentJITResourceScope: Codable, Equatable, Sendable {
+    case items(Set<AgentJITItemIdentity>)
+    case folder(AgentJITFolderScope)
+
+    public func matches(
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?
+    ) -> Bool {
+        switch self {
+        case .items(let identities):
+            guard let itemIdentity else { return false }
+            return identities.contains(itemIdentity)
+        case .folder(let folderScope):
+            return folderScope.matches(itemFolderPath: itemFolderPath)
+        }
+    }
+
+    public func covers(
+        itemIdentities: Set<AgentJITItemIdentity>,
+        itemFolderPath: String?
+    ) -> Bool {
+        switch self {
+        case .items(let approvedIdentities):
+            return !itemIdentities.isEmpty
+                && approvedIdentities.isSuperset(of: itemIdentities)
+        case .folder(let folderScope):
+            return folderScope.matches(itemFolderPath: itemFolderPath)
+        }
+    }
+}
+
 public struct AgentJITCallerFingerprint: Codable, Equatable, Sendable {
     public let processName: String
     public let bundleIdentifier: String?
@@ -249,6 +299,10 @@ public struct AgentJITGrantItemReference: Codable, Equatable, Sendable {
         self.name = name
         self.folderPath = folderPath
     }
+
+    public var itemIdentity: AgentJITItemIdentity? {
+        UUID(uuidString: id).map { AgentJITItemIdentity(type: type, id: $0) }
+    }
 }
 
 public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
@@ -256,6 +310,7 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
     public let agentName: String
     public let callerFingerprint: AgentJITCallerFingerprint
     public let folderScope: AgentJITFolderScope
+    public let resourceScope: AgentJITResourceScope
     public let capabilities: Set<AgentJITCapability>
     public let createdAt: Date
     public let expiresAt: Date
@@ -271,6 +326,7 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         case agentName
         case callerFingerprint
         case folderScope
+        case resourceScope
         case capabilities
         case createdAt
         case expiresAt
@@ -287,6 +343,7 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         agentName: String,
         callerFingerprint: AgentJITCallerFingerprint,
         folderScope: AgentJITFolderScope,
+        resourceScope: AgentJITResourceScope? = nil,
         capabilities: Set<AgentJITCapability>,
         createdAt: Date,
         expiresAt: Date,
@@ -301,6 +358,9 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         self.agentName = agentName
         self.callerFingerprint = callerFingerprint
         self.folderScope = folderScope
+        let itemIdentities = Set(requestedItems.compactMap(\.itemIdentity))
+        self.resourceScope = resourceScope
+            ?? (requestedItems.isEmpty ? .folder(folderScope) : .items(itemIdentities))
         self.capabilities = capabilities
         self.createdAt = createdAt
         self.expiresAt = expiresAt
@@ -318,15 +378,21 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         self.agentName = try container.decode(String.self, forKey: .agentName)
         self.callerFingerprint = try container.decode(AgentJITCallerFingerprint.self, forKey: .callerFingerprint)
         self.folderScope = try container.decode(AgentJITFolderScope.self, forKey: .folderScope)
+        let decodedItems = try container.decodeIfPresent(
+            [AgentJITGrantItemReference].self,
+            forKey: .requestedItems
+        ) ?? []
+        let itemIdentities = Set(decodedItems.compactMap(\.itemIdentity))
+        self.resourceScope = try container.decodeIfPresent(
+            AgentJITResourceScope.self,
+            forKey: .resourceScope
+        ) ?? (decodedItems.isEmpty ? .folder(folderScope) : .items(itemIdentities))
         self.capabilities = try container.decode(Set<AgentJITCapability>.self, forKey: .capabilities)
         self.createdAt = try container.decode(Date.self, forKey: .createdAt)
         self.expiresAt = try container.decode(Date.self, forKey: .expiresAt)
         self.revokedAt = try container.decodeIfPresent(Date.self, forKey: .revokedAt)
         self.lastUsedAt = try container.decodeIfPresent(Date.self, forKey: .lastUsedAt)
-        self.requestedItems = try container.decodeIfPresent(
-            [AgentJITGrantItemReference].self,
-            forKey: .requestedItems
-        ) ?? []
+        self.requestedItems = decodedItems
         self.agentRuntimeContext = try container.decodeIfPresent(
             AgentRuntimeContext.self,
             forKey: .agentRuntimeContext
@@ -341,6 +407,7 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         try container.encode(agentName, forKey: .agentName)
         try container.encode(callerFingerprint, forKey: .callerFingerprint)
         try container.encode(folderScope, forKey: .folderScope)
+        try container.encode(resourceScope, forKey: .resourceScope)
         try container.encode(capabilities, forKey: .capabilities)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(expiresAt, forKey: .expiresAt)
@@ -359,6 +426,7 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
 
     public func allows(
         capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity? = nil,
         itemFolderPath: String?,
         itemEnvironments: [String] = [],
         caller: AgentJITCallerFingerprint,
@@ -366,7 +434,10 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
     ) -> Bool {
         status(asOf: now) == .active
             && capabilities.contains(capability)
-            && folderScope.matches(itemFolderPath: itemFolderPath)
+            && resourceScope.matches(
+                itemIdentity: itemIdentity,
+                itemFolderPath: itemFolderPath
+            )
             && (environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
             && callerFingerprint.matches(caller)
     }

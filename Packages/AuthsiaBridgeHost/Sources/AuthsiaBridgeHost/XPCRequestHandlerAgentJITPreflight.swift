@@ -179,12 +179,17 @@ extension XPCRequestHandler {
 
         for resolution in scopes {
             do {
+                let requestedIdentities = Set(resolution.requestedItems.compactMap(\.itemIdentity))
                 if let existing = try agentJITGrantAuthorizer.activeGrant(
                     capability: capability,
+                    itemIdentity: requestedIdentities.first,
                     itemFolderPath: resolution.scope.storageValue,
                     itemEnvironments: agentJITItemEnvironments(payload.environmentScope),
                     caller: caller,
                     now: timing.issuedAt
+                ), existing.resourceScope.covers(
+                    itemIdentities: requestedIdentities,
+                    itemFolderPath: resolution.scope.storageValue
                 ) {
                     let merged = grant(existing, adding: resolution.requestedItems)
                     if merged.requestedItems != existing.requestedItems {
@@ -360,14 +365,19 @@ extension XPCRequestHandler {
                     timeIntervalSince1970: Double(revalidationMilliseconds) / 1_000
                 )
                 for resolution in freshScopes {
+                    let requestedIdentities = Set(resolution.requestedItems.compactMap(\.itemIdentity))
                     let activeGrant = try agentJITGrantAuthorizer.activeGrant(
                         capability: capability,
+                        itemIdentity: requestedIdentities.first,
                         itemFolderPath: resolution.scope.storageValue,
                         itemEnvironments: agentJITItemEnvironments(payload.environmentScope),
                         caller: freshCaller,
                         now: revalidationDate
                     )
-                    if activeGrant == nil {
+                    if activeGrant?.resourceScope.covers(
+                        itemIdentities: requestedIdentities,
+                        itemFolderPath: resolution.scope.storageValue
+                    ) != true {
                         freshPendingResolutions.append(resolution)
                     }
                 }
@@ -629,7 +639,11 @@ extension XPCRequestHandler {
         adding requestedItems: [AgentJITGrantItemReference]
     ) -> AgentJITGrant {
         var mergedItems = grant.requestedItems
-        for requestedItem in requestedItems where !mergedItems.contains(requestedItem) {
+        for requestedItem in requestedItems
+        where grant.resourceScope.covers(
+            itemIdentities: Set(requestedItem.itemIdentity.map { [$0] } ?? []),
+            itemFolderPath: requestedItem.folderPath
+        ) && !mergedItems.contains(requestedItem) {
             mergedItems.append(requestedItem)
         }
         return AgentJITGrant(
@@ -637,6 +651,7 @@ extension XPCRequestHandler {
             agentName: grant.agentName,
             callerFingerprint: grant.callerFingerprint,
             folderScope: grant.folderScope,
+            resourceScope: grant.resourceScope,
             capabilities: grant.capabilities,
             createdAt: grant.createdAt,
             expiresAt: grant.expiresAt,
