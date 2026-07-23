@@ -247,7 +247,7 @@ struct ExecCommandTests {
         )
     }
 
-    @Test("agent JIT preflight records command history for Access Center")
+    @Test("agent JIT preflight attaches returned grant to platform-only command history")
     func agentJITPreflightRecordsCommandHistoryForAccessCenter() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("authsia-exec-agent-history-\(UUID().uuidString)", isDirectory: true)
@@ -255,7 +255,8 @@ struct ExecCommandTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let store = AgentCommandHistoryStore(fileURL: directory.appendingPathComponent("events.jsonl"))
-        let client = RecordingExecJITPreflightClient()
+        let grantID = UUID()
+        let client = RecordingExecJITPreflightClient(grantIDs: [grantID])
         let now = Date(timeIntervalSince1970: 1_800_000_000)
 
         try Exec.runJITPreflight(
@@ -267,26 +268,26 @@ struct ExecCommandTests {
                 ),
             ],
             parentEnvironment: [
-                AgentRuntimeContextResolver.environmentPlatformKey: "codex",
+                AgentRuntimeContextResolver.environmentPlatformKey: "cursor",
                 AgentRuntimeContextResolver.environmentInvokesAuthsiaKey: "1",
-                AgentRuntimeContextResolver.environmentSessionIDKey: "codex-session-1",
             ],
             processAncestry: [],
             client: client,
             commandHistoryStore: store,
             now: now,
             currentDirectoryPath: "/Users/test/Projects/Authsia-Demo",
-            terminalSessionScope: "tty:/dev/ttys001:sid:123",
+            terminalSessionScope: nil,
             commandLine: ["authsia", "workspace", "run", "--", "/bin/true"]
         )
 
         #expect(client.payloads.count == 1)
         let event = try #require(try store.loadAll().first)
-        #expect(event.agentPlatform == "codex")
-        #expect(event.sessionID == "codex-session-1")
+        #expect(event.agentPlatform == "cursor")
+        #expect(event.sessionID == nil)
+        #expect(event.agentJITGrantID == grantID)
         #expect(event.captureSource == .process)
         #expect(event.workingDirectory == "/Users/test/Projects/Authsia-Demo")
-        #expect(event.terminalSessionScope == "tty:/dev/ttys001:sid:123")
+        #expect(event.terminalSessionScope == nil)
         #expect(event.executable == "authsia")
         #expect(event.arguments == ["authsia", "workspace", "run", "--", "/bin/true"])
         #expect(event.command == "authsia workspace run -- /bin/true")
@@ -1184,10 +1185,15 @@ struct ExecCollectSecretsTests {
 }
 
 private final class RecordingExecJITPreflightClient: ExecJITPreflightClient {
+    private let grantIDs: [UUID]
     private(set) var payloads: [AgentJITPreflightPayload] = []
+
+    init(grantIDs: [UUID] = []) {
+        self.grantIDs = grantIDs
+    }
 
     func agentJITPreflight(_ payload: AgentJITPreflightPayload) throws -> AgentJITPreflightResultPayload {
         payloads.append(payload)
-        return AgentJITPreflightResultPayload(grantIDs: [])
+        return AgentJITPreflightResultPayload(grantIDs: grantIDs)
     }
 }
