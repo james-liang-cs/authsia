@@ -21,7 +21,9 @@ public enum AutomationCredentialToken {
             throw AutomationCredentialTokenError.invalidFormat
         }
         let body = token.dropFirst(prefix.count)
-        let pieces = body.split(separator: "_", omittingEmptySubsequences: false)
+        // Split only on the first separator: base64url maps '/' to '_', so the
+        // secret segment itself can contain underscores.
+        let pieces = body.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: false)
         guard pieces.count == 2,
               let id = UUID(uuidString: String(pieces[0])),
               let randomBytes = base64URLDecoded(String(pieces[1])),

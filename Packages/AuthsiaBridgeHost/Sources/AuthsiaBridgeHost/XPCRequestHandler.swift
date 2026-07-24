@@ -88,6 +88,46 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         return BridgeContext.isChromeNativeHostProcessName(callerIdentity?.parentProcess?.processName)
     }
 
+    /// These default providers must be built outside the @MainActor init: closure
+    /// literals in its body inherit main-actor isolation and trap in
+    /// dispatch_assert_queue when the XPC queue invokes them during synchronous
+    /// dispatch (listAccess/revokeAccess/validateAccess).
+    nonisolated static func defaultAutomationCredentialAuthorityProvider(
+        authorityStore: AuthorityStoring,
+        digestKeyLoader: @escaping () throws -> Data = {
+            try AutomationCredentialDigestKeyStore().loadOrCreate()
+        }
+    ) -> AutomationCredentialAuthorityProvider {
+        {
+            AutomationCredentialAuthority(
+                authorityStore: authorityStore,
+                digestKey: try digestKeyLoader()
+            )
+        }
+    }
+
+    nonisolated static func defaultAutomationCredentialValidationProvider(
+        authorityProvider: @escaping AutomationCredentialAuthorityProvider,
+        currentMachineIdProvider: @escaping CurrentMachineIdProvider
+    ) -> AutomationCredentialValidationProvider {
+        { token, command, consumingUse in
+            guard let machineId = currentMachineIdProvider() else { return .credentialNotFound }
+            do {
+                let metadata = try authorityProvider().validate(
+                    token: token,
+                    requestedCommand: command,
+                    currentMachineId: machineId,
+                    consumingUse: consumingUse
+                )
+                return .found(AutomationCredentialLookup.CredentialRecord(metadata: metadata))
+            } catch AutomationCredentialAuthorityError.corruptedStore {
+                return .corruptedStore
+            } catch {
+                return .credentialNotFound
+            }
+        }
+    }
+
     @MainActor
     public init(
         listProvider: ListProvider? = nil,
@@ -137,32 +177,14 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         self.passwordSecretExistenceProvider = passwordSecretExistenceProvider
         self.apiKeySecretExistenceProvider = apiKeySecretExistenceProvider
         self.automationCredentialLookupProvider = automationCredentialLookupProvider
-        let resolvedAutomationCredentialAuthorityProvider = automationCredentialAuthorityProvider ?? {
-            AutomationCredentialAuthority(
-                authorityStore: authorityStore,
-                digestKey: try AutomationCredentialDigestKeyStore().loadOrCreate()
-            )
-        }
+        let resolvedAutomationCredentialAuthorityProvider = automationCredentialAuthorityProvider
+            ?? Self.defaultAutomationCredentialAuthorityProvider(authorityStore: authorityStore)
         self.automationCredentialAuthorityProvider = resolvedAutomationCredentialAuthorityProvider
-        self.automationCredentialValidationProvider = automationCredentialValidationProvider ?? {
-            token,
-            command,
-            consumingUse in
-            guard let machineId = currentMachineIdProvider() else { return .credentialNotFound }
-            do {
-                let metadata = try resolvedAutomationCredentialAuthorityProvider().validate(
-                    token: token,
-                    requestedCommand: command,
-                    currentMachineId: machineId,
-                    consumingUse: consumingUse
-                )
-                return .found(AutomationCredentialLookup.CredentialRecord(metadata: metadata))
-            } catch AutomationCredentialAuthorityError.corruptedStore {
-                return .corruptedStore
-            } catch {
-                return .credentialNotFound
-            }
-        }
+        self.automationCredentialValidationProvider = automationCredentialValidationProvider
+            ?? Self.defaultAutomationCredentialValidationProvider(
+                authorityProvider: resolvedAutomationCredentialAuthorityProvider,
+                currentMachineIdProvider: currentMachineIdProvider
+            )
         self.currentMachineIdProvider = currentMachineIdProvider
         self.authorityStore = authorityStore
         let resolvedAgentJITGrantStore = agentJITGrantStore

@@ -184,7 +184,9 @@ extension XPCRequestHandler {
                     capability: capability,
                     itemIdentity: requestedIdentities.first,
                     itemFolderPath: resolution.scope.storageValue,
-                    itemEnvironments: agentJITItemEnvironments(payload.environmentScope),
+                    itemEnvironments: resolution.itemEnvironments.isEmpty
+                        ? agentJITItemEnvironments(payload.environmentScope)
+                        : resolution.itemEnvironments,
                     caller: caller,
                     now: timing.issuedAt
                 ), existing.resourceScope.covers(
@@ -384,7 +386,9 @@ extension XPCRequestHandler {
                         capability: capability,
                         itemIdentity: requestedIdentities.first,
                         itemFolderPath: resolution.scope.storageValue,
-                        itemEnvironments: agentJITItemEnvironments(payload.environmentScope),
+                        itemEnvironments: resolution.itemEnvironments.isEmpty
+                            ? agentJITItemEnvironments(payload.environmentScope)
+                            : resolution.itemEnvironments,
                         caller: freshCaller,
                         now: revalidationDate
                     )
