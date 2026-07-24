@@ -1517,6 +1517,9 @@ struct Workspace: AsyncParsableCommand {
             exec.env = nil
             exec.all = false
             exec.allMachines = false
+            // Programmatic construction bypasses parsing, so wrapper defaults are
+            // never materialized; every @Option/@Argument/@Flag must be assigned here.
+            exec.outputPolicy = .strict
             exec.field = nil
             exec.envFile = plan.envFiles
             exec.environmentOverrides = plan.envBindings

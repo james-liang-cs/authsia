@@ -1563,6 +1563,71 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(approver.requests, [])
     }
 
+    func testPreflightReusesExactItemGrantWhenRequestOmitsEnvironmentScope() async throws {
+        let caller = callerFingerprint(requestedCommand: "exec")
+        let original = listPayload()
+        let nested = try XCTUnwrap(original.passwords.first { $0.name == "API Nested" })
+        let tagged = listPayload(replacingPasswords: original.passwords.map {
+            $0.id == nested.id
+                ? BridgePassword(
+                    id: $0.id,
+                    name: $0.name,
+                    username: $0.username,
+                    website: $0.website,
+                    folderPath: $0.folderPath,
+                    isFavorite: $0.isFavorite,
+                    isCliEnabled: $0.isCliEnabled,
+                    isScraped: $0.isScraped,
+                    createdAt: $0.createdAt,
+                    updatedAt: $0.updatedAt,
+                    environments: ["validation-x"]
+                )
+                : $0
+        })
+        let grant = AgentJITGrant(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            agentName: "Codex",
+            callerFingerprint: caller,
+            folderScope: .folder("Team/API/Prod"),
+            capabilities: [.exec, .list],
+            createdAt: Date(),
+            expiresAt: Date().addingTimeInterval(60),
+            revokedAt: nil,
+            lastUsedAt: nil,
+            requestedItems: [
+                AgentJITGrantItemReference(
+                    type: "password",
+                    id: nested.id.uuidString,
+                    name: nested.name,
+                    folderPath: nested.folderPath
+                ),
+            ],
+            approvedBy: "biometric",
+            environmentScope: .named("validation-x")
+        )
+        let store = MemoryAgentJITGrantStore([grant])
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(store: store, approver: approver, listProvider: { tagged })
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(
+                    type: "password",
+                    query: "API Nested",
+                    folderPath: nil,
+                    isFolderScoped: false
+                ),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(response.payload?.grantIDs, [grant.id])
+        XCTAssertEqual(store.grants.count, 1)
+        XCTAssertEqual(approver.requests, [])
+    }
+
     func testPreflightExplainsSeparateExecCapabilityForCoveredDescendant() async throws {
         let caller = callerFingerprint(requestedCommand: "exec")
         let grant = AgentJITGrant.fixture(

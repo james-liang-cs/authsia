@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import AuthenticatorBridge
+import AuthenticatorCore
 
 public struct AgentJITPreflightFailure: Error {
     public let code: BridgeErrorCode
@@ -15,10 +16,18 @@ public struct AgentJITPreflightFailure: Error {
 public struct AgentJITScopeResolution: Equatable {
     public let scope: AgentJITFolderScope
     public var requestedItems: [AgentJITGrantItemReference]
+    /// Environment tags of the resolved vault items (vault truth, not the caller's
+    /// declared scope), so grant matching cannot be widened or broken by the request.
+    public var itemEnvironments: [String]
 
-    public init(scope: AgentJITFolderScope, requestedItems: [AgentJITGrantItemReference]) {
+    public init(
+        scope: AgentJITFolderScope,
+        requestedItems: [AgentJITGrantItemReference],
+        itemEnvironments: [String] = []
+    ) {
         self.scope = scope
         self.requestedItems = requestedItems
+        self.itemEnvironments = VaultEnvironmentTags.normalize(itemEnvironments)
     }
 }
 
@@ -48,6 +57,7 @@ public struct AgentJITPreflightResolver {
             }
 
             let scope: AgentJITFolderScope
+            let itemEnvironments: [String]
             let itemReference: AgentJITGrantItemReference
             switch reference.type {
             case "password":
@@ -68,6 +78,7 @@ public struct AgentJITPreflightResolver {
                     )
                 }
                 scope = requestedScope ?? AgentJITFolderScope(folderPath: item.folderPath)
+                itemEnvironments = item.environments
                 itemReference = AgentJITGrantItemReference(
                     type: "password",
                     id: item.id.uuidString,
@@ -92,6 +103,7 @@ public struct AgentJITPreflightResolver {
                     )
                 }
                 scope = requestedScope ?? AgentJITFolderScope(folderPath: item.folderPath)
+                itemEnvironments = item.environments
                 itemReference = AgentJITGrantItemReference(
                     type: "api-key",
                     id: item.id.uuidString,
@@ -116,6 +128,7 @@ public struct AgentJITPreflightResolver {
                     )
                 }
                 scope = requestedScope ?? AgentJITFolderScope(folderPath: item.folderPath)
+                itemEnvironments = item.environments
                 itemReference = AgentJITGrantItemReference(
                     type: "certificate",
                     id: item.id.uuidString,
@@ -140,6 +153,7 @@ public struct AgentJITPreflightResolver {
                     )
                 }
                 scope = requestedScope ?? AgentJITFolderScope(folderPath: item.folderPath)
+                itemEnvironments = item.environments
                 itemReference = AgentJITGrantItemReference(
                     type: "note",
                     id: item.id.uuidString,
@@ -164,6 +178,7 @@ public struct AgentJITPreflightResolver {
                     )
                 }
                 scope = requestedScope ?? AgentJITFolderScope(folderPath: item.folderPath)
+                itemEnvironments = []
                 itemReference = AgentJITGrantItemReference(
                     type: "ssh",
                     id: item.id.uuidString,
@@ -178,7 +193,11 @@ public struct AgentJITPreflightResolver {
             }
 
             append(
-                AgentJITScopeResolution(scope: scope, requestedItems: [itemReference]),
+                AgentJITScopeResolution(
+                    scope: scope,
+                    requestedItems: [itemReference],
+                    itemEnvironments: itemEnvironments
+                ),
                 scopes: &scopes,
                 indicesByScope: &indicesByScope
             )
@@ -289,6 +308,9 @@ public struct AgentJITPreflightResolver {
             for item in resolution.requestedItems where !scopes[index].requestedItems.contains(item) {
                 scopes[index].requestedItems.append(item)
             }
+            scopes[index].itemEnvironments = VaultEnvironmentTags.normalize(
+                scopes[index].itemEnvironments + resolution.itemEnvironments
+            )
         } else {
             indicesByScope[resolution.scope] = scopes.count
             scopes.append(resolution)
@@ -315,6 +337,9 @@ public struct AgentJITPreflightResolver {
                 for item in resolution.requestedItems where !collapsed[index].requestedItems.contains(item) {
                     collapsed[index].requestedItems.append(item)
                 }
+                collapsed[index].itemEnvironments = VaultEnvironmentTags.normalize(
+                    collapsed[index].itemEnvironments + resolution.itemEnvironments
+                )
             } else {
                 collapsed.append(resolution)
             }
