@@ -18,7 +18,7 @@ headless bridge, SSH agent, and just-in-time (JIT) agent grants. It focuses on
 who can ask Authsia for secrets, which gates are applied, and what the design
 does not try to protect against.
 
-For detailed JIT grant behavior, see `Doc/ops/jit-agent-grants.md`.
+For detailed JIT grant behavior, see [`jit-agent-grants.md`](jit-agent-grants.md).
 
 ## Security Goals
 

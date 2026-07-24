@@ -2169,7 +2169,7 @@ Unprefixed Authsia commands are treated as direct human CLI, so GitHub Copilot m
 on every local Authsia terminal command it runs.
 
 Maintainer-level flow, enforcement, and triage details live in
-[`Doc/ops/jit-agent-grants.md`](../ops/jit-agent-grants.md).
+[`jit-agent-grants.md`](jit-agent-grants.md).
 
 ### Automation credentials for background agents
 

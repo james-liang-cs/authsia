@@ -426,6 +426,13 @@ instead of falling back to the normal list approval prompt:
 Agent list requests require a valid JIT preflight grant for a supported Vault scope.
 ```
 
+Chrome autofill is not an agent caller. Bridge only takes the chrome path when
+both `--chrome-native-host` (`requestedCommand=chromeNativeHost`) and an
+`AuthsiaNativeHost` parent are present. That path issues a reusable
+`chrome-native-host` session after the first approval and keeps it across
+Chrome's per-message native-host process restarts (stable origin, not
+PID-bound). Terminal, agent JIT, and IDE-hosted CLI callers are unchanged.
+
 ## Scope Rules
 
 JIT grants use exact stable item identities by default. An approval for item A
@@ -509,7 +516,7 @@ operator must still protect the bearer before launch: Authsia does not make a
 parent process's environment confidential. The parent app's canonical security
 model documents credential generation, verifier storage, upgrade behavior, and
 the residual same-user boundary in
-`Doc/ops/security-model.md#automation-credentials`.
+[`security-model.md#automation-credentials`](security-model.md#automation-credentials).
 
 ## TTL And Revocation
 
