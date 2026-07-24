@@ -341,14 +341,13 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
     }
 
-    func testPerScopeRemoteApprovalBuildsOneRequestAtATimeAndKeepsMixedAttribution() async throws {
+    func testExactItemBatchBuildsAllRemoteRequestsTogetherAndKeepsOneAttribution() async throws {
         let builder = RemoteRequestBuilderSpy()
         let remoteSource = try RemoteJITApprovalPairedIPhoneSource(
             pairingGenerationID: builder.pairing.pairingGenerationID,
             signingKeyFingerprint: builder.pairing.iphoneSigningKeyFingerprint
         )
         let approver = JITApprovalTracker(outcomes: [
-            .approved(source: .macPanel),
             .approved(source: .pairedIPhone(remoteSource)),
         ])
         let store = MemoryAgentJITGrantStore()
@@ -372,15 +371,16 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
 
         XCTAssertNil(response.error)
-        XCTAssertEqual(builder.inputBatches.map(\.count), [1, 1])
-        XCTAssertEqual(builder.inputBatches.compactMap(\.first).map(\.folderScope), [
+        XCTAssertEqual(builder.inputBatches.map(\.count), [2])
+        XCTAssertEqual(builder.inputBatches.first?.map(\.folderScope), [
             .folder("Team/API"), .folder("Team/Web"),
         ])
-        XCTAssertEqual(approver.requests.map(\.remoteRequests).map(\.count), [1, 1])
-        XCTAssertEqual(store.grants.map(\.approvedBy), ["mac-panel", builder.remoteAttribution])
-        XCTAssertEqual(try auditRecords(at: auditURL).map(\.approvedBy), [
-            "mac-panel", builder.remoteAttribution,
-        ])
+        XCTAssertEqual(approver.requests.map(\.remoteRequests).map(\.count), [2])
+        XCTAssertEqual(store.grants.map(\.approvedBy), Array(repeating: builder.remoteAttribution, count: 2))
+        XCTAssertEqual(
+            try auditRecords(at: auditURL).map(\.approvedBy),
+            Array(repeating: builder.remoteAttribution, count: 2)
+        )
         XCTAssertEqual(store.saveAllCallCount, 1)
         XCTAssertEqual(store.savedBatches.map(\.count), [2])
     }
@@ -1452,7 +1452,30 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertNil(records[0].agentJITGrantID)
     }
 
-    func testPreflightKeepsSiblingScopesSeparate() async throws {
+    func testPreflightBatchesSiblingExactItemsIntoOneDeniedApproval() async throws {
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: false)
+        let handler = makeHandler(store: store, approver: approver)
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+                AgentJITPreflightReference(type: "cert", query: "Web Cert", folderPath: "Team/Web"),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertEqual(response.error?.code, .notAuthorized)
+        XCTAssertEqual(store.grants, [])
+        XCTAssertEqual(approver.requests.count, 1)
+        XCTAssertEqual(
+            approver.requests.first?.approvalDescriptors.flatMap(\.requestedItems).map(\.name),
+            ["API", "Web Cert"]
+        )
+    }
+
+    func testPreflightKeepsSiblingGrantsSeparateAfterOneApproval() async throws {
         let store = MemoryAgentJITGrantStore()
         let approver = JITApprovalTracker(result: true)
         let handler = makeHandler(store: store, approver: approver)
@@ -1469,10 +1492,10 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertNil(response.error)
         XCTAssertEqual(response.payload?.grantIDs.count, 2)
         XCTAssertEqual(Set(store.grants.map(\.folderScope)), [.folder("Team/API"), .folder("Team/Web")])
-        XCTAssertEqual(approver.requests.map(\.itemLabel), ["Team/API", "Team/Web"])
+        XCTAssertEqual(approver.requests.map(\.itemLabel), ["Multiple items"])
+        XCTAssertEqual(approver.requests.first?.approvalDescriptors.count, 2)
         XCTAssertEqual(approver.requests.first?.prompt.contains(
-            "Allow Claude temporary access to CLI-enabled password, API key, certificate, and note items " +
-                "in folder 'Team/API' and its descendants"
+            "Allow Claude temporary access to the exact CLI-enabled Vault items shown, plus scoped list access"
         ), true)
     }
 
@@ -3001,25 +3024,6 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
 
         XCTAssertEqual(response.error?.code, .policyDenied)
         XCTAssertNil(response.payload)
-    }
-
-    func testPreflightDoesNotSavePartialGrantWhenLaterScopeDenied() async throws {
-        let store = MemoryAgentJITGrantStore()
-        let approver = JITApprovalTracker(results: [true, false])
-        let handler = makeHandler(store: store, approver: approver)
-        let payload = AgentJITPreflightPayload(
-            requestedCommand: "exec",
-            references: [
-                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
-                AgentJITPreflightReference(type: "cert", query: "Web Cert", folderPath: "Team/Web"),
-            ]
-        )
-
-        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
-
-        XCTAssertEqual(response.error?.code, .notAuthorized)
-        XCTAssertEqual(store.grants, [])
-        XCTAssertEqual(approver.requests.map(\.itemLabel), ["Team/API", "Team/Web"])
     }
 
     private func makeHandler(
