@@ -362,7 +362,10 @@ struct SessionCacheTests {
     func nonTerminalContextsDoNotReuseInteractiveSessions() {
         let account = SessionCache.scopedKeychainAccount(
             environment: [:],
-            terminalIdentifier: nil
+            terminalIdentifier: nil,
+            processSessionIdentifier: nil,
+            ancestralScope: { nil },
+            processAncestry: []
         )
 
         #expect(account == nil)
@@ -373,7 +376,9 @@ struct SessionCacheTests {
         let account = SessionCache.scopedKeychainAccount(
             environment: ["TERM_SESSION_ID": "shared-by-app"],
             terminalIdentifier: nil,
-            processSessionIdentifier: nil
+            processSessionIdentifier: nil,
+            ancestralScope: { nil },
+            processAncestry: []
         )
 
         #expect(account == nil)

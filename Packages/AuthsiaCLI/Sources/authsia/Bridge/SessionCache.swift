@@ -190,6 +190,7 @@ struct SessionCache {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         terminalIdentifier: String? = TerminalSessionScope.currentTerminalIdentifier(),
         processSessionIdentifier: Int32? = TerminalSessionScope.currentProcessSessionIdentifier(),
+        ancestralScope: () -> String? = TerminalSessionScope.currentAncestralScope,
         processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
         requestedCommand: String? = nil
     ) -> String? {
@@ -197,6 +198,7 @@ struct SessionCache {
             environment: environment,
             terminalIdentifier: terminalIdentifier,
             processSessionIdentifier: processSessionIdentifier,
+            ancestralScope: ancestralScope,
             processAncestry: processAncestry,
             requestedCommand: requestedCommand
         ) else {

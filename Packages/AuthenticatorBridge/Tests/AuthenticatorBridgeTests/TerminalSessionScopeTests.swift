@@ -60,12 +60,19 @@ struct TerminalSessionScopeTests {
         #expect(closed == .closed)
     }
 
-    @Test("current process scope matches pid scope")
-    func currentProcessScopeMatchesPIDScope() {
+    @Test("current process scope requires terminal-backed standard I/O")
+    func currentProcessScopeRequiresTerminalBackedStandardIO() {
         let current = TerminalSessionScope.currentProcess()
         let byPID = TerminalSessionScope.process(pid: getpid())
+        let hasTerminalIO = [STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO].contains {
+            isatty($0) != 0
+        }
 
-        #expect(current == byPID)
+        if hasTerminalIO {
+            #expect(current == byPID)
+        } else {
+            #expect(current == nil)
+        }
     }
 
     #if os(macOS)
