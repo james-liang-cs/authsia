@@ -224,7 +224,8 @@ extension XPCRequestHandler {
         )
         var approvedResolutions: [AgentJITApprovedResolution] = []
 
-        if shouldBatchAgentJITListApproval(payload) && !pendingResolutions.isEmpty {
+        let isBroadListBatch = shouldBatchAgentJITListApproval(payload)
+        if (isBroadListBatch || pendingResolutions.count > 1) && !pendingResolutions.isEmpty {
             let remoteRequests = await remoteAgentJITApprovalRequests(
                 bridgeRequestID: bridgeRequest.id,
                 timing: timing,
@@ -234,15 +235,24 @@ extension XPCRequestHandler {
                 resolutions: pendingResolutions
             )
             let outcome = await requestAgentJITApproval(
-                prompt: agentJITBroadListPreflightPrompt(
-                    caller: caller,
-                    duration: duration,
-                    pendingScopes: pendingResolutions.map(\.scope),
-                    activeScopes: promptGrantSnapshot.map(\.folderScope),
-                    environmentScope: payload.environmentScope
-                ),
+                prompt: isBroadListBatch
+                    ? agentJITBroadListPreflightPrompt(
+                        caller: caller,
+                        duration: duration,
+                        pendingScopes: pendingResolutions.map(\.scope),
+                        activeScopes: promptGrantSnapshot.map(\.folderScope),
+                        environmentScope: payload.environmentScope
+                    )
+                    : agentJITExactItemBatchPreflightPrompt(
+                        caller: caller,
+                        duration: duration,
+                        requestedCommand: requestedCommand,
+                        pendingScopes: pendingResolutions.map(\.scope),
+                        hasActiveGrants: !promptGrantSnapshot.isEmpty,
+                        environmentScope: payload.environmentScope
+                    ),
                 command: .agentJITPreflight,
-                itemLabel: "All folders",
+                itemLabel: isBroadListBatch ? "All folders" : "Multiple items",
                 field: nil,
                 callback: callback,
                 approvalDescriptors: agentJITApprovalDescriptors(
@@ -262,8 +272,8 @@ extension XPCRequestHandler {
             guard case .allowed(let source, let approvalAttribution) = authorization else {
                 recordAudit(
                     command: .agentJITPreflight,
-                    itemId: "All folders",
-                    itemName: "All folders",
+                    itemId: isBroadListBatch ? "All folders" : "Multiple items",
+                    itemName: isBroadListBatch ? "All folders" : "Multiple items",
                     approvedBy: authorization.attribution,
                     caller: callerIdentity,
                     requestedCommand: bridgeRequest.context.requestedCommand,
@@ -925,6 +935,25 @@ extension XPCRequestHandler {
                 "approval because unrelated folder trees are isolated."
         }
         return "\(reason) The active grant covers \(agentJITScopeListDescription(normalizedActiveScopes)). " +
+            basePrompt
+    }
+
+    private func agentJITExactItemBatchPreflightPrompt(
+        caller: AgentJITCallerFingerprint,
+        duration: String,
+        requestedCommand: String,
+        pendingScopes: [AgentJITFolderScope],
+        hasActiveGrants: Bool,
+        environmentScope: EnvironmentAccessScope?
+    ) -> String {
+        let scopes = agentJITScopeListDescription(normalizedAgentJITScopes(pendingScopes))
+        let access = requestedCommand == "list"
+            ? "temporary scoped list access to the exact CLI-enabled Vault items shown"
+            : "temporary access to the exact CLI-enabled Vault items shown, plus scoped list access"
+        let basePrompt = "Allow \(caller.displayName) \(access) across \(scopes) for \(duration)." +
+            agentJITEnvironmentDescription(environmentScope)
+        guard hasActiveGrants else { return basePrompt }
+        return "Separate approval required: This request adds exact-item authority not covered by active grants. " +
             basePrompt
     }
 
