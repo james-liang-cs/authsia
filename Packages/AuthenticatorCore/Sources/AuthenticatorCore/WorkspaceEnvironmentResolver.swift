@@ -63,7 +63,6 @@ public struct WorkspaceEnvironmentIssue: Equatable, Sendable {
         case conflict
         case cliDisabled
         case missingReference
-        case missingEnvironmentValue
     }
 
     public let kind: Kind
@@ -136,19 +135,10 @@ public enum WorkspaceEnvironmentResolver {
             let group = grouped[key] ?? []
             let eligible = group.filter { allows($0, selection: normalizedSelection) }
             inactive.append(contentsOf: group.filter { !allows($0, selection: normalizedSelection) })
+            // A named selection injects only its exact tag plus `All`. A variable whose
+            // candidates are all untagged Default items or tagged for another environment
+            // is simply inactive for this run — not a validation failure.
             guard let highestTier = eligible.map(\.sourceTier).max() else {
-                if case .named = normalizedSelection, !isStaleSelection {
-                    let missingCandidates = group.filter { !$0.isLiteral }
-                    if !missingCandidates.isEmpty {
-                        issues.append(
-                            WorkspaceEnvironmentIssue(
-                                kind: .missingEnvironmentValue,
-                                variableName: missingCandidates.first?.variableName,
-                                candidateIDs: missingCandidates.map(\.id).sorted()
-                            )
-                        )
-                    }
-                }
                 continue
             }
 
