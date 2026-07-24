@@ -74,6 +74,46 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         XCTAssertEqual(listProvider.callCount, 2)
     }
 
+    /// NSXPCConnection.current() is only valid during the synchronous XPC entry, so the
+    /// caller identity provider returns nil when re-invoked from the handler's async task.
+    /// Session reuse must rely on the identity captured at entry, not a re-invocation.
+    func testListReusesSessionWhenIdentityProviderFailsOutsideEntry() async {
+        let approver = ApprovalTracker(result: true)
+        let listProvider = ListProvider()
+        let providerCallCount = CallCountBox()
+        let handler = XPCRequestHandler(
+            listProvider: listProvider.fetch,
+            approver: approver,
+            callerIdentityProvider: {
+                providerCallCount.value += 1
+                // Entry captures for the two requests succeed; any extra call happens
+                // outside the XPC message context and yields nil.
+                return providerCallCount.value <= 2 ? self.trustedTerminalCaller : nil
+            }
+        )
+
+        let first = XCTestExpectation(description: "first list reply")
+        var firstResponseData: Data?
+        handler.list(makeListRequest()) { data, _ in
+            firstResponseData = data
+            first.fulfill()
+        }
+        await fulfillment(of: [first], timeout: 1)
+
+        let firstResponse = try? BridgeCoder.decode(BridgeResponse<BridgeListPayload>.self, from: firstResponseData ?? Data())
+        let sessionToken = firstResponse?.sessionToken
+        XCTAssertNotNil(sessionToken)
+
+        let second = XCTestExpectation(description: "second list reply")
+        handler.list(makeListRequest(sessionToken: sessionToken)) { _, _ in
+            second.fulfill()
+        }
+        await fulfillment(of: [second], timeout: 1)
+
+        XCTAssertEqual(approver.callCount, 1, "second list should reuse the session without a new approval")
+        XCTAssertEqual(listProvider.callCount, 2)
+    }
+
     func testListFailsClosedWhenGlobalCLIAccessIsDisabled() async throws {
         BridgeSettings.appDefaults.set(false, forKey: cliAccessEnabledKey)
         let approver = ApprovalTracker(result: true)
@@ -1117,6 +1157,10 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         )
         return (try? BridgeCoder.encode(request)) ?? Data()
     }
+}
+
+private final class CallCountBox: @unchecked Sendable {
+    var value = 0
 }
 
 private final class ApprovalTracker: BridgeApprover {
