@@ -103,7 +103,7 @@ final class WorkspaceEnvironmentResolverTests: XCTestCase {
         XCTAssertTrue(resolution.issues.isEmpty)
     }
 
-    func testNamedEnvironmentBlocksDefaultSecretFallback() {
+    func testNamedEnvironmentSilentlySkipsUntaggedDefault() {
         let defaultID = UUID(uuidString: "88888888-8888-8888-8888-888888888888")!
 
         let resolution = WorkspaceEnvironmentResolver.resolve(
@@ -120,7 +120,27 @@ final class WorkspaceEnvironmentResolverTests: XCTestCase {
 
         XCTAssertTrue(resolution.effective.isEmpty)
         XCTAssertEqual(resolution.inactive.map(\.itemID), [defaultID])
-        XCTAssertEqual(resolution.issues.map(\.kind), [.missingEnvironmentValue])
+        XCTAssertTrue(resolution.issues.isEmpty)
+    }
+
+    func testNamedEnvironmentSilentlySkipsOtherEnvironmentSecret() {
+        let productionID = UUID(uuidString: "77777777-7777-7777-7777-777777777777")!
+
+        let resolution = WorkspaceEnvironmentResolver.resolve(
+            candidates: [
+                candidate(
+                    id: productionID,
+                    folderPath: "Workspaces/api",
+                    environments: ["Production"]
+                ),
+            ],
+            selection: .named("Development"),
+            availableEnvironments: ["Development", "Production"]
+        )
+
+        XCTAssertTrue(resolution.effective.isEmpty)
+        XCTAssertEqual(resolution.inactive.map(\.itemID), [productionID])
+        XCTAssertTrue(resolution.issues.isEmpty)
     }
 
     func testAllIsGlobalFallbackWhileExactEnvironmentWins() {
