@@ -631,6 +631,7 @@ extension XPCRequestHandler {
                 return try RemoteJITApprovalItemReference(
                     id: id,
                     kind: kind,
+                    name: item.name,
                     folderPath: item.folderPath
                 )
             }

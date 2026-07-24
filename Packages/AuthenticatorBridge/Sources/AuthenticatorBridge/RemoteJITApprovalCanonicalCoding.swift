@@ -42,6 +42,7 @@ public enum RemoteJITApprovalCanonicalCoding {
         for item in descriptor.requestedItems {
             writer.append(item.kind.rawValue)
             writer.append(item.id)
+            try writer.appendString(item.name)
             try writer.appendOptionalString(item.folderPath)
         }
         writer.append(descriptor.grantIssuedAtMilliseconds)
@@ -516,6 +517,7 @@ private struct CanonicalReader {
                 throw RemoteJITApprovalValidationError.nonCanonical
             }
             let id = try readUUID()
+            let name = try readString(maximumBytes: 1_024)
             let folderMarker = try readUInt8()
             let folderPath: String?
             switch folderMarker {
@@ -542,6 +544,7 @@ private struct CanonicalReader {
             items.append(try RemoteJITApprovalItemReference(
                 id: id,
                 kind: kind,
+                name: name,
                 folderPath: folderPath
             ))
         }

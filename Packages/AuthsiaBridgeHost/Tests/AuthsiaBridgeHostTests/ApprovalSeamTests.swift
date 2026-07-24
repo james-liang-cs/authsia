@@ -139,6 +139,7 @@ private func makeRemoteRequest() throws -> RemoteJITApprovalRequest {
             try RemoteJITApprovalItemReference(
                 id: UUID(uuidString: "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE")!,
                 kind: .password,
+                name: "Fixture password",
                 folderPath: nil
             )
         ],

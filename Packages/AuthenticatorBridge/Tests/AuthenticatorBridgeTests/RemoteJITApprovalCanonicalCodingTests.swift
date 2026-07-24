@@ -121,8 +121,8 @@ final class RemoteJITApprovalCanonicalCodingTests: XCTestCase {
         )
         let mutations = [
             NamedMutation(name: "wrong decision domain", bytes: changing(golden, at: 0, to: 0)),
-            NamedMutation(name: "unsupported decision schema", bytes: changing(golden, at: domain.count + 1, to: 2)),
-            NamedMutation(name: "unsupported decision protocol", bytes: changing(golden, at: domain.count + 3, to: 2)),
+            NamedMutation(name: "unsupported decision schema", bytes: changing(golden, at: domain.count + 1, to: 3)),
+            NamedMutation(name: "unsupported decision protocol", bytes: changing(golden, at: domain.count + 3, to: 3)),
             NamedMutation(name: "unknown decision tag", bytes: changing(golden, at: decisionTagOffset, to: 3)),
             NamedMutation(name: "invalid decision expiry", bytes: invalidExpiry),
             NamedMutation(name: "DER decision signature", bytes: derSignature),
@@ -210,8 +210,8 @@ final class RemoteJITApprovalCanonicalCodingTests: XCTestCase {
         var mutations: [NamedMutation] = []
 
         mutations.append(.init(name: "wrong domain", bytes: changing(golden, at: 0, to: 0)))
-        mutations.append(.init(name: "unsupported schema", bytes: changing(golden, at: 41, to: 2)))
-        mutations.append(.init(name: "unsupported protocol", bytes: changing(golden, at: 43, to: 2)))
+        mutations.append(.init(name: "unsupported schema", bytes: changing(golden, at: 41, to: 3)))
+        mutations.append(.init(name: "unsupported protocol", bytes: changing(golden, at: 43, to: 3)))
         mutations.append(.init(
             name: "invalid optional marker",
             bytes: changing(golden, at: layout.optionalMarkerOffsets[0], to: 2)
@@ -314,6 +314,14 @@ final class RemoteJITApprovalCanonicalCodingTests: XCTestCase {
             with: golden[layout.items[0].uuid]
         )
         mutations.append(.init(name: "duplicate item UUID", bytes: duplicateItems))
+        mutations.append(.init(
+            name: "unsafe item name",
+            bytes: replacingString(
+                golden,
+                layout.items[0].nameString,
+                with: "Deploy\u{202E}password"
+            )
+        ))
         mutations.append(.init(
             name: "noncanonical item folder",
             bytes: replacingString(
@@ -419,6 +427,7 @@ private struct EncodedItem {
     let whole: Range<Int>
     let tagOffset: Int
     let uuid: Range<Int>
+    let nameString: EncodedString
     let folderString: EncodedString?
 }
 
@@ -481,12 +490,14 @@ private struct DescriptorLayout {
             let tagOffset = cursor.offset
             try cursor.skip(1)
             let uuid = try cursor.range(count: 16)
+            let name = try cursor.string()
             let marker = try cursor.byte()
             let folder = marker == 1 ? try cursor.string() : nil
             items.append(.init(
                 whole: start..<cursor.offset,
                 tagOffset: tagOffset,
                 uuid: uuid,
+                nameString: name,
                 folderString: folder
             ))
         }

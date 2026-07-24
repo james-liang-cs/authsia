@@ -86,6 +86,19 @@ final class RemoteJITApprovalModelTests: XCTestCase {
         }
     }
 
+    func testItemNamesAreCanonicalSafeAndBounded() throws {
+        XCTAssertEqual(try makeItem(name: "De\u{301}ploy").name, "Déploy")
+        assertValidationError(.invalidString) {
+            try makeItem(name: "")
+        }
+        assertValidationError(.invalidString) {
+            try makeItem(name: "Deploy\u{202E}password")
+        }
+        assertValidationError(.oversized) {
+            try makeItem(name: String(repeating: "x", count: 1_025))
+        }
+    }
+
     func testValidDescriptorPreservesCanonicalAuthority() throws {
         let descriptor = try makeValidDescriptor()
 
@@ -422,9 +435,10 @@ private let remoteRawInputCeiling = 1_048_576
 private func makeItem(
     id: UUID = syntheticItemID,
     kind: RemoteJITApprovalItemKind = .password,
+    name: String = "Synthetic item",
     folderPath: String? = "Team/API"
 ) throws -> RemoteJITApprovalItemReference {
-    try RemoteJITApprovalItemReference(id: id, kind: kind, folderPath: folderPath)
+    try RemoteJITApprovalItemReference(id: id, kind: kind, name: name, folderPath: folderPath)
 }
 
 private func makeCaller(

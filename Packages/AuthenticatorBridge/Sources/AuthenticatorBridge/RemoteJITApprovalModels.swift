@@ -27,11 +27,13 @@ public enum RemoteJITApprovalItemKind: UInt8, CaseIterable, Sendable {
 public struct RemoteJITApprovalItemReference: Equatable, Sendable {
     public let id: UUID
     public let kind: RemoteJITApprovalItemKind
+    public let name: String
     public let folderPath: String?
 
     public init(
         id: UUID,
         kind: RemoteJITApprovalItemKind,
+        name: String,
         folderPath: String?
     ) throws {
         let normalizedFolder: String?
@@ -46,6 +48,7 @@ public struct RemoteJITApprovalItemReference: Equatable, Sendable {
 
         self.id = id
         self.kind = kind
+        self.name = try normalizedRemoteString(name, maximumBytes: 1_024)
         self.folderPath = normalizedFolder
     }
 }
@@ -153,8 +156,8 @@ public struct RemoteJITApprovalDescriptorInput: Equatable, Sendable {
 }
 
 public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
-    public static let schemaVersion: UInt16 = 1
-    public static let protocolVersion: UInt16 = 1
+    public static let schemaVersion: UInt16 = 2
+    public static let protocolVersion: UInt16 = 2
     public static let requestLifetimeMilliseconds: Int64 = 90_000
 
     public let approvalID: UUID
