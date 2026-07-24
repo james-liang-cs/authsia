@@ -31,6 +31,7 @@ final class AgentJITCallerContextTests: XCTestCase {
     func testTrustsSupportedSignedTerminalHostsWithShellAncestry() {
         for bundleIdentifier in [
             "com.googlecode.iterm2",
+            "com.mitchellh.ghostty",
             "dev.warp.Warp",
             "dev.warp.Warp-Stable",
         ] {
