@@ -2,6 +2,26 @@ import XCTest
 @testable import AuthsiaBridgeHost
 
 final class XPCListenerManagerTests: XCTestCase {
+    func testIsTrustedAppExecutablePath_AllowsBundledAppPath() {
+        let bundled = "/Applications/Authsia.app/Contents/MacOS/Authsia"
+
+        XCTAssertTrue(
+            XPCListenerManager.isTrustedAppExecutablePath(
+                bundled,
+                bundledAppExecutablePath: bundled
+            )
+        )
+    }
+
+    func testIsTrustedAppExecutablePath_RejectsLookalikeAppPath() {
+        XCTAssertFalse(
+            XPCListenerManager.isTrustedAppExecutablePath(
+                "/Applications/Authsia-copy.app/Contents/MacOS/Authsia",
+                bundledAppExecutablePath: "/Applications/Authsia.app/Contents/MacOS/Authsia"
+            )
+        )
+    }
+
     func testIsTrustedCLIExecutablePath_AllowsBundledHelperPath() {
         let bundled = "/Applications/Authsia.app/Contents/Helpers/authsia"
 
