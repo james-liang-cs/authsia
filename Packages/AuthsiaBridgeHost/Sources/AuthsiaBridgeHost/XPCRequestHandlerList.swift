@@ -184,7 +184,9 @@ extension XPCRequestHandler {
                 // `.list` request that carries the real verb in `requestedCommand`. Phrase the
                 // prompt from that verb so the user isn't told this is a "list" when it isn't.
                 let approvalPrompt: String
-                if let requestedCommand = bridgeRequest.context.requestedCommand, requestedCommand != "list" {
+                if Self.isChromeNativeHostCaller(request: bridgeRequest, callerIdentity: callerIdentity) {
+                    approvalPrompt = "Allow Chrome autofill to access Authsia"
+                } else if let requestedCommand = bridgeRequest.context.requestedCommand, requestedCommand != "list" {
                     approvalPrompt = "Allow CLI to run '\(requestedCommand)'"
                 } else {
                     approvalPrompt = "Allow CLI to list items"

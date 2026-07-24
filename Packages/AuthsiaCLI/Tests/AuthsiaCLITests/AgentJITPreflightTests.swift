@@ -449,6 +449,16 @@ struct AgentJITPreflightTests {
         )
 
         #expect(client.payloads.count == 2)
+
+        try List.runJITPreflight(
+            scope: .passwords,
+            folder: nil,
+            parentEnvironment: [:],
+            processAncestry: Self.claudeRuntimeAncestry,
+            chromeNativeHost: true,
+            client: client
+        )
+        #expect(client.payloads.count == 2)
     }
 
     private static let humanTerminalAncestry = [

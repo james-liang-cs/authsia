@@ -39,6 +39,17 @@ final class NativeHostCoreTests: XCTestCase {
         )
     }
 
+    func testCLIListCommandsUseChromeNativeHostMarker() {
+        XCTAssertEqual(
+            CLICommand.listPasswordsJSON.arguments,
+            ["authsia", "list", "passwords", "--format", "json", "--chrome-native-host"]
+        )
+        XCTAssertEqual(
+            CLICommand.listOTPJSON.arguments,
+            ["authsia", "list", "otp", "--format", "json", "--chrome-native-host"]
+        )
+    }
+
     func testCredentialResolverListsCliDisabledMatchesForChromeAutofill() throws {
         let passwordId = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let otpId = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!

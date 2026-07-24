@@ -275,7 +275,7 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
         }
         // Store the session token in memory and persist to disk for subsequent CLI invocations
         sessionToken = payload.sessionToken
-        SessionCache.save(token: payload.sessionToken, expiresAt: payload.expiresAt)
+        SessionCache.save(token: payload.sessionToken, expiresAt: payload.expiresAt, requestedCommand: Self.requestedCommand)
         return UnlockResult(expiresAt: payload.expiresAt, ttlSeconds: payload.ttlSeconds, sessionToken: payload.sessionToken)
     }
 
@@ -1129,7 +1129,7 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
         guard let token = response.sessionToken else { return }
         sessionToken = token
         let expiresAt = response.sessionExpiresAt ?? Date().addingTimeInterval(300)
-        SessionCache.save(token: token, expiresAt: expiresAt)
+        SessionCache.save(token: token, expiresAt: expiresAt, requestedCommand: Self.requestedCommand)
     }
 
     // Task-local tag so `currentContext()` can annotate each in-flight RPC with

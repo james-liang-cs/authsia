@@ -59,6 +59,32 @@ struct GetCommandHelpTests {
         }
     }
 
+    @Test("list parses hidden chrome native host marker")
+    func listParsesHiddenChromeNativeHostMarker() throws {
+        let command = try List.parse(["passwords", "--chrome-native-host"])
+        let help = List.helpMessage(columns: 160)
+
+        #expect(command.chromeNativeHost == true)
+        #expect(!help.contains("--chrome-native-host"))
+    }
+
+    @Test("list chrome native host marker requires native host ancestry")
+    func listChromeNativeHostMarkerRequiresNativeHostAncestry() throws {
+        let command = try List.parse(["passwords", "--chrome-native-host"])
+
+        try command.validateChromeNativeHostMarker(processAncestry: [
+            AgenticProcessReference(processName: "authsia", bundleIdentifier: nil),
+            AgenticProcessReference(processName: "AuthsiaNativeHost", bundleIdentifier: nil),
+        ])
+
+        #expect(throws: ValidationError.self) {
+            try command.validateChromeNativeHostMarker(processAncestry: [
+                AgenticProcessReference(processName: "authsia", bundleIdentifier: nil),
+                AgenticProcessReference(processName: "zsh", bundleIdentifier: nil),
+            ])
+        }
+    }
+
     @Test("get resolves a specific item in an exact folder by id")
     func getResolvesSpecificItemInExactFolderByID() throws {
         let rootID = "00000000-0000-0000-0000-000000000001"

@@ -188,6 +188,93 @@ final class BridgeSessionManagerTests: XCTestCase {
         )
     }
 
+    func testChromeNativeHostSessionOriginIgnoresNativeHostPID() throws {
+        let chromeRequest = BridgeRequest(
+            id: UUID(),
+            type: .list,
+            query: "",
+            options: .init(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: false,
+                isPiped: true,
+                isSSH: false,
+                isCI: false,
+                timestamp: Date(),
+                requestedCommand: BridgeContext.chromeNativeHostRequestedCommand,
+                sessionScope: BridgeContext.chromeNativeHostSessionScope
+            )
+        )
+        let firstCaller = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: BridgeContext.chromeNativeHostProcessName,
+                bundleIdentifier: nil
+            )
+        )
+        let secondCaller = CallerIdentity(
+            pid: 52,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 99,
+                processName: BridgeContext.chromeNativeHostProcessName,
+                bundleIdentifier: nil
+            )
+        )
+        let terminalCaller = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: "Terminal",
+                bundleIdentifier: "com.apple.Terminal",
+                isPlatformBinary: true
+            )
+        )
+        let terminalRequest = BridgeRequest(
+            id: UUID(),
+            type: .list,
+            query: "",
+            options: .init(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: true,
+                isPiped: false,
+                isSSH: false,
+                isCI: false,
+                timestamp: Date(),
+                requestedCommand: "list",
+                sessionScope: "tty:/dev/ttys001"
+            )
+        )
+
+        let firstOrigin = XPCRequestHandler.sessionOrigin(from: firstCaller, request: chromeRequest)
+        let secondOrigin = XPCRequestHandler.sessionOrigin(from: secondCaller, request: chromeRequest)
+        let terminalOrigin = XPCRequestHandler.sessionOrigin(from: terminalCaller, request: terminalRequest)
+        let unmarkedChromeOrigin = XPCRequestHandler.sessionOrigin(
+            from: firstCaller,
+            request: terminalRequest
+        )
+
+        XCTAssertEqual(firstOrigin, secondOrigin)
+        XCTAssertEqual(firstOrigin?.processIdentifier, 0)
+        XCTAssertEqual(firstOrigin?.processName, BridgeContext.chromeNativeHostProcessName)
+        XCTAssertEqual(terminalOrigin?.processIdentifier, 41)
+        XCTAssertEqual(terminalOrigin?.processName, "Terminal")
+        // Without the chrome marker, AuthsiaNativeHost parent keeps a PID-bound origin.
+        XCTAssertEqual(unmarkedChromeOrigin?.processIdentifier, 41)
+        XCTAssertEqual(unmarkedChromeOrigin?.processName, BridgeContext.chromeNativeHostProcessName)
+    }
+
     func testInvalidateScopeClearsSharedStatusWithoutLocalSession() throws {
         let scope = "tty:/dev/ttys001:sid:123"
         try BridgeSessionStatusStore.save(
