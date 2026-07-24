@@ -36,10 +36,11 @@ JIT grants are deliberately narrow:
   SSH metadata items. `exec` secret reads remain limited to password, API key,
   certificate, and secure note items.
 - They grant only `exec` and scoped `list`.
-- A named-folder scope includes that folder and slash-delimited descendants,
-  never ancestors or siblings. Root is a separate root-only scope.
+- Exact stable item identities are the default. Reusable folder scope applies
+  only when the approval explicitly displays it; root remains root-only.
 - They expire with the same TTL as the CLI session setting.
-- They are bound to the caller fingerprint, terminal/session scope, and working directory.
+- They are bound to caller fingerprint, terminal/session scope, exact working
+  directory (the workspace authority key), environment, and capability.
 
 ## Remote iPhone Approval Status
 
@@ -290,8 +291,8 @@ JIT grants split those cases:
 
 ## Current Exfiltration Coverage
 
-This matrix describes current behavior, not the stronger execution-lease and
-broker targets. Each channel receives one primary classification:
+This matrix describes the implemented Authsia-owned boundary. Each channel
+receives one primary classification:
 
 - **prevented** — the Authsia boundary rejects the channel;
 - **mediated** — Authsia is in the data path, but mediation is not a complete
@@ -303,9 +304,9 @@ broker targets. Each channel receives one primary classification:
 | --- | --- | --- |
 | Standard output | Mediated | `authsia exec` masks known secret values and common transforms; novel transforms can bypass masking. |
 | Standard error | Mediated | Uses the same masking boundary and has the same limitations as stdout. |
-| Binary output | Mediated | It crosses `OutputMasker.Stream`, but invalid UTF-8 currently passes through unchanged. |
+| Invalid or incomplete UTF-8 output | Prevented by default | Strict output buffers a valid multibyte code point split across read chunks. Invalid sequences, or a partial code point still incomplete when the stream closes, are withheld; the child is terminated and the CLI exits `74`. Explicit `masked-compatibility` may pass those bytes with a warning. Valid UTF-8 using a novel transform remains mediated, not categorically prevented. |
 | File writes | Detected | Agent file-activity evidence can show best-effort writes in a managed scope; it does not block or inspect arbitrary content. |
-| Network | Out of scope | Arbitrary child network traffic is not mediated; only future explicit broker operations can enforce destination policy. |
+| Network | Out of scope | Arbitrary child network traffic is not mediated. |
 | Subprocesses | Detected | Command and ancestry evidence can identify supported activity; child-process behavior is not contained. |
 | Clipboard | Out of scope | Authsia does not monitor arbitrary child clipboard access. |
 | IPC | Out of scope | Authsia validates its own XPC boundary but does not police arbitrary same-user IPC. |
@@ -313,8 +314,8 @@ broker targets. Each channel receives one primary classification:
 | Process memory | Out of scope | Root, debugger, injection, and arbitrary same-user memory inspection are not application-level guarantees. |
 
 Full operating-system filesystem, process, and network DLP is intentionally
-outside Authsia's responsibility. Future work must describe protection only for
-Authsia-owned CLI, hook, workspace, execution, and broker surfaces.
+outside Authsia's responsibility. Product claims must stay limited to
+Authsia-owned CLI, hook, workspace, and execution surfaces.
 
 ## When JIT Runs
 
@@ -394,15 +395,22 @@ the stored grant plus caller fingerprint comparison.
    - Duplicate names must be disambiguated with a sufficiently narrow requested
      folder subtree or a stable item ID. If duplicates remain inside the
      requested subtree, use a narrower subtree or the item ID.
-4. The bridge converts each item to a folder scope, removes duplicate scopes,
-   and collapses descendant requests already covered by an ancestor scope.
-5. For each scope without an active matching grant, the app asks the user to
-   approve temporary access.
-6. Approved grants are saved locally and returned to the CLI.
-7. The `exec` internal metadata list can use the grant's `list` capability, but
-   only scoped to the active grant folders.
-8. Final secret reads must find an active matching `exec` grant. Without it, the
-   bridge fails closed with:
+4. The bridge resolves each item to its stable type-and-UUID identity. Folder
+   and environment metadata remain live policy and display context.
+5. For every item or capability without matching authority, the app asks the
+   user to approve the canonical descriptor. Local and paired-iPhone panels
+   show the same caller, workspace, working directory, environment, capability,
+   duration, reuse policy, and exact item metadata.
+6. A multiple-item decision persists atomically; denial or storage failure
+   creates no partial grant.
+7. Approved grants are saved in authenticated Bridge-owned authority and
+   returned to the CLI.
+8. The `exec` internal metadata list can use the grant's `list` capability only
+   within the displayed exact-item or explicit folder scope.
+9. Final secret reads rerun live item, caller, exact working-directory/workspace,
+   environment, capability, and grant policy and must find an active matching
+   `exec` grant.
+   Without it, the bridge fails closed with:
 
 ```text
 Agent exec secret reads require a valid JIT preflight grant for this item scope.
@@ -420,39 +428,45 @@ Agent list requests require a valid JIT preflight grant for a supported Vault sc
 
 ## Scope Rules
 
-JIT scopes are folder scopes, not individual item IDs. This keeps the approval
-count manageable while still preventing broad vault access.
+JIT grants use exact stable item identities by default. An approval for item A
+does not authorize item B because they share a folder. A multiple-item request
+shows and persists every exact item atomically.
 
-| Secret location | Granted scope | What it covers |
-| --- | --- | --- |
-| Root | Root only | Root items only; never the whole vault |
-| `Team/API` | `Team/API` subtree | `Team/API` and slash-delimited descendants such as `Team/API/Prod` |
-| `Team/API/Prod` | `Team/API/Prod` subtree | That folder and its descendants, not `Team/API` or sibling folders |
+Reusable folder scope remains an explicit compatibility choice only when the
+approval displays that broader scope:
+
+| Displayed scope | What it covers |
+| --- | --- |
+| Exact item | Only the displayed type-and-UUID item, subject to live folder and environment policy |
+| Root folder | Root items only; never the whole vault |
+| `Team/API` folder | `Team/API` and slash-delimited descendants such as `Team/API/Prod` |
 
 Important edge cases:
 
 - A root grant covers root items only. It does not include any folder.
-- Multiple root references are grouped into one root approval.
-- Multiple references collapse only when an actual requested or active ancestor
-  scope covers the descendants. Sibling scopes remain separate when their
-  common ancestor was not requested or already active.
+- Exact references remain separate item identities even when their display
+  folders share an ancestor.
 - A grant for `Team/API` covers `Team/API/Prod`, but a grant for
-  `Team/API/Prod` does not cover `Team/API`.
+  `Team/API/Prod` does not cover `Team/API` only when the user explicitly
+  approved that folder scope.
 - Prefix lookalikes are not descendants: `Team/API2` and `Team/API` are sibling
   scopes.
-- Another unrelated folder tree requires separate approval unless an active
-  matching grant already exists.
-- A covered tree may still require a separate approval when the request adds a
-  capability not already present, such as `exec` after a list-only grant.
+- Moving the same exact item preserves its identity but does not bypass a live
+  folder or environment restriction.
+- Workspace authority is the exact working-directory string, including
+  nil-versus-present state. The workspace name is derived display context, not
+  a second mutable authority key.
+- A changed caller, working-directory/workspace, environment, or capability
+  requires matching authority and can require another approval.
 
 ## Approval Copy
 
-The prompt states why another approval is needed. It distinguishes an unrelated
-folder tree from a new capability on a covered tree. A first broad unscoped list
-approval with no active scopes uses concise `across all resolved folders`
-wording and does not enumerate pending paths. When active grants exist and a
-separate approval adds unrelated scopes, the prompt lists the pending new folder
-paths and active folder scopes. Broad prompts never name vault items or secrets.
+The prompt states why another approval is needed and shows exact item name,
+type, and folder without showing values. It also shows caller, workspace and
+working directory, capability, environment, duration, and whether reuse is
+`Exact items only` or an explicit folder scope. Multiple exact items use one
+atomic approve/deny decision. A list-only grant does not silently widen to
+`exec`.
 
 ## Capabilities
 
@@ -486,19 +500,33 @@ command capabilities and scope before applying JIT-only limits. This preserves
 token-authorized agent automation for commands such as `list`, `get`, `load`,
 `read`, `inject`, and `ssh`.
 
+The bearer is displayed once and is not stored in the token-free CLI cache.
+Bridge-owned authenticated authority enforces its machine binding, expiry,
+revocation, capability, item or folder scope, environment, maximum uses, and
+rate limits. A denied credential does not fall back to human or JIT approval,
+and the general bearer is removed before launching an `exec` child. The
+operator must still protect the bearer before launch: Authsia does not make a
+parent process's environment confidential. The parent app's canonical security
+model documents credential generation, verifier storage, upgrade behavior, and
+the residual same-user boundary in
+`Doc/ops/security-model.md#automation-credentials`.
+
 ## TTL And Revocation
 
 JIT grants use the configured CLI session TTL (`cliSessionTTL`). The default is
 the same default used by normal CLI sessions, and the maximum is 24 hours.
 Legacy negative TTL preferences are treated as 24 hours.
 
-Grants are stored at:
+Active grants are stored in the versioned, HMAC-authenticated Bridge authority
+store backed by Keychain. The former path:
 
 ```text
 ~/Library/Application Support/Authsia/agent-jit-grants.json
 ```
 
-The directory is kept at `0700`; the file is kept at `0600`.
+is legacy input only. On first grant-store access after upgrade it is moved to a
+quarantine name and is never read as authority. Its former `0700` directory and
+`0600` file permissions do not make it trusted.
 
 Grants can become inactive in three ways:
 
@@ -603,8 +631,8 @@ Confidence labels mean:
   directory.
 
 Actual Authsia secret access remains governed by JIT grants, bridge policy,
-named-folder subtree scope, capability, TTL, and audit records. File activity
-does not grant or deny access.
+exact-item or explicitly approved folder scope, caller, workspace, environment,
+capability, TTL, and audit records. File activity does not grant or deny access.
 
 ## Access Insights
 
@@ -664,8 +692,8 @@ JIT should fail closed in these cases:
 - a duplicate item name cannot be resolved exactly
 - an agentic caller attempts a non-`exec` secret read
 - the final secret read or direct metadata list has no active matching grant
-- the grant is expired, revoked, outside its folder subtree, wrong-command, or
-  wrong-caller
+- the grant is expired, revoked, outside its exact-item or explicit folder
+  scope, wrong-workspace, wrong-environment, wrong-command, or wrong-caller
 - the grant store is corrupted or unreadable
 
 Automation credentials are a separate path. If a valid
@@ -748,6 +776,10 @@ If JIT does not prompt, check:
   omitted bindings, while a new CLI checks the Bridge version before sending.
 - Caller-binding or exact-scope violations revoke the related JIT grant in the
   same Bridge store mutation and add an HMAC-backed redacted audit marker.
+- Strict output is the default. Known plaintext and recognized deterministic
+  transforms are masked across stdout/stderr stream boundaries; invalid or
+  incomplete UTF-8 is withheld, terminates the child, and exits `74`.
+  `masked-compatibility` is explicit and warned.
 - Supported Claude Code and Copilot pre-tool hooks support workspace
   `observe`, `confirm`, and `block` response modes. Post-tool evidence may alert
   or revoke but never claims that a completed action was prevented.
