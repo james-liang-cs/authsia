@@ -38,6 +38,7 @@ struct RemoteJITApprovalGoldenFixture: Decodable {
     struct Item: Decodable {
         let id: UUID
         let kind: String
+        let name: String
         let folderPath: String?
     }
 
@@ -62,7 +63,7 @@ struct RemoteJITApprovalGoldenFixture: Decodable {
     static func load() throws -> Self {
         let url = try XCTUnwrap(
             Bundle.module.url(
-                forResource: "remote-jit-approval-v1",
+                forResource: "remote-jit-approval-v2",
                 withExtension: "json"
             )
         )
@@ -102,6 +103,7 @@ struct RemoteJITApprovalGoldenFixture: Decodable {
                 try RemoteJITApprovalItemReference(
                     id: item.id,
                     kind: Self.itemKind(item.kind),
+                    name: item.name,
                     folderPath: item.folderPath
                 )
             },
