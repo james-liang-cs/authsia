@@ -16,6 +16,14 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertTrue(AgentJITCallerContext.isTrustedHumanTerminal(humanTerminalCaller()))
     }
 
+    func testTrustsBundledCLIIdentifierForSignedTerminalAncestry() {
+        XCTAssertTrue(
+            AgentJITCallerContext.isTrustedHumanTerminal(
+                humanTerminalCaller(cliBundleIdentifier: "authsia")
+            )
+        )
+    }
+
     func testDoesNotTrustIDEHostedShellAsHumanTerminal() {
         XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(vscodeHostedCaller()))
     }
@@ -63,6 +71,19 @@ final class AgentJITCallerContextTests: XCTestCase {
     }
 
     func testDoesNotTrustRenamedOrUnsignedTerminalHosts() {
+        let renamedCLI = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "authsia.fake",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: "Terminal",
+                bundleIdentifier: "com.apple.Terminal",
+                isPlatformBinary: true
+            )
+        )
         let renamed = CallerIdentity(
             pid: 42,
             processName: "authsia",
@@ -104,6 +125,7 @@ final class AgentJITCallerContextTests: XCTestCase {
             )
         )
 
+        XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(renamedCLI))
         XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(renamed))
         XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(unsignedCLI))
         XCTAssertFalse(AgentJITCallerContext.isTrustedHumanTerminal(imitatedAppleTerminal))
@@ -226,11 +248,13 @@ final class AgentJITCallerContextTests: XCTestCase {
         )
     }
 
-    private func humanTerminalCaller() -> CallerIdentity {
+    private func humanTerminalCaller(
+        cliBundleIdentifier: String = "com.authsia.cli"
+    ) -> CallerIdentity {
         CallerIdentity(
             pid: 42,
             processName: "authsia",
-            bundleIdentifier: "com.authsia.cli",
+            bundleIdentifier: cliBundleIdentifier,
             signingTeamId: "TEAM",
             signingIdentity: "Developer ID Application",
             parentProcess: ParentProcessInfo(

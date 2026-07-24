@@ -13,7 +13,7 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
     private let trustedTerminalCaller = CallerIdentity(
         pid: 42,
         processName: "authsia",
-        bundleIdentifier: "com.authsia.cli",
+        bundleIdentifier: "authsia",
         signingTeamId: "TEAM",
         signingIdentity: "Developer ID Application",
         parentProcess: ParentProcessInfo(
