@@ -9,6 +9,7 @@ import Darwin
 public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
     private let serviceName = "Authsia.Bridge"
     private let bundledCLIPath: String
+    private let bundledAppExecutablePath: String?
     private let trustedDevelopmentBuildRoots: [String]
     private var listener: NSXPCListener?
     private let handler: XPCRequestHandler
@@ -16,10 +17,12 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
     public init(
         handler: XPCRequestHandler,
         bundledCLIPath: String,
+        bundledAppExecutablePath: String? = nil,
         trustedDevelopmentBuildRoots: [String] = []
     ) {
         self.handler = handler
         self.bundledCLIPath = bundledCLIPath
+        self.bundledAppExecutablePath = bundledAppExecutablePath
         self.trustedDevelopmentBuildRoots = trustedDevelopmentBuildRoots
         super.init()
     }
@@ -174,7 +177,10 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
             return false
         }
 
-        let trusted = Self.isTrustedCLIExecutablePath(
+        let trusted = Self.isTrustedAppExecutablePath(
+            guestExecutablePath,
+            bundledAppExecutablePath: bundledAppExecutablePath
+        ) || Self.isTrustedCLIExecutablePath(
             guestExecutablePath,
             bundledCLIPath: bundledCLIPath,
             trustedDevelopmentBuildRoots: trustedDevelopmentBuildRoots
@@ -199,6 +205,20 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
             return nil
         }
         return String(cString: pathBuffer)
+    }
+
+    public static func isTrustedAppExecutablePath(
+        _ executablePath: String,
+        bundledAppExecutablePath: String?
+    ) -> Bool {
+        guard let bundledAppExecutablePath else { return false }
+        return URL(fileURLWithPath: executablePath)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path == URL(fileURLWithPath: bundledAppExecutablePath)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
     }
 
     public static func isTrustedCLIExecutablePath(
