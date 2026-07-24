@@ -62,19 +62,30 @@ struct List: ParsableCommand {
     @Flag(name: .customLong("json"), help: .hidden)
     var json = false
 
+    @Flag(name: .customLong("chrome-native-host"), help: .hidden)
+    var chromeNativeHost = false
+
     static func loadPayload(
         scope: Scope,
         folder: String?,
         parentEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
+        chromeNativeHost: Bool = false,
         jitClient: ExecJITPreflightClient = AuthsiaBridgeClient.shared
     ) throws -> BridgeListPayload {
-        try AuthsiaBridgeClient.shared.withRequestedCommand(.list) {
+        let requestedCommand = chromeNativeHost
+            ? BridgeContext.chromeNativeHostRequestedCommand
+            : CapabilityCommand.list.rawValue
+        return try AuthsiaBridgeClient.shared.withRequestedCommand(
+            requestedCommand,
+            includeAutomationCredential: !chromeNativeHost
+        ) {
             try runJITPreflight(
                 scope: scope,
                 folder: folder,
                 parentEnvironment: parentEnvironment,
                 processAncestry: processAncestry,
+                chromeNativeHost: chromeNativeHost,
                 client: jitClient
             )
             return try AuthsiaBridgeClient.shared.list()
@@ -86,15 +97,28 @@ struct List: ParsableCommand {
         folder: String?,
         parentEnvironment: [String: String],
         processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
+        chromeNativeHost: Bool = false,
         client: ExecJITPreflightClient = AuthsiaBridgeClient.shared
     ) throws {
-        guard Exec.shouldRunJITPreflight(environment: parentEnvironment, processAncestry: processAncestry),
+        guard !chromeNativeHost,
+              Exec.shouldRunJITPreflight(environment: parentEnvironment, processAncestry: processAncestry),
               let reference = jitPreflightReference(scope: scope, folder: folder) else {
             return
         }
         _ = try client.agentJITPreflight(
             AgentJITPreflightPayload(requestedCommand: "list", references: [reference])
         )
+    }
+
+    func validateChromeNativeHostMarker(
+        processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry()
+    ) throws {
+        guard chromeNativeHost else { return }
+        guard processAncestry.dropFirst().contains(where: {
+            BridgeContext.isChromeNativeHostProcessName($0.processName)
+        }) else {
+            throw ValidationError("--chrome-native-host is reserved for the Authsia Chrome native host.")
+        }
     }
 
     private static func jitPreflightReference(scope: Scope, folder: String?) -> AgentJITPreflightReference? {
@@ -138,12 +162,13 @@ struct List: ParsableCommand {
     }
 
     func run() throws {
+        try validateChromeNativeHostMarker()
         if scope == .otp, environment != nil {
             throw ValidationError("--environment is not supported for OTP items.")
         }
         let outputFormat = try resolveOutputFormat(format: format, jsonFlag: json, command: "authsia list")
         try Self.authorizeAutomationAccess()
-        let payload = try Self.loadPayload(scope: scope, folder: folder)
+        let payload = try Self.loadPayload(scope: scope, folder: folder, chromeNativeHost: chromeNativeHost)
         let currentMachine = MachineIdentity.load()
         let currentMachineId = currentMachine.machineId
         let currentMachineName = currentMachine.displayName

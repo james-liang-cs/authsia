@@ -17,9 +17,9 @@ public enum CLICommand: Equatable {
     var arguments: [String] {
         switch self {
         case .listOTPJSON:
-            return ["authsia", "list", "otp", "--format", "json"]
+            return ["authsia", "list", "otp", "--format", "json", "--chrome-native-host"]
         case .listPasswordsJSON:
-            return ["authsia", "list", "passwords", "--format", "json"]
+            return ["authsia", "list", "passwords", "--format", "json", "--chrome-native-host"]
         case .getPasswordJSON(let id):
             return ["authsia", "get", "password", id.uuidString, "--format", "json"]
         case .getOTPJSON(let id):

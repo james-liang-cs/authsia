@@ -133,35 +133,35 @@ struct SessionCache {
     }
 
     /// Saves a session token and expiry to Keychain.
-    static func save(token: String, expiresAt: Date) {
+    static func save(token: String, expiresAt: Date, requestedCommand: String? = nil) {
         let secureStore = KeychainSessionSecureStore()
         save(
             token: token,
             expiresAt: expiresAt,
             secureStore: secureStore,
             legacyFilePath: legacySessionFilePath,
-            keychainAccount: scopedKeychainAccount()
+            keychainAccount: scopedKeychainAccount(requestedCommand: requestedCommand)
         )
     }
 
     /// Loads a valid (non-expired) session token.
     /// Returns nil if no cached session exists or it has expired.
-    static func load() -> String? {
+    static func load(requestedCommand: String? = nil) -> String? {
         let secureStore = KeychainSessionSecureStore()
         return load(
             secureStore: secureStore,
             legacyFilePath: legacySessionFilePath,
-            keychainAccount: scopedKeychainAccount()
+            keychainAccount: scopedKeychainAccount(requestedCommand: requestedCommand)
         )
     }
 
     /// Returns the cached session's expiry date if it exists and hasn't expired.
-    static func loadExpiresAt() -> Date? {
+    static func loadExpiresAt(requestedCommand: String? = nil) -> Date? {
         let secureStore = KeychainSessionSecureStore()
         return loadExpiresAt(
             secureStore: secureStore,
             legacyFilePath: legacySessionFilePath,
-            keychainAccount: scopedKeychainAccount()
+            keychainAccount: scopedKeychainAccount(requestedCommand: requestedCommand)
         )
     }
 
@@ -175,12 +175,12 @@ struct SessionCache {
     }
 
     /// Removes any cached session token from Keychain and legacy disk cache.
-    static func clear() {
+    static func clear(requestedCommand: String? = nil) {
         let secureStore = KeychainSessionSecureStore()
         clear(
             secureStore: secureStore,
             legacyFilePath: legacySessionFilePath,
-            keychainAccount: scopedKeychainAccount()
+            keychainAccount: scopedKeychainAccount(requestedCommand: requestedCommand)
         )
     }
 

@@ -95,7 +95,7 @@ extension XPCRequestHandler {
             request.id,
             sessionToken: token,
             scope: request.context.sessionScope,
-            origin: Self.sessionOrigin(from: callerIdentity)
+            origin: Self.sessionOrigin(from: callerIdentity, request: request)
         )
     }
 
@@ -159,6 +159,11 @@ extension XPCRequestHandler {
     }
 
     static func isAgentJITCaller(request: BridgeRequest, callerIdentity: CallerIdentity?) -> Bool {
+        // Chrome autofill uses the CLI transport via AuthsiaNativeHost, but it is not an
+        // agent caller and must keep the normal biometric/session approval path.
+        if isChromeNativeHostCaller(request: request, callerIdentity: callerIdentity) {
+            return false
+        }
         if request.context.agentRuntimeContext != nil {
             return true
         }
@@ -176,6 +181,16 @@ extension XPCRequestHandler {
         return !AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
     }
 
+    static func isChromeNativeHostCaller(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> Bool {
+        // Require both the hidden CLI marker and AuthsiaNativeHost ancestry so
+        // this path cannot open for terminal, agent, or IDE-hosted CLI callers.
+        request.context.requestedCommand == BridgeContext.chromeNativeHostRequestedCommand
+            && isChromeNativeHostCallerIdentity(callerIdentity)
+    }
+
     private static func hasValidatedInteractiveHumanSession(
         request: BridgeRequest,
         callerIdentity: CallerIdentity?
@@ -183,7 +198,7 @@ extension XPCRequestHandler {
         guard request.context.isTTY,
               let sessionToken = request.sessionToken,
               !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let origin = sessionOrigin(from: callerIdentity),
+              let origin = sessionOrigin(from: callerIdentity, request: request),
               let currentSession = sharedSessionManager.currentSession(scope: request.context.sessionScope) else {
             return false
         }
@@ -553,8 +568,22 @@ extension XPCRequestHandler {
         return (false, nil, nil)
     }
 
-    static func sessionOrigin(from callerIdentity: CallerIdentity?) -> BridgeSessionOrigin? {
+    static func sessionOrigin(
+        from callerIdentity: CallerIdentity?,
+        request: BridgeRequest? = nil
+    ) -> BridgeSessionOrigin? {
         guard let callerIdentity else { return nil }
+        // Chrome launches a fresh AuthsiaNativeHost process per sendNativeMessage.
+        // Bind the reusable chrome session to the stable host name, not that PID,
+        // or match-count / menu / fill each re-prompt. Marker + native-host parent
+        // are both required so terminal/agent sessions keep PID-bound origins.
+        if let request, isChromeNativeHostCaller(request: request, callerIdentity: callerIdentity) {
+            return BridgeSessionOrigin(
+                processIdentifier: 0,
+                processName: BridgeContext.chromeNativeHostProcessName,
+                bundleIdentifier: nil
+            )
+        }
         if let hostProcess = callerIdentity.hostProcess {
             return BridgeSessionOrigin(
                 processIdentifier: hostProcess.pid,
@@ -576,18 +605,26 @@ extension XPCRequestHandler {
         )
     }
 
+    static func isChromeNativeHostCallerIdentity(_ callerIdentity: CallerIdentity?) -> Bool {
+        BridgeContext.isChromeNativeHostProcessName(callerIdentity?.parentProcess?.processName)
+            || BridgeContext.isChromeNativeHostProcessName(callerIdentity?.hostProcess?.processName)
+    }
+
     func issueReusableHumanSession(
         for request: BridgeRequest,
         callerIdentity: CallerIdentity?
     ) -> (token: String?, expiresAt: Date?, failed: Bool) {
-        guard AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity) else {
+        let mayIssueReusableSession =
+            AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
+            || Self.isChromeNativeHostCaller(request: request, callerIdentity: callerIdentity)
+        guard mayIssueReusableSession else {
             return (nil, nil, false)
         }
         guard let session = Self.sharedSessionManager.createSessionOrNil(
             ttlSeconds: Self.configuredSessionTTL,
             scope: request.context.sessionScope,
             workingDirectory: request.context.workingDirectory,
-            origin: Self.sessionOrigin(from: callerIdentity)
+            origin: Self.sessionOrigin(from: callerIdentity, request: request)
         ) else {
             return (nil, nil, true)
         }

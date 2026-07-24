@@ -75,6 +75,19 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
     )
 
+    private let chromeNativeHostCallerIdentity = CallerIdentity(
+        pid: 42,
+        processName: "authsia",
+        bundleIdentifier: "com.authsia.cli",
+        signingTeamId: "TEAM",
+        signingIdentity: "Developer ID Application",
+        parentProcess: ParentProcessInfo(
+            pid: 41,
+            processName: BridgeContext.chromeNativeHostProcessName,
+            bundleIdentifier: nil
+        )
+    )
+
     private let claudeViaVSCodeCallerIdentity = CallerIdentity(
         pid: 42,
         processName: "authsia",
@@ -2598,6 +2611,129 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
         XCTAssertEqual(approver.requests, [])
         XCTAssertNil(response.payload)
+    }
+
+    func testChromeNativeHostIsNotAgentJITCaller() {
+        let chromeMarkedRequest = BridgeRequest(
+            id: UUID(),
+            type: .list,
+            query: "",
+            options: .init(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: false,
+                isPiped: true,
+                isSSH: false,
+                isCI: false,
+                timestamp: now,
+                requestedCommand: BridgeContext.chromeNativeHostRequestedCommand,
+                sessionScope: BridgeContext.chromeNativeHostSessionScope
+            )
+        )
+        let plainListRequest = BridgeRequest(
+            id: UUID(),
+            type: .list,
+            query: "",
+            options: .init(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: false,
+                isPiped: true,
+                isSSH: false,
+                isCI: false,
+                timestamp: now,
+                requestedCommand: "list",
+                sessionScope: BridgeContext.chromeNativeHostSessionScope
+            )
+        )
+
+        XCTAssertFalse(XPCRequestHandler.isAgentJITCaller(
+            request: chromeMarkedRequest,
+            callerIdentity: chromeNativeHostCallerIdentity
+        ))
+        // Marker without AuthsiaNativeHost parent must not take the chrome path.
+        XCTAssertTrue(XPCRequestHandler.isAgentJITCaller(
+            request: chromeMarkedRequest,
+            callerIdentity: callerIdentity
+        ))
+        // AuthsiaNativeHost parent without the chrome marker must not take the chrome path.
+        XCTAssertTrue(XPCRequestHandler.isAgentJITCaller(
+            request: plainListRequest,
+            callerIdentity: chromeNativeHostCallerIdentity
+        ))
+        XCTAssertFalse(XPCRequestHandler.isChromeNativeHostCaller(
+            request: plainListRequest,
+            callerIdentity: chromeNativeHostCallerIdentity
+        ))
+    }
+
+    func testChromeNativeHostListWithoutJITDoesNotRequirePreflight() async throws {
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(
+            store: MemoryAgentJITGrantStore(),
+            approver: approver,
+            callerIdentity: chromeNativeHostCallerIdentity
+        )
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .list,
+            query: "",
+            options: .init(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: false,
+                isPiped: true,
+                isSSH: false,
+                isCI: false,
+                timestamp: now,
+                requestedCommand: BridgeContext.chromeNativeHostRequestedCommand,
+                sessionScope: BridgeContext.chromeNativeHostSessionScope
+            )
+        )
+        let response: BridgeResponse<BridgeListPayload> = try await bridgeResponse(
+            for: request,
+            description: "chrome native host list reply",
+            route: handler.list
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertNotNil(response.payload)
+        XCTAssertNotEqual(
+            response.error?.message,
+            "Agent list requests require a valid JIT preflight grant for a supported Vault scope."
+        )
+        XCTAssertEqual(approver.requests.map(\.command), [.list])
+    }
+
+    func testTrustedTerminalCallerDoesNotUseChromeAutofillPath() {
+        let request = makeRequest(type: .list, requestedCommand: "list")
+
+        XCTAssertFalse(XPCRequestHandler.isChromeNativeHostCaller(
+            request: request,
+            callerIdentity: humanCallerIdentity
+        ))
+        XCTAssertFalse(XPCRequestHandler.isAgentJITCaller(
+            request: request,
+            callerIdentity: humanCallerIdentity
+        ))
+        let origin = XPCRequestHandler.sessionOrigin(from: humanCallerIdentity, request: request)
+        XCTAssertEqual(origin?.processName, "Terminal")
+        XCTAssertEqual(origin?.processIdentifier, humanCallerIdentity.parentProcess?.pid)
+        XCTAssertNotEqual(origin?.processIdentifier, 0)
+    }
+
+    func testAgentCallerStillRequiresJITDespiteChromeLikeSessionScope() {
+        let request = makeRequest(
+            type: .list,
+            requestedCommand: "list",
+            agentRuntimeContext: agentRuntimeContext()
+        )
+
+        XCTAssertFalse(XPCRequestHandler.isChromeNativeHostCaller(
+            request: request,
+            callerIdentity: callerIdentity
+        ))
+        XCTAssertTrue(XPCRequestHandler.isAgentJITCaller(
+            request: request,
+            callerIdentity: callerIdentity
+        ))
     }
 
     func testListPathWithActiveJITGrantSkipsApprovalAndReturnsScopedItems() async throws {

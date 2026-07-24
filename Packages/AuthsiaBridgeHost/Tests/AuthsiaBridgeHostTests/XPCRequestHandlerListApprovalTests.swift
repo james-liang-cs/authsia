@@ -72,6 +72,85 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         XCTAssertEqual(approver.callCount, 1)
         XCTAssertEqual(approver.remoteRequests, [[]])
         XCTAssertEqual(listProvider.callCount, 2)
+        XCTAssertEqual(approver.prompts, ["Allow CLI to list items"])
+    }
+
+    func testChromeNativeHostListCreatesReusableSessionAfterApproval() async {
+        let firstChromeCaller = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: BridgeContext.chromeNativeHostProcessName,
+                bundleIdentifier: nil
+            )
+        )
+        // Chrome starts a new native-host process for each sendNativeMessage.
+        let secondChromeCaller = CallerIdentity(
+            pid: 52,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 51,
+                processName: BridgeContext.chromeNativeHostProcessName,
+                bundleIdentifier: nil
+            )
+        )
+        let approver = ApprovalTracker(result: true)
+        let listProvider = ListProvider()
+        let callerBox = CallerBox(firstChromeCaller)
+        let handler = XPCRequestHandler(
+            listProvider: listProvider.fetch,
+            approver: approver,
+            callerIdentityProvider: { callerBox.value }
+        )
+
+        let firstRequestData = makeListRequest(
+            isPiped: true,
+            requestedCommand: BridgeContext.chromeNativeHostRequestedCommand,
+            sessionScope: BridgeContext.chromeNativeHostSessionScope
+        )
+        let first = XCTestExpectation(description: "chrome first list reply")
+        var firstResponseData: Data?
+        handler.list(firstRequestData) { data, _ in
+            firstResponseData = data
+            first.fulfill()
+        }
+        await fulfillment(of: [first], timeout: 1)
+
+        let firstResponse = try? BridgeCoder.decode(
+            BridgeResponse<BridgeListPayload>.self,
+            from: firstResponseData ?? Data()
+        )
+        let sessionToken = firstResponse?.sessionToken
+        XCTAssertNil(firstResponse?.error)
+        XCTAssertNotNil(sessionToken, "Chrome native host approvals must issue a reusable session")
+        XCTAssertEqual(approver.prompts, ["Allow Chrome autofill to access Authsia"])
+
+        callerBox.value = secondChromeCaller
+        let secondRequestData = makeListRequest(
+            isPiped: true,
+            sessionToken: sessionToken,
+            requestedCommand: BridgeContext.chromeNativeHostRequestedCommand,
+            sessionScope: BridgeContext.chromeNativeHostSessionScope
+        )
+        let second = XCTestExpectation(description: "chrome second list reply")
+        handler.list(secondRequestData) { _, _ in
+            second.fulfill()
+        }
+        await fulfillment(of: [second], timeout: 1)
+
+        XCTAssertEqual(
+            approver.callCount,
+            1,
+            "chrome session must survive AuthsiaNativeHost PID changes across sendNativeMessage calls"
+        )
+        XCTAssertEqual(listProvider.callCount, 2)
     }
 
     /// NSXPCConnection.current() is only valid during the synchronous XPC entry, so the
@@ -1163,8 +1242,17 @@ private final class CallCountBox: @unchecked Sendable {
     var value = 0
 }
 
+private final class CallerBox: @unchecked Sendable {
+    var value: CallerIdentity
+
+    init(_ value: CallerIdentity) {
+        self.value = value
+    }
+}
+
 private final class ApprovalTracker: BridgeApprover {
     private(set) var callCount = 0
+    private(set) var prompts: [String] = []
     private(set) var remoteRequests: [[RemoteJITApprovalRequest]] = []
     private let outcome: RemoteJITApprovalOutcome
 
@@ -1183,6 +1271,7 @@ private final class ApprovalTracker: BridgeApprover {
         remoteRequests: [RemoteJITApprovalRequest]
     ) async -> RemoteJITApprovalOutcome {
         callCount += 1
+        prompts.append(prompt)
         self.remoteRequests.append(remoteRequests)
         return outcome
     }
