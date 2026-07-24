@@ -49,7 +49,8 @@ public enum CallerIdentityExtractor {
         }
 
         var info: CFDictionary?
-        guard SecCodeCopySigningInformation(staticGuestCode, SecCSFlags(), &info) == errSecSuccess,
+        let signingInformationFlags = SecCSFlags(rawValue: kSecCSSigningInformation)
+        guard SecCodeCopySigningInformation(staticGuestCode, signingInformationFlags, &info) == errSecSuccess,
               let signingInfo = info as? [String: Any] else {
             return CallerIdentity(
                 pid: pid,
@@ -203,7 +204,8 @@ public enum CallerIdentityExtractor {
             return nil
         }
         var info: CFDictionary?
-        guard SecCodeCopySigningInformation(staticGuestCode, SecCSFlags(), &info) == errSecSuccess,
+        let signingInformationFlags = SecCSFlags(rawValue: kSecCSSigningInformation)
+        guard SecCodeCopySigningInformation(staticGuestCode, signingInformationFlags, &info) == errSecSuccess,
               let signingInfo = info as? [String: Any] else {
             return nil
         }
