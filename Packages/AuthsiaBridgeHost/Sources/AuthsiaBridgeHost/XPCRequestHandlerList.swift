@@ -50,6 +50,7 @@ extension XPCRequestHandler {
                         for: bridgeRequest
                     )
                     if bridgeRequest.context.requestedCommand == BridgeContext.workspaceEnvValidateRequestedCommand ||
+                        bridgeRequest.context.requestedCommand == BridgeContext.workspaceEnvUseRequestedCommand ||
                         bridgeRequest.context.requestedCommand == BridgeContext.workspaceRunRequestedCommand {
                         payload = BridgeListPayloadFactory.validationPayload(
                             payload,

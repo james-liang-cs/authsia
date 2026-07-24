@@ -1628,7 +1628,15 @@ struct Workspace: AsyncParsableCommand {
             func run() throws {
                 let root = try Env.workspaceRoot()
                 let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
-                let payload = try AuthsiaBridgeClient.shared.list()
+                let plan = try WorkspaceRunPlan.build(
+                    startingAt: root,
+                    extraEnvFiles: [],
+                    commandArgs: ["/usr/bin/true"]
+                )
+                let payload = try AuthsiaBridgeClient.shared.workspaceMetadata(
+                    try Workspace.Run.validationMetadataRequest(for: plan),
+                    requestedCommand: BridgeContext.workspaceEnvBindingsListRequestedCommand
+                )
                 let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
                 let evaluation = WorkspaceEnvironmentEvaluation.evaluate(
                     config: config,
@@ -1684,27 +1692,48 @@ struct Workspace: AsyncParsableCommand {
             }
         }
 
-        struct Validate: ParsableCommand {
+        struct Validate: AsyncParsableCommand {
             static let configuration = CommandConfiguration(
                 commandName: "validate",
-                abstract: "Validate workspace env bindings against Authsia",
+                abstract: "Validate the active workspace environment against Authsia",
                 discussion: """
                     Examples:
                       authsia workspace env validate
                     """
             )
 
-            func run() throws {
-                let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: Env.workspaceRoot())
-                let request = Env.validationMetadataRequest(config)
+            func run() async throws {
+                let root = try Env.workspaceRoot()
+                let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+                let plan = try WorkspaceRunPlan.build(
+                    startingAt: root,
+                    extraEnvFiles: [],
+                    commandArgs: ["/usr/bin/true"]
+                )
+                let request = try Workspace.Run.validationMetadataRequest(for: plan)
                 let payload = Workspace.loadWorkspaceMetadataPayload(
                     request,
                     requestedCommand: BridgeContext.workspaceEnvValidateRequestedCommand
                 )
-                print(Env.renderValidation(Env.validateBindings(
+                let vaultIndex = payload.map(WorkspaceVaultIndex.init(payload:))
+                let validation = Env.validateBindings(
                     config,
-                    vaultIndex: payload.map(WorkspaceVaultIndex.init(payload:))
-                )))
+                    vaultIndex: vaultIndex
+                )
+                let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
+                let status = try await WorkspaceStatusReporter.build(
+                    workspaceRoot: root,
+                    vaultIndex: vaultIndex,
+                    activeEnvironment: active
+                )
+                print(Env.renderValidation(validation))
+
+                let failures = Env.validationFailures(status)
+                guard failures.isEmpty else {
+                    throw ValidationError(
+                        "Workspace environment validation failed: \(failures.joined(separator: ", "))."
+                    )
+                }
             }
         }
 
@@ -1853,6 +1882,20 @@ struct Workspace: AsyncParsableCommand {
                 }
             }
             return ValidationResult(valid: valid, missing: missing, unverified: unverified)
+        }
+
+        static func validationFailures(_ status: WorkspaceStatus) -> [String] {
+            var failures: [String] = []
+            if !status.missingReferences.isEmpty {
+                failures.append("\(status.missingReferences.count) missing reference(s)")
+            }
+            if !status.unverifiedReferences.isEmpty {
+                failures.append("\(status.unverifiedReferences.count) unverified reference(s)")
+            }
+            if status.environmentIssueCount > 0 {
+                failures.append("\(status.environmentIssueCount) environment resolution issue(s)")
+            }
+            return failures
         }
 
         static func validationMetadataRequest(

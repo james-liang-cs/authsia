@@ -111,6 +111,64 @@ struct WorkspaceEnvironmentRuntimeTests {
         }
     }
 
+    @Test("workspace references do not fuzzy-match similarly named vault items")
+    func workspaceReferencesRequireExactVaultItemMatches() throws {
+        let root = URL(fileURLWithPath: "/tmp/authsia-exact-reference-test", isDirectory: true)
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil,
+            envBindings: [
+                .init(
+                    name: "API_KEY",
+                    reference: "authsia://api-key/API/key?folder=Workspaces%2Fapi"
+                ),
+            ]
+        )
+        let plan = WorkspaceRunPlan(
+            workspaceRoot: root,
+            config: config,
+            envFiles: [],
+            managedEnvFileCount: 0,
+            envBindings: [:],
+            activeEnvironment: nil,
+            defaultOnly: true,
+            commandArgs: ["/usr/bin/true"],
+            usesShell: false
+        )
+        let timestamp = Date(timeIntervalSince1970: 0)
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [],
+            apiKeys: [
+                BridgeAPIKey(
+                    id: UUID(),
+                    name: "API_TOKEN",
+                    website: nil,
+                    folderPath: "Workspaces/api",
+                    isFavorite: false,
+                    isCliEnabled: true,
+                    isScraped: false,
+                    createdAt: timestamp,
+                    updatedAt: timestamp,
+                    environments: ["Production"]
+                ),
+            ],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        #expect(throws: (any Error).self) {
+            _ = try Workspace.Run.applyingEnvironment(
+                to: plan,
+                selection: .named("Production"),
+                payload: payload
+            )
+        }
+    }
+
     @Test("workspace run names variables with ambiguous active-environment folders")
     func runNamesVariablesWithAmbiguousActiveEnvironmentFolders() {
         let servicesID = UUID(uuidString: "EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE")!

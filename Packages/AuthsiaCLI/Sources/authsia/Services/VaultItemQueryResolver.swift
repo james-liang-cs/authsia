@@ -97,10 +97,7 @@ enum VaultItemQueryResolver {
         }
         let exactCaseMatches = scoped.filter { $0.name == trimmed }
         if !exactCaseMatches.isEmpty { return exactCaseMatches }
-        let exactMatches = scoped.filter { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }
-        if !exactMatches.isEmpty { return exactMatches }
-        let lowered = trimmed.lowercased()
-        return scoped.filter { $0.name.lowercased().contains(lowered) }
+        return scoped.filter { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }
     }
 
     private static func candidates(type: VaultItemQueryType, payload: BridgeListPayload) -> [Candidate] {

@@ -138,9 +138,9 @@ Key properties:
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
 | `authsia env add` | Add an environment scope profile | `authsia env add --name prod --folder Production --folder Shared` |
-| `authsia env list` | List profiles outside a workspace; inside one, list referenced item tags, active state, counts, and matching profiles | `authsia env list --format table` |
+| `authsia env list` | List profiles outside a workspace; inside one, list tags from the workspace vault-folder tree, active state, reference counts, and matching profiles | `authsia env list --format table` |
 | `authsia env show` | Show the active workspace environment or global profile | `authsia env show` |
-| `authsia env use <name>` | Set the one active environment for the current workspace, or a global profile outside one | `authsia env use Production` |
+| `authsia env use <name>` | Activate one healthy, referenced environment for the current workspace, or a global profile outside one | `authsia env use Production` |
 | `authsia env clear` | Return the current workspace to the Default environment, or clear the global profile outside one | `authsia env clear` |
 | `authsia ssh adopt` | Adopt existing SSH private keys into Authsia, replace disk keys with stubs, and enable shell integration in the user's shell startup file without creating duplicate backup notes | `authsia ssh adopt --path ~/.ssh --dry-run` |
 | `authsia ssh adopt --revert <path>` | Restore a private key file from a legacy SSH adoption backup | `authsia ssh adopt --revert ~/.ssh/id_ed25519` |
@@ -1539,9 +1539,9 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace sync --apply-json <path>` | Apply config-safe sync selections such as repair, add-to-config, and skip | `authsia workspace sync --apply-json /tmp/authsia-workspace-sync-selection.json` |
 | `workspace sync --folder <path> --apply-json <path>` | Link an imported vault workspace folder by applying config-safe selections | `authsia workspace sync --folder Workspaces/api --apply-json /tmp/authsia-workspace-sync-selection.json` |
 | `workspace env add <NAME> <authsia://...>` | Add or update a commit-safe workspace env binding | `authsia workspace env add API_KEY 'authsia://api-key/API_KEY/key?folder=Workspaces%2Fapi'` |
-| `workspace env list` | List bindings with active environment, item environment properties, and effective/inactive state | `authsia workspace env list` |
+| `workspace env list` | List bindings with active environment, item environment properties, and effective/inactive state using exact scoped metadata | `authsia workspace env list` |
 | `workspace env remove <NAME> [authsia://...]` | Remove one workspace env binding; a repeated schema-v2 name requires its exact reference | `authsia workspace env remove API_KEY 'authsia://api-key/API_KEY/key'` |
-| `workspace env validate` | Validate exact configured env refs, including cross-folder bindings and unscoped item IDs, without listing the vault or returning values; unavailable scoped metadata is reported as unverified | `authsia workspace env validate` |
+| `workspace env validate` | Validate the stored environment across exact bindings and all managed env-file scopes; missing or unverified refs, stale selections, conflicts, missing environment values, and disabled CLI access fail without returning values | `authsia workspace env validate` |
 | `workspace run -- <command>` | Validate exact active workspace refs through exact-reference metadata, then run the command; secret-bearing env refs use `exec` | `authsia workspace run -- npm dev` |
 | `workspace run --env-file <path> -- <command>` | Add an extra env file for one run; its exact applicable refs join the run preflight | `authsia workspace run --env-file .env.production -- npm run deploy` |
 | `workspace run --environment <name> -- <command>` | Use exact-tagged and `All` items without persisting the choice | `authsia workspace run --environment Production -- npm run deploy` |
@@ -1682,11 +1682,22 @@ Use either one or more `--folder` values, or `--all`.
 |-----------|----------|--------|-------------|
 | `--format` | No | `table` (default), `json` | Output format |
 
+Inside a workspace, the command reads non-secret metadata only from CLI-enabled
+passwords and API keys in the configured workspace vault-folder tree. Tags from
+other workspaces are excluded, while unreferenced tagged items in the active
+workspace remain visible.
+
 #### `authsia env use <name>`
 
 | Parameter | Required | Values | Description |
 |-----------|----------|--------|-------------|
 | `<name>` | Yes | string | Profile name to activate |
+
+Inside a workspace, activation uses the same exact configured references,
+managed env files, environment precedence, and blocking checks as
+`authsia workspace run`. A catalog-only tag cannot be activated until at least
+one workspace reference uses it, and conflicts, missing values, disabled CLI
+access, or unavailable metadata leave the previous selection unchanged.
 
 #### `authsia env clear`
 

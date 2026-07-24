@@ -37,13 +37,19 @@ public enum BridgeWorkspaceMetadataFilter {
 
         switch payload.mode {
         case .status:
-            guard request.context.requestedCommand == BridgeContext.workspaceStatusRequestedCommand else {
-                throw Failure.invalidRequest("Workspace metadata status requires the workspace status command.")
+            switch request.context.requestedCommand {
+            case BridgeContext.workspaceStatusRequestedCommand:
+                return try statusPayload(source, references: payload.references)
+            case BridgeContext.workspaceEnvListRequestedCommand:
+                return syncPreviewPayload(source, workspaceFolder: workspaceFolder)
+            default:
+                throw Failure.invalidRequest("Workspace metadata status requires a supported workspace command.")
             }
-            return try statusPayload(source, references: payload.references)
         case .validate:
             guard request.context.requestedCommand == BridgeContext.workspaceEnvValidateRequestedCommand ||
-                    request.context.requestedCommand == BridgeContext.workspaceRunRequestedCommand else {
+                    request.context.requestedCommand == BridgeContext.workspaceRunRequestedCommand ||
+                    request.context.requestedCommand == BridgeContext.workspaceEnvUseRequestedCommand ||
+                    request.context.requestedCommand == BridgeContext.workspaceEnvBindingsListRequestedCommand else {
                 throw Failure.invalidRequest("Workspace metadata validation requires a supported workspace command.")
             }
             return try exactReferencePayload(
