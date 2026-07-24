@@ -62,7 +62,8 @@ public enum AgentJITCallerContext {
 
     public static func isTrustedHumanTerminal(_ callerIdentity: CallerIdentity?) -> Bool {
         guard let callerIdentity,
-              callerIdentity.bundleIdentifier == "com.authsia.cli",
+              let bundleIdentifier = callerIdentity.bundleIdentifier,
+              trustedCLIBundleIdentifiers.contains(bundleIdentifier),
               callerIdentity.signingTeamId?.isEmpty == false,
               callerIdentity.signingIdentity?.isEmpty == false else {
             return false
@@ -98,6 +99,11 @@ public enum AgentJITCallerContext {
         "com.googlecode.iterm2",
         "dev.warp.Warp",
         "dev.warp.Warp-Stable",
+    ]
+
+    private static let trustedCLIBundleIdentifiers: Set<String> = [
+        "authsia",
+        "com.authsia.cli",
     ]
 
     private static let trustedShellProcessNames: Set<String> = [
