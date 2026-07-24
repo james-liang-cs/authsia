@@ -167,11 +167,9 @@ public enum CallerIdentityExtractor {
         var ancestry: [ParentProcessInfo] = []
         // Walk up at most 8 levels to avoid infinite loops
         for _ in 0..<8 {
-            var bsdInfo = proc_bsdinfo()
-            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-            let result = proc_pidinfo(currentPID, PROC_PIDTBSDINFO, 0, &bsdInfo, size)
-            guard result == size else { return parentProcessContext(from: ancestry) }
-            let ppid = pid_t(bsdInfo.pbi_ppid)
+            guard let ppid = TerminalSessionScope.parentProcessIdentifier(pid: currentPID) else {
+                return parentProcessContext(from: ancestry)
+            }
             guard ppid > 1 else { return parentProcessContext(from: ancestry) }
 
             let name = processName(for: ppid) ?? "unknown"
