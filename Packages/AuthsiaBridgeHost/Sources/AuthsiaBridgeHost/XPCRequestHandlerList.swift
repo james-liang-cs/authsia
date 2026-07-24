@@ -175,7 +175,7 @@ extension XPCRequestHandler {
                 && jitListScopes.isEmpty
                 && jitListGrants.isEmpty
                 && !agentCommandListWithoutJIT
-                && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
+                && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken, callerIdentity: callerIdentity)
             var interactiveApprovalAttribution: String?
 
             if needsApproval {

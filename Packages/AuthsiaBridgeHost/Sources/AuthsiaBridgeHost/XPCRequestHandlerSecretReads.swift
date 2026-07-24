@@ -96,7 +96,7 @@ extension XPCRequestHandler {
                 var newSessionExpiresAt: Date?
                 var interactiveApprovalAttribution: String?
                 let sessionToken = bridgeRequest.sessionToken
-                let needsApproval = !bypassApproval && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
+                let needsApproval = !bypassApproval && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken, callerIdentity: callerIdentity)
                 if needsApproval {
                     let authorization = await self.requestLocalApproval(
                         prompt: "Allow CLI to access OTP code for \(match.issuer)",
@@ -1029,7 +1029,7 @@ extension XPCRequestHandler {
                 var newSessionExpiresAt: Date?
                 var interactiveApprovalAttribution: String?
                 let sessionToken = bridgeRequest.sessionToken
-                let needsApproval = !bypassApproval && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
+                let needsApproval = !bypassApproval && !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken, callerIdentity: callerIdentity)
                 if needsApproval {
                     let authorization = await self.requestLocalApproval(
                         prompt: "Allow CLI to access SSH key for \(match.name)",

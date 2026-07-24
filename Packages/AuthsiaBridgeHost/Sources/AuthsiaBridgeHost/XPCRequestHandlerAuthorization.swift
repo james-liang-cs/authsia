@@ -78,9 +78,16 @@ extension XPCRequestHandler {
         reply(encodeResponse(response), nil)
     }
 
-    /// Validates the session token and request ID to prevent replay attacks
-    /// Returns true if the request is valid and not a replay
-    func validateSessionAndRequest(_ request: BridgeRequest, sessionToken: String?) -> Bool {
+    /// Validates the session token and request ID to prevent replay attacks.
+    /// Returns true if the request is valid and not a replay.
+    /// `callerIdentity` must be the identity captured at the synchronous XPC entry;
+    /// re-extracting here would read NSXPCConnection.current() outside the message
+    /// context and yield nil, so no stored session origin could ever match.
+    func validateSessionAndRequest(
+        _ request: BridgeRequest,
+        sessionToken: String?,
+        callerIdentity: CallerIdentity?
+    ) -> Bool {
         guard let token = sessionToken else {
             return false
         }
@@ -88,7 +95,7 @@ extension XPCRequestHandler {
             request.id,
             sessionToken: token,
             scope: request.context.sessionScope,
-            origin: Self.sessionOrigin(from: callerIdentityProvider())
+            origin: Self.sessionOrigin(from: callerIdentity)
         )
     }
 
@@ -330,7 +337,7 @@ extension XPCRequestHandler {
             )
         }
 
-        let needsApproval = !validateSessionAndRequest(request, sessionToken: request.sessionToken)
+        let needsApproval = !validateSessionAndRequest(request, sessionToken: request.sessionToken, callerIdentity: callerIdentity)
         return .allowed(
             approvedBy: needsApproval ? "biometric" : "session",
             needsApproval: needsApproval,
@@ -524,7 +531,7 @@ extension XPCRequestHandler {
         callback: AuthsiaBridgeApprovalCallbackProtocol?
     ) async -> (approved: Bool, newSessionToken: String?, sessionExpiresAt: Date?) {
         // Validate session and request for replay protection
-        let needsApproval = !validateSessionAndRequest(request, sessionToken: request.sessionToken)
+        let needsApproval = !validateSessionAndRequest(request, sessionToken: request.sessionToken, callerIdentity: callerIdentity)
         if !needsApproval {
             return (true, nil, nil)
         }

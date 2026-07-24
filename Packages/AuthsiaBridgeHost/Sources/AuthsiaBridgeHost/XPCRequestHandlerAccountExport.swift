@@ -94,7 +94,7 @@ extension XPCRequestHandler {
             var newSessionExpiresAt: Date?
             var interactiveApprovalAttribution: String?
             let sessionToken = bridgeRequest.sessionToken
-            let needsApproval = !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken)
+            let needsApproval = !self.validateSessionAndRequest(bridgeRequest, sessionToken: sessionToken, callerIdentity: callerIdentity)
             if needsApproval {
                 let authorization = await self.requestLocalApproval(
                     prompt: "Allow CLI to export all 2FA accounts",
