@@ -10,6 +10,7 @@
 - [Load and Cleanup Behavior](#load-and-cleanup-behavior)
 - [Import and Export](#import-and-export)
 - [CLI and SSH Access](#cli-and-ssh-access)
+- [Bridge Authority and Session State](#bridge-authority-and-session-state)
 - [Audit Logs](#audit-logs)
 - [Operational Rules](#operational-rules)
 
@@ -19,7 +20,11 @@ Authsia separates secrets from metadata.
 
 - Secrets are stored in Apple Keychain.
 - Live app metadata is JSON-encoded and stored in Keychain.
-- The CLI metadata snapshot is the only current on-disk JSON metadata cache.
+- Active JIT grants and automation credential policy are stored in a
+  Bridge-owned Keychain authority envelope.
+- The CLI metadata snapshot is the only current on-disk JSON vault metadata
+  cache. Other JSON files described below hold token-free status, local
+  configuration, or non-authoritative compatibility metadata.
 - Repositories combine metadata and secrets only when a caller needs a full item.
 
 This keeps list views fast and avoids exposing secret bytes during normal UI
@@ -62,7 +67,7 @@ Application Support unless noted otherwise.
 |---|---|---|
 | `~/Library/Application Support/Authsia/CLI/vault_metadata_snapshot.json` | App / bridge | Non-secret CLI metadata snapshot for vault list and lookup fallback. |
 | `~/Library/Application Support/Authsia/bridge_audit.log` | Bridge / SSH agent | HMAC-chained audit log for sensitive bridge requests and SSH signing. |
-| `~/Library/Application Support/Authsia/agent-jit-grants.json` | App bridge | Agent JIT grants approved in Access Center. |
+| `~/Library/Application Support/Authsia/agent-jit-grants.json` | Upgrade migration only | Legacy unsigned JIT data. On first grant-store access it is moved to `agent-jit-grants.json.legacy`, or removed when that quarantine file already exists. Neither file is authority. |
 | `~/Library/Application Support/Authsia/AgentRuntimeContext/events.jsonl` | Optional agent hook scripts / CLI | Short-lived agent attribution events read by the CLI when building bridge request context. |
 | `~/Library/Preferences/app.authsia.plist` | UserDefaults | App preferences domain for CLI access, CLI and SSH session TTLs, SSH-agent opt-in state, iCloud Keychain sync preference, interface settings, and registration identities. macOS may cache this through `cfprefsd`. |
 
@@ -74,7 +79,8 @@ Application Support unless noted otherwise.
 | `~/.authsia/cli-session-status.json` | Bridge | Current bridge session status for `authsia status` and Developer Control Center display. |
 | `~/.authsia/ssh-agent-session.json` | SSH agent | Current SSH approval-session status. |
 | `~/.authsia/ssh-automation-grants.json` | App / bridge / CLI | Temporary SSH automation grants tied to automation credentials. |
-| `~/.authsia/access-credentials.json` | CLI / bridge | Automation access credentials created by `authsia access`. The bridge re-validates this file server-side. |
+| `~/.authsia/access-credential-metadata.json` | CLI | Token-free, non-authoritative metadata cache refreshed from Bridge create, list, and revoke responses. |
+| `~/.authsia/access-credentials.json` | Legacy CLI | Disabled legacy automation metadata shown only with compatibility listing. It is never accepted as authority. |
 | `~/.authsia/environment-profiles.json` | CLI | `authsia env` profiles and the active profile name. |
 | `~/.authsia/machine.json` | CLI / app import flows | Stable machine UUID and hostname used for multi-machine provenance. |
 | `~/.authsia/session.json` | Legacy CLI | Legacy plaintext session cache. Current builds migrate valid entries into terminal-scoped Keychain records and remove this file. |
@@ -341,6 +347,72 @@ public and private key entries exist. Identity listing uses the lightweight
 is retrieved only for the selected sign request after policy and approval checks
 allow signing.
 
+## Bridge Authority and Session State
+
+Active agent JIT grants and automation credential policy records share one
+versioned Bridge-owned Keychain authority envelope:
+
+```text
+class: generic password
+service: app.authsia.bridge.authority
+account: authority-store-v1
+accessible: after first unlock, this device only
+data-protection Keychain: enabled
+```
+
+This Keychain item is local and is not part of optional iCloud vault sync. Its
+envelope contains typed authority records with identifiers, creation and expiry
+times, revocation state, use limits, binding digests, non-secret display labels,
+and encoded policy payloads. Corrupt records or an incompatible envelope version
+fail closed.
+
+For JIT grants, the policy payload contains the approved typed item identities
+and folder context, caller fingerprint, workspace and working-directory
+bindings, environment scope, capabilities, TTL, approval source, and requested
+item display metadata. The record binds that payload to its SHA-256 digest. It
+does not contain password values, API-key values, note bodies, private keys, or
+other vault secret bytes.
+
+For automation credentials, the payload contains non-secret policy metadata
+such as machine binding, scope, environment, allowed commands, expiry, and use
+limits. The authority record stores an HMAC-SHA256 verifier for the opaque
+bearer, not the bearer itself. The HMAC key is a separate local Keychain item:
+
+```text
+class: generic password
+service: app.authsia.bridge.automation-credential-digest
+account: v1
+accessible: after first unlock, this device only
+```
+
+The bearer is returned once at creation. It is intentionally omitted from
+`~/.authsia/access-credential-metadata.json`; listing and revocation use the
+Bridge-owned authority records. The older `~/.authsia/access-credentials.json`
+file is display-only compatibility metadata and cannot authorize a request.
+
+The former JIT file at
+`~/Library/Application Support/Authsia/agent-jit-grants.json` is likewise never
+read as authority. The grant store quarantines or removes it during upgrade
+migration, and all current JIT writes go to the Keychain authority envelope.
+
+Interactive human CLI session tokens use separate terminal-scoped Keychain
+items:
+
+```text
+class: generic password
+service: com.authsia.cli.session
+account: terminal:<terminal and process-session scope>
+accessible: after first unlock, this device only
+synchronizable: false
+```
+
+The CLI item contains only its session token and expiry. The Bridge keeps the
+server-side session and replay state in memory. The
+`~/.authsia/cli-session-status.json` file mirrors only token-free display and
+liveness fields such as Bridge PID, scope, expiry, working directory, and
+origin; deleting or clearing a scope from that status invalidates matching
+Bridge use.
+
 ## Audit Logs
 
 Bridge and SSH-agent access events are written to the local audit log:
@@ -414,6 +486,9 @@ HMAC chain using the Keychain-stored HMAC key.
 - Never store OTP seeds, passwords, note contents, certificate private keys, SSH
   private keys, or passphrases in metadata JSON.
 - Never log secret bytes or seed material.
+- Never treat readable legacy JIT or automation JSON as authority. Active JIT
+  grants and automation credential policy must use the Bridge-owned Keychain
+  authority store.
 - The iCloud Keychain Sync toggle must never delete data.
 - Delete flows must remove both synced and local Keychain variants.
 - Data deletion must stay behind explicit delete actions such as item delete,
