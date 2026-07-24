@@ -39,6 +39,72 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         XCTAssertTrue(filtered.sshKeys.isEmpty)
     }
 
+    func testEnvListReturnsCLIEnabledItemsOnlyFromWorkspaceTree() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceEnvListRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .status,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .password,
+                        itemName: "DB_PASSWORD",
+                        folderPath: "Workspaces/api"
+                    ),
+                ]
+            )
+        )
+
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertEqual(filtered.passwords.map(\.name), ["DB_PASSWORD", "Nested"])
+        XCTAssertEqual(filtered.apiKeys.map(\.name), ["API_KEY"])
+    }
+
+    func testEnvUseReturnsOnlyExactCLIEnabledReferences() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceEnvUseRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .validate,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .password,
+                        itemName: "DB_PASSWORD",
+                        folderPath: "Workspaces/api"
+                    ),
+                ]
+            )
+        )
+
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertEqual(filtered.passwords.map(\.name), ["DB_PASSWORD"])
+        XCTAssertTrue(filtered.apiKeys.isEmpty)
+    }
+
+    func testWorkspaceEnvListReturnsOnlyExactCLIEnabledReferences() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceEnvBindingsListRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .validate,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .apiKey,
+                        itemName: "API_KEY",
+                        folderPath: "Workspaces/api"
+                    ),
+                ]
+            )
+        )
+
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertTrue(filtered.passwords.isEmpty)
+        XCTAssertEqual(filtered.apiKeys.map(\.name), ["API_KEY"])
+    }
+
     func testValidationReturnsOnlyExactCLIEnabledReferences() throws {
         let request = try makeRequest(
             command: BridgeContext.workspaceEnvValidateRequestedCommand,

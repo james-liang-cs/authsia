@@ -46,7 +46,7 @@ struct Env: ParsableCommand {
         }
     }
 
-    struct List: ParsableCommand {
+    struct List: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "list",
             abstract: "List environment profiles"
@@ -55,9 +55,9 @@ struct Env: ParsableCommand {
         @Option(name: .long, help: "Output format: table (default), json")
         var format: OutputFormat = .table
 
-        func run() throws {
+        func run() async throws {
             if let root = Env.currentWorkspaceRoot() {
-                print(try Env.renderWorkspaceList(root: root, format: format))
+                print(try await Env.renderWorkspaceList(root: root, format: format))
             } else {
                 let items = try Env.listItems()
                 print(try Env.renderList(items: items, format: format))
@@ -79,7 +79,7 @@ struct Env: ParsableCommand {
         }
     }
 
-    struct Use: ParsableCommand {
+    struct Use: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "use",
             abstract: "Set the active environment profile"
@@ -88,9 +88,9 @@ struct Env: ParsableCommand {
         @Argument(help: "Environment profile name")
         var name: String
 
-        func run() throws {
+        func run() async throws {
             if let root = Env.currentWorkspaceRoot() {
-                let normalized = try Env.validateWorkspaceEnvironment(name, root: root)
+                let normalized = try await Env.validateWorkspaceEnvironment(name, root: root)
                 try WorkspaceEnvironmentSelectionStore().setActiveEnvironment(normalized, for: root)
                 print("Active workspace environment set to \(normalized).")
             } else {
@@ -260,12 +260,16 @@ struct Env: ParsableCommand {
         let matchingProfileScope: String?
     }
 
-    private static func renderWorkspaceList(root: URL, format: OutputFormat) throws -> String {
+    private static func renderWorkspaceList(root: URL, format: OutputFormat) async throws -> String {
         let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
         guard config.schemaVersion >= 2 else {
             return "Workspace uses schema v1. Run `authsia workspace update` to enable workspace environments."
         }
-        let payload = try AuthsiaBridgeClient.shared.list()
+        let status = try await WorkspaceStatusReporter.build(workspaceRoot: root)
+        let payload = try AuthsiaBridgeClient.shared.workspaceMetadata(
+            Workspace.workspaceStatusMetadataRequest(status),
+            requestedCommand: BridgeContext.workspaceEnvListRequestedCommand
+        )
         let evaluation = try workspaceEnvironmentEvaluation(
             root: root,
             config: config,
@@ -274,7 +278,7 @@ struct Env: ParsableCommand {
         )
         let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
         let profiles = try EnvironmentProfileStore().loadAll()
-        let items = evaluation.resolution.availableEnvironments.map { name in
+        let items = workspaceEnvironmentNames(payload).map { name in
             WorkspaceListItem(
                 name: name,
                 isActive: active.map { VaultEnvironmentTags.contains($0, in: [name]) } ?? false,
@@ -296,22 +300,53 @@ struct Env: ParsableCommand {
         }
     }
 
-    private static func validateWorkspaceEnvironment(_ name: String, root: URL) throws -> String {
+    private static func validateWorkspaceEnvironment(_ name: String, root: URL) async throws -> String {
         let normalized = VaultEnvironmentTags.normalize([name]).first ?? ""
         let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
         guard config.schemaVersion >= 2 else {
             throw ValidationError("Workspace environment selection requires schema v2. Run `authsia workspace update` first.")
         }
-        let evaluation = try workspaceEnvironmentEvaluation(
-            root: root,
-            config: config,
-            payload: try AuthsiaBridgeClient.shared.list(),
-            selection: .defaultOnly
+        let plan = try WorkspaceRunPlan.build(
+            startingAt: root,
+            extraEnvFiles: [],
+            commandArgs: ["/usr/bin/true"]
         )
-        guard VaultEnvironmentTags.contains(normalized, in: evaluation.resolution.availableEnvironments) else {
-            throw ValidationError("Environment '\(normalized)' is not referenced by this workspace. Run `authsia env list`.")
+        let payload = try AuthsiaBridgeClient.shared.workspaceMetadata(
+            try Workspace.Run.validationMetadataRequest(for: plan),
+            requestedCommand: BridgeContext.workspaceEnvUseRequestedCommand
+        )
+        let status = try await WorkspaceStatusReporter.build(
+            workspaceRoot: root,
+            vaultIndex: WorkspaceVaultIndex(payload: payload),
+            activeEnvironment: normalized
+        )
+        return try validatedWorkspaceEnvironmentName(normalized, status: status)
+    }
+
+    static func validatedWorkspaceEnvironmentName(
+        _ name: String,
+        status: WorkspaceStatus
+    ) throws -> String {
+        let normalized = VaultEnvironmentTags.normalize([name]).first ?? ""
+        guard !normalized.isEmpty else {
+            throw ValidationError("Environment name cannot be empty. Run `authsia env list`.")
         }
-        return evaluation.resolution.availableEnvironments.first(where: { VaultEnvironmentTags.contains(normalized, in: [$0]) }) ?? normalized
+        guard let canonicalName = status.availableEnvironments.first(where: {
+            VaultEnvironmentTags.contains(normalized, in: [$0])
+        }) else {
+            throw ValidationError(
+                "Environment '\(normalized)' is not referenced by this workspace. Run `authsia env list`."
+            )
+        }
+        guard status.missingReferences.isEmpty,
+              status.unverifiedReferences.isEmpty,
+              status.environmentIssueCount == 0 else {
+            throw ValidationError(
+                "Environment '\(canonicalName)' cannot be activated because workspace validation failed. " +
+                    "Run `authsia workspace env validate`."
+            )
+        }
+        return canonicalName
     }
 
     static func workspaceEnvironmentEvaluation(
@@ -326,6 +361,13 @@ struct Env: ParsableCommand {
             envFiles: envFiles,
             payload: payload,
             selection: selection
+        )
+    }
+
+    static func workspaceEnvironmentNames(_ payload: BridgeListPayload) -> [String] {
+        VaultEnvironmentTags.selectableEnvironments(
+            payload.passwords.flatMap(\.environments) +
+                payload.apiKeys.flatMap(\.environments)
         )
     }
 

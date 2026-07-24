@@ -56,6 +56,132 @@ struct EnvCommandTests {
         #expect(evaluation.resolution.availableEnvironments == ["Production"])
     }
 
+    @Test("unreferenced workspace tags are not runnable environments")
+    func unreferencedWorkspaceTagsAreNotRunnableEnvironments() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("env-workspace-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil
+        )
+        let payload = BridgeListPayload(
+            accounts: [],
+            passwords: [
+                BridgePassword(
+                    id: UUID(),
+                    name: "UNREFERENCED",
+                    username: "user",
+                    website: nil,
+                    folderPath: "Workspaces/api",
+                    isFavorite: false,
+                    isCliEnabled: true,
+                    isScraped: false,
+                    createdAt: .distantPast,
+                    updatedAt: .distantPast,
+                    environments: ["Development"]
+                ),
+            ],
+            apiKeys: [],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+
+        let evaluation = try Env.workspaceEnvironmentEvaluation(
+            root: root,
+            config: config,
+            payload: payload,
+            selection: .defaultOnly
+        )
+
+        #expect(evaluation.resolution.availableEnvironments.isEmpty)
+    }
+
+    @Test("workspace env list uses scoped workspace metadata")
+    func workspaceEnvListUsesScopedWorkspaceMetadata() throws {
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let sourceURL = testFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/authsia/Commands/EnvCommand.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try #require(source.range(of: "private static func renderWorkspaceList"))
+        let end = try #require(source.range(
+            of: "private static func validateWorkspaceEnvironment",
+            range: start.upperBound..<source.endIndex
+        ))
+        let implementation = source[start.lowerBound..<end.lowerBound]
+
+        #expect(implementation.contains("AuthsiaBridgeClient.shared.workspaceMetadata("))
+        #expect(implementation.contains("workspaceEnvironmentNames(payload)"))
+        #expect(!implementation.contains("AuthsiaBridgeClient.shared.list()"))
+    }
+
+    @Test("workspace env selection uses scoped workspace metadata")
+    func workspaceEnvSelectionUsesScopedWorkspaceMetadata() throws {
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let sourceURL = testFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/authsia/Commands/EnvCommand.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try #require(source.range(of: "private static func validateWorkspaceEnvironment"))
+        let end = try #require(source.range(
+            of: "static func workspaceEnvironmentEvaluation",
+            range: start.upperBound..<source.endIndex
+        ))
+        let implementation = source[start.lowerBound..<end.lowerBound]
+
+        #expect(implementation.contains("AuthsiaBridgeClient.shared.workspaceMetadata("))
+        #expect(implementation.contains("Workspace.Run.validationMetadataRequest(for: plan)"))
+        #expect(implementation.contains("BridgeContext.workspaceEnvUseRequestedCommand"))
+        #expect(implementation.contains("activeEnvironment: normalized"))
+        #expect(implementation.contains("status.environmentIssueCount"))
+        #expect(!implementation.contains("AuthsiaBridgeClient.shared.list()"))
+        #expect(!implementation.contains("Workspace.workspaceStatusMetadataRequest(status)"))
+    }
+
+    @Test("workspace env selection accepts only healthy runnable environments")
+    func workspaceEnvSelectionAcceptsOnlyHealthyRunnableEnvironments() throws {
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil
+        )
+        var status = WorkspaceStatus(
+            config: config,
+            envFiles: [],
+            envBindings: [],
+            agentRules: [],
+            missingReferences: [],
+            unverifiedReferences: []
+        )
+        status.availableEnvironments = ["Production"]
+        status.selectionHealth = "healthy"
+
+        #expect(
+            try Env.validatedWorkspaceEnvironmentName("production", status: status) == "Production"
+        )
+
+        status.environmentIssueCount = 1
+        #expect(throws: (any Error).self) {
+            _ = try Env.validatedWorkspaceEnvironmentName("Production", status: status)
+        }
+
+        status.environmentIssueCount = 0
+        status.availableEnvironments = []
+        #expect(throws: (any Error).self) {
+            _ = try Env.validatedWorkspaceEnvironmentName("Production", status: status)
+        }
+    }
+
     @Test("add persists normalized folder mapping")
     func addPersistsNormalizedFolderMapping() throws {
         let (store, directory) = makeStore()

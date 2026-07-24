@@ -934,6 +934,7 @@ enum AgentRuleInstaller {
 
     - Never ask the user for plaintext secrets.
     - Never write resolved secret values to source files, logs, issues, chat, or generated docs.
+    - Before running an Authsia command, use the full command's `-h` help to confirm its arguments and options.
     - Use `authsia list ...` only for safe metadata discovery, and still include the Authsia agent marker.
     - Use `authsia://` references when a file or template needs a secret placeholder.
     - Use `authsia exec ... -- <command>` when a command needs real secret values.

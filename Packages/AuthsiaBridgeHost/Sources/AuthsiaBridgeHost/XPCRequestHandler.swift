@@ -225,6 +225,8 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         let requiresPersistedMetadata = [
             BridgeContext.workspaceSyncPreviewRequestedCommand,
             BridgeContext.workspaceEnvValidateRequestedCommand,
+            BridgeContext.workspaceEnvUseRequestedCommand,
+            BridgeContext.workspaceEnvBindingsListRequestedCommand,
             BridgeContext.workspaceRunRequestedCommand,
         ].contains(request.context.requestedCommand)
         if !requiresPersistedMetadata, repository.hasLoadedVaultState {

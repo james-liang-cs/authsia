@@ -202,6 +202,10 @@ struct WorkspaceConfigTests {
                 #expect(help.contains(example), "\(command) help should include example: \(example)")
             }
         }
+        #expect(
+            Workspace.Env.Validate.helpMessage(columns: 160)
+                .contains("Validate the active workspace environment against Authsia")
+        )
     }
 
     @Test("store writes commit-safe relative config")
@@ -2436,6 +2440,10 @@ struct AgentRuleInstallerTests {
         let sharedRules = try read(".authsia/agent-rules.md", in: root)
         for rules in [agentsRules, sharedRules] {
             #expect(rules.contains("AUTHSIA_AGENT_PLATFORM=codex"))
+            #expect(rules.contains(
+                "Before running an Authsia command, use the full command's `-h` help " +
+                    "to confirm its arguments and options."
+            ))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=<claude-code|codex|cursor|windsurf|copilot>"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=claude-code"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=cursor"))
@@ -4368,6 +4376,83 @@ struct WorkspaceEnvBindingTests {
                 ),
             ]
         ))
+    }
+
+    @Test("workspace env list uses exact scoped metadata")
+    func workspaceEnvListUsesExactScopedMetadata() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/authsia/Commands/WorkspaceCommand.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let envStart = try #require(source.range(of: "struct Env: ParsableCommand"))
+        let start = try #require(source.range(
+            of: "struct List: ParsableCommand",
+            range: envStart.lowerBound..<source.endIndex
+        ))
+        let end = try #require(source.range(
+            of: "struct Add: ParsableCommand",
+            range: start.upperBound..<source.endIndex
+        ))
+        let implementation = source[start.lowerBound..<end.lowerBound]
+
+        #expect(implementation.contains("AuthsiaBridgeClient.shared.workspaceMetadata("))
+        #expect(implementation.contains("BridgeContext.workspaceEnvBindingsListRequestedCommand"))
+        #expect(!implementation.contains("AuthsiaBridgeClient.shared.list()"))
+    }
+
+    @Test("workspace env validate evaluates the stored environment with run references")
+    func workspaceEnvValidateEvaluatesStoredEnvironmentWithRunReferences() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/authsia/Commands/WorkspaceCommand.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try #require(source.range(of: "struct Validate: AsyncParsableCommand"))
+        let end = try #require(source.range(
+            of: "static func addBinding",
+            range: start.upperBound..<source.endIndex
+        ))
+        let implementation = source[start.lowerBound..<end.lowerBound]
+
+        #expect(implementation.contains("Workspace.Run.validationMetadataRequest(for: plan)"))
+        #expect(implementation.contains("WorkspaceEnvironmentSelectionStore().activeEnvironment"))
+        #expect(implementation.contains("WorkspaceStatusReporter.build("))
+        #expect(implementation.contains("Env.validationFailures(status)"))
+        #expect(implementation.contains("throw ValidationError"))
+    }
+
+    @Test("workspace env validation treats every unresolved state as blocking")
+    func workspaceEnvValidationTreatsEveryUnresolvedStateAsBlocking() {
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil
+        )
+        let missing = WorkspaceMissingReference(
+            relativePath: ".env",
+            itemType: "password",
+            item: "DB_PASSWORD",
+            folderPath: "Workspaces/api"
+        )
+        var status = WorkspaceStatus(
+            config: config,
+            envFiles: [],
+            envBindings: [],
+            agentRules: [],
+            missingReferences: [missing],
+            unverifiedReferences: [missing]
+        )
+        status.environmentIssueCount = 2
+
+        #expect(Workspace.Env.validationFailures(status) == [
+            "1 missing reference(s)",
+            "1 unverified reference(s)",
+            "2 environment resolution issue(s)",
+        ])
     }
 }
 
