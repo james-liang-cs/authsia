@@ -97,6 +97,7 @@ public enum AgentJITCallerContext {
     private static let trustedTerminalBundleIdentifiers: Set<String> = [
         "com.apple.Terminal",
         "com.googlecode.iterm2",
+        "com.mitchellh.ghostty",
         "dev.warp.Warp",
         "dev.warp.Warp-Stable",
     ]
