@@ -4,6 +4,15 @@ import XCTest
 import AuthenticatorBridge
 
 final class AgentJITCallerContextTests: XCTestCase {
+    func testExtractTraversesGhosttyLoginBoundaryWhenRequested() throws {
+        guard let rawPID = ProcessInfo.processInfo.environment["AUTHSIA_DIAGNOSTIC_PID"],
+              let pid = Int32(rawPID) else {
+            throw XCTSkip("Set AUTHSIA_DIAGNOSTIC_PID to inspect a live process.")
+        }
+        let caller = try XCTUnwrap(CallerIdentityExtractor.extract(fromPID: pid))
+        XCTAssertEqual(caller.parentProcess?.bundleIdentifier, "com.mitchellh.ghostty")
+    }
+
     func testExtractFromNonexistentPIDReturnsNil() {
         XCTAssertNil(CallerIdentityExtractor.extract(fromPID: pid_t.max))
     }
