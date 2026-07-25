@@ -1633,8 +1633,9 @@ struct InjectedSecretFileScrubberTests {
         #expect(!eligibleContents.contains(eligibleSecret))
         #expect(
             warning
-                == "Warning: Authsia secret-file cleanup was incomplete; review Access Center. "
-                    + "The child exit status was preserved.\n"
+                == "Warning: Authsia concealed detected secret values, but file observation was "
+                    + "incomplete; other files may require review. The child exit status was "
+                    + "preserved.\n"
         )
     }
 
