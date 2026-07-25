@@ -2368,6 +2368,7 @@ struct Exec: ParsableCommand {
 
         let fileCleanupStatus: InjectedSecretFileCleanupStatus
         var detectedSecret = false
+        var concealedSecret = false
         var inspectionIncomplete = false
         if let fileScrubContext, let cleanupRootSelection, let touchWatcher {
             let observation = touchWatcher.stop()
@@ -2386,6 +2387,7 @@ struct Exec: ParsableCommand {
             }
             InjectedSecretFileScrubber.record(results: results, store: fileActivityStore)
             detectedSecret = results.contains { $0.outcome == .detected }
+            concealedSecret = results.contains { $0.outcome == .scrubbed }
             let observationIncomplete = fileCleanupMasker == nil
                 || (cleanupSecretFiles && fileCleanupSelectionIncomplete)
                 || cleanupRootSelection.isIncomplete
@@ -2408,7 +2410,11 @@ struct Exec: ParsableCommand {
 
         if fileCleanupStatus == .incomplete {
             let warning: String
-            if detectedSecret && inspectionIncomplete {
+            if concealedSecret {
+                warning = "Warning: Authsia concealed detected secret values, but file observation "
+                    + "was incomplete; other files may require review. The child exit status was "
+                    + "preserved.\n"
+            } else if detectedSecret && inspectionIncomplete {
                 warning = "Warning: Authsia detected an injected secret in an observed file and "
                     + "left it unchanged, and secret-file inspection was incomplete; review Access "
                     + "Center. Automatic replacement was unavailable. "
