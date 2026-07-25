@@ -23,7 +23,7 @@ struct ExecCommandTests {
         #expect(help.contains("authsia exec --env-file prod.env -- npm start"))
         #expect(help.contains("--cleanup-secret-files"))
         #expect(help.contains("replace eligible exact injected secrets"))
-        #expect(help.contains("off by default"))
+        #expect(help.contains("automatic for agent runs"))
         #expect(help.contains("including nested folders"))
     }
 
@@ -201,6 +201,27 @@ struct ExecCommandTests {
         ])
 
         #expect(command.cleanupSecretFiles)
+    }
+
+    @Test(
+        "secret-file cleanup is automatic only for agent runs unless explicitly requested",
+        arguments: [
+            (false, Optional("codex"), true),
+            (false, nil, false),
+            (true, nil, true),
+        ]
+    )
+    func secretFileCleanupPolicy(
+        explicitlyRequested: Bool,
+        agentPlatform: String?,
+        expected: Bool
+    ) {
+        #expect(
+            Exec.shouldCleanupSecretFiles(
+                explicitlyRequested: explicitlyRequested,
+                agentPlatform: agentPlatform
+            ) == expected
+        )
     }
 
     @Test("masked compatibility requires an explicit option")

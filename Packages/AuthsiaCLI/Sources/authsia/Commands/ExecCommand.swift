@@ -153,7 +153,7 @@ struct Exec: ParsableCommand {
 
     @Flag(
         name: .long,
-        help: "After exit, replace eligible exact injected secrets in safely verified observed files; off by default"
+        help: "After exit, replace eligible exact injected secrets in safely verified observed files; automatic for agent runs"
     )
     var cleanupSecretFiles = false
 
@@ -385,9 +385,13 @@ struct Exec: ParsableCommand {
                     terminalSessionScope: TerminalSessionScope.currentAncestralScope(),
                     workingDirectory: workingDirectory
                 )
+            let shouldCleanupSecretFiles = Self.shouldCleanupSecretFiles(
+                explicitlyRequested: cleanupSecretFiles,
+                agentPlatform: treeContext?.agentPlatform
+            )
             let fileScrubContext = Self.selectedFileScrubContext(
                 cleanupSelection: fileCleanupSelection,
-                cleanupSecretFiles: cleanupSecretFiles,
+                cleanupSecretFiles: shouldCleanupSecretFiles,
                 candidate: InjectedSecretFileScrubContext(
                     agentJITGrantIDs: Array(Set(accumulatedGrantIDs)),
                     agentPlatform: treeContext?.agentPlatform,
@@ -403,7 +407,7 @@ struct Exec: ParsableCommand {
                 fileCleanupMasker: fileCleanupMasker,
                 fileEventMetadataMasker: fileEventMetadataMasker,
                 fileCleanupSelectionIncomplete: fileCleanupSelection.isIncomplete,
-                cleanupSecretFiles: cleanupSecretFiles,
+                cleanupSecretFiles: shouldCleanupSecretFiles,
                 outputPolicy: outputPolicy,
                 sshAutomationCredential: sshAutomationCredential,
                 treeContext: treeContext,
@@ -952,6 +956,13 @@ struct Exec: ParsableCommand {
             return nil
         }
         return candidate()
+    }
+
+    static func shouldCleanupSecretFiles(
+        explicitlyRequested: Bool,
+        agentPlatform: String?
+    ) -> Bool {
+        explicitlyRequested || agentPlatform != nil
     }
 
     static func fileEventMetadataMasker(
