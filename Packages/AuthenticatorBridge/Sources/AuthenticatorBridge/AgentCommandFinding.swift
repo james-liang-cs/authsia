@@ -15,6 +15,10 @@ public enum AgentCommandFindingType: String, Codable, Equatable, Sendable {
     case injectedTreeCapture
     case sensitiveFileActivity
     case outsideWorkspaceFileActivity
+    case secretFileScrubbed
+    case secretDetectedInFile
+    case secretFileInspectionIncomplete
+    case secretFileCleanupIncomplete
     case mediatedResponse
 }
 
@@ -201,12 +205,6 @@ public enum AgentCommandFindingDetector {
     private static let environmentFileReadExecutables: Set<String> = [
         "bat", "cat", "head", "less", "more", "source", "tail", "type",
     ]
-    private static let benignDotEnvSuffixes: Set<String> = [
-        ".example",
-        ".sample",
-        ".template",
-        ".dist",
-    ]
 
     public static func findings(
         for grants: [AgentJITGrant],
@@ -291,6 +289,22 @@ public enum AgentCommandFindingDetector {
         }
 
         for fileEvent in grantFileEvents {
+            if fileEvent.captureSource == .injectedExec {
+                if fileEvent.detail == InjectedSecretFileActivityDetail.scrubbed {
+                    findings.append(secretFileScrubbedFinding(for: fileEvent, grant: grant))
+                } else if fileEvent.detail == InjectedSecretFileActivityDetail.secretDetected {
+                    findings.append(secretDetectedInFileFinding(for: fileEvent, grant: grant))
+                } else if fileEvent.detail == InjectedSecretFileActivityDetail.inspectionFailed {
+                    findings.append(
+                        secretFileInspectionIncompleteFinding(for: fileEvent, grant: grant)
+                    )
+                } else if fileEvent.detail == InjectedSecretFileActivityDetail.verificationFailed
+                    || fileEvent.detail == InjectedSecretFileActivityDetail.remediationFailed {
+                    findings.append(secretFileCleanupIncompleteFinding(for: fileEvent, grant: grant))
+                }
+                continue
+            }
+
             if isSensitiveFileActivity(fileEvent) {
                 findings.append(sensitiveFileActivityFinding(for: fileEvent, grant: grant))
             }
@@ -459,6 +473,78 @@ public enum AgentCommandFindingDetector {
         )
     }
 
+    private static func secretFileScrubbedFinding(
+        for event: AgentFileActivityEvent,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .info,
+            type: .secretFileScrubbed,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            fileEvidenceEventIDs: [event.id],
+            recordedAt: event.recordedAt,
+            title: "Secret scrubbed from file",
+            detail: "A known injected secret was replaced with a concealment placeholder in an "
+                + "observed candidate file after the mediated child exited.",
+            recommendedAction: "Confirm the child should not have written vault secrets to disk."
+        )
+    }
+
+    private static func secretDetectedInFileFinding(
+        for event: AgentFileActivityEvent,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .review,
+            type: .secretDetectedInFile,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            fileEvidenceEventIDs: [event.id],
+            recordedAt: event.recordedAt,
+            title: "Secret detected in file",
+            detail: "A known injected secret was confirmed in an observed candidate file and "
+                + "intentionally left unchanged because secret-file cleanup was not enabled for "
+                + "this run.",
+            recommendedAction: "Review the file and remove or rotate the exposed secret if needed."
+        )
+    }
+
+    private static func secretFileCleanupIncompleteFinding(
+        for event: AgentFileActivityEvent,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .review,
+            type: .secretFileCleanupIncomplete,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            fileEvidenceEventIDs: [event.id],
+            recordedAt: event.recordedAt,
+            title: "Secret-file cleanup incomplete",
+            detail: "Authsia could not verify that a known injected secret was removed from a touched file.",
+            recommendedAction: "Review the affected file activity and remove or rotate any exposed secret if needed."
+        )
+    }
+
+    private static func secretFileInspectionIncompleteFinding(
+        for event: AgentFileActivityEvent,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .review,
+            type: .secretFileInspectionIncomplete,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            fileEvidenceEventIDs: [event.id],
+            recordedAt: event.recordedAt,
+            title: "Secret-file inspection incomplete",
+            detail: "Bounded post-exit inspection could not complete, so secret presence in the "
+                + "touched file was not confirmed.",
+            recommendedAction: "Review the affected file activity and inspect the file if needed."
+        )
+    }
+
     private static func outsideWorkspaceFileActivityFinding(
         for event: AgentFileActivityEvent,
         grant: AgentJITGrant
@@ -600,28 +686,11 @@ public enum AgentCommandFindingDetector {
             return false
         }
 
-        return tokens.dropFirst().contains(where: isHighSignalDotEnvPath)
-    }
-
-    private static func isHighSignalDotEnvPath(_ token: String) -> Bool {
-        let fileName = URL(fileURLWithPath: token).lastPathComponent.lowercased()
-        guard fileName == ".env" || fileName.hasPrefix(".env.") else { return false }
-        return !benignDotEnvSuffixes.contains { fileName.hasSuffix($0) }
+        return tokens.dropFirst().contains(where: AgentSecretPathPolicy.isHighSignalDotEnvPath)
     }
 
     private static func isSensitiveFileActivity(_ event: AgentFileActivityEvent) -> Bool {
-        let fileName = URL(fileURLWithPath: event.path).lastPathComponent.lowercased()
-        if isHighSignalDotEnvPath(fileName) {
-            return true
-        }
-        return fileName == ".envrc"
-            || fileName == ".netrc"
-            || fileName.hasSuffix(".pem")
-            || fileName.hasSuffix(".p12")
-            || fileName.hasSuffix(".pfx")
-            || fileName == "id_rsa"
-            || fileName == "id_ed25519"
-            || fileName == "id_ecdsa"
+        AgentSecretPathPolicy.isHighSignalSecretPath(event.path)
     }
 
     private static func isOutsideWorkspaceFileActivity(_ event: AgentFileActivityEvent) -> Bool {

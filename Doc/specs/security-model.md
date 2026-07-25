@@ -2,6 +2,7 @@
 
 ## Table of Contents
 
+- [How It Works In Brief](#how-it-works-in-brief)
 - [Security Goals](#security-goals)
 - [Trust Boundaries](#trust-boundaries)
 - [Security Flow](#security-flow)
@@ -19,6 +20,29 @@ who can ask Authsia for secrets, which gates are applied, and what the design
 does not try to protect against.
 
 For detailed JIT grant behavior, see [`jit-agent-grants.md`](jit-agent-grants.md).
+
+## How It Works In Brief
+
+1. Secrets and SSH private keys stay in Authsia-owned Keychain storage. The
+   unentitled CLI asks the signed local Bridge or SSH-agent service to use them;
+   it cannot read that Keychain storage directly.
+2. The Bridge first verifies the caller and request policy. A human uses a
+   terminal-scoped session or approval. A coding agent gets a separate JIT
+   approval bound to the caller, requested items, workspace, environment,
+   capability, and expiry. Unattended automation and SSH signing use their own
+   scoped authority paths.
+3. For `authsia exec` and secret-bearing `authsia workspace run`, live policy
+   is checked again immediately before release. Values are placed only in the
+   launched child's environment, not in the parent shell.
+4. Authsia strictly masks known values and recognized representations in that
+   child's stdout and stderr. After the child exits, bounded inspection looks
+   for eligible exact injected values in observed files and leaves them
+   unchanged by default. `--cleanup-secret-files` is the explicit opt-in for
+   best-effort replacement.
+5. Access Center and redacted audit records make grants, sessions, findings,
+   and revocation visible. This reduces accidental disclosure and limits
+   authority; it is not operating-system-wide DLP and cannot stop an approved
+   child from exfiltrating a value through an unmanaged channel.
 
 ## Security Goals
 

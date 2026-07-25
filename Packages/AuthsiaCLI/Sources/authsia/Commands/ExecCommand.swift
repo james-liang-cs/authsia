@@ -151,6 +151,12 @@ struct Exec: ParsableCommand {
     @Flag(name: .long, help: "Include scraped items from all machines (default: current machine only)")
     var allMachines = false
 
+    @Flag(
+        name: .long,
+        help: "After exit, replace eligible exact injected secrets in safely verified observed files; off by default"
+    )
+    var cleanupSecretFiles = false
+
     @Option(
         name: .customLong("output-policy"),
         help: "Output handling: strict or masked-compatibility"
@@ -339,6 +345,14 @@ struct Exec: ParsableCommand {
             let childCommand = Self.childCommandArguments(command: resolvedCommandArgs, shell: usesShell)
 
             // Phase 6: Collect all secret values for masking
+            let exactInjectedSecrets = Self.exactInjectedSecrets(
+                entries: entries,
+                resolvedSecrets: resolved.secrets,
+                environment: environment
+            )
+            let fileCleanupSelection = Self.fileCleanupSecretSelection(
+                exactInjectedSecrets: exactInjectedSecrets
+            )
             let allSecrets = Self.collectSecrets(
                 entries: entries,
                 resolvedSecrets: resolved.secrets,
@@ -348,12 +362,18 @@ struct Exec: ParsableCommand {
 
             // Phase 7: Spawn child process with output masking
             let masker = OutputMasker(secrets: allSecrets)
+            let fileCleanupMasker = OutputMasker(exactSecrets: fileCleanupSelection.secrets)
+            let fileEventMetadataMasker = Self.fileEventMetadataMasker(
+                exactInjectedSecrets: exactInjectedSecrets
+            )
             if outputPolicy == .maskedCompatibility {
                 StandardError.writeLine(
                     "Warning: masked-compatibility cannot prevent disclosure through files, network, IPC, or arbitrary output transforms."
                 )
             }
             let processAncestry = AgenticProcessDetector.currentProcessAncestry()
+            let workingDirectory = FileManager.default.currentDirectoryPath
+            let workspaceRoot = parentEnvironment["AUTHSIA_WORKSPACE_ROOT"] ?? workingDirectory
             let treeContext: InjectedProcessTreeWatchContext? = allSecrets.isEmpty
                 ? nil
                 : InjectedProcessTreeWatchContext(
@@ -363,15 +383,31 @@ struct Exec: ParsableCommand {
                         processAncestry: processAncestry
                     ),
                     terminalSessionScope: TerminalSessionScope.currentAncestralScope(),
-                    workingDirectory: FileManager.default.currentDirectoryPath
+                    workingDirectory: workingDirectory
                 )
+            let fileScrubContext = Self.selectedFileScrubContext(
+                cleanupSelection: fileCleanupSelection,
+                cleanupSecretFiles: cleanupSecretFiles,
+                candidate: InjectedSecretFileScrubContext(
+                    agentJITGrantIDs: Array(Set(accumulatedGrantIDs)),
+                    agentPlatform: treeContext?.agentPlatform,
+                    terminalSessionScope: treeContext?.terminalSessionScope,
+                    workingDirectory: workingDirectory,
+                    workspaceRoot: workspaceRoot
+                )
+            )
             let result = Self.runChildProcess(
                 command: childCommand,
                 environment: environment,
                 masker: masker,
+                fileCleanupMasker: fileCleanupMasker,
+                fileEventMetadataMasker: fileEventMetadataMasker,
+                fileCleanupSelectionIncomplete: fileCleanupSelection.isIncomplete,
+                cleanupSecretFiles: cleanupSecretFiles,
                 outputPolicy: outputPolicy,
                 sshAutomationCredential: sshAutomationCredential,
-                treeContext: treeContext
+                treeContext: treeContext,
+                fileScrubContext: fileScrubContext
             )
             if result.outputFailure != nil {
                 StandardError.writeLine(
@@ -860,6 +896,68 @@ struct Exec: ParsableCommand {
         var secrets = entries.map(\.value)
         secrets.append(contentsOf: resolvedSecrets)
         return secrets
+    }
+
+    static func exactInjectedSecrets(
+        entries: [Load.LoadedEntry],
+        resolvedSecrets: [String],
+        environment: [String: String]
+    ) -> [String] {
+        let finalValues = Set(environment.values)
+        var values = entries.map(\.value)
+        values.append(contentsOf: resolvedSecrets)
+        if let sshToken = environment[AutomationAccessResolver.sshEnvironmentKey] {
+            values.append(sshToken)
+        }
+
+        var seen = Set<String>()
+        return values.filter {
+            !$0.isEmpty
+                && finalValues.contains($0)
+                && seen.insert($0).inserted
+        }
+    }
+
+    struct FileCleanupSecretSelection: Equatable {
+        let secrets: [String]
+        let isIncomplete: Bool
+    }
+
+    /// Destructive replacement requires 12 characters to avoid common short-value collisions.
+    static let minimumFileCleanupSecretLength = 12
+
+    static func fileCleanupSecretSelection(
+        exactInjectedSecrets: [String]
+    ) -> FileCleanupSecretSelection {
+        var seen = Set<String>()
+        let eligible = exactInjectedSecrets.filter {
+            $0.count >= minimumFileCleanupSecretLength
+                && seen.insert($0).inserted
+        }
+        return FileCleanupSecretSelection(
+            secrets: eligible,
+            isIncomplete: exactInjectedSecrets.contains {
+                $0.count < minimumFileCleanupSecretLength
+            }
+        )
+    }
+
+    static func selectedFileScrubContext(
+        cleanupSelection: FileCleanupSecretSelection,
+        cleanupSecretFiles: Bool,
+        candidate: @autoclosure () -> InjectedSecretFileScrubContext
+    ) -> InjectedSecretFileScrubContext? {
+        guard !cleanupSelection.secrets.isEmpty
+                || (cleanupSecretFiles && cleanupSelection.isIncomplete) else {
+            return nil
+        }
+        return candidate()
+    }
+
+    static func fileEventMetadataMasker(
+        exactInjectedSecrets: [String]
+    ) -> OutputMasker {
+        OutputMasker(secrets: exactInjectedSecrets)
     }
 
     static func collectSecrets(
@@ -2125,6 +2223,19 @@ struct Exec: ParsableCommand {
         let terminationStatus: Int32
         let terminationReason: Process.TerminationReason
         let outputFailure: OutputDisclosureFailure?
+        let fileCleanupStatus: InjectedSecretFileCleanupStatus
+
+        init(
+            terminationStatus: Int32,
+            terminationReason: Process.TerminationReason,
+            outputFailure: OutputDisclosureFailure?,
+            fileCleanupStatus: InjectedSecretFileCleanupStatus = .notRequested
+        ) {
+            self.terminationStatus = terminationStatus
+            self.terminationReason = terminationReason
+            self.outputFailure = outputFailure
+            self.fileCleanupStatus = fileCleanupStatus
+        }
 
         var exitCode: Int32 {
             if outputFailure != nil {
@@ -2141,17 +2252,27 @@ struct Exec: ParsableCommand {
         command: [String],
         environment: [String: String],
         masker: OutputMasker,
+        fileCleanupMasker: OutputMasker? = nil,
+        fileEventMetadataMasker: OutputMasker? = nil,
+        fileCleanupSelectionIncomplete: Bool = false,
+        cleanupSecretFiles: Bool = false,
         outputPolicy: OutputDisclosurePolicy = .strict,
         sshAutomationCredential: AccessCredential? = nil,
         standardOutput: FileHandle = .standardOutput,
         standardError: FileHandle = .standardError,
         treeContext: InjectedProcessTreeWatchContext? = nil,
+        fileScrubContext: InjectedSecretFileScrubContext? = nil,
         treeStore: InjectedProcessTreeStore = InjectedProcessTreeStore(),
         commandHistoryStore: AgentCommandHistoryStore = AgentCommandHistoryStore(),
-        treeSampleProvider: (@Sendable (Int32) -> [InjectedProcessTreeSample])? = nil
+        fileActivityStore: AgentFileActivityStore = AgentFileActivityStore(),
+        treeSampleProvider: (@Sendable (Int32) -> [InjectedProcessTreeSample])? = nil,
+        fileTouchWatcher: InjectedFileTouchWatcher? = nil,
+        signalCoordinator: ChildSignalForwardingCoordinator = .shared,
+        childProcess: Process = Process(),
+        processExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/env")
     ) -> ChildRunResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let process = childProcess
+        process.executableURL = processExecutableURL
         process.arguments = command
         process.environment = environment
 
@@ -2160,19 +2281,39 @@ struct Exec: ParsableCommand {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        let signalSources = installSignalForwarding(to: process)
-        defer { signalSources.forEach { $0.cancel() } }
+        let cleanupRootSelection: InjectedFileTouchRootSelection?
+        let touchWatcher: InjectedFileTouchWatcher?
+        let touchWatcherStarted: Bool
+        if let fileScrubContext {
+            let selection = InjectedFileTouchWatcher.defaultRoots(
+                workspaceRoot: fileScrubContext.workspaceRoot,
+                workingDirectory: fileScrubContext.workingDirectory,
+                environment: environment
+            )
+            cleanupRootSelection = selection
+            let created = fileTouchWatcher ?? InjectedFileTouchWatcher(roots: selection.roots)
+            touchWatcherStarted = created.start()
+            touchWatcher = created
+        } else {
+            cleanupRootSelection = nil
+            touchWatcher = nil
+            touchWatcherStarted = false
+        }
 
         do {
             try process.run()
         } catch {
+            _ = touchWatcher?.stop()
             StandardError.writeLine("Error: Failed to execute '\(command.first ?? "<unknown>")': \(error.localizedDescription)")
             return ChildRunResult(
                 terminationStatus: 1,
                 terminationReason: .exit,
-                outputFailure: nil
+                outputFailure: nil,
+                fileCleanupStatus: .notRequested
             )
         }
+        let signalRegistration = signalCoordinator.register(process)
+        defer { signalRegistration.unregister() }
         _ = sshAutomationCredential
 
         let watcher: InjectedProcessTreeWatcher?
@@ -2193,9 +2334,6 @@ struct Exec: ParsableCommand {
             watcher = created
         } else {
             watcher = nil
-        }
-        defer {
-            watcher?.stop(exitStatus: process.terminationStatus)
         }
 
         let group = DispatchGroup()
@@ -2226,10 +2364,78 @@ struct Exec: ParsableCommand {
         process.waitUntilExit()
         group.wait()
 
+        signalRegistration.unregister()
+        watcher?.stop(exitStatus: process.terminationStatus)
+
+        let fileCleanupStatus: InjectedSecretFileCleanupStatus
+        var detectedSecret = false
+        var inspectionIncomplete = false
+        if let fileScrubContext, let cleanupRootSelection, let touchWatcher {
+            let observation = touchWatcher.stop()
+            let results: [InjectedSecretFileScrubResult]
+            if let fileCleanupMasker {
+                results = InjectedSecretFileScrubber.scrub(
+                    paths: observation.paths,
+                    masker: fileCleanupMasker,
+                    allowedRootBindings: observation.validatedRootBindings,
+                    context: fileScrubContext,
+                    eventMetadataMasker: fileEventMetadataMasker,
+                    mode: cleanupSecretFiles ? .remediate : .detectOnly
+                )
+            } else {
+                results = []
+            }
+            InjectedSecretFileScrubber.record(results: results, store: fileActivityStore)
+            detectedSecret = results.contains { $0.outcome == .detected }
+            let observationIncomplete = fileCleanupMasker == nil
+                || (cleanupSecretFiles && fileCleanupSelectionIncomplete)
+                || cleanupRootSelection.isIncomplete
+                || observation.isIncomplete
+                || !touchWatcherStarted
+            inspectionIncomplete = results.contains {
+                $0.outcome == .outsideAllowedRoots
+                    || $0.outcome == .verificationFailed
+                    || $0.outcome == .remediationFailed
+            }
+                || observationIncomplete
+            if observationIncomplete {
+                fileCleanupStatus = .incomplete
+            } else {
+                fileCleanupStatus = .forRequestedCleanup(results)
+            }
+        } else {
+            fileCleanupStatus = .notRequested
+        }
+
+        if fileCleanupStatus == .incomplete {
+            let warning: String
+            if detectedSecret && inspectionIncomplete {
+                warning = "Warning: Authsia detected an injected secret in an observed file and "
+                    + "left it unchanged, and secret-file inspection was incomplete; review Access "
+                    + "Center. Pass --cleanup-secret-files to enable best-effort replacement. "
+                    + "The child exit status was preserved.\n"
+            } else if detectedSecret {
+                warning = "Warning: Authsia detected an injected secret in an observed file and "
+                    + "left it unchanged; review Access Center. Pass --cleanup-secret-files to "
+                    + "enable best-effort replacement. The child exit status was preserved.\n"
+            } else if cleanupSecretFiles {
+                warning = "Warning: Authsia secret-file cleanup was incomplete; review Access "
+                    + "Center. The child exit status was preserved.\n"
+            } else {
+                warning = "Warning: Authsia secret-file inspection was incomplete; review Access "
+                    + "Center. No secret presence was confirmed. Child exit preserved.\n"
+            }
+            let warningData = Data(
+                warning.utf8
+            )
+            try? standardError.write(contentsOf: warningData)
+        }
+
         return ChildRunResult(
             terminationStatus: process.terminationStatus,
             terminationReason: process.terminationReason,
-            outputFailure: outputCoordinator.failure
+            outputFailure: outputCoordinator.failure,
+            fileCleanupStatus: fileCleanupStatus
         )
     }
 
@@ -2263,17 +2469,207 @@ struct Exec: ParsableCommand {
             }
         }
     }
+}
 
-    private static func installSignalForwarding(to process: Process) -> [DispatchSourceSignal] {
-        let signals: [Int32] = [SIGINT, SIGTERM, SIGHUP]
-        return signals.map { sig in
-            signal(sig, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            source.setEventHandler {
-                if process.isRunning { kill(process.processIdentifier, sig) }
-            }
+struct ChildSignalDispositionInstallation: @unchecked Sendable {
+    private let restoreAction: () -> Void
+
+    init(_ restoreAction: @escaping () -> Void) {
+        self.restoreAction = restoreAction
+    }
+
+    func restore() {
+        restoreAction()
+    }
+}
+
+private func catchForwardedChildSignal(_ signal: Int32) {}
+
+struct ChildSignalActionController: @unchecked Sendable {
+    typealias Apply = @Sendable (
+        Int32,
+        UnsafePointer<sigaction>?,
+        UnsafeMutablePointer<sigaction>?
+    ) -> Int32
+
+    private let apply: Apply
+
+    init(
+        apply: @escaping Apply = { signal, action, previousAction in
+            sigaction(signal, action, previousAction)
+        }
+    ) {
+        self.apply = apply
+    }
+
+    func installCaught(signal: Int32) -> ChildSignalDispositionInstallation {
+        var caughtAction = sigaction()
+        caughtAction.__sigaction_u.__sa_handler = catchForwardedChildSignal
+        caughtAction.sa_flags = 0
+        sigemptyset(&caughtAction.sa_mask)
+
+        var previousAction = sigaction()
+        precondition(
+            apply(signal, &caughtAction, &previousAction) == 0,
+            "Unable to install signal disposition"
+        )
+        let actionToRestore = previousAction
+
+        return ChildSignalDispositionInstallation {
+            var action = actionToRestore
+            precondition(
+                apply(signal, &action, nil) == 0,
+                "Unable to restore signal disposition"
+            )
+        }
+    }
+}
+
+struct ChildSignalSourceInstallation: @unchecked Sendable {
+    private let cancelAction: () -> Void
+
+    init(_ cancelAction: @escaping () -> Void) {
+        self.cancelAction = cancelAction
+    }
+
+    func cancel() {
+        cancelAction()
+    }
+}
+
+final class ChildSignalForwardingRegistration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var unregisterAction: (() -> Void)?
+
+    init(unregisterAction: @escaping () -> Void) {
+        self.unregisterAction = unregisterAction
+    }
+
+    func unregister() {
+        lock.lock()
+        let action = unregisterAction
+        unregisterAction = nil
+        lock.unlock()
+        action?()
+    }
+
+    deinit {
+        unregister()
+    }
+}
+
+final class ChildSignalForwardingCoordinator: @unchecked Sendable {
+    typealias DispositionInstaller = @Sendable (
+        Int32
+    ) -> ChildSignalDispositionInstallation
+    typealias SourceInstaller = @Sendable (
+        Int32,
+        DispatchQueue,
+        @escaping @Sendable () -> Void
+    ) -> ChildSignalSourceInstallation
+    typealias SignalForwarder = @Sendable (pid_t, Int32) -> Void
+
+    static let shared = ChildSignalForwardingCoordinator()
+
+    private struct SignalInstallation {
+        let identifier: UUID
+        let disposition: ChildSignalDispositionInstallation
+        let source: ChildSignalSourceInstallation
+    }
+
+    private let signals: [Int32]
+    private let deliveryQueue: DispatchQueue
+    private let dispositionInstaller: DispositionInstaller
+    private let sourceInstaller: SourceInstaller
+    private let forwardSignal: SignalForwarder
+    private var targets: [UUID: Process] = [:]
+    private var installations: [Int32: SignalInstallation] = [:]
+
+    init(
+        signals: [Int32] = [SIGINT, SIGTERM, SIGHUP],
+        deliveryQueue: DispatchQueue = DispatchQueue(
+            label: "app.authsia.child-signal-forwarding"
+        ),
+        dispositionInstaller: DispositionInstaller? = nil,
+        sourceInstaller: SourceInstaller? = nil,
+        forwardSignal: SignalForwarder? = nil
+    ) {
+        self.signals = Array(Set(signals)).sorted()
+        self.deliveryQueue = deliveryQueue
+        self.dispositionInstaller = dispositionInstaller ?? { signal in
+            ChildSignalActionController().installCaught(signal: signal)
+        }
+        self.sourceInstaller = sourceInstaller ?? { signal, queue, eventHandler in
+            let source = DispatchSource.makeSignalSource(
+                signal: signal,
+                queue: queue
+            )
+            source.setEventHandler(handler: eventHandler)
             source.resume()
-            return source
+            return ChildSignalSourceInstallation {
+                source.cancel()
+            }
+        }
+        self.forwardSignal = forwardSignal ?? { pid, signal in
+            _ = Darwin.kill(pid, signal)
+        }
+    }
+
+    func register(_ process: Process) -> ChildSignalForwardingRegistration {
+        let identifier = UUID()
+        deliveryQueue.sync {
+            targets[identifier] = process
+            if targets.count == 1 {
+                installSignalHandling()
+            }
+        }
+
+        return ChildSignalForwardingRegistration { [weak self] in
+            self?.unregister(identifier)
+        }
+    }
+
+    private func installSignalHandling() {
+        for signal in signals {
+            let identifier = UUID()
+            let disposition = dispositionInstaller(signal)
+            let source = sourceInstaller(
+                signal,
+                deliveryQueue,
+                { [weak self] in
+                    self?.handle(signal: signal, installationID: identifier)
+                }
+            )
+            installations[signal] = SignalInstallation(
+                identifier: identifier,
+                disposition: disposition,
+                source: source
+            )
+        }
+    }
+
+    private func unregister(_ identifier: UUID) {
+        deliveryQueue.sync {
+            guard targets.removeValue(forKey: identifier) != nil,
+                  targets.isEmpty else {
+                return
+            }
+
+            let installedSignals = signals.compactMap { installations[$0] }
+            installations.removeAll()
+            installedSignals.forEach { $0.source.cancel() }
+            installedSignals.forEach { $0.disposition.restore() }
+        }
+    }
+
+    private func handle(signal: Int32, installationID: UUID) {
+        dispatchPrecondition(condition: .onQueue(deliveryQueue))
+        guard installations[signal]?.identifier == installationID else {
+            return
+        }
+
+        for process in targets.values where process.isRunning {
+            forwardSignal(process.processIdentifier, signal)
         }
     }
 }
