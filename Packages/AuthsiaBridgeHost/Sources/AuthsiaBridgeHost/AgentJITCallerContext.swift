@@ -22,19 +22,46 @@ public enum AgentJITCallerContext {
     }
 
     private static func sessionScope(for request: BridgeRequest, caller: CallerIdentity) -> String? {
-        let cursorSessionPrefix = "agent:cursor:sid:"
         guard let requestedScope = request.context.sessionScope,
-              requestedScope.hasPrefix(cursorSessionPrefix),
-              let sessionID = Int32(requestedScope.dropFirst(cursorSessionPrefix.count)),
-              sessionID > 0,
+              let platform = agentSidPlatform(from: requestedScope),
               let parent = caller.parentProcess,
               parent.pid > 1,
-              let host = caller.hostProcess,
-              isCursorExtensionHost(parent),
-              isCursorHost(host) else {
+              shouldRewriteToAgentProcessPID(parent: parent, host: caller.hostProcess) else {
             return request.context.sessionScope
         }
-        return "agent:cursor:pid:\(parent.pid)"
+        return "agent:\(platform):pid:\(parent.pid)"
+    }
+
+    /// Parses `agent:<platform>:sid:<n>` where `<n>` is a positive Int32.
+    private static func agentSidPlatform(from scope: String) -> String? {
+        guard scope.hasPrefix("agent:"),
+              let sidRange = scope.range(of: ":sid:", options: .backwards) else {
+            return nil
+        }
+        let platform = String(scope["agent:".endIndex..<sidRange.lowerBound])
+        let sessionValue = String(scope[sidRange.upperBound...])
+        guard !platform.isEmpty,
+              !platform.contains(":"),
+              let sessionID = Int32(sessionValue),
+              sessionID > 0 else {
+            return nil
+        }
+        return platform
+    }
+
+    private static func shouldRewriteToAgentProcessPID(
+        parent: ParentProcessInfo,
+        host: ParentProcessInfo?
+    ) -> Bool {
+        if AgenticProcessDetector.isAgenticProcess(
+            processName: parent.processName,
+            bundleIdentifier: parent.bundleIdentifier
+        ) {
+            return true
+        }
+        // IDE extension hosts: only coalesce when the host identity is trusted.
+        guard let host else { return false }
+        return isCursorExtensionHost(parent) && isCursorHost(host)
     }
 
     private static func isCursorExtensionHost(_ process: ParentProcessInfo) -> Bool {

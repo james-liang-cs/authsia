@@ -236,9 +236,13 @@ public enum AgenticProcessDetector {
             let withoutAppSuffix = normalized.hasSuffix(".app")
                 ? String(normalized.dropLast(".app".count))
                 : normalized
-            let withoutExtension = (withoutAppSuffix as NSString).deletingPathExtension
+            // Only strip executable wrappers (.exe). Do not use generic
+            // deletingPathExtension — that misattributes docs like CLAUDE.md.
+            let withoutExeSuffix = withoutAppSuffix.hasSuffix(".exe")
+                ? String(withoutAppSuffix.dropLast(".exe".count))
+                : withoutAppSuffix
             return platformName(forKnownAgentName: withoutAppSuffix)
-                ?? platformName(forKnownAgentName: withoutExtension)
+                ?? platformName(forKnownAgentName: withoutExeSuffix)
         }.first
     }
 
