@@ -12,6 +12,14 @@ struct OutputMasker {
             .sorted { $0.count > $1.count }
     }
 
+    /// Exact-match mode for destructive cleanup. Does not add encoded or escaped derivatives.
+    init(exactSecrets: [String]) {
+        var seen = Set<String>()
+        self.sortedSecrets = exactSecrets
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+            .sorted { $0.count > $1.count }
+    }
+
     /// Replace all occurrences of any secret in the input with the placeholder.
     func mask(_ input: String) -> String {
         guard !sortedSecrets.isEmpty else { return input }

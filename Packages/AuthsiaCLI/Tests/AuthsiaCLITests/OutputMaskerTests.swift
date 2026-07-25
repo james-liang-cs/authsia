@@ -120,6 +120,18 @@ struct OutputMaskerTests {
         #expect(masker.mask("hex=68756E74657232") == "hex=<concealed by authsia>")
     }
 
+    @Test("exact secret masker excludes derived encodings")
+    func exactSecretMaskerExcludesDerivedEncodings() {
+        let exactMasker = OutputMasker(exactSecrets: ["", "abcd", "abcd"])
+        let outputMasker = OutputMasker(secrets: ["abcd"])
+
+        #expect(exactMasker.mask("original=abcd") == "original=<concealed by authsia>")
+        #expect(exactMasker.mask("base64=YWJjZA==") == "base64=YWJjZA==")
+        #expect(exactMasker.mask("hex=61626364") == "hex=61626364")
+        #expect(outputMasker.mask("base64=YWJjZA==") == "base64=<concealed by authsia>")
+        #expect(outputMasker.mask("hex=61626364") == "hex=<concealed by authsia>")
+    }
+
     @Test("masks percent encoded secret")
     func masksPercentEncodedSecret() {
         let masker = OutputMasker(secrets: ["token/next"])

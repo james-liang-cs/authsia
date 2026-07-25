@@ -46,6 +46,9 @@ struct WorkspaceConfigTests {
         #expect(agentHelp.contains("--dry-run"))
         #expect(agentHelp.contains("--print"))
         #expect(runHelp.contains("--shell"))
+        #expect(runHelp.contains("--cleanup-secret-files"))
+        #expect(runHelp.contains("replace eligible exact injected secrets"))
+        #expect(runHelp.contains("off by default"))
         #expect(syncHelp.contains("--plan-json"))
         #expect(syncHelp.contains("--apply-json"))
         #expect(guardHelp.contains("--dry-run"))
@@ -3253,6 +3256,23 @@ struct WorkspaceRunPlannerTests {
         #expect(exec.environmentOverrides == ["HF_TOKEN": binding.reference])
     }
 
+    @Test("workspace run secret-file cleanup is off by default")
+    func workspaceRunSecretFileCleanupIsOffByDefault() throws {
+        let command = try Workspace.Run.parse(["--", "npm", "test"])
+
+        #expect(!command.cleanupSecretFiles)
+    }
+
+    @Test("workspace run parses secret-file cleanup opt-in")
+    func workspaceRunParsesSecretFileCleanupOptIn() throws {
+        let command = try Workspace.Run.parse([
+            "--cleanup-secret-files",
+            "--", "npm", "test",
+        ])
+
+        #expect(command.cleanupSecretFiles)
+    }
+
     @Test("workspace run dry-run names direct or mediated execution path")
     func workspaceRunDryRunNamesDirectOrMediatedExecutionPath() throws {
         let root = try makeWorkspaceRoot()
@@ -3371,7 +3391,10 @@ struct WorkspaceRunPlannerTests {
             commandArgs: [],
             shellCommandParts: ["--", "printf", "ok"]
         )
-        let shellExec = Workspace.Run.configuredExec(for: shellPlan)
+        let shellExec = Workspace.Run.configuredExec(
+            for: shellPlan,
+            cleanupSecretFiles: true
+        )
 
         #expect(shellExec.resolvedType == nil)
         #expect(shellExec.resolvedQuery == nil)
@@ -3379,6 +3402,7 @@ struct WorkspaceRunPlannerTests {
         #expect(shellExec.env == nil)
         #expect(!shellExec.all)
         #expect(!shellExec.allMachines)
+        #expect(shellExec.cleanupSecretFiles)
         #expect(shellExec.field == nil)
         #expect(shellExec.envFile == [root.appendingPathComponent(".env").path])
         #expect(shellExec.environmentOverrides.isEmpty)
@@ -3392,6 +3416,7 @@ struct WorkspaceRunPlannerTests {
         )
         let directExec = Workspace.Run.configuredExec(for: directPlan)
 
+        #expect(!directExec.cleanupSecretFiles)
         #expect(directExec.shellCommand == nil)
         #expect(directExec.resolvedCommandArgs == ["printf", "ok"])
     }

@@ -49,6 +49,7 @@ struct ConfiguredExecDefaultsTests {
         #expect(exec.env == nil)
         #expect(exec.all == false)
         #expect(exec.allMachines == false)
+        #expect(exec.cleanupSecretFiles == false)
         #expect(exec.outputPolicy == .strict)
         #expect(exec.field == nil)
         #expect(exec.envFile.isEmpty)

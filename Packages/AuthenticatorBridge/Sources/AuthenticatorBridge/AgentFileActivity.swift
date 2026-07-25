@@ -29,6 +29,8 @@ public enum AgentFileActivitySource: String, Codable, CaseIterable, Equatable, S
     case hook
     case workspaceDiff
     case command
+    /// Post-exit inspection or explicit cleanup from a secret-injected `authsia exec` / `workspace run` child.
+    case injectedExec
 }
 
 public enum AgentFileActivityConfidence: String, Codable, CaseIterable, Equatable, Sendable {
@@ -36,6 +38,15 @@ public enum AgentFileActivityConfidence: String, Codable, CaseIterable, Equatabl
     case confirmed
     case inferred
     case fallback
+}
+
+/// Detail strings recorded on `AgentFileActivityEvent` for `captureSource == .injectedExec`.
+public enum InjectedSecretFileActivityDetail {
+    public static let scrubbed = "scrubbed"
+    public static let secretDetected = "secret-detected"
+    public static let inspectionFailed = "inspection-failed"
+    public static let verificationFailed = "verification-failed"
+    public static let remediationFailed = "remediation-failed"
 }
 
 public struct AgentFileActivityEvent: Codable, Equatable, Identifiable, Sendable {

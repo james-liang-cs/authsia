@@ -305,7 +305,7 @@ receives one primary classification:
 | Standard output | Mediated | `authsia exec` masks known secret values and common transforms; novel transforms can bypass masking. |
 | Standard error | Mediated | Uses the same masking boundary and has the same limitations as stdout. |
 | Invalid or incomplete UTF-8 output | Prevented by default | Strict output buffers a valid multibyte code point split across read chunks. Invalid sequences, or a partial code point still incomplete when the stream closes, are withheld; the child is terminated and the CLI exits `74`. Explicit `masked-compatibility` may pass those bytes with a warning. Valid UTF-8 using a novel transform remains mediated, not categorically prevented. |
-| File writes | Detected | Agent file-activity evidence can show best-effort writes in a managed scope; it does not block or inspect arbitrary content. |
+| File writes | Detected | Agent file-activity evidence can show best-effort writes. After a secret-injected mediated run, Authsia reads only bounded observed candidates for eligible exact injected tokens and leaves files unchanged by default. `--cleanup-secret-files` opts into replacement. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
 | Network | Out of scope | Arbitrary child network traffic is not mediated. |
 | Subprocesses | Detected | Command and ancestry evidence can identify supported activity; child-process behavior is not contained. |
 | Clipboard | Out of scope | Authsia does not monitor arbitrary child clipboard access. |
@@ -589,6 +589,23 @@ The first rules are intentionally narrow:
   `id_rsa` / `id_ed25519` / `id_ecdsa`, `*.pem` / `*.p12` / `*.pfx`). Broad
   names such as bare `credentials`, `*.key`, `.npmrc`, and `.pypirc` are not
   Review flags.
+- `Review`: when a matching per-file event is persisted for the JIT grant, an
+  eligible injected secret was confirmed in an observed file and left
+  unchanged because cleanup was not enabled (`Secret detected in file`).
+- `Review`: when a matching per-file event is persisted for the JIT grant, a
+  specific default inspection attempt could not complete; this does not
+  confirm secret presence (`Secret-file inspection incomplete`).
+- `Review`: when a matching per-file event is persisted for the JIT grant, a
+  specific requested opt-in cleanup attempt was incomplete
+  (`Secret-file cleanup incomplete`).
+- `Info`: when a matching per-file event is persisted for the JIT grant, an
+  eligible injected secret was successfully replaced during explicit cleanup
+  (`Secret scrubbed from file`).
+
+Root/watcher health failures, global path/byte/time budget exhaustion, and
+excluded short values during requested cleanup can still produce a CLI warning
+without a per-file event or per-grant finding. Event persistence is
+best-effort.
 - `Info`: process monitoring was used where hook capture is unavailable.
 - `Info`: a process was recorded from the secret-injected child tree during
   mediated `authsia exec` / secret-bearing `workspace run` (Access Center
@@ -603,6 +620,59 @@ While a secret-injected child is running, Authsia may poll that child’s
 descendant tree and persist redacted Process Tree evidence for Access Center.
 This is observe-only for the injected-child lifetime; it is not an OS-wide
 sandbox and does not block, kill, or auto-revoke from tree activity.
+
+Post-exit file handling uses a lower-disruption rollout:
+
+- `authsia exec` and secret-bearing `authsia workspace run` inspect by default
+  but do not rewrite files. `--cleanup-secret-files`, available on both
+  commands and off by default, is the only switch that enables remediation.
+- Inspection starts only when the final child environment contains an original
+  injected value of at least 12 characters. Short-only default runs are
+  unobserved and quiet; mixed runs ignore shorter values without adding an
+  incomplete result. Output-only derived masking tokens and env-file-overridden
+  values are not file-match tokens.
+- The canonical real cwd is always considered, with valid configured workspace
+  and trusted temporary roots added. Roots are conservatively bounded and
+  captured by device/inode before launch. A missing or replaced root fails
+  identity checks during fallback and at destructive boundaries.
+- Filesystem events provide observed candidates. The high-signal-name mtime
+  fallback is capped across deduplicated roots at 10,000 entries or one
+  monotonic second and prunes `.git`, `.build`, `DerivedData`, and
+  `node_modules`. Discovery remains best-effort, so a missed ordinary-file
+  event can leave that file unexamined without a warning.
+- Default inspection opens eligible candidates read-only and invokes no Authsia
+  content rewrite or metadata restoration. The filesystem read may still
+  advance `atime`. A confirmed exact match stays unchanged, records
+  `secret-detected`, and emits one warning. A completed no-match inspection is
+  quiet.
+- An unsafe or unverifiable default candidate records `inspection-failed` when
+  evidence can be persisted. Access Center derives the Review finding
+  `Secret-file inspection incomplete`, which explicitly does not confirm secret
+  presence. A detection plus incomplete inspection still emits one combined
+  warning.
+- Explicit cleanup accepts only an identity-stable, within-root, regular
+  single-link UTF-8 file no larger than 2 MiB. Eligible exact matches are
+  replaced in place with `<concealed by authsia>`, regardless of filename.
+  Values shorter than 12 characters remain excluded and make requested cleanup
+  incomplete.
+- Opt-in rewrites are descriptor-anchored and verify a bounded snapshot of
+  xattrs (including the resource fork), ACL, mode, ownership, flags, and exact
+  creation/access/modification times. Pre-mutation rejection leaves content
+  untouched. Once rewriting begins, failure triggers best-effort restoration,
+  but rollback can fail. A crash or power loss between truncation, writing, and
+  restoration can leave partial or already-masked content; remediation is not
+  crash-atomic.
+- Opt-in failures record `verification-failed` or `remediation-failed` and may
+  produce `Secret-file cleanup incomplete`. Confirmed detection, incomplete
+  inspection, successful scrub, and cleanup failure remain distinct findings.
+- Evidence persistence is best-effort, so a CLI warning may occur without a
+  finding. Outside-root candidates produce no per-file event. No inspection,
+  detection, or cleanup warning changes the child exit status. Strict-output
+  failure for invalid or incomplete UTF-8 remains the separate exit-`74`
+  behavior.
+
+This is post-exit leak reduction, not live filesystem prevention: the child or
+agent may read or transmit a file before inspection or cleanup.
 
 Grant rows show a calm count such as `2 flags` when findings exist. The Commands
 sheet has `All` and `Flagged` filters, and flagged command rows show the derived
@@ -653,11 +723,30 @@ command output, stdin, environment values, or plaintext secrets. Agent activity
 JSON export uses workspace-relative paths for workspace-contained file activity
 and omits the matching absolute path, working directory, and workspace root.
 
+After a secret-injected `authsia exec` / secret-bearing `workspace run` child
+exits, Authsia may record `injectedExec` events with `secret-detected`,
+`inspection-failed`, `scrubbed`, `verification-failed`, or
+`remediation-failed`. These distinguish a confirmed unchanged match, an
+unconfirmed inspection failure, successful opt-in replacement, and opt-in
+cleanup failures. They store path metadata, not file contents or injected token
+bytes. Evidence persistence is best-effort, and outside-root candidates do not
+produce a per-file event.
+
+Before persistence, injected-exec path, working-directory, and workspace
+metadata is redacted with every exact value actually injected into the child
+and recognized deterministic encodings, including encodings of values shorter
+than the 12-character destructive-cleanup threshold.
+Each event-worthy result produces one event per unique active JIT grant in
+deterministic grant-ID order; duplicate grant IDs collapse, and a result with
+no active grant produces exactly one event whose grant ID is `nil`.
+
 Source labels mean:
 
 - `Hook`: a supported agent file tool reported the path.
 - `Workspace diff`: Authsia associated a workspace change with the session.
 - `Command`: Access Center inferred the path from a recorded command.
+- `Injected exec`: post-exit inspection, detection, cleanup, or a recorded
+  failure from a mediated child.
 
 Confidence labels mean:
 

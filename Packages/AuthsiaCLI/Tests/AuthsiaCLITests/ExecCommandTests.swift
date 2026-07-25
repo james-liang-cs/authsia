@@ -21,6 +21,9 @@ struct ExecCommandTests {
         #expect(help.contains("authsia exec --type api-key --query API_KEY -- npm start"))
         #expect(help.contains("authsia exec password --folder Team/API -- docker compose up"))
         #expect(help.contains("authsia exec --env-file prod.env -- npm start"))
+        #expect(help.contains("--cleanup-secret-files"))
+        #expect(help.contains("replace eligible exact injected secrets"))
+        #expect(help.contains("off by default"))
         #expect(help.contains("including nested folders"))
     }
 
@@ -179,6 +182,27 @@ struct ExecCommandTests {
         #expect(command.outputPolicy == .strict)
     }
 
+    @Test("secret-file cleanup is off by default")
+    func secretFileCleanupIsOffByDefault() throws {
+        let command = try Exec.parse([
+            "--env-file", ".env",
+            "--", "npm", "start",
+        ])
+
+        #expect(!command.cleanupSecretFiles)
+    }
+
+    @Test("secret-file cleanup requires the explicit flag")
+    func parsesSecretFileCleanupFlag() throws {
+        let command = try Exec.parse([
+            "--env-file", ".env",
+            "--cleanup-secret-files",
+            "--", "npm", "start",
+        ])
+
+        #expect(command.cleanupSecretFiles)
+    }
+
     @Test("masked compatibility requires an explicit option")
     func parsesMaskedCompatibilityOutputPolicy() throws {
         let command = try Exec.parse([
@@ -201,6 +225,64 @@ struct ExecCommandTests {
         #expect(result.exitCode == Exec.outputDisclosureFailureExitCode)
     }
 
+    @Test("incomplete file cleanup preserves the child exit status")
+    func incompleteFileCleanupPreservesChildExitStatus() {
+        let result = Exec.ChildRunResult(
+            terminationStatus: 7,
+            terminationReason: .exit,
+            outputFailure: nil,
+            fileCleanupStatus: .incomplete
+        )
+
+        #expect(result.exitCode == 7)
+        #expect(result.fileCleanupStatus == .incomplete)
+    }
+
+    @Test("cleanup warning write failure preserves a nonzero child exit status")
+    func cleanupWarningWriteFailurePreservesNonzeroChildExitStatus() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-cleanup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = UUID().uuidString
+        let path = directory.appendingPathComponent("oversized.txt").path
+        var oversized = Data("TOKEN=\(secret)\n".utf8)
+        oversized.append(Data(repeating: 0x41, count: InjectedSecretFileScrubber.defaultMaxBytes))
+        try oversized.write(to: URL(fileURLWithPath: path))
+
+        let watcher = InjectedFileTouchWatcher(
+            roots: [directory.path],
+            startOverride: { true }
+        )
+        watcher.recordForTesting(path)
+        let errorPipe = Pipe()
+        try errorPipe.fileHandleForWriting.close()
+
+        let result = Exec.runChildProcess(
+            command: ["/bin/sh", "-c", "exit 7"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            masker: OutputMasker(secrets: [secret]),
+            fileCleanupMasker: OutputMasker(exactSecrets: [secret]),
+            standardError: errorPipe.fileHandleForWriting,
+            fileScrubContext: InjectedSecretFileScrubContext(
+                agentJITGrantIDs: [UUID()],
+                agentPlatform: "codex",
+                terminalSessionScope: "test-scope",
+                workingDirectory: directory.path,
+                workspaceRoot: directory.path
+            ),
+            fileActivityStore: AgentFileActivityStore(
+                fileURL: directory.appendingPathComponent("files.jsonl")
+            ),
+            fileTouchWatcher: watcher
+        )
+
+        #expect(result.terminationStatus == 7)
+        #expect(result.exitCode == 7)
+        #expect(result.fileCleanupStatus == .incomplete)
+    }
+
     @Test("strict child output failure terminates and withholds invalid bytes")
     func strictChildOutputFailureTerminatesAndWithholdsInvalidBytes() throws {
         let output = Pipe()
@@ -218,6 +300,7 @@ struct ExecCommandTests {
 
         #expect(result.outputFailure == .invalidUTF8)
         #expect(result.exitCode == Exec.outputDisclosureFailureExitCode)
+        #expect(result.fileCleanupStatus == .notRequested)
         #expect(((try output.fileHandleForReading.readToEnd()) ?? Data()) == Data())
     }
 
@@ -1039,6 +1122,87 @@ struct ExecCollectSecretsTests {
     func collectSecretsEmpty() {
         let result = Exec.collectSecrets(entries: [], resolvedSecrets: [])
         #expect(result.isEmpty)
+    }
+
+    @Test("exact cleanup secrets contain only stable nonempty injected values")
+    func exactCleanupSecretsExcludeTransformationOnlyTokens() {
+        let original = "abcd-1234-efgh"
+        let resolved = "resolved-synthetic-value"
+        let sshToken = "authsia_ac1_synthetic-token"
+        let entries = [
+            Load.LoadedEntry(
+                key: "A", value: original, itemType: .password,
+                sourceName: "A", sourceID: "1", folderPath: nil,
+                scrapeMachineName: nil, scrapeMachineId: nil
+            ),
+            Load.LoadedEntry(
+                key: "B", value: "", itemType: .password,
+                sourceName: "B", sourceID: "2", folderPath: nil,
+                scrapeMachineName: nil, scrapeMachineId: nil
+            ),
+        ]
+
+        let result = Exec.exactInjectedSecrets(
+            entries: entries,
+            resolvedSecrets: [resolved, original, ""],
+            environment: [
+                "A": original,
+                "RESOLVED": resolved,
+                AutomationAccessResolver.sshEnvironmentKey: sshToken,
+            ]
+        )
+
+        #expect(result == [original, resolved, sshToken])
+        #expect(!result.contains("a"))
+        #expect(!result.contains("14"))
+    }
+
+    @Test("exact cleanup secrets exclude loaded values overridden in the final environment")
+    func exactCleanupSecretsExcludeEnvFileOverrides() {
+        let overridden = "loaded-secret-value"
+        let retained = "retained-secret-value"
+        let entries = [
+            Load.LoadedEntry(
+                key: "OVERRIDDEN", value: overridden, itemType: .password,
+                sourceName: "Overridden", sourceID: "1", folderPath: nil,
+                scrapeMachineName: nil, scrapeMachineId: nil
+            ),
+            Load.LoadedEntry(
+                key: "RETAINED", value: retained, itemType: .password,
+                sourceName: "Retained", sourceID: "2", folderPath: nil,
+                scrapeMachineName: nil, scrapeMachineId: nil
+            ),
+        ]
+        let environment = Exec.finalEnvironment(
+            entries: entries,
+            parentEnvironment: [:],
+            envFileVars: ["OVERRIDDEN": "plain-env-file-override"],
+            sshAutomationCredential: nil
+        )
+
+        let result = Exec.exactInjectedSecrets(
+            entries: entries,
+            resolvedSecrets: [],
+            environment: environment
+        )
+
+        #expect(result == [retained])
+        #expect(!result.contains(overridden))
+    }
+
+    @Test("file cleanup selection excludes values shorter than twelve characters")
+    func fileCleanupSelectionExcludesShortValues() {
+        let selection = Exec.fileCleanupSecretSelection(
+            exactInjectedSecrets: [
+                "short-value",
+                "twelve-chars",
+                "eligible-secret-value",
+                "eligible-secret-value",
+            ]
+        )
+
+        #expect(selection.secrets == ["twelve-chars", "eligible-secret-value"])
+        #expect(selection.isIncomplete)
     }
 
     @Test("includes explicit shell substring expansions for injected secrets")
