@@ -1064,12 +1064,6 @@ struct Workspace: AsyncParsableCommand {
         @Flag(name: .customLong("default-only"), help: "Use only untagged default-environment items for one run")
         var defaultOnly = false
 
-        @Flag(
-            name: .long,
-            help: "Compatibility flag; eligible exact injected secrets are automatically replaced after mediated runs"
-        )
-        var cleanupSecretFiles = false
-
         @Option(
             name: .customLong("shell"),
             parsing: .remaining,
@@ -1171,10 +1165,7 @@ struct Workspace: AsyncParsableCommand {
                 Darwin.exit(result.exitCode)
             }
 
-            let exec = Self.configuredExec(
-                for: plan,
-                cleanupSecretFiles: cleanupSecretFiles
-            )
+            let exec = Self.configuredExec(for: plan)
             try exec.run()
         }
 
@@ -1516,10 +1507,7 @@ struct Workspace: AsyncParsableCommand {
             character == "_" || character.isLetter || character.isNumber
         }
 
-        static func configuredExec(
-            for plan: WorkspaceRunPlan,
-            cleanupSecretFiles: Bool = false
-        ) -> Exec {
+        static func configuredExec(for plan: WorkspaceRunPlan) -> Exec {
             var exec = Exec()
             exec.type = nil
             exec.query = nil
@@ -1529,7 +1517,6 @@ struct Workspace: AsyncParsableCommand {
             exec.env = nil
             exec.all = false
             exec.allMachines = false
-            exec.cleanupSecretFiles = cleanupSecretFiles
             // Programmatic construction bypasses parsing, so wrapper defaults are
             // never materialized; every @Option/@Argument/@Flag must be assigned here.
             exec.outputPolicy = .strict

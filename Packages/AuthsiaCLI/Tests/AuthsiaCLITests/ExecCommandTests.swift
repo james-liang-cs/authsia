@@ -21,9 +21,7 @@ struct ExecCommandTests {
         #expect(help.contains("authsia exec --type api-key --query API_KEY -- npm start"))
         #expect(help.contains("authsia exec password --folder Team/API -- docker compose up"))
         #expect(help.contains("authsia exec --env-file prod.env -- npm start"))
-        #expect(help.contains("--cleanup-secret-files"))
-        #expect(help.contains("eligible exact injected secrets are automatically replaced"))
-        #expect(help.contains("after mediated runs"))
+        #expect(!help.contains("--cleanup-secret-files"))
         #expect(help.contains("including nested folders"))
     }
 
@@ -182,25 +180,15 @@ struct ExecCommandTests {
         #expect(command.outputPolicy == .strict)
     }
 
-    @Test("secret-file cleanup compatibility flag is false by default")
-    func secretFileCleanupCompatibilityFlagIsFalseByDefault() throws {
-        let command = try Exec.parse([
-            "--env-file", ".env",
-            "--", "npm", "start",
-        ])
-
-        #expect(!command.cleanupSecretFiles)
-    }
-
-    @Test("secret-file cleanup compatibility flag still parses")
-    func parsesSecretFileCleanupFlag() throws {
-        let command = try Exec.parse([
-            "--env-file", ".env",
-            "--cleanup-secret-files",
-            "--", "npm", "start",
-        ])
-
-        #expect(command.cleanupSecretFiles)
+    @Test("rejects removed secret-file cleanup flag")
+    func rejectsRemovedSecretFileCleanupFlag() {
+        #expect(throws: (any Error).self) {
+            _ = try Exec.parse([
+                "--env-file", ".env",
+                "--cleanup-secret-files",
+                "--", "npm", "start",
+            ])
+        }
     }
 
     @Test("secret-file cleanup is automatic for every mediated run")
