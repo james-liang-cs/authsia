@@ -309,7 +309,7 @@ existing environment variables.
 | `--all-machines` | No | flag | Include scraped items from all machines (default: current machine only) |
 | `--field` | No | type-specific field | Defaults to password/certificate/content |
 | `--env-file <path>` | No | file path | Explicitly load env vars from a `.env` file (repeatable; last file wins on duplicate keys) |
-| `--cleanup-secret-files` | No | flag | Force best-effort post-exit replacement for a non-agent run; verified agent runs clean eligible exact injected values automatically |
+| `--cleanup-secret-files` | No | flag | Compatibility flag; eligible exact injected values are automatically replaced after every mediated run |
 | `--shell <command>` | No | quoted shell command string | Run the command string through `/bin/sh -c` for child-shell expansion |
 | `-- <command> [args...]` | Yes, unless `--shell` is used | command argv | Command to run directly with injected secrets |
 
@@ -386,11 +386,11 @@ it was given.
 follow shell convention: signal-killed processes exit with `128 + signum` (e.g. 130 for SIGINT).
 
 **Post-exit file inspection:** `exec` inspects bounded observed files for exact injected values of
-at least 12 characters. When Authsia verifies that the invocation belongs to a coding agent, it
-automatically replaces only those exact values and preserves all surrounding file content. Human
-and unattributed runs leave files unchanged, warn on a confirmed match, and can force the same
-best-effort replacement with `--cleanup-secret-files`. The flag is also available on
-`authsia workspace run`. Neither inspection nor cleanup changes the child exit status.
+at least 12 characters and automatically replaces only those exact values while preserving all
+surrounding file content. This applies to human, agent, and automation invocations. The
+`--cleanup-secret-files` flag remains accepted by `exec` and `authsia workspace run` for script
+compatibility, but cleanup no longer requires it. Neither inspection nor cleanup changes the child
+exit status.
 
 Examples:
 
@@ -412,7 +412,7 @@ authsia exec --env-file prod.env -- npm start
 authsia exec --env-file config/.env -- make deploy
 API_KEY=authsia://api-key/Stripe/key?folder=Team/API authsia exec -- npm start
 
-# Explicitly opt into best-effort post-exit replacement
+# Compatibility form; cleanup is already automatic
 authsia exec api-key API_KEY --cleanup-secret-files -- npm start
 
 # Combine type scope with .env file
@@ -1559,7 +1559,7 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace run --default-only -- <command>` | Use only default-environment items for one run | `authsia workspace run --default-only -- npm test` |
 | `workspace run --shell -- <command>` | Run a quoted shell command through `/bin/sh -c` with managed env files | `authsia workspace run --shell -- 'curl "$API_KEY"'` |
 | `workspace run --dry-run` | Show env files, command, and direct-vs-`exec` execution path | `authsia workspace run --dry-run -- npm test` |
-| `workspace run --cleanup-secret-files -- <command>` | Force best-effort post-exit replacement for a non-agent run; agent runs clean eligible exact values automatically | `authsia workspace run --cleanup-secret-files -- npm test` |
+| `workspace run --cleanup-secret-files -- <command>` | Compatibility form; eligible exact injected values are already cleaned automatically | `authsia workspace run --cleanup-secret-files -- npm test` |
 | `workspace status` | Show workspace config, managed env files, env bindings, reference/rule state, and missing/unverified-vault guidance for `authsia://` refs | `authsia workspace status` |
 | `guard` | Activate guarded mode in the current shell after standard shell integration is enabled | `authsia guard` |
 | `unguard` | Restart the current tab in normal mode; skip Auto-guard once | `authsia unguard` |
@@ -2149,9 +2149,9 @@ uses workspace-relative paths for workspace-contained file activity and omits th
 path, working directory, and workspace root.
 
 After `authsia exec` or a secret-bearing `authsia workspace run`, Authsia performs bounded
-post-exit file inspection. A verified coding-agent invocation automatically enables cleanup;
-human and unattributed invocations remain detect-only unless `--cleanup-secret-files` explicitly
-enables cleanup.
+post-exit file inspection and automatically enables cleanup for human, agent, and automation
+invocations. `--cleanup-secret-files` remains accepted for script compatibility but does not
+change this policy.
 
 Inspection considers only original injected values that remain in the final child environment and
 are at least 12 characters long. Output-only derived masking tokens, env-file-overridden values, and
@@ -2172,21 +2172,17 @@ high-signal-name fallback is bounded across deduplicated roots to 10,000 visited
 monotonic second and prunes `.git`, `.build`, `DerivedData`, and `node_modules`. Discovery remains
 best-effort: a missed ordinary-file event can leave that file unexamined without a warning.
 
-Detect-only inspection opens a candidate read-only and never enters Authsia’s rewrite or metadata
-restoration path. Filesystem reads may still advance the file’s access time (`atime`). Eligible
-candidates are within identity-bound roots, regular single-link files, valid UTF-8, no larger than
-2 MiB, and stable during verification. In a human or unattributed run, a safely confirmed exact
-match is left unchanged, records redacted `secret-detected` evidence, and emits one warning
-directing the user to Access Center and the cleanup flag. A completed no-match inspection is quiet.
-If bounded inspection cannot complete,
+Eligible candidates are within identity-bound roots, regular single-link files, valid UTF-8, no
+larger than 2 MiB, and stable during verification. A completed no-match inspection is quiet. If
+bounded inspection cannot complete,
 Authsia may record `inspection-failed` and the Review finding `Secret-file inspection incomplete`;
 that finding explicitly does not confirm secret presence. A combined detection plus inspection
 failure still produces only one warning.
 
-For a verified coding-agent run, or a non-agent run using `--cleanup-secret-files`, each safely
-verified eligible exact match is replaced in place with `<concealed by authsia>`, regardless of
-filename. Replacement changes only the exact secret bytes; surrounding text and unrelated values
-remain intact. Values shorter than 12 characters remain excluded and make cleanup incomplete.
+For every mediated run, each safely verified eligible exact match is replaced in place with
+`<concealed by authsia>`, regardless of filename. Replacement changes only the exact secret bytes;
+surrounding text and unrelated values remain intact. Values shorter than 12 characters remain
+excluded and make cleanup incomplete.
 Rewrites are descriptor-anchored: Authsia mutates or restores only the verified opened descriptor
 and creates no scrub temporary entry to rename or unlink by path. A bounded descriptor snapshot
 verifies extended attributes (including the resource fork), extended ACL, mode, ownership, flags,
@@ -2238,9 +2234,9 @@ output, block commands, revoke grants, or change authorization. Severities are l
 `Review`, and `Warning`. V1 **Flagged** (Review/Warning) covers commands recorded after ended grants,
 direct agent secret-read attempts (`authsia get`, `authsia read`, `authsia load`, `authsia inject`),
 environment dumps (`env`, `printenv`) and clear high-signal dotenv reads (not `.env.example` /
-`ls .env*` mentions), high-signal secret file paths, confirmed unchanged file detections,
-incomplete default inspection, and incomplete requested cleanup. Info-only signals include process
-fallback, injected-tree capture, outside-workspace file activity, and successful explicit secret
+`ls .env*` mentions), high-signal secret file paths, legacy confirmed unchanged file detections,
+legacy incomplete inspection, and incomplete cleanup. Info-only signals include process
+fallback, injected-tree capture, outside-workspace file activity, and successful secret
 file scrub. File findings require successfully persisted redacted per-file evidence associated with
 a JIT grant. The Commands view can
 filter `All` or `Flagged` rows, and JSON export includes `commands`, `files`, `processTrees`,

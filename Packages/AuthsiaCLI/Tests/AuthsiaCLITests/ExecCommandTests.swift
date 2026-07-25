@@ -22,8 +22,8 @@ struct ExecCommandTests {
         #expect(help.contains("authsia exec password --folder Team/API -- docker compose up"))
         #expect(help.contains("authsia exec --env-file prod.env -- npm start"))
         #expect(help.contains("--cleanup-secret-files"))
-        #expect(help.contains("replace eligible exact injected secrets"))
-        #expect(help.contains("automatic for agent runs"))
+        #expect(help.contains("eligible exact injected secrets are automatically replaced"))
+        #expect(help.contains("after mediated runs"))
         #expect(help.contains("including nested folders"))
     }
 
@@ -182,8 +182,8 @@ struct ExecCommandTests {
         #expect(command.outputPolicy == .strict)
     }
 
-    @Test("secret-file cleanup is off by default")
-    func secretFileCleanupIsOffByDefault() throws {
+    @Test("secret-file cleanup compatibility flag is false by default")
+    func secretFileCleanupCompatibilityFlagIsFalseByDefault() throws {
         let command = try Exec.parse([
             "--env-file", ".env",
             "--", "npm", "start",
@@ -192,7 +192,7 @@ struct ExecCommandTests {
         #expect(!command.cleanupSecretFiles)
     }
 
-    @Test("secret-file cleanup requires the explicit flag")
+    @Test("secret-file cleanup compatibility flag still parses")
     func parsesSecretFileCleanupFlag() throws {
         let command = try Exec.parse([
             "--env-file", ".env",
@@ -203,25 +203,9 @@ struct ExecCommandTests {
         #expect(command.cleanupSecretFiles)
     }
 
-    @Test(
-        "secret-file cleanup is automatic only for agent runs unless explicitly requested",
-        arguments: [
-            (false, Optional("codex"), true),
-            (false, nil, false),
-            (true, nil, true),
-        ]
-    )
-    func secretFileCleanupPolicy(
-        explicitlyRequested: Bool,
-        agentPlatform: String?,
-        expected: Bool
-    ) {
-        #expect(
-            Exec.shouldCleanupSecretFiles(
-                explicitlyRequested: explicitlyRequested,
-                agentPlatform: agentPlatform
-            ) == expected
-        )
+    @Test("secret-file cleanup is automatic for every mediated run")
+    func secretFileCleanupPolicy() {
+        #expect(Exec.shouldCleanupSecretFiles())
     }
 
     @Test("masked compatibility requires an explicit option")

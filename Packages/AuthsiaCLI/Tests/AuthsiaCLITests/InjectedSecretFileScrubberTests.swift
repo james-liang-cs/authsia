@@ -1918,8 +1918,8 @@ struct InjectedSecretFileScrubberTests {
         #expect(events.contains { $0.detail == InjectedSecretFileActivityDetail.scrubbed })
     }
 
-    @Test("agent-scoped runs automatically replace only the exact injected secret")
-    func agentScopedRunAutomaticallyReplacesOnlyExactInjectedSecret() throws {
+    @Test("mediated runs automatically replace only the exact injected secret")
+    func mediatedRunAutomaticallyReplacesOnlyExactInjectedSecret() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -1932,15 +1932,12 @@ struct InjectedSecretFileScrubberTests {
         watcher.recordForTesting(path)
         let context = InjectedSecretFileScrubContext(
             agentJITGrantIDs: [],
-            agentPlatform: "codex",
+            agentPlatform: nil,
             terminalSessionScope: nil,
             workingDirectory: directory.path,
             workspaceRoot: directory.path
         )
-        let automaticCleanup = Exec.shouldCleanupSecretFiles(
-            explicitlyRequested: false,
-            agentPlatform: context.agentPlatform
-        )
+        let automaticCleanup = Exec.shouldCleanupSecretFiles()
         let quotedPath = path.replacingOccurrences(of: "'", with: "'\\''")
 
         let result = Exec.runChildProcess(
