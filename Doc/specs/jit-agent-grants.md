@@ -744,7 +744,9 @@ Confidence labels mean:
 - `Inferred`: Authsia inferred the path from command argv or a workspace
   change, not a direct hook report.
 - `Fallback`: Authsia associated activity by terminal/session scope and working
-  directory.
+  directory. This fallback also requires compatible agent-platform attribution;
+  an unattributed human CLI run is not attached to an agent grant merely because
+  it used the same terminal and working directory.
 
 Actual Authsia secret access remains governed by JIT grants, bridge policy,
 exact-item or explicitly approved folder scope, caller, workspace, environment,

@@ -163,6 +163,16 @@ final class AgentCommandHistoryTests: XCTestCase {
             arguments: ["npm", "test"],
             command: "npm test"
         )
+        let humanOnSameTerminal = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 75),
+            agentPlatform: nil,
+            captureSource: .process,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "authsia",
+            arguments: ["authsia", "exec"],
+            command: "authsia exec"
+        )
         let matchedByGrantID = AgentCommandEvent(
             recordedAt: Date(timeIntervalSince1970: 80),
             agentPlatform: "claude-code",
@@ -185,7 +195,13 @@ final class AgentCommandHistoryTests: XCTestCase {
 
         let matched = AgentCommandHistoryQuery.events(
             for: grant,
-            from: [unrelated, matchedByGrantID, matchedByScope, matchedByContext]
+            from: [
+                unrelated,
+                humanOnSameTerminal,
+                matchedByGrantID,
+                matchedByScope,
+                matchedByContext,
+            ]
         )
 
         XCTAssertEqual(matched.map(\.command), ["swift test", "npm test", "make ship"])
@@ -325,6 +341,19 @@ final class AgentCommandHistoryTests: XCTestCase {
             status: .succeeded,
             confidence: .fallback
         )
+        let humanOnSameTerminal = AgentFileActivityEvent(
+            recordedAt: Date(timeIntervalSince1970: 31),
+            agentPlatform: nil,
+            captureSource: .workspaceDiff,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            workspaceRoot: "/tmp/project",
+            path: "/tmp/project/Human.txt",
+            kind: .file,
+            action: .modify,
+            status: .succeeded,
+            confidence: .fallback
+        )
         let conflictingContext = AgentFileActivityEvent(
             recordedAt: Date(timeIntervalSince1970: 32),
             agentPlatform: "claude-code",
@@ -385,6 +414,7 @@ final class AgentCommandHistoryTests: XCTestCase {
                 hookScopeOnly,
                 scopeWithoutWorkingDirectory,
                 conflictingContext,
+                humanOnSameTerminal,
                 matchedByScope,
                 matchedByGrantID,
                 matchedByContext,
@@ -392,6 +422,35 @@ final class AgentCommandHistoryTests: XCTestCase {
         )
 
         XCTAssertEqual(matched.map(\.workspaceRelativePath), ["Package.swift", "Granted.swift", "Sources"])
+    }
+
+    func testProcessTreeRunsForGrantExcludeHumanRunOnSameTerminal() {
+        let grant = makeGrant(agentName: "Codex")
+        let agentRun = InjectedProcessTreeRun(
+            startedAt: Date(timeIntervalSince1970: 20),
+            rootPID: 100,
+            rootExecutable: "sh",
+            rootArguments: ["sh", "-c", "npm test"],
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            workingDirectory: "/tmp/project",
+            agentPlatform: "codex"
+        )
+        let humanRun = InjectedProcessTreeRun(
+            startedAt: Date(timeIntervalSince1970: 30),
+            rootPID: 200,
+            rootExecutable: "sh",
+            rootArguments: ["sh", "-c", "authsia exec"],
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            workingDirectory: "/tmp/project",
+            agentPlatform: nil
+        )
+
+        let matched = InjectedProcessTreeQuery.runs(
+            for: grant,
+            from: [humanRun, agentRun]
+        )
+
+        XCTAssertEqual(matched.map(\.rootPID), [100])
     }
 
     func testFindingSeverityEncodingUsesOnlyInfoReviewAndWarning() throws {

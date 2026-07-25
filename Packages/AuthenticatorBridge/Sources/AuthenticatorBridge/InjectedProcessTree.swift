@@ -129,6 +129,12 @@ public enum InjectedProcessTreeQuery {
     }
 
     private static func matchesTerminalScope(run: InjectedProcessTreeRun, grant: AgentJITGrant) -> Bool {
+        guard AgentGrantActivityAttribution.matchesAgentPlatform(
+            run.agentPlatform,
+            grant: grant
+        ) else {
+            return false
+        }
         guard let runScope = normalized(run.terminalSessionScope),
               let grantScope = normalized(grant.callerFingerprint.sessionScope),
               runScope == grantScope else {

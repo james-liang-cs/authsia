@@ -167,6 +167,12 @@ public enum AgentFileActivityQuery {
 
     private static func matchesTerminalScope(event: AgentFileActivityEvent, grant: AgentJITGrant) -> Bool {
         guard event.captureSource == .workspaceDiff else { return false }
+        guard AgentGrantActivityAttribution.matchesAgentPlatform(
+            event.agentPlatform,
+            grant: grant
+        ) else {
+            return false
+        }
         guard let eventScope = normalized(event.terminalSessionScope),
               let grantScope = normalized(grant.callerFingerprint.sessionScope),
               eventScope == grantScope else {

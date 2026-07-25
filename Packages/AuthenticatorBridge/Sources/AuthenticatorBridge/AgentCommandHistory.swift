@@ -109,6 +109,12 @@ public enum AgentCommandHistoryQuery {
 
     private static func matchesTerminalScope(event: AgentCommandEvent, grant: AgentJITGrant) -> Bool {
         guard event.captureSource == .process else { return false }
+        guard AgentGrantActivityAttribution.matchesAgentPlatform(
+            event.agentPlatform,
+            grant: grant
+        ) else {
+            return false
+        }
         guard let eventScope = normalized(event.terminalSessionScope),
               let grantScope = normalized(grant.callerFingerprint.sessionScope),
               eventScope == grantScope else {
@@ -143,6 +149,36 @@ public enum AgentCommandHistoryQuery {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+enum AgentGrantActivityAttribution {
+    static func matchesAgentPlatform(_ eventPlatform: String?, grant: AgentJITGrant) -> Bool {
+        guard let eventPlatform = normalizedPlatform(eventPlatform) else {
+            return false
+        }
+        let grantPlatforms = [
+            grant.agentRuntimeContext?.platform,
+            AgenticProcessDetector.agentPlatform(
+                processName: grant.callerFingerprint.parentProcessName,
+                bundleIdentifier: grant.callerFingerprint.parentBundleIdentifier
+            ),
+            grant.agentName,
+        ]
+        return grantPlatforms.compactMap(normalizedPlatform).contains(eventPlatform)
+    }
+
+    private static func normalizedPlatform(_ value: String?) -> String? {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "claude", "claude code", "claude-code":
+            return "claude-code"
+        case "codex":
+            return "codex"
+        case let value? where !value.isEmpty:
+            return value
+        default:
+            return nil
+        }
     }
 }
 
