@@ -2120,23 +2120,34 @@ Code uses generated Bash tool hooks as the first capture layer. GitHub Copilot u
 Copilot CLI `PreToolUse` Bash hook when `.github/copilot/settings.local.json` can be installed.
 Authsia also uses macOS process monitoring as a fallback/corroboration layer, but only records
 processes that can be tied to an active Authsia-managed agent terminal scope, including local VS Code
-Copilot extension-host ancestry. Access Center grant cards expose an Agent activity sheet with
-Commands and Files views plus JSON export. Records are redacted before persistence and store command metadata only:
+Copilot extension-host ancestry. Separately, while `authsia exec` or secret-bearing
+`authsia workspace run` waits on a secret-injected child, Authsia polls that child’s descendant
+tree and records redacted Process Tree evidence (observe-only; not a sandbox). Access Center grant
+cards expose an Agent activity sheet with Commands, Files, and Process Tree views plus JSON export.
+Records are redacted before persistence and store command metadata only:
 time, tool/platform, grant/session context, cwd when available, executable, argv or command string
 after safe redaction, exit status when available, and capture source. They do not store command
 output, stdin, environment values, vault item contents, or secrets.
 
 Agent file activity in Access Center is local display evidence only. Authsia records path metadata
-from supported agent tool hooks, including action, status, source, and confidence. It does not store
-file contents, command output, stdin, environment values, or plaintext secrets. JSON export uses
-workspace-relative paths for workspace-contained file activity and omits the matching absolute path,
-working directory, and workspace root.
+from supported agent tool hooks, and Access Center also derives low-confidence path events from
+allowlisted command argv (for example `cat`, `ls`, `rm`) when path-like tokens are present. It does
+not store file contents, command output, stdin, environment values, or plaintext secrets. JSON export
+uses workspace-relative paths for workspace-contained file activity and omits the matching absolute
+path, working directory, and workspace root.
+
+Source labels are:
+
+- `Hook`: a supported agent file tool reported the path.
+- `Workspace diff`: Authsia associated a workspace change with the session.
+- `Command`: Access Center inferred the path from a recorded command.
 
 Confidence labels are:
 
 - `Direct`: a supported hook reported the file or directory for the tool call.
 - `Confirmed`: a post-tool hook reported success for the same tool call.
-- `Inferred`: Authsia detected a workspace change during the session, not a direct read.
+- `Inferred`: Authsia inferred the path from command argv or a workspace change, not a direct hook
+  report.
 - `Fallback`: Authsia associated activity by terminal/session scope and working directory.
 
 Actual Authsia secret access remains governed by JIT grants, bridge policy, named-folder subtree scope,
@@ -2145,12 +2156,13 @@ capability, TTL, and audit records. File activity does not grant or deny access.
 Access Center derives local investigation flags from this metadata, matching JIT grants, and audit
 records. Flags are display-only and do not call AI, send data out, persist separately, store command
 output, block commands, revoke grants, or change authorization. Severities are limited to `Info`,
-`Review`, and `Warning`. V1 flags commands recorded after ended grants, process-only captures without
-a nearby matching hook event for hook-capable tools, direct agent secret-read attempts (`authsia get`,
-`authsia read`, `authsia load`, `authsia inject`), possible environment exposure commands (`env`,
-`printenv`, `.env` reads), and process fallback where hooks are unavailable. The Commands view can
-filter `All` or `Flagged` rows, and JSON export includes `commands`, `files`, `findings`, and
-`summary` counts.
+`Review`, and `Warning`. V1 **Flagged** (Review/Warning) covers commands recorded after ended grants,
+direct agent secret-read attempts (`authsia get`, `authsia read`, `authsia load`, `authsia inject`),
+environment dumps (`env`, `printenv`) and clear high-signal dotenv reads (not `.env.example` /
+`ls .env*` mentions), plus high-signal secret file paths. Info-only signals include process
+fallback, injected-tree capture, and outside-workspace file activity. The Commands view can
+filter `All` or `Flagged` rows, and JSON export includes `commands`, `files`, `processTrees`,
+`findings`, and `summary` counts.
 
 The same hook metadata can attach display-only agent or subagent attribution to JIT grants and audit
 records. Attribution is not trusted for authorization. JIT still binds grants to the OS caller

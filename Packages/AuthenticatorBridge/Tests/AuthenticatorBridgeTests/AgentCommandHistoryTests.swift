@@ -571,19 +571,68 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(findings.map(\.severity), [.review])
     }
 
+    func testFindingDetectorReviewsClearDotEnvFileReadsButIgnoresBenignMentions() {
+        let grant = makeGrant()
+        let clearRead = AgentCommandEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            recordedAt: Date(timeIntervalSince1970: 100),
+            agentPlatform: "claude-code",
+            agentJITGrantID: grant.id,
+            captureSource: .hook,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "cat",
+            arguments: ["cat", ".env.production"],
+            command: "cat .env.production",
+            exitStatus: 0
+        )
+        let benignMention = AgentCommandEvent(
+            id: UUID(uuidString: "22222222-3333-4444-5555-666666666666")!,
+            recordedAt: Date(timeIntervalSince1970: 101),
+            agentPlatform: "claude-code",
+            agentJITGrantID: grant.id,
+            captureSource: .hook,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "ls",
+            arguments: ["ls", "-la", ".env.example"],
+            command: "ls -la .env.example",
+            exitStatus: 0
+        )
+        let exampleRead = AgentCommandEvent(
+            id: UUID(uuidString: "33333333-4444-5555-6666-777777777777")!,
+            recordedAt: Date(timeIntervalSince1970: 102),
+            agentPlatform: "claude-code",
+            agentJITGrantID: grant.id,
+            captureSource: .hook,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "cat",
+            arguments: ["cat", ".env.example"],
+            command: "cat .env.example",
+            exitStatus: 0
+        )
+
+        let findings = AgentCommandFindingDetector.findings(
+            for: grant,
+            events: [clearRead, benignMention, exampleRead],
+            auditRecords: []
+        )
+
+        XCTAssertEqual(findings.map(\.type), [.possibleEnvironmentExposure])
+        XCTAssertEqual(findings.map(\.evidenceEventIDs), [[clearRead.id]])
+    }
+
     func testFindingDetectorReviewsSensitiveFileActivity() {
         let grant = makeGrant()
         let sensitivePaths = [
             ".env.production",
             ".envrc",
-            ".npmrc",
-            ".pypirc",
             ".netrc",
-            ".aws/credentials",
-            "credentials",
             "id_ecdsa",
             "identity.p12",
             "identity.pfx",
+            "tls.pem",
         ]
         let sensitiveEvents = sensitivePaths.enumerated().map { offset, path in
             AgentFileActivityEvent(
@@ -600,25 +649,35 @@ final class AgentCommandHistoryTests: XCTestCase {
                 confidence: .direct
             )
         }
-        let benignEvent = AgentFileActivityEvent(
-            id: UUID(uuidString: "22222222-3333-4444-5555-666666666666")!,
-            recordedAt: Date(timeIntervalSince1970: 200),
-            agentPlatform: "claude-code",
-            agentJITGrantID: grant.id,
-            captureSource: .hook,
-            workingDirectory: "/tmp/project",
-            workspaceRoot: "/tmp/project",
-            path: "/tmp/project/README.md",
-            kind: .file,
-            action: .read,
-            status: .succeeded,
-            confidence: .direct
-        )
+        let noisyPaths = [
+            ".env.example",
+            ".npmrc",
+            ".pypirc",
+            ".aws/credentials",
+            "credentials",
+            "signing.key",
+            "README.md",
+        ]
+        let noisyEvents = noisyPaths.enumerated().map { offset, path in
+            AgentFileActivityEvent(
+                recordedAt: Date(timeIntervalSince1970: TimeInterval(200 + offset)),
+                agentPlatform: "claude-code",
+                agentJITGrantID: grant.id,
+                captureSource: .hook,
+                workingDirectory: "/tmp/project",
+                workspaceRoot: "/tmp/project",
+                path: "/tmp/project/\(path)",
+                kind: .file,
+                action: .read,
+                status: .succeeded,
+                confidence: .direct
+            )
+        }
 
         let findings = AgentCommandFindingDetector.findings(
             for: grant,
             events: [],
-            fileEvents: [benignEvent] + sensitiveEvents,
+            fileEvents: noisyEvents + sensitiveEvents,
             auditRecords: []
         )
 
@@ -628,10 +687,10 @@ final class AgentCommandHistoryTests: XCTestCase {
         )
         XCTAssertEqual(findings.map(\.severity), Array(repeating: .review, count: sensitiveEvents.count))
         XCTAssertEqual(findings.map(\.evidenceEventIDs), Array(repeating: [], count: sensitiveEvents.count))
-        XCTAssertEqual(findings.map(\.fileEvidenceEventIDs), sensitiveEvents.map { [$0.id] })
+        XCTAssertEqual(Set(findings.flatMap(\.fileEvidenceEventIDs)), Set(sensitiveEvents.map(\.id)))
     }
 
-    func testFindingDetectorReviewsOutsideWorkspaceFileActivity() {
+    func testFindingDetectorMarksOutsideWorkspaceFileActivityAsInfo() {
         let grant = makeGrant()
         let outsideEvent = AgentFileActivityEvent(
             id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
@@ -684,7 +743,7 @@ final class AgentCommandHistoryTests: XCTestCase {
         )
 
         XCTAssertEqual(findings.map(\.type), [.outsideWorkspaceFileActivity])
-        XCTAssertEqual(findings.map(\.severity), [.review])
+        XCTAssertEqual(findings.map(\.severity), [.info])
         XCTAssertEqual(findings.first?.evidenceEventIDs, [])
         XCTAssertEqual(findings.first?.fileEvidenceEventIDs, [outsideEvent.id])
     }

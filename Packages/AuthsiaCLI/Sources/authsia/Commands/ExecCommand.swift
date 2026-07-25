@@ -251,6 +251,7 @@ struct Exec: ParsableCommand {
         }
 
         try AuthsiaBridgeClient.shared.withRequestedCommand(.exec) {
+            var accumulatedGrantIDs: [UUID] = []
             // Phase 1: Load by type+scope (existing behavior)
             var entries: [Load.LoadedEntry] = []
             if let type = resolvedType, hasTypeScope {
@@ -268,11 +269,11 @@ struct Exec: ParsableCommand {
                     field: field?.loadField
                 )
                 if !initialReferences.isEmpty {
-                    try Self.runJITPreflight(
+                    accumulatedGrantIDs.append(contentsOf: try Self.runJITPreflight(
                         references: initialReferences,
                         parentEnvironment: parentEnvironment,
                         environmentScope: effectiveEnvironmentScope
-                    )
+                    ))
                 }
                 let authorizedPayload = try Load.applyAutomationAccess(
                     to: try client.list(),
@@ -288,13 +289,13 @@ struct Exec: ParsableCommand {
                     allMachines: allMachines,
                     currentMachineId: currentMachineId
                 )
-                try Self.runJITPreflight(
+                accumulatedGrantIDs.append(contentsOf: try Self.runJITPreflight(
                     type: loadType,
                     references: references,
                     field: field?.loadField,
                     parentEnvironment: parentEnvironment,
                     environmentScope: effectiveEnvironmentScope
-                )
+                ))
                 entries = try Load.loadEntries(
                     type: loadType,
                     references: references,
@@ -322,13 +323,13 @@ struct Exec: ParsableCommand {
                 environment: preflightEnvironment,
                 parentEnvironment: parentEnvironment
             )
-            try Self.runJITPreflight(
+            accumulatedGrantIDs.append(contentsOf: try Self.runJITPreflight(
                 references: SecretReferenceResolver.preflightReferences(
                     environment: preflightEnvironment
                 ),
                 parentEnvironment: parentEnvironment,
                 environmentScope: effectiveEnvironmentScope
-            )
+            ))
 
             // Phase 5: Resolve any authsia:// references in the environment
             let resolver = SecretReferenceResolver(client: AuthsiaBridgeClient.shared)
@@ -352,12 +353,28 @@ struct Exec: ParsableCommand {
                     "Warning: masked-compatibility cannot prevent disclosure through files, network, IPC, or arbitrary output transforms."
                 )
             }
+            let processAncestry = AgenticProcessDetector.currentProcessAncestry()
+            let treeContext: InjectedProcessTreeWatchContext? = allSecrets.isEmpty
+                ? nil
+                : InjectedProcessTreeWatchContext(
+                    agentJITGrantIDs: Array(Set(accumulatedGrantIDs)),
+                    agentPlatform: processAncestry.lazy.compactMap {
+                        AgenticProcessDetector.agentPlatform(
+                            processName: $0.processName,
+                            bundleIdentifier: $0.bundleIdentifier,
+                            arguments: $0.arguments
+                        )
+                    }.first,
+                    terminalSessionScope: TerminalSessionScope.currentAncestralScope(),
+                    workingDirectory: FileManager.default.currentDirectoryPath
+                )
             let result = Self.runChildProcess(
                 command: childCommand,
                 environment: environment,
                 masker: masker,
                 outputPolicy: outputPolicy,
-                sshAutomationCredential: sshAutomationCredential
+                sshAutomationCredential: sshAutomationCredential,
+                treeContext: treeContext
             )
             if result.outputFailure != nil {
                 StandardError.writeLine(
@@ -566,7 +583,7 @@ struct Exec: ParsableCommand {
         environmentScope: EnvironmentAccessScope? = nil,
         processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
         client: ExecJITPreflightClient = AuthsiaBridgeClient.shared
-    ) throws {
+    ) throws -> [UUID] {
         try runJITPreflight(
             references: try jitPreflightReferences(type: type, references: references, field: field),
             parentEnvironment: parentEnvironment,
@@ -576,6 +593,7 @@ struct Exec: ParsableCommand {
         )
     }
 
+    @discardableResult
     static func runJITPreflight(
         references: [AgentJITPreflightReference],
         parentEnvironment: [String: String],
@@ -587,9 +605,9 @@ struct Exec: ParsableCommand {
         currentDirectoryPath: String = FileManager.default.currentDirectoryPath,
         terminalSessionScope: String? = TerminalSessionScope.currentAncestralScope(),
         commandLine: [String] = CommandLine.arguments
-    ) throws {
+    ) throws -> [UUID] {
         guard shouldRunJITPreflight(environment: parentEnvironment, processAncestry: processAncestry),
-              !references.isEmpty else { return }
+              !references.isEmpty else { return [] }
         var grantIDs: [UUID] = []
         defer {
             recordAgentCommandHistory(
@@ -610,6 +628,7 @@ struct Exec: ParsableCommand {
                 environmentScope: environmentScope
             )
         ).grantIDs
+        return grantIDs
     }
 
     private static func recordAgentCommandHistory(
@@ -2101,7 +2120,11 @@ struct Exec: ParsableCommand {
         outputPolicy: OutputDisclosurePolicy = .strict,
         sshAutomationCredential: AccessCredential? = nil,
         standardOutput: FileHandle = .standardOutput,
-        standardError: FileHandle = .standardError
+        standardError: FileHandle = .standardError,
+        treeContext: InjectedProcessTreeWatchContext? = nil,
+        treeStore: InjectedProcessTreeStore = InjectedProcessTreeStore(),
+        commandHistoryStore: AgentCommandHistoryStore = AgentCommandHistoryStore(),
+        treeSampleProvider: (@Sendable (Int32) -> [InjectedProcessTreeSample])? = nil
     ) -> ChildRunResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -2127,6 +2150,29 @@ struct Exec: ParsableCommand {
             )
         }
         _ = sshAutomationCredential
+
+        let watcher: InjectedProcessTreeWatcher?
+        if let treeContext {
+            let provider = treeSampleProvider ?? { InjectedProcessTreeSampler.liveSamples(rootPID: $0) }
+            let created = InjectedProcessTreeWatcher(
+                store: treeStore,
+                commandHistoryStore: commandHistoryStore,
+                sampleProvider: provider,
+                context: treeContext
+            )
+            let rootExecutable = command.first.map { URL(fileURLWithPath: $0).lastPathComponent }
+            created.start(
+                rootPID: process.processIdentifier,
+                rootExecutable: rootExecutable,
+                rootArguments: command
+            )
+            watcher = created
+        } else {
+            watcher = nil
+        }
+        defer {
+            watcher?.stop(exitStatus: process.terminationStatus)
+        }
 
         let group = DispatchGroup()
         let outputCoordinator = ChildOutputCoordinator(process: process)
