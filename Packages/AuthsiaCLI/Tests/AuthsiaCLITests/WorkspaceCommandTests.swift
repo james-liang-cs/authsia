@@ -48,7 +48,7 @@ struct WorkspaceConfigTests {
         #expect(runHelp.contains("--shell"))
         #expect(runHelp.contains("--cleanup-secret-files"))
         #expect(runHelp.contains("replace eligible exact injected secrets"))
-        #expect(runHelp.contains("off by default"))
+        #expect(runHelp.contains("automatic for agent runs"))
         #expect(syncHelp.contains("--plan-json"))
         #expect(syncHelp.contains("--apply-json"))
         #expect(guardHelp.contains("--dry-run"))

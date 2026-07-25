@@ -1066,7 +1066,7 @@ struct Workspace: AsyncParsableCommand {
 
         @Flag(
             name: .long,
-            help: "After exit, replace eligible exact injected secrets in safely verified observed files; off by default"
+            help: "After exit, replace eligible exact injected secrets in safely verified observed files; automatic for agent runs"
         )
         var cleanupSecretFiles = false
 

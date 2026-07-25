@@ -305,7 +305,7 @@ receives one primary classification:
 | Standard output | Mediated | `authsia exec` masks known secret values and common transforms; novel transforms can bypass masking. |
 | Standard error | Mediated | Uses the same masking boundary and has the same limitations as stdout. |
 | Invalid or incomplete UTF-8 output | Prevented by default | Strict output buffers a valid multibyte code point split across read chunks. Invalid sequences, or a partial code point still incomplete when the stream closes, are withheld; the child is terminated and the CLI exits `74`. Explicit `masked-compatibility` may pass those bytes with a warning. Valid UTF-8 using a novel transform remains mediated, not categorically prevented. |
-| File writes | Detected | Agent file-activity evidence can show best-effort writes. After a secret-injected mediated run, Authsia reads only bounded observed candidates for eligible exact injected tokens and leaves files unchanged by default. `--cleanup-secret-files` opts into replacement. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
+| File writes | Detected and reduced | Agent file-activity evidence can show best-effort writes. After a secret-injected mediated agent run, Authsia reads only bounded observed candidates and automatically replaces eligible exact injected tokens while preserving other file content. Human and unattributed runs remain detect-only unless `--cleanup-secret-files` requests cleanup. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
 | Network | Out of scope | Arbitrary child network traffic is not mediated. |
 | Subprocesses | Detected | Command and ancestry evidence can identify supported activity; child-process behavior is not contained. |
 | Clipboard | Out of scope | Authsia does not monitor arbitrary child clipboard access. |
@@ -596,10 +596,10 @@ The first rules are intentionally narrow:
   specific default inspection attempt could not complete; this does not
   confirm secret presence (`Secret-file inspection incomplete`).
 - `Review`: when a matching per-file event is persisted for the JIT grant, a
-  specific requested opt-in cleanup attempt was incomplete
+  specific automatic or explicitly requested cleanup attempt was incomplete
   (`Secret-file cleanup incomplete`).
 - `Info`: when a matching per-file event is persisted for the JIT grant, an
-  eligible injected secret was successfully replaced during explicit cleanup
+  eligible injected secret was successfully replaced during cleanup
   (`Secret scrubbed from file`).
 
 Root/watcher health failures, global path/byte/time budget exhaustion, and
@@ -623,9 +623,10 @@ sandbox and does not block, kill, or auto-revoke from tree activity.
 
 Post-exit file handling uses a lower-disruption rollout:
 
-- `authsia exec` and secret-bearing `authsia workspace run` inspect by default
-  but do not rewrite files. `--cleanup-secret-files`, available on both
-  commands and off by default, is the only switch that enables remediation.
+- `authsia exec` and secret-bearing `authsia workspace run` automatically
+  remediate safely verified exact matches when Authsia attributes the
+  invocation to a coding agent. Human and unattributed runs inspect without
+  rewriting unless `--cleanup-secret-files` explicitly requests remediation.
 - Inspection starts only when the final child environment contains an original
   injected value of at least 12 characters. Short-only default runs are
   unobserved and quiet; mixed runs ignore shorter values without adding an
@@ -727,8 +728,8 @@ After a secret-injected `authsia exec` / secret-bearing `workspace run` child
 exits, Authsia may record `injectedExec` events with `secret-detected`,
 `inspection-failed`, `scrubbed`, `verification-failed`, or
 `remediation-failed`. These distinguish a confirmed unchanged match, an
-unconfirmed inspection failure, successful opt-in replacement, and opt-in
-cleanup failures. They store path metadata, not file contents or injected token
+unconfirmed inspection failure, successful replacement, and cleanup failures.
+They store path metadata, not file contents or injected token
 bytes. Evidence persistence is best-effort, and outside-root candidates do not
 produce a per-file event.
 

@@ -1918,6 +1918,59 @@ struct InjectedSecretFileScrubberTests {
         #expect(events.contains { $0.detail == InjectedSecretFileActivityDetail.scrubbed })
     }
 
+    @Test("agent-scoped runs automatically replace only the exact injected secret")
+    func agentScopedRunAutomaticallyReplacesOnlyExactInjectedSecret() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let path = directory.appendingPathComponent("agent-output.txt").path
+        let secret = "agent-exact-secret-value"
+        let watcher = InjectedFileTouchWatcher(
+            roots: [directory.path],
+            startOverride: { true }
+        )
+        watcher.recordForTesting(path)
+        let context = InjectedSecretFileScrubContext(
+            agentJITGrantIDs: [],
+            agentPlatform: "codex",
+            terminalSessionScope: nil,
+            workingDirectory: directory.path,
+            workspaceRoot: directory.path
+        )
+        let automaticCleanup = Exec.shouldCleanupSecretFiles(
+            explicitlyRequested: false,
+            agentPlatform: context.agentPlatform
+        )
+        let quotedPath = path.replacingOccurrences(of: "'", with: "'\\''")
+
+        let result = Exec.runChildProcess(
+            command: [
+                "/bin/sh",
+                "-c",
+                "printf 'prefix=%s\\nnear=%sx\\nsuffix=preserved\\n' "
+                    + "'\(secret)' '\(secret)' > '\(quotedPath)'",
+            ],
+            environment: ["PATH": "/usr/bin:/bin"],
+            masker: OutputMasker(secrets: [secret]),
+            fileCleanupMasker: OutputMasker(exactSecrets: [secret]),
+            cleanupSecretFiles: automaticCleanup,
+            fileScrubContext: context,
+            fileActivityStore: AgentFileActivityStore(
+                fileURL: directory.appendingPathComponent("files.jsonl")
+            ),
+            fileTouchWatcher: watcher
+        )
+
+        #expect(automaticCleanup)
+        #expect(result.fileCleanupStatus == .complete)
+        #expect(
+            try String(contentsOfFile: path, encoding: .utf8)
+                == "prefix=\(OutputMasker.placeholder)\n"
+                    + "near=\(OutputMasker.placeholder)x\n"
+                    + "suffix=preserved\n"
+        )
+    }
+
     @Test("default run detects a high-signal secret file and leaves it unchanged")
     func defaultRunDetectsHighSignalFileWithoutCleanup() throws {
         let directory = try temporaryDirectory()

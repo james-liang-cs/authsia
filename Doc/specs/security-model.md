@@ -36,9 +36,10 @@ For detailed JIT grant behavior, see [`jit-agent-grants.md`](jit-agent-grants.md
    launched child's environment, not in the parent shell.
 4. Authsia strictly masks known values and recognized representations in that
    child's stdout and stderr. After the child exits, bounded inspection looks
-   for eligible exact injected values in observed files and leaves them
-   unchanged by default. `--cleanup-secret-files` is the explicit opt-in for
-   best-effort replacement.
+   for eligible exact injected values in observed files. For a verified coding
+   agent run, Authsia automatically replaces only those exact values while
+   preserving the file's other content. Human and unattributed runs remain
+   detect-only unless `--cleanup-secret-files` explicitly requests cleanup.
 5. Access Center and redacted audit records make grants, sessions, findings,
    and revocation visible. This reduces accidental disclosure and limits
    authority; it is not operating-system-wide DLP and cannot stop an approved
