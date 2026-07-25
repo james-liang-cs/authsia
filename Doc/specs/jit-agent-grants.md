@@ -305,7 +305,7 @@ receives one primary classification:
 | Standard output | Mediated | `authsia exec` masks known secret values and common transforms; novel transforms can bypass masking. |
 | Standard error | Mediated | Uses the same masking boundary and has the same limitations as stdout. |
 | Invalid or incomplete UTF-8 output | Prevented by default | Strict output buffers a valid multibyte code point split across read chunks. Invalid sequences, or a partial code point still incomplete when the stream closes, are withheld; the child is terminated and the CLI exits `74`. Explicit `masked-compatibility` may pass those bytes with a warning. Valid UTF-8 using a novel transform remains mediated, not categorically prevented. |
-| File writes | Detected and reduced | Agent file-activity evidence can show best-effort writes. After a secret-injected mediated agent run, Authsia reads only bounded observed candidates and automatically replaces eligible exact injected tokens while preserving other file content. Human and unattributed runs remain detect-only unless `--cleanup-secret-files` requests cleanup. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
+| File writes | Detected and reduced | After any secret-injected mediated run, Authsia reads only bounded observed candidates and automatically replaces eligible exact injected tokens while preserving other file content. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
 | Network | Out of scope | Arbitrary child network traffic is not mediated. |
 | Subprocesses | Detected | Command and ancestry evidence can identify supported activity; child-process behavior is not contained. |
 | Clipboard | Out of scope | Authsia does not monitor arbitrary child clipboard access. |
@@ -589,21 +589,18 @@ The first rules are intentionally narrow:
   `id_rsa` / `id_ed25519` / `id_ecdsa`, `*.pem` / `*.p12` / `*.pfx`). Broad
   names such as bare `credentials`, `*.key`, `.npmrc`, and `.pypirc` are not
   Review flags.
-- `Review`: when a matching per-file event is persisted for the JIT grant, an
-  eligible injected secret was confirmed in an observed file and left
-  unchanged because cleanup was not enabled (`Secret detected in file`).
+- `Review`: legacy detect-only releases may persist a confirmed unchanged match
+  (`Secret detected in file`) or an incomplete inspection that does not confirm
+  secret presence (`Secret-file inspection incomplete`).
 - `Review`: when a matching per-file event is persisted for the JIT grant, a
-  specific default inspection attempt could not complete; this does not
-  confirm secret presence (`Secret-file inspection incomplete`).
-- `Review`: when a matching per-file event is persisted for the JIT grant, a
-  specific automatic or explicitly requested cleanup attempt was incomplete
+  specific cleanup attempt was incomplete
   (`Secret-file cleanup incomplete`).
 - `Info`: when a matching per-file event is persisted for the JIT grant, an
   eligible injected secret was successfully replaced during cleanup
   (`Secret scrubbed from file`).
 
 Root/watcher health failures, global path/byte/time budget exhaustion, and
-excluded short values during requested cleanup can still produce a CLI warning
+excluded short values during automatic cleanup can still produce a CLI warning
 without a per-file event or per-grant finding. Event persistence is
 best-effort.
 - `Info`: process monitoring was used where hook capture is unavailable.
@@ -621,12 +618,12 @@ descendant tree and persist redacted Process Tree evidence for Access Center.
 This is observe-only for the injected-child lifetime; it is not an OS-wide
 sandbox and does not block, kill, or auto-revoke from tree activity.
 
-Post-exit file handling uses a lower-disruption rollout:
+Post-exit file handling:
 
-- `authsia exec` and secret-bearing `authsia workspace run` automatically
-  remediate safely verified exact matches when Authsia attributes the
-  invocation to a coding agent. Human and unattributed runs inspect without
-  rewriting unless `--cleanup-secret-files` explicitly requests remediation.
+- Every secret-bearing `authsia exec` and `authsia workspace run` automatically
+  remediates safely verified exact matches in observed files, whether invoked
+  by a human, agent, or automation credential. There is no cleanup flag or
+  opt-out.
 - Inspection starts only when the final child environment contains an original
   injected value of at least 12 characters. Short-only default runs are
   unobserved and quiet; mixed runs ignore shorter values without adding an
@@ -641,29 +638,20 @@ Post-exit file handling uses a lower-disruption rollout:
   monotonic second and prunes `.git`, `.build`, `DerivedData`, and
   `node_modules`. Discovery remains best-effort, so a missed ordinary-file
   event can leave that file unexamined without a warning.
-- Default inspection opens eligible candidates read-only and invokes no Authsia
-  content rewrite or metadata restoration. The filesystem read may still
-  advance `atime`. A confirmed exact match stays unchanged, records
-  `secret-detected`, and emits one warning. A completed no-match inspection is
-  quiet.
-- An unsafe or unverifiable default candidate records `inspection-failed` when
-  evidence can be persisted. Access Center derives the Review finding
-  `Secret-file inspection incomplete`, which explicitly does not confirm secret
-  presence. A detection plus incomplete inspection still emits one combined
-  warning.
-- Explicit cleanup accepts only an identity-stable, within-root, regular
+- Automatic cleanup accepts only an identity-stable, within-root, regular
   single-link UTF-8 file no larger than 2 MiB. Eligible exact matches are
-  replaced in place with `<concealed by authsia>`, regardless of filename.
-  Values shorter than 12 characters remain excluded and make requested cleanup
-  incomplete.
-- Opt-in rewrites are descriptor-anchored and verify a bounded snapshot of
+  replaced in place with
+  `<concealed by authsia>`, regardless of filename. Surrounding and unrelated
+  file content stays unchanged. Values shorter than 12 characters remain
+  excluded and make cleanup incomplete.
+- Cleanup rewrites are descriptor-anchored and verify a bounded snapshot of
   xattrs (including the resource fork), ACL, mode, ownership, flags, and exact
   creation/access/modification times. Pre-mutation rejection leaves content
   untouched. Once rewriting begins, failure triggers best-effort restoration,
   but rollback can fail. A crash or power loss between truncation, writing, and
   restoration can leave partial or already-masked content; remediation is not
   crash-atomic.
-- Opt-in failures record `verification-failed` or `remediation-failed` and may
+- Cleanup failures record `verification-failed` or `remediation-failed` and may
   produce `Secret-file cleanup incomplete`. Confirmed detection, incomplete
   inspection, successful scrub, and cleanup failure remain distinct findings.
 - Evidence persistence is best-effort, so a CLI warning may occur without a
@@ -727,8 +715,8 @@ and omits the matching absolute path, working directory, and workspace root.
 After a secret-injected `authsia exec` / secret-bearing `workspace run` child
 exits, Authsia may record `injectedExec` events with `secret-detected`,
 `inspection-failed`, `scrubbed`, `verification-failed`, or
-`remediation-failed`. These distinguish a confirmed unchanged match, an
-unconfirmed inspection failure, successful replacement, and cleanup failures.
+`remediation-failed`. The first two are legacy detect-only evidence; the others
+distinguish successful replacement and cleanup failures.
 They store path metadata, not file contents or injected token
 bytes. Evidence persistence is best-effort, and outside-root candidates do not
 produce a per-file event.
