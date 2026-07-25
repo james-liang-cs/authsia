@@ -158,6 +158,49 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
         XCTAssertTrue(filtered.passwords.isEmpty)
     }
 
+    func testValidationAllowsExplicitRootNameReference() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceEnvValidateRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .validate,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .apiKey,
+                        itemName: "ROOT_API_KEY",
+                        folderPath: "/"
+                    ),
+                ]
+            )
+        )
+
+        let filtered = try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+
+        XCTAssertEqual(filtered.apiKeys.map(\.name), ["ROOT_API_KEY"])
+        XCTAssertTrue(filtered.passwords.isEmpty)
+    }
+
+    func testValidationRejectsUnscopedNameReference() throws {
+        let request = try makeRequest(
+            command: BridgeContext.workspaceEnvValidateRequestedCommand,
+            payload: WorkspaceMetadataRequestPayload(
+                workspaceFolder: "Workspaces/api",
+                mode: .validate,
+                references: [
+                    WorkspaceMetadataReference(
+                        itemType: .apiKey,
+                        itemName: "ROOT_API_KEY",
+                        folderPath: nil
+                    ),
+                ]
+            )
+        )
+
+        XCTAssertThrowsError(
+            try BridgeWorkspaceMetadataFilter.filteredPayload(sourcePayload(), for: request)
+        )
+    }
+
     func testWorkspaceRunValidationReturnsOnlyExactCLIEnabledReferences() throws {
         let request = try makeRequest(
             command: BridgeContext.workspaceRunRequestedCommand,
@@ -383,6 +426,7 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
             ],
             apiKeys: [
                 apiKey("API_KEY", folder: "Workspaces/api", isCliEnabled: true),
+                apiKey("ROOT_API_KEY", folder: nil, isCliEnabled: true),
                 apiKey(
                     "BASELINE_API_KEY",
                     folder: "Workspaces/Baseline",
@@ -459,7 +503,7 @@ final class BridgeWorkspaceMetadataFilterTests: XCTestCase {
 
     private func apiKey(
         _ name: String,
-        folder: String,
+        folder: String?,
         isCliEnabled: Bool,
         id: UUID = UUID()
     ) -> BridgeAPIKey {

@@ -90,9 +90,11 @@ public enum BridgeWorkspaceMetadataFilter {
             let itemName = reference.itemName.trimmingCharacters(in: .whitespacesAndNewlines)
             let itemID = UUID(uuidString: itemName)
             let folderPath = normalizeFolderPath(reference.folderPath)
+            let isExplicitRoot = reference.folderPath?
+                .trimmingCharacters(in: .whitespacesAndNewlines) == "/"
             guard !itemName.isEmpty,
                   itemName.count <= 512,
-                  folderPath != nil || itemID != nil else {
+                  folderPath != nil || isExplicitRoot || itemID != nil else {
                 throw Failure.invalidRequest("Workspace metadata reference is outside the workspace scope.")
             }
             return WorkspaceMetadataReference(

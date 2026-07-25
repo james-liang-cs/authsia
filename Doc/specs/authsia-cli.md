@@ -1371,8 +1371,11 @@ Example workspace file:
 ```
 
 `authsia workspace env add <NAME> <authsia://...>` stores a commit-safe env binding in
-`.authsia/workspace.json`; `list`, `remove`, and `validate` manage and check those bindings. When a
-schema-v2 variable has multiple environment-specific bindings, `remove` requires the exact reference
+`.authsia/workspace.json`; `list`, `remove`, and `validate` manage and check those bindings. A
+human-readable item name without a folder is qualified to the configured workspace folder. Explicit
+cross-folder references remain unchanged, including `?folder=%2F` for an exact root-level item;
+unscoped UUID references also remain unchanged. When a schema-v2 variable has multiple
+environment-specific bindings, `remove` requires the exact reference
 (`authsia workspace env remove <NAME> <authsia://...>`) so it cannot remove every variant. This is
 for projects that want `API_KEY`-style environment variables during `workspace run` without keeping a
 managed `.env` file. Validation uses the live vault when available and reports missing or unverified
