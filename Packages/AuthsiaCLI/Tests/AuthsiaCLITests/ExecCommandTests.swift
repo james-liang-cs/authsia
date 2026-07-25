@@ -1338,6 +1338,64 @@ struct ExecCollectSecretsTests {
         let masker = OutputMasker(secrets: result)
         #expect(masker.mask("14") == OutputMasker.placeholder)
     }
+
+    @Test("runChildProcess records injected process tree when tree context is provided")
+    func runChildProcessRecordsInjectedProcessTree() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let grantID = UUID()
+        let treeStore = InjectedProcessTreeStore(fileURL: directory.appendingPathComponent("trees.jsonl"))
+        let commandStore = AgentCommandHistoryStore(fileURL: directory.appendingPathComponent("commands.jsonl"))
+        let output = Pipe()
+        let error = Pipe()
+
+        let result = Exec.runChildProcess(
+            command: ["/bin/echo", "ok"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            masker: OutputMasker(secrets: ["secret"]),
+            standardOutput: output.fileHandleForWriting,
+            standardError: error.fileHandleForWriting,
+            treeContext: InjectedProcessTreeWatchContext(
+                agentJITGrantIDs: [grantID],
+                agentPlatform: "codex",
+                terminalSessionScope: "tty:/dev/ttys001:sid:1",
+                workingDirectory: "/tmp/project"
+            ),
+            treeStore: treeStore,
+            commandHistoryStore: commandStore,
+            treeSampleProvider: { rootPID in
+                [
+                    InjectedProcessTreeSample(
+                        pid: rootPID,
+                        ppid: 1,
+                        startTime: 1,
+                        executable: "echo",
+                        arguments: ["/bin/echo", "ok"]
+                    ),
+                    InjectedProcessTreeSample(
+                        pid: rootPID &+ 1,
+                        ppid: rootPID,
+                        startTime: 2,
+                        executable: "helper",
+                        arguments: ["helper"]
+                    ),
+                ]
+            }
+        )
+        try output.fileHandleForWriting.close()
+        try error.fileHandleForWriting.close()
+
+        #expect(result.terminationStatus == 0)
+        let runs = try treeStore.loadAll()
+        #expect(runs.count == 1)
+        #expect(runs[0].agentJITGrantID == grantID)
+        #expect(runs[0].nodes.map(\.executable).contains("helper"))
+        let events = try commandStore.loadAll()
+        #expect(events.contains { $0.captureSource == .injectedTree && $0.executable == "helper" })
+    }
 }
 
 private final class RecordingExecJITPreflightClient: ExecJITPreflightClient {

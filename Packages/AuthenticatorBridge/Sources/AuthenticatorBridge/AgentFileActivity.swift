@@ -28,6 +28,7 @@ public enum AgentFileActivityStatus: String, Codable, CaseIterable, Equatable, S
 public enum AgentFileActivitySource: String, Codable, CaseIterable, Equatable, Sendable {
     case hook
     case workspaceDiff
+    case command
 }
 
 public enum AgentFileActivityConfidence: String, Codable, CaseIterable, Equatable, Sendable {

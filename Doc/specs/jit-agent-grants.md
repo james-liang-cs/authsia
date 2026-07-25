@@ -571,20 +571,38 @@ The first rules are intentionally narrow:
 
 - `Warning`: a command was recorded after the matching grant expired or was
   revoked.
-- `Review`: a process-monitor record exists for a hook-capable tool, but no
-  matching hook record was found for the same grant/scope/command within the
-  short correlation window.
 - `Review`: a direct agent secret-read command such as `authsia get`,
   `authsia read`, `authsia load`, or `authsia inject` was recorded or appears in
   a matching audit record.
-- `Review`: an active-grant command could expose environment data, such as
-  `env`, `printenv`, or direct reads of `.env` files.
+- `Review`: an active-grant command dumps environment (`env`, `printenv`) or
+  clearly reads a high-signal dotenv file (for example `cat .env` /
+  `.env.production`). Benign mentions such as `.env.example` or `ls .env*` are
+  not flagged.
+- `Review`: file activity touched a high-signal secret path (`.env` /
+  `.env.<name>` excluding example/sample/template/dist, `.envrc`, `.netrc`,
+  `id_rsa` / `id_ed25519` / `id_ecdsa`, `*.pem` / `*.p12` / `*.pfx`). Broad
+  names such as bare `credentials`, `*.key`, `.npmrc`, and `.pypirc` are not
+  Review flags.
 - `Info`: process monitoring was used where hook capture is unavailable.
+- `Info`: a process was recorded from the secret-injected child tree during
+  mediated `authsia exec` / secret-bearing `workspace run` (Access Center
+  Process Tree). These records do not use the process-without-hook Review rule.
+- `Info`: file activity touched a path outside the recorded workspace root
+  (still visible, not counted in Flagged).
+
+The Commands **Flagged** filter and grant flag badges count only `Review` and
+`Warning` findings.
+
+While a secret-injected child is running, Authsia may poll that child’s
+descendant tree and persist redacted Process Tree evidence for Access Center.
+This is observe-only for the injected-child lifetime; it is not an OS-wide
+sandbox and does not block, kill, or auto-revoke from tree activity.
 
 Grant rows show a calm count such as `2 flags` when findings exist. The Commands
 sheet has `All` and `Flagged` filters, and flagged command rows show the derived
 reason. Command-history JSON export includes the original events, a `findings`
-array with evidence event IDs, and summary counts.
+array with evidence event IDs, and summary counts. Agent activity export also
+includes matching `processTrees` when present.
 
 Access Center has an opt-in `Include human sessions` toggle for showing normal
 interactive CLI sessions in a right-side column beside agent grants. These rows
@@ -622,18 +640,25 @@ requests do not use this fallback.
 ## Agent File Activity Evidence
 
 Agent file activity is local display evidence only. Authsia records path
-metadata from supported agent tool hooks, including action, status, source, and
-confidence. It does not store file contents, command output, stdin, environment
-values, or plaintext secrets. Agent activity JSON export uses workspace-relative
-paths for workspace-contained file activity and omits the matching absolute path,
-working directory, and workspace root.
+metadata from supported agent tool hooks, and Access Center also derives
+low-confidence path events from allowlisted command argv (for example `cat`,
+`ls`, `rm`) when path-like tokens are present. It does not store file contents,
+command output, stdin, environment values, or plaintext secrets. Agent activity
+JSON export uses workspace-relative paths for workspace-contained file activity
+and omits the matching absolute path, working directory, and workspace root.
+
+Source labels mean:
+
+- `Hook`: a supported agent file tool reported the path.
+- `Workspace diff`: Authsia associated a workspace change with the session.
+- `Command`: Access Center inferred the path from a recorded command.
 
 Confidence labels mean:
 
 - `Direct`: a supported hook reported the file or directory for the tool call.
 - `Confirmed`: a post-tool hook reported success for the same tool call.
-- `Inferred`: Authsia detected a workspace change during the session, not a
-  direct read.
+- `Inferred`: Authsia inferred the path from command argv or a workspace
+  change, not a direct hook report.
 - `Fallback`: Authsia associated activity by terminal/session scope and working
   directory.
 

@@ -12,6 +12,7 @@ public enum AgentCommandFindingType: String, Codable, Equatable, Sendable {
     case deniedDirectSecretRead
     case possibleEnvironmentExposure
     case processFallbackUsed
+    case injectedTreeCapture
     case sensitiveFileActivity
     case outsideWorkspaceFileActivity
     case mediatedResponse
@@ -153,12 +154,14 @@ public struct AgentCommandHistoryExport: Codable, Equatable, Sendable {
 public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
     public let commands: [AgentCommandEvent]
     public let files: [AgentFileActivityExportEvent]
+    public let processTrees: [InjectedProcessTreeRun]
     public let findings: [AgentCommandFinding]
     public let summary: AgentCommandFindingSummary
 
     public init(
         commands: [AgentCommandEvent],
         files: [AgentFileActivityEvent],
+        processTrees: [InjectedProcessTreeRun] = [],
         findings: [AgentCommandFinding]
     ) {
         self.commands = commands.sorted { lhs, rhs in
@@ -175,6 +178,12 @@ public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
                 return lhs.recordedAt < rhs.recordedAt
             }
             .map(AgentFileActivityExportEvent.init(event:))
+        self.processTrees = processTrees.sorted { lhs, rhs in
+            if lhs.startedAt == rhs.startedAt {
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            return lhs.startedAt < rhs.startedAt
+        }
         self.findings = findings.sorted { lhs, rhs in
             if lhs.recordedAt == rhs.recordedAt {
                 return lhs.id < rhs.id
@@ -189,6 +198,15 @@ public enum AgentCommandFindingDetector {
     private static let hookMatchWindow: TimeInterval = 10
     private static let directSecretReadCommands: Set<String> = ["get", "read", "load", "inject"]
     private static let environmentExecutables: Set<String> = ["env", "printenv"]
+    private static let environmentFileReadExecutables: Set<String> = [
+        "bat", "cat", "head", "less", "more", "source", "tail", "type",
+    ]
+    private static let benignDotEnvSuffixes: Set<String> = [
+        ".example",
+        ".sample",
+        ".template",
+        ".dist",
+    ]
 
     public static func findings(
         for grants: [AgentJITGrant],
@@ -249,6 +267,10 @@ public enum AgentCommandFindingDetector {
                 } else {
                     findings.append(processFallbackUsedFinding(for: event, grant: grant))
                 }
+            }
+
+            if event.captureSource == .injectedTree {
+                findings.append(injectedTreeCaptureFinding(for: event, grant: grant))
             }
 
             if isDeniedDirectSecretRead(event) {
@@ -382,6 +404,22 @@ public enum AgentCommandFindingDetector {
         )
     }
 
+    private static func injectedTreeCaptureFinding(
+        for event: AgentCommandEvent,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .info,
+            type: .injectedTreeCapture,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [event.id],
+            recordedAt: event.recordedAt,
+            title: "Injected process tree capture",
+            detail: "Authsia recorded this process while observing the secret-injected child tree.",
+            recommendedAction: "Use the Process Tree view to review descendants launched after secret release."
+        )
+    }
+
     private static func mediatedResponseFinding(
         for event: AgentCommandEvent,
         grant: AgentJITGrant
@@ -426,7 +464,7 @@ public enum AgentCommandFindingDetector {
         grant: AgentJITGrant
     ) -> AgentCommandFinding {
         AgentCommandFinding(
-            severity: .review,
+            severity: .info,
             type: .outsideWorkspaceFileActivity,
             agentJITGrantID: grant.id,
             evidenceEventIDs: [],
@@ -555,25 +593,30 @@ public enum AgentCommandFindingDetector {
            environmentExecutables.contains(firstExecutable) {
             return true
         }
-        return tokens.contains { token in
-            token == ".env"
-                || token.hasPrefix(".env.")
-                || token.hasSuffix("/.env")
-                || token.contains("/.env.")
+
+        guard let first = tokens.first,
+              let firstExecutable = executableName(first),
+              environmentFileReadExecutables.contains(firstExecutable) || firstExecutable == "." else {
+            return false
         }
+
+        return tokens.dropFirst().contains(where: isHighSignalDotEnvPath)
+    }
+
+    private static func isHighSignalDotEnvPath(_ token: String) -> Bool {
+        let fileName = URL(fileURLWithPath: token).lastPathComponent.lowercased()
+        guard fileName == ".env" || fileName.hasPrefix(".env.") else { return false }
+        return !benignDotEnvSuffixes.contains { fileName.hasSuffix($0) }
     }
 
     private static func isSensitiveFileActivity(_ event: AgentFileActivityEvent) -> Bool {
         let fileName = URL(fileURLWithPath: event.path).lastPathComponent.lowercased()
-        return fileName == ".env"
-            || fileName.hasPrefix(".env.")
-            || fileName == ".envrc"
-            || fileName == ".npmrc"
-            || fileName == ".pypirc"
+        if isHighSignalDotEnvPath(fileName) {
+            return true
+        }
+        return fileName == ".envrc"
             || fileName == ".netrc"
-            || fileName == "credentials"
             || fileName.hasSuffix(".pem")
-            || fileName.hasSuffix(".key")
             || fileName.hasSuffix(".p12")
             || fileName.hasSuffix(".pfx")
             || fileName == "id_rsa"

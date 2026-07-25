@@ -3,6 +3,7 @@ import Foundation
 public enum AgentCommandCaptureSource: String, Codable, Equatable, Sendable {
     case hook
     case process
+    case injectedTree
 }
 
 public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
@@ -255,6 +256,15 @@ private extension AgentCommandEvent {
                 executable ?? "",
                 command,
             ].joined(separator: "\u{1f}")
+        case .injectedTree:
+            return [
+                "injectedTree",
+                agentJITGrantID?.uuidString ?? "",
+                terminalSessionScope ?? "",
+                workingDirectory ?? "",
+                executable ?? "",
+                command,
+            ].joined(separator: "\u{1f}")
         }
     }
 }
@@ -283,7 +293,7 @@ public extension JSONDecoder {
     }
 }
 
-private enum AgentCommandRedactor {
+enum AgentCommandRedactor {
     private static let sensitiveFragments = [
         "password",
         "passwd",
