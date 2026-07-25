@@ -27,6 +27,35 @@ struct AgenticProcessDetectorTests {
         ]
 
         #expect(AgenticProcessDetector.containsAgenticProcess(ancestry))
+        #expect(
+            AgenticProcessDetector.agentPlatform(
+                processName: "node",
+                bundleIdentifier: nil,
+                arguments: ["node", "/opt/homebrew/bin/claude", "--output-format", "stream-json"]
+            ) == "claude-code"
+        )
+    }
+
+    @Test("does not treat documentation filenames as agent platforms")
+    func doesNotTreatDocumentationFilenamesAsAgentPlatforms() {
+        #expect(
+            AgenticProcessDetector.agentPlatform(
+                processName: "zsh",
+                bundleIdentifier: nil,
+                arguments: [
+                    "/bin/zsh",
+                    "-c",
+                    "cat /Users/james/PlayGround/Authsia-Demo/CLAUDE.md ./AGENTS.md",
+                ]
+            ) == nil
+        )
+        #expect(
+            AgenticProcessDetector.agentPlatform(
+                processName: "sh",
+                bundleIdentifier: nil,
+                arguments: ["/bin/sh", "-c", "head -n 1 ./codex.md"]
+            ) == nil
+        )
     }
 
     @Test("does not treat human terminal hosts as agents")

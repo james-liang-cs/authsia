@@ -188,6 +188,59 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertEqual(second?.sessionScope, first?.sessionScope)
     }
 
+    func testAgentProcessFingerprintRewritesCodexSidToParentPIDUnderChatGPT() {
+        let caller = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "authsia",
+            signingTeamId: "TEAM",
+            signingIdentity: "Apple Development",
+            parentProcess: ParentProcessInfo(
+                pid: 55,
+                processName: "codex",
+                bundleIdentifier: "codex",
+                signingTeamId: "TEAM",
+                signingIdentity: "Developer ID",
+                isPlatformBinary: false
+            ),
+            hostProcess: ParentProcessInfo(
+                pid: 50,
+                processName: "ChatGPT",
+                bundleIdentifier: "com.openai.codex",
+                signingTeamId: "TEAM",
+                signingIdentity: "Developer ID",
+                isPlatformBinary: false
+            )
+        )
+
+        let first = AgentJITCallerContext.fingerprint(
+            for: makeRequest(sessionScope: "agent:codex:sid:29549", workingDirectory: "/tmp/demo"),
+            caller: caller
+        )
+        let second = AgentJITCallerContext.fingerprint(
+            for: makeRequest(sessionScope: "agent:codex:sid:81474", workingDirectory: "/tmp/demo"),
+            caller: caller
+        )
+
+        XCTAssertEqual(first?.sessionScope, "agent:codex:pid:55")
+        XCTAssertEqual(second?.sessionScope, "agent:codex:pid:55")
+    }
+
+    func testAgentProcessFingerprintRewritesCodexSidToCursorHelperPID() {
+        let caller = cursorHostedCaller(parentPID: 7909)
+        let first = AgentJITCallerContext.fingerprint(
+            for: makeRequest(sessionScope: "agent:codex:sid:1001", workingDirectory: "/tmp/demo"),
+            caller: caller
+        )
+        let second = AgentJITCallerContext.fingerprint(
+            for: makeRequest(sessionScope: "agent:codex:sid:1002", workingDirectory: "/tmp/demo"),
+            caller: caller
+        )
+
+        XCTAssertEqual(first?.sessionScope, "agent:codex:pid:7909")
+        XCTAssertEqual(second?.sessionScope, first?.sessionScope)
+    }
+
     func testCursorExtensionHostFingerprintIsolatesDifferentParentProcesses() {
         let request = makeRequest(sessionScope: "agent:cursor:sid:1001", workingDirectory: "/tmp/project")
 

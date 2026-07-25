@@ -358,13 +358,10 @@ struct Exec: ParsableCommand {
                 ? nil
                 : InjectedProcessTreeWatchContext(
                     agentJITGrantIDs: Array(Set(accumulatedGrantIDs)),
-                    agentPlatform: processAncestry.lazy.compactMap {
-                        AgenticProcessDetector.agentPlatform(
-                            processName: $0.processName,
-                            bundleIdentifier: $0.bundleIdentifier,
-                            arguments: $0.arguments
-                        )
-                    }.first,
+                    agentPlatform: Self.injectedTreeAgentPlatform(
+                        parentEnvironment: parentEnvironment,
+                        processAncestry: processAncestry
+                    ),
                     terminalSessionScope: TerminalSessionScope.currentAncestralScope(),
                     workingDirectory: FileManager.default.currentDirectoryPath
                 )
@@ -629,6 +626,33 @@ struct Exec: ParsableCommand {
             )
         ).grantIDs
         return grantIDs
+    }
+
+    /// Prefers the resolved agent runtime marker so injected-tree Commands match
+    /// `.process` attribution. Ancestry argv is only a fallback.
+    static func injectedTreeAgentPlatform(
+        parentEnvironment: [String: String],
+        processAncestry: [AgenticProcessReference],
+        now: Date = Date(),
+        currentDirectoryPath: String = FileManager.default.currentDirectoryPath,
+        eventsURL: URL = AgentRuntimeContextResolver.defaultEventsURL
+    ) -> String? {
+        if let resolved = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: currentDirectoryPath,
+            processAncestry: processAncestry,
+            eventsURL: eventsURL,
+            environment: parentEnvironment
+        )?.platform {
+            return resolved
+        }
+        return processAncestry.lazy.compactMap {
+            AgenticProcessDetector.agentPlatform(
+                processName: $0.processName,
+                bundleIdentifier: $0.bundleIdentifier,
+                arguments: $0.arguments
+            )
+        }.first
     }
 
     private static func recordAgentCommandHistory(

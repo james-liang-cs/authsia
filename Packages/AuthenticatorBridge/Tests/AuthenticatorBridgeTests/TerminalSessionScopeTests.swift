@@ -60,6 +60,41 @@ struct TerminalSessionScopeTests {
         #expect(closed == .closed)
     }
 
+    @Test("liveness probes agent platform sid scopes as session-leader pids")
+    func livenessProbesAgentPlatformSidScopesAsSessionLeaderPIDs() {
+        let active = TerminalSessionScope.liveness(
+            for: "agent:codex:sid:29549",
+            isProcessRunning: { $0 == 29549 }
+        )
+        let closed = TerminalSessionScope.liveness(
+            for: "agent:codex:sid:29549",
+            isProcessRunning: { _ in false }
+        )
+        let claude = TerminalSessionScope.liveness(
+            for: "agent:claude-code:sid:81474",
+            isProcessRunning: { $0 == 81474 }
+        )
+
+        #expect(active == .active)
+        #expect(closed == .closed)
+        #expect(claude == .active)
+    }
+
+    @Test("liveness probes rewritten agent platform pid scopes")
+    func livenessProbesRewrittenAgentPlatformPIDScopes() {
+        let active = TerminalSessionScope.liveness(
+            for: "agent:codex:pid:4242",
+            isProcessRunning: { $0 == 4242 }
+        )
+        let closed = TerminalSessionScope.liveness(
+            for: "agent:claude-code:pid:4242",
+            isProcessRunning: { _ in false }
+        )
+
+        #expect(active == .active)
+        #expect(closed == .closed)
+    }
+
     @Test("current process scope requires terminal-backed standard I/O")
     func currentProcessScopeRequiresTerminalBackedStandardIO() {
         let current = TerminalSessionScope.currentProcess()

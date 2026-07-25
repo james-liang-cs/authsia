@@ -302,6 +302,26 @@ struct ExecCommandTests {
         )
     }
 
+    @Test("injected tree platform prefers resolved agent marker over ancestry argv")
+    func injectedTreePlatformPrefersResolvedAgentMarkerOverAncestryArgv() {
+        let ancestry = [
+            AgenticProcessReference(
+                processName: "zsh",
+                bundleIdentifier: nil,
+                arguments: ["/bin/zsh", "-c", "cat ./CLAUDE.md"]
+            ),
+        ]
+        let platform = Exec.injectedTreeAgentPlatform(
+            parentEnvironment: [
+                AgentRuntimeContextResolver.environmentPlatformKey: "codex",
+                AgentRuntimeContextResolver.environmentInvokesAuthsiaKey: "1",
+            ],
+            processAncestry: ancestry,
+            eventsURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        )
+        #expect(platform == "codex")
+    }
+
     @Test("agent JIT preflight attaches returned grant to platform-only command history")
     func agentJITPreflightRecordsCommandHistoryForAccessCenter() throws {
         let directory = FileManager.default.temporaryDirectory

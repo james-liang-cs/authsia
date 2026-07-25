@@ -71,8 +71,8 @@ public enum TerminalSessionScope {
         let processIdentifier: Int32?
         if let sessionID = components(from: scope)?.processSessionIdentifier {
             processIdentifier = sessionID
-        } else if let scope, scope.hasPrefix("agent:cursor:pid:") {
-            processIdentifier = Int32(scope.dropFirst("agent:cursor:pid:".count))
+        } else if let agentProcessID = agentScopedProcessIdentifier(from: scope) {
+            processIdentifier = agentProcessID
         } else {
             processIdentifier = nil
         }
@@ -81,6 +81,32 @@ public enum TerminalSessionScope {
             return .unknown
         }
         return isProcessRunning(processIdentifier) ? .active : .closed
+    }
+
+    /// Extracts a probeable process id from `agent:<platform>:sid:<n>` or
+    /// `agent:<platform>:pid:<n>` scopes. Session ids are treated as session-leader
+    /// pids (same contract as `tty:…:sid:`).
+    public static func agentScopedProcessIdentifier(from scope: String?) -> Int32? {
+        guard let scope = nonEmpty(scope), scope.hasPrefix("agent:") else {
+            return nil
+        }
+        for marker in [":sid:", ":pid:"] {
+            guard let range = scope.range(of: marker, options: .backwards) else {
+                continue
+            }
+            let value = String(scope[range.upperBound...])
+            guard let processIdentifier = Int32(value), processIdentifier > 1 else {
+                continue
+            }
+            let prefix = String(scope[..<range.lowerBound])
+            // Require `agent:<non-empty-platform>` before the marker.
+            let platform = String(prefix.dropFirst("agent:".count))
+            guard !platform.isEmpty, !platform.contains(":") else {
+                continue
+            }
+            return processIdentifier
+        }
+        return nil
     }
 
     public static func currentProcess() -> String? {
