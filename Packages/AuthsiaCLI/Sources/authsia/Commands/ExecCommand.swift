@@ -151,12 +151,6 @@ struct Exec: ParsableCommand {
     @Flag(name: .long, help: "Include scraped items from all machines (default: current machine only)")
     var allMachines = false
 
-    @Flag(
-        name: .long,
-        help: "Compatibility flag; eligible exact injected secrets are automatically replaced after mediated runs"
-    )
-    var cleanupSecretFiles = false
-
     @Option(
         name: .customLong("output-policy"),
         help: "Output handling: strict or masked-compatibility"
@@ -2417,12 +2411,12 @@ struct Exec: ParsableCommand {
             if detectedSecret && inspectionIncomplete {
                 warning = "Warning: Authsia detected an injected secret in an observed file and "
                     + "left it unchanged, and secret-file inspection was incomplete; review Access "
-                    + "Center. Pass --cleanup-secret-files to enable best-effort replacement. "
+                    + "Center. Automatic replacement was unavailable. "
                     + "The child exit status was preserved.\n"
             } else if detectedSecret {
                 warning = "Warning: Authsia detected an injected secret in an observed file and "
-                    + "left it unchanged; review Access Center. Pass --cleanup-secret-files to "
-                    + "enable best-effort replacement. The child exit status was preserved.\n"
+                    + "left it unchanged; review Access Center. Automatic replacement was "
+                    + "unavailable. The child exit status was preserved.\n"
             } else if cleanupSecretFiles {
                 warning = "Warning: Authsia secret-file cleanup was incomplete; review Access "
                     + "Center. The child exit status was preserved.\n"

@@ -309,7 +309,6 @@ existing environment variables.
 | `--all-machines` | No | flag | Include scraped items from all machines (default: current machine only) |
 | `--field` | No | type-specific field | Defaults to password/certificate/content |
 | `--env-file <path>` | No | file path | Explicitly load env vars from a `.env` file (repeatable; last file wins on duplicate keys) |
-| `--cleanup-secret-files` | No | flag | Compatibility flag; eligible exact injected values are automatically replaced after every mediated run |
 | `--shell <command>` | No | quoted shell command string | Run the command string through `/bin/sh -c` for child-shell expansion |
 | `-- <command> [args...]` | Yes, unless `--shell` is used | command argv | Command to run directly with injected secrets |
 
@@ -388,9 +387,8 @@ follow shell convention: signal-killed processes exit with `128 + signum` (e.g. 
 **Post-exit file inspection:** `exec` inspects bounded observed files for exact injected values of
 at least 12 characters and automatically replaces only those exact values while preserving all
 surrounding file content. This applies to human, agent, and automation invocations. The
-`--cleanup-secret-files` flag remains accepted by `exec` and `authsia workspace run` for script
-compatibility, but cleanup no longer requires it. Neither inspection nor cleanup changes the child
-exit status.
+cleanup behavior has no command-line flag or opt-out. Neither inspection nor cleanup changes the
+child exit status.
 
 Examples:
 
@@ -411,9 +409,6 @@ authsia exec -- npm start
 authsia exec --env-file prod.env -- npm start
 authsia exec --env-file config/.env -- make deploy
 API_KEY=authsia://api-key/Stripe/key?folder=Team/API authsia exec -- npm start
-
-# Compatibility form; cleanup is already automatic
-authsia exec api-key API_KEY --cleanup-secret-files -- npm start
 
 # Combine type scope with .env file
 authsia exec password --folder Team/API -- docker compose up
@@ -1559,7 +1554,6 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace run --default-only -- <command>` | Use only default-environment items for one run | `authsia workspace run --default-only -- npm test` |
 | `workspace run --shell -- <command>` | Run a quoted shell command through `/bin/sh -c` with managed env files | `authsia workspace run --shell -- 'curl "$API_KEY"'` |
 | `workspace run --dry-run` | Show env files, command, and direct-vs-`exec` execution path | `authsia workspace run --dry-run -- npm test` |
-| `workspace run --cleanup-secret-files -- <command>` | Compatibility form; eligible exact injected values are already cleaned automatically | `authsia workspace run --cleanup-secret-files -- npm test` |
 | `workspace status` | Show workspace config, managed env files, env bindings, reference/rule state, and missing/unverified-vault guidance for `authsia://` refs | `authsia workspace status` |
 | `guard` | Activate guarded mode in the current shell after standard shell integration is enabled | `authsia guard` |
 | `unguard` | Restart the current tab in normal mode; skip Auto-guard once | `authsia unguard` |
@@ -2150,8 +2144,7 @@ path, working directory, and workspace root.
 
 After `authsia exec` or a secret-bearing `authsia workspace run`, Authsia performs bounded
 post-exit file inspection and automatically enables cleanup for human, agent, and automation
-invocations. `--cleanup-secret-files` remains accepted for script compatibility but does not
-change this policy.
+invocations. Cleanup has no command-line flag or opt-out.
 
 Inspection considers only original injected values that remain in the final child environment and
 are at least 12 characters long. Output-only derived masking tokens, env-file-overridden values, and

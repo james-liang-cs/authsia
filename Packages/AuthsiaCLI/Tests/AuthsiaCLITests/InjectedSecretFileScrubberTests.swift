@@ -2007,8 +2007,8 @@ struct InjectedSecretFileScrubberTests {
         #expect(
             warning
                 == "Warning: Authsia detected an injected secret in an observed file and left "
-                    + "it unchanged; review Access Center. Pass --cleanup-secret-files to enable "
-                    + "best-effort replacement. The child exit status was preserved.\n"
+                    + "it unchanged; review Access Center. Automatic replacement was unavailable. "
+                    + "The child exit status was preserved.\n"
         )
         #expect(!warning.contains(secret))
         #expect(!warning.contains(path))
@@ -2059,8 +2059,8 @@ struct InjectedSecretFileScrubberTests {
         #expect(
             warning
                 == "Warning: Authsia detected an injected secret in an observed file and left "
-                    + "it unchanged; review Access Center. Pass --cleanup-secret-files to enable "
-                    + "best-effort replacement. The child exit status was preserved.\n"
+                    + "it unchanged; review Access Center. Automatic replacement was unavailable. "
+                    + "The child exit status was preserved.\n"
         )
         let events = try AgentFileActivityStore(fileURL: activityURL).loadAll()
         #expect(events.map(\.detail) == [InjectedSecretFileActivityDetail.secretDetected])
@@ -2255,8 +2255,8 @@ struct InjectedSecretFileScrubberTests {
         #expect(
             warning
                 == "Warning: Authsia detected an injected secret in an observed file and left "
-                    + "it unchanged; review Access Center. Pass --cleanup-secret-files to enable "
-                    + "best-effort replacement. The child exit status was preserved.\n"
+                    + "it unchanged; review Access Center. Automatic replacement was unavailable. "
+                    + "The child exit status was preserved.\n"
         )
         #expect(!warning.contains("inspection was incomplete"))
 
@@ -2358,7 +2358,7 @@ struct InjectedSecretFileScrubberTests {
             warning
                 == "Warning: Authsia detected an injected secret in an observed file and left "
                     + "it unchanged, and secret-file inspection was incomplete; review Access "
-                    + "Center. Pass --cleanup-secret-files to enable best-effort replacement. "
+                    + "Center. Automatic replacement was unavailable. "
                     + "The child exit status was preserved.\n"
         )
         #expect(warning.filter { $0 == "\n" }.count == 1)
