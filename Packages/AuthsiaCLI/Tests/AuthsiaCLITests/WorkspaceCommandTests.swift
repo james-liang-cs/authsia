@@ -47,8 +47,8 @@ struct WorkspaceConfigTests {
         #expect(agentHelp.contains("--print"))
         #expect(runHelp.contains("--shell"))
         #expect(runHelp.contains("--cleanup-secret-files"))
-        #expect(runHelp.contains("replace eligible exact injected secrets"))
-        #expect(runHelp.contains("automatic for agent runs"))
+        #expect(runHelp.contains("eligible exact injected secrets are automatically replaced"))
+        #expect(runHelp.contains("after mediated runs"))
         #expect(syncHelp.contains("--plan-json"))
         #expect(syncHelp.contains("--apply-json"))
         #expect(guardHelp.contains("--dry-run"))
@@ -3256,15 +3256,15 @@ struct WorkspaceRunPlannerTests {
         #expect(exec.environmentOverrides == ["HF_TOKEN": binding.reference])
     }
 
-    @Test("workspace run secret-file cleanup is off by default")
-    func workspaceRunSecretFileCleanupIsOffByDefault() throws {
+    @Test("workspace run cleanup compatibility flag is false by default")
+    func workspaceRunCleanupCompatibilityFlagIsFalseByDefault() throws {
         let command = try Workspace.Run.parse(["--", "npm", "test"])
 
         #expect(!command.cleanupSecretFiles)
     }
 
-    @Test("workspace run parses secret-file cleanup opt-in")
-    func workspaceRunParsesSecretFileCleanupOptIn() throws {
+    @Test("workspace run parses secret-file cleanup compatibility flag")
+    func workspaceRunParsesSecretFileCleanupCompatibilityFlag() throws {
         let command = try Workspace.Run.parse([
             "--cleanup-secret-files",
             "--", "npm", "test",

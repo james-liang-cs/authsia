@@ -153,7 +153,7 @@ struct Exec: ParsableCommand {
 
     @Flag(
         name: .long,
-        help: "After exit, replace eligible exact injected secrets in safely verified observed files; automatic for agent runs"
+        help: "Compatibility flag; eligible exact injected secrets are automatically replaced after mediated runs"
     )
     var cleanupSecretFiles = false
 
@@ -385,10 +385,7 @@ struct Exec: ParsableCommand {
                     terminalSessionScope: TerminalSessionScope.currentAncestralScope(),
                     workingDirectory: workingDirectory
                 )
-            let shouldCleanupSecretFiles = Self.shouldCleanupSecretFiles(
-                explicitlyRequested: cleanupSecretFiles,
-                agentPlatform: treeContext?.agentPlatform
-            )
+            let shouldCleanupSecretFiles = Self.shouldCleanupSecretFiles()
             let fileScrubContext = Self.selectedFileScrubContext(
                 cleanupSelection: fileCleanupSelection,
                 cleanupSecretFiles: shouldCleanupSecretFiles,
@@ -958,11 +955,8 @@ struct Exec: ParsableCommand {
         return candidate()
     }
 
-    static func shouldCleanupSecretFiles(
-        explicitlyRequested: Bool,
-        agentPlatform: String?
-    ) -> Bool {
-        explicitlyRequested || agentPlatform != nil
+    static func shouldCleanupSecretFiles() -> Bool {
+        true
     }
 
     static func fileEventMetadataMasker(
