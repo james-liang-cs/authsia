@@ -32,6 +32,26 @@ struct ShortOptionAliasTests {
         ])
     }
 
+    @Test("clear folder parses for every editable vault category")
+    func clearFolderParsesForEveryEditableVaultCategory() throws {
+        #expect(try EditAPIKey.parse(["Stripe", "--clear-folder"]).clearFolder)
+        #expect(try EditPassword.parse(["GitHub", "--clear-folder"]).clearFolder)
+        #expect(try EditCertificate.parse(["TLS", "--clear-folder"]).clearFolder)
+        #expect(try EditNote.parse(["Runbook", "--clear-folder"]).clearFolder)
+        #expect(try EditSSH.parse(["deploy", "--clear-folder"]).clearFolder)
+    }
+
+    @Test("named folder and clear folder are mutually exclusive")
+    func folderEditFlagsAreMutuallyExclusive() {
+        #expect(throws: ValidationError.self) {
+            try validateFolderUpdate(
+                folder: "Team/API",
+                clearFolder: true,
+                example: "authsia edit api-key Stripe --clear-folder"
+            )
+        }
+    }
+
     @Test("type alias parses for type-filtered commands")
     func typeAliasParsesForTypeFilteredCommands() throws {
         let scrape = try Scrape.parse(["-t", "password", "json", "--dry-run"])

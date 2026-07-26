@@ -472,6 +472,7 @@ extension XPCRequestHandler {
                    payload.website == nil,
                    payload.notes == nil,
                    payload.folderPath == nil,
+                   payload.clearFolder != true,
                    payload.isScraped == nil,
                    payload.scrapeMachineName == nil,
                    payload.scrapeMachineId == nil,
@@ -525,7 +526,9 @@ extension XPCRequestHandler {
                         password: payload.password.map { Data($0.utf8) } ?? full.password,
                         website: payload.website ?? full.website,
                         notes: payload.notes ?? full.notes,
-                        folderPath: payload.folderPath ?? full.folderPath,
+                        folderPath: payload.clearFolder == true
+                            ? nil
+                            : (payload.folderPath ?? full.folderPath),
                         createdAt: full.createdAt,
                         modifiedAt: Date(),
                         isFavorite: full.isFavorite,
@@ -597,6 +600,7 @@ extension XPCRequestHandler {
                    payload.website == nil,
                    payload.notes == nil,
                    payload.folderPath == nil,
+                   payload.clearFolder != true,
                    payload.isScraped == nil,
                    payload.scrapeMachineName == nil,
                    payload.scrapeMachineId == nil,
@@ -649,7 +653,9 @@ extension XPCRequestHandler {
                         key: payload.key.map { Data($0.utf8) } ?? full.key,
                         website: payload.website ?? full.website,
                         notes: payload.notes ?? full.notes,
-                        folderPath: payload.folderPath ?? full.folderPath,
+                        folderPath: payload.clearFolder == true
+                            ? nil
+                            : (payload.folderPath ?? full.folderPath),
                         createdAt: full.createdAt,
                         modifiedAt: Date(),
                         isFavorite: full.isFavorite,
@@ -678,6 +684,7 @@ extension XPCRequestHandler {
                    payload.clearPrivateKey != true,
                    payload.notes == nil,
                    payload.folderPath == nil,
+                   payload.clearFolder != true,
                    payload.isScraped == nil,
                    payload.scrapeMachineName == nil,
                    payload.scrapeMachineId == nil,
@@ -733,7 +740,9 @@ extension XPCRequestHandler {
                         issuer: full.issuer,
                         subject: full.subject,
                         notes: payload.notes ?? full.notes,
-                        folderPath: payload.folderPath ?? full.folderPath,
+                        folderPath: payload.clearFolder == true
+                            ? nil
+                            : (payload.folderPath ?? full.folderPath),
                         createdAt: full.createdAt,
                         modifiedAt: Date(),
                         isFavorite: full.isFavorite,
@@ -761,6 +770,7 @@ extension XPCRequestHandler {
                 if payload.title == nil,
                    payload.content == nil,
                    payload.folderPath == nil,
+                   payload.clearFolder != true,
                    payload.isScraped == nil,
                    payload.scrapeMachineName == nil,
                    payload.scrapeMachineId == nil,
@@ -809,7 +819,9 @@ extension XPCRequestHandler {
                         id: full.id,
                         title: payload.title ?? full.title,
                         content: payload.content.map { Data($0.utf8) } ?? full.content,
-                        folderPath: payload.folderPath ?? full.folderPath,
+                        folderPath: payload.clearFolder == true
+                            ? nil
+                            : (payload.folderPath ?? full.folderPath),
                         createdAt: full.createdAt,
                         modifiedAt: Date(),
                         isFavorite: full.isFavorite,
@@ -837,6 +849,7 @@ extension XPCRequestHandler {
                    payload.comment == nil,
                    payload.fingerprint == nil,
                    payload.folderPath == nil,
+                   payload.clearFolder != true,
                    payload.isScraped == nil,
                    payload.scrapeMachineName == nil,
                    payload.scrapeMachineId == nil,
@@ -894,7 +907,9 @@ extension XPCRequestHandler {
                         keyType: payload.keyType ?? current.keyType,
                         approvalPolicy: payload.approvalPolicy ?? current.approvalPolicy,
                         boundHosts: payload.boundHosts ?? current.boundHosts,
-                        folderPath: payload.folderPath ?? current.folderPath,
+                        folderPath: payload.clearFolder == true
+                            ? nil
+                            : (payload.folderPath ?? current.folderPath),
                         createdAt: current.createdAt,
                         modifiedAt: Date(),
                         isFavorite: current.isFavorite,

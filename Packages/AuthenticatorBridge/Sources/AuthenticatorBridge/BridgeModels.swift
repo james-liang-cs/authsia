@@ -757,6 +757,7 @@ public struct PasswordWritePayload: Codable, Equatable {
     public let notes: String?
     public let isScraped: Bool?
     public let folderPath: String?
+    public let clearFolder: Bool?
     public let scrapeMachineName: String?
     public let scrapeMachineId: String?
     public let expiresAt: Date?
@@ -771,6 +772,7 @@ public struct PasswordWritePayload: Codable, Equatable {
         notes: String?,
         isScraped: Bool? = nil,
         folderPath: String? = nil,
+        clearFolder: Bool? = nil,
         scrapeMachineName: String? = nil,
         scrapeMachineId: String? = nil,
         expiresAt: Date? = nil,
@@ -784,6 +786,7 @@ public struct PasswordWritePayload: Codable, Equatable {
         self.notes = notes
         self.isScraped = isScraped
         self.folderPath = folderPath
+        self.clearFolder = clearFolder
         self.scrapeMachineName = scrapeMachineName
         self.scrapeMachineId = scrapeMachineId
         self.expiresAt = expiresAt
@@ -799,6 +802,7 @@ public struct APIKeyWritePayload: Codable, Equatable {
     public let notes: String?
     public let isScraped: Bool?
     public let folderPath: String?
+    public let clearFolder: Bool?
     public let scrapeMachineName: String?
     public let scrapeMachineId: String?
     public let expiresAt: Date?
@@ -812,6 +816,7 @@ public struct APIKeyWritePayload: Codable, Equatable {
         notes: String?,
         isScraped: Bool? = nil,
         folderPath: String? = nil,
+        clearFolder: Bool? = nil,
         scrapeMachineName: String? = nil,
         scrapeMachineId: String? = nil,
         expiresAt: Date? = nil,
@@ -824,6 +829,7 @@ public struct APIKeyWritePayload: Codable, Equatable {
         self.notes = notes
         self.isScraped = isScraped
         self.folderPath = folderPath
+        self.clearFolder = clearFolder
         self.scrapeMachineName = scrapeMachineName
         self.scrapeMachineId = scrapeMachineId
         self.expiresAt = expiresAt
@@ -848,6 +854,7 @@ public struct CertificateWritePayload: Codable, Equatable {
     public let notes: String?
     public let isScraped: Bool?
     public let folderPath: String?
+    public let clearFolder: Bool?
     public let scrapeMachineName: String?
     public let scrapeMachineId: String?
     public let environments: [String]?
@@ -860,6 +867,7 @@ public struct CertificateWritePayload: Codable, Equatable {
         notes: String?,
         isScraped: Bool? = nil,
         folderPath: String? = nil,
+        clearFolder: Bool? = nil,
         scrapeMachineName: String? = nil,
         scrapeMachineId: String? = nil,
         environments: [String]? = nil
@@ -871,6 +879,7 @@ public struct CertificateWritePayload: Codable, Equatable {
         self.notes = notes
         self.isScraped = isScraped
         self.folderPath = folderPath
+        self.clearFolder = clearFolder
         self.scrapeMachineName = scrapeMachineName
         self.scrapeMachineId = scrapeMachineId
         self.environments = environments.map(VaultEnvironmentTags.normalize)
@@ -882,6 +891,7 @@ public struct NoteWritePayload: Codable, Equatable {
     public let content: String?
     public let isScraped: Bool?
     public let folderPath: String?
+    public let clearFolder: Bool?
     public let scrapeMachineName: String?
     public let scrapeMachineId: String?
     public let environments: [String]?
@@ -891,6 +901,7 @@ public struct NoteWritePayload: Codable, Equatable {
         content: String?,
         isScraped: Bool? = nil,
         folderPath: String? = nil,
+        clearFolder: Bool? = nil,
         scrapeMachineName: String? = nil,
         scrapeMachineId: String? = nil,
         environments: [String]? = nil
@@ -899,6 +910,7 @@ public struct NoteWritePayload: Codable, Equatable {
         self.content = content
         self.isScraped = isScraped
         self.folderPath = folderPath
+        self.clearFolder = clearFolder
         self.scrapeMachineName = scrapeMachineName
         self.scrapeMachineId = scrapeMachineId
         self.environments = environments.map(VaultEnvironmentTags.normalize)
@@ -914,6 +926,7 @@ public struct SSHKeyWritePayload: Codable, Equatable {
     public let passphrase: String?
     public let isScraped: Bool?
     public let folderPath: String?
+    public let clearFolder: Bool?
     public let scrapeMachineName: String?
     public let scrapeMachineId: String?
     public let keyType: SSHKeyType?
@@ -930,6 +943,7 @@ public struct SSHKeyWritePayload: Codable, Equatable {
         passphrase: String? = nil,
         isScraped: Bool? = nil,
         folderPath: String? = nil,
+        clearFolder: Bool? = nil,
         scrapeMachineName: String? = nil,
         scrapeMachineId: String? = nil,
         keyType: SSHKeyType? = nil,
@@ -945,6 +959,7 @@ public struct SSHKeyWritePayload: Codable, Equatable {
         self.passphrase = passphrase
         self.isScraped = isScraped
         self.folderPath = folderPath
+        self.clearFolder = clearFolder
         self.scrapeMachineName = scrapeMachineName
         self.scrapeMachineId = scrapeMachineId
         self.keyType = keyType

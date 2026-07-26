@@ -54,6 +54,7 @@ struct EditAPIKey: ParsableCommand {
         completion: .custom(ShellCompletionMetadata.completeFolders)
     )
     var folder: String?
+    @Flag(name: .customLong("clear-folder"), help: "Move the item to Root") var clearFolder = false
     @Option(name: .customLong("expires-at"), help: "Auto-destroy date (YYYY-MM-DD or ISO-8601 timestamp)")
     var expiresAt: String?
     @Flag(name: .customLong("clear-expires-at"), help: "Remove the auto-destroy date") var clearExpiresAt = false
@@ -64,6 +65,11 @@ struct EditAPIKey: ParsableCommand {
     @Option(name: .long) var format: OutputFormat = .json
 
     func run() throws {
+        try validateFolderUpdate(
+            folder: folder,
+            clearFolder: clearFolder,
+            example: "authsia edit api-key Stripe --clear-folder"
+        )
         if expiresAt != nil && clearExpiresAt {
             throw ValidationError(
                 "Use either --expires-at or --clear-expires-at, not both. " +
@@ -87,6 +93,7 @@ struct EditAPIKey: ParsableCommand {
             website: website,
             notes: notes,
             folderPath: normalizeFolderPath(folder),
+            clearFolder: clearFolder,
             expiresAt: expiry,
             clearExpiresAt: clearExpiresAt,
             environments: replacement
@@ -122,6 +129,7 @@ struct EditPassword: ParsableCommand {
         completion: .custom(ShellCompletionMetadata.completeFolders)
     )
     var folder: String?
+    @Flag(name: .customLong("clear-folder"), help: "Move the item to Root") var clearFolder = false
     @Option(name: .customLong("expires-at"), help: "Auto-destroy date (YYYY-MM-DD or ISO-8601 timestamp)")
     var expiresAt: String?
     @Flag(name: .customLong("clear-expires-at"), help: "Remove the auto-destroy date") var clearExpiresAt = false
@@ -132,6 +140,11 @@ struct EditPassword: ParsableCommand {
     @Option(name: .long) var format: OutputFormat = .json
 
     func run() throws {
+        try validateFolderUpdate(
+            folder: folder,
+            clearFolder: clearFolder,
+            example: "authsia edit password GitHub --clear-folder"
+        )
         if expiresAt != nil && clearExpiresAt {
             throw ValidationError(
                 "Use either --expires-at or --clear-expires-at, not both. " +
@@ -151,6 +164,7 @@ struct EditPassword: ParsableCommand {
             website: website,
             notes: notes,
             folderPath: normalizeFolderPath(folder),
+            clearFolder: clearFolder,
             expiresAt: expiry,
             clearExpiresAt: clearExpiresAt,
             environments: replacement
@@ -185,6 +199,7 @@ struct EditCertificate: ParsableCommand {
         completion: .custom(ShellCompletionMetadata.completeFolders)
     )
     var folder: String?
+    @Flag(name: .customLong("clear-folder"), help: "Move the item to Root") var clearFolder = false
     @Option(name: .long, help: "Environment tag used to disambiguate the item") var environment: String?
     @Option(name: .customLong("add-environment"), help: "Add an environment tag (repeatable)") var addEnvironment: [String] = []
     @Option(name: .customLong("remove-environment"), help: "Remove an environment tag (repeatable)") var removeEnvironment: [String] = []
@@ -192,6 +207,11 @@ struct EditCertificate: ParsableCommand {
     @Option(name: .long) var format: OutputFormat = .json
 
     func run() throws {
+        try validateFolderUpdate(
+            folder: folder,
+            clearFolder: clearFolder,
+            example: "authsia edit cert TLS --clear-folder"
+        )
         let certificate = try certFile.map { try StdinReader.readFileOrStdin($0) }
         let privateKey = try keyFile.map { try StdinReader.readFileOrStdin($0) }
         let candidate = try resolveVaultItem(type: .certificate, query: query, environment: environment)
@@ -203,6 +223,7 @@ struct EditCertificate: ParsableCommand {
             privateKey: privateKey,
             notes: notes,
             folderPath: normalizeFolderPath(folder),
+            clearFolder: clearFolder,
             environments: replacement
         )
         let output = try OutputFormatter.formatWriteResult(result, format: format)
@@ -234,6 +255,7 @@ struct EditNote: ParsableCommand {
         completion: .custom(ShellCompletionMetadata.completeFolders)
     )
     var folder: String?
+    @Flag(name: .customLong("clear-folder"), help: "Move the item to Root") var clearFolder = false
     @Option(name: .long, help: "Environment tag used to disambiguate the item") var environment: String?
     @Option(name: .customLong("add-environment"), help: "Add an environment tag (repeatable)") var addEnvironment: [String] = []
     @Option(name: .customLong("remove-environment"), help: "Remove an environment tag (repeatable)") var removeEnvironment: [String] = []
@@ -241,6 +263,11 @@ struct EditNote: ParsableCommand {
     @Option(name: .long) var format: OutputFormat = .json
 
     func run() throws {
+        try validateFolderUpdate(
+            folder: folder,
+            clearFolder: clearFolder,
+            example: "authsia edit note Runbook --clear-folder"
+        )
         let contentValue = try resolveNoteContent(content: content, contentFile: contentFile)
         let candidate = try resolveVaultItem(type: .note, query: query, environment: environment)
         let replacement = try environmentReplacement(existing: candidate.environments, add: addEnvironment, remove: removeEnvironment, clear: clearEnvironments)
@@ -249,6 +276,7 @@ struct EditNote: ParsableCommand {
             title: title,
             content: contentValue,
             folderPath: normalizeFolderPath(folder),
+            clearFolder: clearFolder,
             environments: replacement
         )
         let output = try OutputFormatter.formatWriteResult(result, format: format)
@@ -285,6 +313,7 @@ struct EditSSH: ParsableCommand {
         completion: .custom(ShellCompletionMetadata.completeFolders)
     )
     var folder: String?
+    @Flag(name: .customLong("clear-folder"), help: "Move the item to Root") var clearFolder = false
     @Option(name: .long, help: "Approval policy: always, session, or auto") var approval: String?
     @Option(name: .long, help: "Comma-separated bound hosts (e.g. github.com,*.corp.internal). Empty string clears.")
     var hosts: String?
@@ -295,6 +324,11 @@ struct EditSSH: ParsableCommand {
     @Option(name: .long, help: "Output format") var format: OutputFormat = .json
 
     func run() throws {
+        try validateFolderUpdate(
+            folder: folder,
+            clearFolder: clearFolder,
+            example: "authsia edit ssh deploy --clear-folder"
+        )
         if let approval {
             let validValues = ["always", "session", "auto"]
             guard validValues.contains(approval) else {
@@ -334,6 +368,7 @@ struct EditSSH: ParsableCommand {
             comment: comment,
             fingerprint: fingerprint,
             folderPath: normalizeFolderPath(folder),
+            clearFolder: clearFolder,
             keyType: keyType,
             approvalPolicy: approvalWire,
             boundHosts: parsedHosts,
@@ -372,6 +407,18 @@ private func environmentReplacement(
     return VaultEnvironmentTags.normalize(
         existing.filter { !VaultEnvironmentTags.contains($0, in: remove) } + add
     )
+}
+
+func validateFolderUpdate(
+    folder: String?,
+    clearFolder: Bool,
+    example: String
+) throws {
+    if folder != nil && clearFolder {
+        throw ValidationError(
+            "Use either --folder or --clear-folder, not both. Example: \(example)"
+        )
+    }
 }
 
 private func resolveNoteContent(content: String?, contentFile: String?) throws -> String? {

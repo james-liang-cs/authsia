@@ -624,10 +624,21 @@ Examples are included in the command table above.
 Updates an existing item. All flags are optional; only provided fields are updated.
 Requires biometric authentication or an active session.
 
+For passwords, API keys, certificates, secure notes, and SSH keys, `--folder <path>` moves the item
+to that named folder and `--clear-folder` moves it to Root. The two flags are mutually exclusive.
+Omitting both leaves the current folder unchanged.
+
 For passwords and API keys, `--expires-at <date>` sets or replaces the auto-destroy date and
 `--clear-expires-at` removes it. The two flags are mutually exclusive.
 
-Examples are included in the command table above.
+```bash
+authsia edit api-key Stripe --folder Team/API
+authsia edit api-key Stripe --clear-folder
+authsia edit password GitHub --clear-folder
+authsia edit cert TLS --clear-folder
+authsia edit note Runbook --clear-folder
+authsia edit ssh deploy --clear-folder
+```
 
 ### `authsia delete <type> <query>` — Delete an item
 
