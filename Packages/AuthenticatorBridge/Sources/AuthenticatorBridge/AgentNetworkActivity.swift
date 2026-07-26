@@ -197,13 +197,22 @@ public struct AgentNetworkActivityAccumulator: Sendable {
     public let runID: UUID
     public let grantIDs: [UUID]
 
+    private let recordLimit: Int
+    private let connectionLimit: Int
     private var recordsByKey: [String: AgentNetworkActivityRecord] = [:]
     private var connectionIDsByKey: [String: Set<String>] = [:]
     private var byteCountsByConnectionID: [String: (sent: UInt64?, received: UInt64?)] = [:]
 
-    public init(runID: UUID, grantIDs: [UUID]) {
+    public init(
+        runID: UUID,
+        grantIDs: [UUID],
+        recordLimit: Int = 2_048,
+        connectionLimit: Int = 4_096
+    ) {
         self.runID = runID
         self.grantIDs = Array(Set(grantIDs)).sorted { $0.uuidString < $1.uuidString }
+        self.recordLimit = max(1, recordLimit)
+        self.connectionLimit = max(1, connectionLimit)
     }
 
     public var records: [AgentNetworkActivityRecord] {
@@ -215,9 +224,37 @@ public struct AgentNetworkActivityAccumulator: Sendable {
         }
     }
 
-    public mutating func apply(_ observations: [AgentNetworkSocketObservation]) {
+    @discardableResult
+    public mutating func apply(_ observations: [AgentNetworkSocketObservation]) -> Bool {
+        var wasComplete = true
         for observation in observations {
             let key = Self.recordKey(for: observation)
+            guard recordsByKey[key] != nil || recordsByKey.count < recordLimit else {
+                wasComplete = false
+                continue
+            }
+
+            let isTrackedConnection = byteCountsByConnectionID[observation.connectionID] != nil
+            guard isTrackedConnection || byteCountsByConnectionID.count < connectionLimit else {
+                wasComplete = false
+                if var record = recordsByKey[key] {
+                    record.apply(
+                        observation,
+                        isNewConnection: false,
+                        sentByteDelta: nil,
+                        receivedByteDelta: nil
+                    )
+                    recordsByKey[key] = record
+                } else {
+                    recordsByKey[key] = AgentNetworkActivityRecord(
+                        runID: runID,
+                        grantIDs: grantIDs,
+                        observation: observation
+                    )
+                }
+                continue
+            }
+
             let previousBytes = byteCountsByConnectionID[observation.connectionID]
             let sentDelta = Self.delta(current: observation.sentBytes, previous: previousBytes?.sent)
             let receivedDelta = Self.delta(
@@ -249,6 +286,7 @@ public struct AgentNetworkActivityAccumulator: Sendable {
                 )
             }
         }
+        return wasComplete
     }
 
     private static func recordKey(for observation: AgentNetworkSocketObservation) -> String {
@@ -308,11 +346,23 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
         return base.appendingPathComponent("Authsia", isDirectory: true)
     }
 
+    private struct FileFingerprint: Equatable {
+        let size: UInt64
+        let modificationDate: Date?
+    }
+
+    private struct HistoryCache {
+        let fingerprint: FileFingerprint?
+        let snapshots: [AgentNetworkActivityRunSnapshot]
+    }
+
     private let historyFileURL: URL
     private let activeFileURL: URL
     private let fileManager: FileManager
     private let retentionInterval: TimeInterval
     private let aggregateLimit: Int
+    private let dataLoader: @Sendable (URL) throws -> Data
+    private var historyCache: HistoryCache?
 
     public init(
         historyFileURL: URL = AgentNetworkActivityStore.defaultHistoryFileURL,
@@ -326,6 +376,23 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
         self.fileManager = fileManager
         self.retentionInterval = retentionInterval
         self.aggregateLimit = max(1, aggregateLimit)
+        self.dataLoader = { try Data(contentsOf: $0) }
+    }
+
+    init(
+        historyFileURL: URL,
+        activeFileURL: URL,
+        fileManager: FileManager = .default,
+        retentionInterval: TimeInterval = 30 * 24 * 60 * 60,
+        aggregateLimit: Int = 10_000,
+        dataLoader: @escaping @Sendable (URL) throws -> Data
+    ) {
+        self.historyFileURL = historyFileURL
+        self.activeFileURL = activeFileURL
+        self.fileManager = fileManager
+        self.retentionInterval = retentionInterval
+        self.aggregateLimit = max(1, aggregateLimit)
+        self.dataLoader = dataLoader
     }
 
     public func checkpoint(_ snapshot: AgentNetworkActivityRunSnapshot) throws {
@@ -360,16 +427,21 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
                 try write(active, to: activeFileURL)
             }
 
-            var history = try loadFile(historyFileURL)
+            var history = try loadHistoryFile()
             history.removeAll { $0.runID == snapshot.runID }
             history.append(finalized)
-            try write(pruned(history, now: now), to: historyFileURL)
+            let retained = pruned(history, now: now)
+            try write(retained, to: historyFileURL)
+            historyCache = HistoryCache(
+                fingerprint: fileFingerprint(for: historyFileURL),
+                snapshots: retained
+            )
         }
     }
 
     public func loadAll(now: Date = Date()) throws -> [AgentNetworkActivityRunSnapshot] {
         try Self.mutationLock.withLock {
-            let history = pruned(try loadFile(historyFileURL), now: now)
+            let history = pruned(try loadHistoryFile(), now: now)
             let active = try loadFile(activeFileURL)
             var byRunID = Dictionary(uniqueKeysWithValues: history.map { ($0.runID, $0) })
             for snapshot in active {
@@ -379,11 +451,28 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
         }
     }
 
+    private func loadHistoryFile() throws -> [AgentNetworkActivityRunSnapshot] {
+        if fileManager.fileExists(atPath: historyFileURL.path) {
+            try requireRegularFile(historyFileURL)
+            try enforceFilePermissions(historyFileURL)
+        }
+        let fingerprint = fileFingerprint(for: historyFileURL)
+        if let historyCache, historyCache.fingerprint == fingerprint {
+            return historyCache.snapshots
+        }
+        let snapshots = try loadFile(historyFileURL)
+        historyCache = HistoryCache(
+            fingerprint: fileFingerprint(for: historyFileURL),
+            snapshots: snapshots
+        )
+        return snapshots
+    }
+
     private func loadFile(_ fileURL: URL) throws -> [AgentNetworkActivityRunSnapshot] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
         try requireRegularFile(fileURL)
         try enforceFilePermissions(fileURL)
-        let data = try Data(contentsOf: fileURL)
+        let data = try dataLoader(fileURL)
         return data.split(separator: 0x0A)
             .compactMap {
                 try? Self.decoder.decode(
@@ -410,6 +499,17 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
         }
         try data.write(to: fileURL, options: .atomic)
         try enforceFilePermissions(fileURL)
+    }
+
+    private func fileFingerprint(for fileURL: URL) -> FileFingerprint? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+              let size = (attributes[.size] as? NSNumber)?.uint64Value else {
+            return nil
+        }
+        return FileFingerprint(
+            size: size,
+            modificationDate: attributes[.modificationDate] as? Date
+        )
     }
 
     private func pruned(

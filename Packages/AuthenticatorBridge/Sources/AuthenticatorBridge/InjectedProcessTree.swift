@@ -748,9 +748,15 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         let updatedCoverage: AgentNetworkCaptureCoverage?
         if var accumulator = sampledAccumulator {
             let inspection = networkInspectionProvider(verifiedSamples, now)
-            accumulator.apply(inspection.observations)
+            let aggregationWasComplete = accumulator.apply(inspection.observations)
             sampledAccumulator = accumulator
-            updatedCoverage = mergedCoverage(sampledCoverage, inspection.coverage)
+            let aggregationCoverage: AgentNetworkCaptureCoverage = aggregationWasComplete
+                ? .observed
+                : .partial
+            updatedCoverage = mergedCoverage(
+                mergedCoverage(sampledCoverage, inspection.coverage),
+                aggregationCoverage
+            )
         } else {
             updatedCoverage = nil
         }
