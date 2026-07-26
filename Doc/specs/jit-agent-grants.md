@@ -306,7 +306,7 @@ receives one primary classification:
 | Standard error | Mediated | Uses the same masking boundary and has the same limitations as stdout. |
 | Invalid or incomplete UTF-8 output | Prevented by default | Strict output buffers a valid multibyte code point split across read chunks. Invalid sequences, or a partial code point still incomplete when the stream closes, are withheld; the child is terminated and the CLI exits `74`. Explicit `masked-compatibility` may pass those bytes with a warning. Valid UTF-8 using a novel transform remains mediated, not categorically prevented. |
 | File writes | Detected and reduced | After any secret-injected mediated run, Authsia reads only bounded observed candidates and automatically replaces eligible exact injected tokens while preserving other file content. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
-| Network | Out of scope | Arbitrary child network traffic is not mediated. |
+| Network | Detected for Authsia-mediated agent runs | Best-effort remote endpoint metadata is recorded for the secret-bearing launched child and verified descendants. Traffic is not blocked or inspected; arbitrary agent, terminal, user, and system network activity remains out of scope. |
 | Subprocesses | Detected | Command and ancestry evidence can identify supported activity; child-process behavior is not contained. |
 | Clipboard | Out of scope | Authsia does not monitor arbitrary child clipboard access. |
 | IPC | Out of scope | Authsia validates its own XPC boundary but does not police arbitrary same-user IPC. |
@@ -316,6 +316,47 @@ receives one primary classification:
 Full operating-system filesystem, process, and network DLP is intentionally
 outside Authsia's responsibility. Product claims must stay limited to
 Authsia-owned CLI, hook, workspace, and execution surfaces.
+
+### Agent Network Activity Evidence
+
+Network capture starts only when a confirmed Agent JIT context launches a
+secret-bearing `authsia exec` or `workspace run` through the injected-child
+path. An active grant alone does not monitor its terminal, working directory,
+coding-agent application, or other user processes.
+
+The existing 500 ms Process Tree watcher supplies the root and descendants
+verified by PID plus start time. A single non-overlapping sample then inspects
+outbound TCP and connected UDP sockets with remote endpoints. It records remote
+IP and port, protocol, process identity and depth, destination zone, timestamps,
+connection count, and optional byte totals. It does not reverse-resolve IPs or
+store packet bodies, URLs, headers, query strings, DNS payloads, command
+arguments, environment values, or secret values.
+
+Capture is best effort and may miss connections that open and close between
+samples. Coverage is `Observed`, `Partial`, or `Unavailable`; process/socket or
+active-run aggregation limits produce Partial evidence without changing child
+behavior. Sampling is capped at 256 verified processes and 4,096 socket
+descriptors per cycle. Active aggregation is capped at 2,048 rows and 4,096
+tracked connections per run. Monitoring failures never block, delay, or alter
+the mediated command.
+
+Active checkpoints are written at most once every two seconds. Final aggregates
+are retained for 30 days with a 10,000-row history limit. Access Center binds
+records only through the mediated run's participating JIT grant IDs and exposes
+them in the selected grant's **Network** tab and JSON export.
+
+Deterministic findings are:
+
+- Review when traffic is observed after an associated grant ended;
+- Review when a known descendant survives root exit;
+- Review when the whole run is unavailable for inspection;
+- Info when inspection is partial;
+- Review for non-loopback traffic on fixed commonly cleartext ports
+  `20`, `21`, `23`, `80`, `110`, `143`, and `389`.
+
+These findings are investigation hints, not proof that a secret was transmitted.
+Ordinary loopback, private, and public traffic remains visible without a
+finding.
 
 ## When JIT Runs
 
