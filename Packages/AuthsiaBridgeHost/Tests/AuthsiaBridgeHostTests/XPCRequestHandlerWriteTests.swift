@@ -362,6 +362,87 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         XCTAssertEqual(approver.requests.first?.command, .updateAPIKey)
     }
 
+    func testClearFolderMovesEveryVaultCategoryToRoot() async throws {
+        let previousValue = UserDefaults.standard.bool(forKey: "cliAccessEnabled")
+        UserDefaults.standard.set(true, forKey: "cliAccessEnabled")
+        defer { UserDefaults.standard.set(previousValue, forKey: "cliAccessEnabled") }
+
+        let repository = TestVaultRepository()
+        try repository.load()
+        try repository.addPassword(
+            PasswordItem(
+                name: "FolderedPassword",
+                username: "",
+                password: Data(),
+                folderPath: "Team/Old"
+            )
+        )
+        try repository.addAPIKey(
+            APIKeyItem(
+                name: "FolderedAPIKey",
+                key: Data(),
+                folderPath: "Team/Old"
+            )
+        )
+        try repository.addCertificate(
+            CertificateItem(
+                name: "FolderedCertificate",
+                certificateData: Data(),
+                folderPath: "Team/Old"
+            )
+        )
+        try repository.addNote(
+            SecureNoteItem(
+                title: "FolderedNote",
+                content: Data(),
+                folderPath: "Team/Old"
+            )
+        )
+        try repository.addSSHKey(
+            SSHKeyItem(
+                name: "FolderedSSH",
+                publicKey: Data(),
+                privateKey: Data(),
+                comment: "",
+                fingerprint: "",
+                folderPath: "Team/Old"
+            )
+        )
+        let handler = XPCRequestHandler(
+            approver: ApprovalTracker(result: true),
+            repository: repository
+        )
+        let body = try BridgeCoder.encode(["clearFolder": true])
+
+        for (type, query) in [
+            (BridgeRequestType.updatePassword, "FolderedPassword"),
+            (.updateAPIKey, "FolderedAPIKey"),
+            (.updateCertificate, "FolderedCertificate"),
+            (.updateNote, "FolderedNote"),
+            (.updateSSH, "FolderedSSH"),
+        ] {
+            let response = try await updateResponse(
+                handler: handler,
+                type: type,
+                query: query,
+                body: body
+            )
+            XCTAssertNil(response.error)
+            XCTAssertNotNil(response.payload)
+        }
+
+        let password = try XCTUnwrap(repository.passwords.first { $0.name == "FolderedPassword" })
+        let apiKey = try XCTUnwrap(repository.apiKeys.first { $0.name == "FolderedAPIKey" })
+        let certificate = try XCTUnwrap(repository.certificates.first { $0.name == "FolderedCertificate" })
+        let note = try XCTUnwrap(repository.notes.first { $0.title == "FolderedNote" })
+        let ssh = try XCTUnwrap(repository.sshKeys.first { $0.name == "FolderedSSH" })
+        XCTAssertNil(try repository.getFullPassword(metadata: password).folderPath)
+        XCTAssertNil(try repository.getFullAPIKey(metadata: apiKey).folderPath)
+        XCTAssertNil(try repository.getFullCertificate(metadata: certificate).folderPath)
+        XCTAssertNil(try repository.getFullNote(metadata: note).folderPath)
+        XCTAssertNil(try repository.getFullSSHKey(metadata: ssh).folderPath)
+    }
+
     func testConvertPasswordToAPIKeyPreservesUsernameInNotesAndDeletesPassword() async throws {
         let previousValue = UserDefaults.standard.bool(forKey: "cliAccessEnabled")
         UserDefaults.standard.set(true, forKey: "cliAccessEnabled")
@@ -1019,6 +1100,38 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         XCTAssertEqual(metadata?.isScraped, true)
         XCTAssertEqual(metadata?.scrapeMachineName, "jamess-mac-mini")
         XCTAssertEqual(metadata?.scrapeMachineId, "73C4AEA4-EB11-4AD7-AC14-DA296C404846")
+    }
+
+    private func updateResponse(
+        handler: XPCRequestHandler,
+        type: BridgeRequestType,
+        query: String,
+        body: Data
+    ) async throws -> BridgeResponse<WriteResultPayload> {
+        let request = BridgeRequest(
+            id: UUID(),
+            type: type,
+            query: query,
+            options: .init(field: nil, copy: false),
+            context: .init(
+                isTTY: true,
+                isPiped: false,
+                isSSH: false,
+                isCI: false,
+                timestamp: Date()
+            ),
+            body: body
+        )
+        let requestData = try BridgeCoder.encode(request)
+        let responseData: Data? = await withCheckedContinuation { continuation in
+            handler.updateItem(requestData) { data, _ in
+                continuation.resume(returning: data)
+            }
+        }
+        return try BridgeCoder.decode(
+            BridgeResponse<WriteResultPayload>.self,
+            from: responseData ?? Data()
+        )
     }
 }
 
