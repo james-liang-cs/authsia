@@ -897,16 +897,79 @@ final class AgentCommandHistoryTests: XCTestCase {
             detail: "Authsia observed file activity that may need review.",
             recommendedAction: "Review the file access."
         )
+        let runID = UUID()
+        let grantID = UUID()
+        let laterNetwork = AgentNetworkActivityRecord(
+            runID: runID,
+            grantIDs: [grantID],
+            observation: AgentNetworkSocketObservation(
+                connectionID: "socket-later",
+                observedAt: Date(timeIntervalSince1970: 103),
+                pid: 42,
+                processStartTime: 100,
+                executable: "synthetic-client",
+                depth: 1,
+                remoteAddress: "203.0.113.8",
+                remotePort: 443,
+                networkProtocol: .tcp,
+                sentBytes: nil,
+                receivedBytes: nil
+            )
+        )
+        let earlierNetwork = AgentNetworkActivityRecord(
+            runID: runID,
+            grantIDs: [grantID],
+            observation: AgentNetworkSocketObservation(
+                connectionID: "socket-earlier",
+                observedAt: Date(timeIntervalSince1970: 102),
+                pid: 42,
+                processStartTime: 100,
+                executable: "synthetic-client",
+                depth: 1,
+                remoteAddress: "192.0.2.10",
+                remotePort: 8443,
+                networkProtocol: .tcp,
+                sentBytes: nil,
+                receivedBytes: nil
+            )
+        )
+        let networkSnapshot = AgentNetworkActivityRunSnapshot(
+            runID: runID,
+            grantIDs: [grantID],
+            coverage: .partial,
+            updatedAt: Date(timeIntervalSince1970: 103),
+            endedAt: Date(timeIntervalSince1970: 104),
+            records: [laterNetwork, earlierNetwork]
+        )
 
-        let export = AgentSessionActivityExport(commands: [command], files: [file], findings: [finding])
+        let export = AgentSessionActivityExport(
+            commands: [command],
+            files: [file],
+            networkSnapshots: [networkSnapshot],
+            findings: [finding]
+        )
         let encoded = try JSONEncoder.agentCommandHistory.encode(export)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         let files = try XCTUnwrap(json["files"] as? [[String: Any]])
 
         XCTAssertEqual(export.commands.count, 1)
         XCTAssertEqual(export.files.count, 1)
+        XCTAssertEqual(export.network.map(\.id), [earlierNetwork.id, laterNetwork.id])
+        XCTAssertEqual(export.networkCoverage.map(\.coverage), [.partial])
         XCTAssertEqual(export.findings.count, 1)
         XCTAssertEqual(export.summary.totalCount, 1)
+        XCTAssertEqual(
+            Set(json.keys),
+            [
+                "commands",
+                "files",
+                "processTrees",
+                "network",
+                "networkCoverage",
+                "findings",
+                "summary",
+            ]
+        )
         XCTAssertEqual(files.first?["workspaceRelativePath"] as? String, "Package.swift")
         XCTAssertNil(files.first?["path"])
         XCTAssertNil(files.first?["workingDirectory"])
@@ -932,6 +995,7 @@ final class AgentCommandHistoryTests: XCTestCase {
 
         XCTAssertEqual(decoded.evidenceEventIDs, [UUID(uuidString: "11111111-2222-3333-4444-555555555555")!])
         XCTAssertEqual(decoded.fileEvidenceEventIDs, [])
+        XCTAssertEqual(decoded.networkEvidenceRecordIDs, [])
     }
 
     func testCommandEventsRejectConflictingRuntimeContextIdentifiers() {

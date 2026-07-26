@@ -281,6 +281,91 @@ final class AgentNetworkActivityTests: XCTestCase {
         XCTAssertEqual(descriptorLimited.observations.count, 1)
     }
 
+    func testFindingsReviewGrantEndedSurvivorsUnavailableAndCleartextTraffic() {
+        let grant = makeGrant(expiresAt: Date(timeIntervalSince1970: 100))
+        let cleartextPorts: [UInt16] = [20, 21, 23, 80, 110, 143, 389]
+        let snapshot = networkSnapshot(
+            grantID: grant.id,
+            coverage: .unavailable,
+            updatedAt: 101,
+            survivingDescendants: ["42:100"],
+            endpoints: cleartextPorts.map { ("203.0.113.8", $0) }
+        )
+
+        let findings = AgentCommandFindingDetector.findings(
+            for: grant,
+            events: [],
+            fileEvents: [],
+            networkSnapshots: [snapshot],
+            auditRecords: []
+        )
+
+        XCTAssertEqual(
+            Set(findings.map(\.type)),
+            [
+                .networkAfterGrantEnded,
+                .networkDescendantSurvived,
+                .networkInspectionUnavailable,
+                .potentialCleartextNetwork,
+            ]
+        )
+        XCTAssertTrue(findings.allSatisfy { $0.severity == .review })
+        XCTAssertEqual(
+            findings.filter { $0.type == .potentialCleartextNetwork }.count,
+            cleartextPorts.count
+        )
+        XCTAssertTrue(
+            findings
+                .filter { $0.type == .potentialCleartextNetwork }
+                .allSatisfy { $0.networkEvidenceRecordIDs.count == 1 }
+        )
+    }
+
+    func testFindingsReportPartialInspectionAsInfo() {
+        let grant = makeGrant()
+        let snapshot = networkSnapshot(
+            grantID: grant.id,
+            coverage: .partial,
+            updatedAt: 50,
+            endpoints: [("203.0.113.8", 443)]
+        )
+
+        let findings = AgentCommandFindingDetector.findings(
+            for: grant,
+            events: [],
+            fileEvents: [],
+            networkSnapshots: [snapshot],
+            auditRecords: []
+        )
+
+        XCTAssertEqual(findings.map(\.type), [.networkInspectionPartial])
+        XCTAssertEqual(findings.map(\.severity), [.info])
+    }
+
+    func testFindingsIgnoreNormalTLSAndLoopbackTraffic() {
+        let grant = makeGrant()
+        let snapshot = networkSnapshot(
+            grantID: grant.id,
+            coverage: .observed,
+            updatedAt: 50,
+            endpoints: [
+                ("127.0.0.1", 80),
+                ("192.168.1.4", 443),
+                ("203.0.113.8", 443),
+            ]
+        )
+
+        let findings = AgentCommandFindingDetector.findings(
+            for: grant,
+            events: [],
+            fileEvents: [],
+            networkSnapshots: [snapshot],
+            auditRecords: []
+        )
+
+        XCTAssertTrue(findings.isEmpty)
+    }
+
     private func observation(
         connectionID: String,
         port: UInt16,
@@ -357,7 +442,49 @@ final class AgentNetworkActivityTests: XCTestCase {
         )
     }
 
-    private func makeGrant() -> AgentJITGrant {
+    private func networkSnapshot(
+        grantID: UUID,
+        coverage: AgentNetworkCaptureCoverage,
+        updatedAt: TimeInterval,
+        survivingDescendants: [String] = [],
+        endpoints: [(String, UInt16)]
+    ) -> AgentNetworkActivityRunSnapshot {
+        let runID = UUID()
+        var accumulator = AgentNetworkActivityAccumulator(
+            runID: runID,
+            grantIDs: [grantID]
+        )
+        accumulator.apply(
+            endpoints.enumerated().map { index, endpoint in
+                AgentNetworkSocketObservation(
+                    connectionID: "socket-\(index)",
+                    observedAt: Date(timeIntervalSince1970: updatedAt),
+                    pid: 42,
+                    processStartTime: 100,
+                    executable: "synthetic-client",
+                    depth: 1,
+                    remoteAddress: endpoint.0,
+                    remotePort: endpoint.1,
+                    networkProtocol: .tcp,
+                    sentBytes: nil,
+                    receivedBytes: nil
+                )
+            }
+        )
+        return AgentNetworkActivityRunSnapshot(
+            runID: runID,
+            grantIDs: [grantID],
+            coverage: coverage,
+            updatedAt: Date(timeIntervalSince1970: updatedAt),
+            endedAt: Date(timeIntervalSince1970: updatedAt),
+            survivingDescendantIdentityKeys: survivingDescendants,
+            records: accumulator.records
+        )
+    }
+
+    private func makeGrant(
+        expiresAt: Date = Date(timeIntervalSince1970: 100)
+    ) -> AgentJITGrant {
         AgentJITGrant(
             id: UUID(),
             agentName: "Codex",
@@ -374,7 +501,7 @@ final class AgentNetworkActivityTests: XCTestCase {
             folderScope: .folder("Synthetic"),
             capabilities: [.exec],
             createdAt: Date(timeIntervalSince1970: 1),
-            expiresAt: Date(timeIntervalSince1970: 100),
+            expiresAt: expiresAt,
             revokedAt: nil,
             lastUsedAt: nil,
             approvedBy: "test"

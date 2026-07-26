@@ -6,7 +6,7 @@ public enum AgentCommandFindingSeverity: String, Codable, CaseIterable, Equatabl
     case warning
 }
 
-public enum AgentCommandFindingType: String, Codable, Equatable, Sendable {
+public enum AgentCommandFindingType: String, Codable, Equatable, Hashable, Sendable {
     case commandAfterGrantEnded
     case processOnlyCapture
     case deniedDirectSecretRead
@@ -20,6 +20,11 @@ public enum AgentCommandFindingType: String, Codable, Equatable, Sendable {
     case secretFileInspectionIncomplete
     case secretFileCleanupIncomplete
     case mediatedResponse
+    case networkAfterGrantEnded
+    case networkDescendantSurvived
+    case networkInspectionUnavailable
+    case networkInspectionPartial
+    case potentialCleartextNetwork
 }
 
 public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
@@ -29,6 +34,7 @@ public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
     public let agentJITGrantID: UUID?
     public let evidenceEventIDs: [UUID]
     public let fileEvidenceEventIDs: [UUID]
+    public let networkEvidenceRecordIDs: [UUID]
     public let recordedAt: Date
     public let title: String
     public let detail: String
@@ -41,6 +47,7 @@ public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
         agentJITGrantID: UUID?,
         evidenceEventIDs: [UUID],
         fileEvidenceEventIDs: [UUID] = [],
+        networkEvidenceRecordIDs: [UUID] = [],
         recordedAt: Date,
         title: String,
         detail: String,
@@ -51,6 +58,7 @@ public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
         self.agentJITGrantID = agentJITGrantID
         self.evidenceEventIDs = evidenceEventIDs
         self.fileEvidenceEventIDs = fileEvidenceEventIDs
+        self.networkEvidenceRecordIDs = networkEvidenceRecordIDs
         self.recordedAt = recordedAt
         self.title = title
         self.detail = detail
@@ -60,6 +68,7 @@ public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
             agentJITGrantID: agentJITGrantID,
             evidenceEventIDs: evidenceEventIDs,
             fileEvidenceEventIDs: fileEvidenceEventIDs,
+            networkEvidenceRecordIDs: networkEvidenceRecordIDs,
             recordedAt: recordedAt
         )
     }
@@ -71,6 +80,7 @@ public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
         case agentJITGrantID
         case evidenceEventIDs
         case fileEvidenceEventIDs
+        case networkEvidenceRecordIDs
         case recordedAt
         case title
         case detail
@@ -85,6 +95,10 @@ public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
         self.agentJITGrantID = try container.decodeIfPresent(UUID.self, forKey: .agentJITGrantID)
         self.evidenceEventIDs = try container.decode([UUID].self, forKey: .evidenceEventIDs)
         self.fileEvidenceEventIDs = try container.decodeIfPresent([UUID].self, forKey: .fileEvidenceEventIDs) ?? []
+        self.networkEvidenceRecordIDs = try container.decodeIfPresent(
+            [UUID].self,
+            forKey: .networkEvidenceRecordIDs
+        ) ?? []
         self.recordedAt = try container.decode(Date.self, forKey: .recordedAt)
         self.title = try container.decode(String.self, forKey: .title)
         self.detail = try container.decode(String.self, forKey: .detail)
@@ -99,6 +113,7 @@ public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(agentJITGrantID, forKey: .agentJITGrantID)
         try container.encode(evidenceEventIDs, forKey: .evidenceEventIDs)
         try container.encode(fileEvidenceEventIDs, forKey: .fileEvidenceEventIDs)
+        try container.encode(networkEvidenceRecordIDs, forKey: .networkEvidenceRecordIDs)
         try container.encode(recordedAt, forKey: .recordedAt)
         try container.encode(title, forKey: .title)
         try container.encode(detail, forKey: .detail)
@@ -110,9 +125,13 @@ public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
         agentJITGrantID: UUID?,
         evidenceEventIDs: [UUID],
         fileEvidenceEventIDs: [UUID],
+        networkEvidenceRecordIDs: [UUID],
         recordedAt: Date
     ) -> String {
-        let eventIDs = (evidenceEventIDs.isEmpty ? fileEvidenceEventIDs : evidenceEventIDs)
+        let selectedIDs = evidenceEventIDs.isEmpty
+            ? (fileEvidenceEventIDs.isEmpty ? networkEvidenceRecordIDs : fileEvidenceEventIDs)
+            : evidenceEventIDs
+        let eventIDs = selectedIDs
             .map(\.uuidString)
             .joined(separator: ",")
         return [
@@ -155,10 +174,30 @@ public struct AgentCommandHistoryExport: Codable, Equatable, Sendable {
     }
 }
 
+public struct AgentNetworkActivityCoverageExport: Codable, Equatable, Sendable {
+    public let runID: UUID
+    public let grantIDs: [UUID]
+    public let coverage: AgentNetworkCaptureCoverage
+    public let updatedAt: Date
+    public let endedAt: Date?
+    public let survivingDescendantIdentityKeys: [String]
+
+    public init(snapshot: AgentNetworkActivityRunSnapshot) {
+        self.runID = snapshot.runID
+        self.grantIDs = snapshot.grantIDs
+        self.coverage = snapshot.coverage
+        self.updatedAt = snapshot.updatedAt
+        self.endedAt = snapshot.endedAt
+        self.survivingDescendantIdentityKeys = snapshot.survivingDescendantIdentityKeys
+    }
+}
+
 public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
     public let commands: [AgentCommandEvent]
     public let files: [AgentFileActivityExportEvent]
     public let processTrees: [InjectedProcessTreeRun]
+    public let network: [AgentNetworkActivityRecord]
+    public let networkCoverage: [AgentNetworkActivityCoverageExport]
     public let findings: [AgentCommandFinding]
     public let summary: AgentCommandFindingSummary
 
@@ -166,6 +205,7 @@ public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
         commands: [AgentCommandEvent],
         files: [AgentFileActivityEvent],
         processTrees: [InjectedProcessTreeRun] = [],
+        networkSnapshots: [AgentNetworkActivityRunSnapshot] = [],
         findings: [AgentCommandFinding]
     ) {
         self.commands = commands.sorted { lhs, rhs in
@@ -188,6 +228,22 @@ public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
             }
             return lhs.startedAt < rhs.startedAt
         }
+        self.network = networkSnapshots
+            .flatMap(\.records)
+            .sorted { lhs, rhs in
+                if lhs.lastSeenAt == rhs.lastSeenAt {
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+                return lhs.lastSeenAt < rhs.lastSeenAt
+            }
+        self.networkCoverage = networkSnapshots
+            .sorted { lhs, rhs in
+                if lhs.updatedAt == rhs.updatedAt {
+                    return lhs.runID.uuidString < rhs.runID.uuidString
+                }
+                return lhs.updatedAt < rhs.updatedAt
+            }
+            .map(AgentNetworkActivityCoverageExport.init(snapshot:))
         self.findings = findings.sorted { lhs, rhs in
             if lhs.recordedAt == rhs.recordedAt {
                 return lhs.id < rhs.id
@@ -220,9 +276,31 @@ public enum AgentCommandFindingDetector {
         fileEvents: [AgentFileActivityEvent],
         auditRecords: [BridgeAuditRecord]
     ) -> [AgentCommandFinding] {
+        findings(
+            for: grants,
+            events: events,
+            fileEvents: fileEvents,
+            networkSnapshots: [],
+            auditRecords: auditRecords
+        )
+    }
+
+    public static func findings(
+        for grants: [AgentJITGrant],
+        events: [AgentCommandEvent],
+        fileEvents: [AgentFileActivityEvent],
+        networkSnapshots: [AgentNetworkActivityRunSnapshot],
+        auditRecords: [BridgeAuditRecord]
+    ) -> [AgentCommandFinding] {
         grants
             .flatMap { grant in
-                findings(for: grant, events: events, fileEvents: fileEvents, auditRecords: auditRecords)
+                findings(
+                    for: grant,
+                    events: events,
+                    fileEvents: fileEvents,
+                    networkSnapshots: networkSnapshots,
+                    auditRecords: auditRecords
+                )
             }
             .sorted { lhs, rhs in
                 if lhs.recordedAt == rhs.recordedAt {
@@ -244,6 +322,22 @@ public enum AgentCommandFindingDetector {
         for grant: AgentJITGrant,
         events: [AgentCommandEvent],
         fileEvents: [AgentFileActivityEvent],
+        auditRecords: [BridgeAuditRecord]
+    ) -> [AgentCommandFinding] {
+        findings(
+            for: grant,
+            events: events,
+            fileEvents: fileEvents,
+            networkSnapshots: [],
+            auditRecords: auditRecords
+        )
+    }
+
+    public static func findings(
+        for grant: AgentJITGrant,
+        events: [AgentCommandEvent],
+        fileEvents: [AgentFileActivityEvent],
+        networkSnapshots: [AgentNetworkActivityRunSnapshot],
         auditRecords: [BridgeAuditRecord]
     ) -> [AgentCommandFinding] {
         let grantEvents = events
@@ -314,12 +408,124 @@ public enum AgentCommandFindingDetector {
             }
         }
 
+        for snapshot in AgentNetworkActivityQuery.snapshots(
+            for: grant,
+            from: networkSnapshots
+        ) {
+            switch snapshot.coverage {
+            case .unavailable:
+                findings.append(networkInspectionUnavailableFinding(for: snapshot, grant: grant))
+            case .partial:
+                findings.append(networkInspectionPartialFinding(for: snapshot, grant: grant))
+            case .observed:
+                break
+            }
+
+            if !snapshot.survivingDescendantIdentityKeys.isEmpty {
+                findings.append(networkDescendantSurvivedFinding(for: snapshot, grant: grant))
+            }
+
+            for record in snapshot.records {
+                if grantEndedBefore(record.lastSeenAt, grant: grant) {
+                    findings.append(networkAfterGrantEndedFinding(for: record, grant: grant))
+                }
+                if isPotentialCleartextNetwork(record) {
+                    findings.append(potentialCleartextNetworkFinding(for: record, grant: grant))
+                }
+            }
+        }
+
         return findings.sorted { lhs, rhs in
             if lhs.recordedAt == rhs.recordedAt {
                 return lhs.id < rhs.id
             }
             return lhs.recordedAt < rhs.recordedAt
         }
+    }
+
+    private static func networkAfterGrantEndedFinding(
+        for record: AgentNetworkActivityRecord,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .review,
+            type: .networkAfterGrantEnded,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            networkEvidenceRecordIDs: [record.id],
+            recordedAt: record.lastSeenAt,
+            title: "Network activity after access ended",
+            detail: "A process in the mediated run contacted an endpoint after the matching access was no longer active.",
+            recommendedAction: "Compare the endpoint time with the grant expiration or revocation time."
+        )
+    }
+
+    private static func networkDescendantSurvivedFinding(
+        for snapshot: AgentNetworkActivityRunSnapshot,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .review,
+            type: .networkDescendantSurvived,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            networkEvidenceRecordIDs: snapshot.records.map(\.id),
+            recordedAt: snapshot.endedAt ?? snapshot.updatedAt,
+            title: "Network-capable descendant survived",
+            detail: "One or more observed descendants were still running when the mediated root process exited.",
+            recommendedAction: "Review the Process Tree and confirm the surviving processes were expected."
+        )
+    }
+
+    private static func networkInspectionUnavailableFinding(
+        for snapshot: AgentNetworkActivityRunSnapshot,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .review,
+            type: .networkInspectionUnavailable,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            networkEvidenceRecordIDs: snapshot.records.map(\.id),
+            recordedAt: snapshot.updatedAt,
+            title: "Network observation unavailable",
+            detail: "Authsia could not inspect network activity for this mediated run.",
+            recommendedAction: "Treat the run as incomplete evidence and review its commands and Process Tree."
+        )
+    }
+
+    private static func networkInspectionPartialFinding(
+        for snapshot: AgentNetworkActivityRunSnapshot,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .info,
+            type: .networkInspectionPartial,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            networkEvidenceRecordIDs: snapshot.records.map(\.id),
+            recordedAt: snapshot.updatedAt,
+            title: "Partial network observation",
+            detail: "Some processes or socket descriptors could not be inspected within the bounded capture limits.",
+            recommendedAction: "Use the observed endpoints as supporting evidence, not a complete network trace."
+        )
+    }
+
+    private static func potentialCleartextNetworkFinding(
+        for record: AgentNetworkActivityRecord,
+        grant: AgentJITGrant
+    ) -> AgentCommandFinding {
+        AgentCommandFinding(
+            severity: .review,
+            type: .potentialCleartextNetwork,
+            agentJITGrantID: grant.id,
+            evidenceEventIDs: [],
+            networkEvidenceRecordIDs: [record.id],
+            recordedAt: record.lastSeenAt,
+            title: "Potential cleartext network service",
+            detail: "A non-loopback endpoint used a port commonly associated with a cleartext service.",
+            recommendedAction: "Confirm the endpoint and transport were appropriate for the approved task."
+        )
     }
 
     private static func commandAfterGrantEndedFinding(
@@ -699,6 +905,13 @@ public enum AgentCommandFindingDetector {
             return true
         }
         return !isEqualOrDescendant(path: path, root: workspaceRoot)
+    }
+
+    private static func isPotentialCleartextNetwork(
+        _ record: AgentNetworkActivityRecord
+    ) -> Bool {
+        guard record.destinationZone != .loopback else { return false }
+        return [20, 21, 23, 80, 110, 143, 389].contains(record.remotePort)
     }
 
     private static func isEqualOrDescendant(path: String, root: String) -> Bool {
