@@ -163,6 +163,162 @@ final class InjectedProcessTreeTests: XCTestCase {
         XCTAssertTrue(events.filter { $0.captureSource == .injectedTree }.allSatisfy { $0.agentJITGrantID == grantID })
     }
 
+    func testWatcherUsesSharedSamplesCheckpointsAndFinalizesNetworkActivity() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let treeStore = InjectedProcessTreeStore(
+            fileURL: directory.appendingPathComponent("trees.jsonl")
+        )
+        let commandStore = AgentCommandHistoryStore(
+            fileURL: directory.appendingPathComponent("commands.jsonl")
+        )
+        let networkStore = AgentNetworkActivityStore(
+            historyFileURL: directory.appendingPathComponent("network.jsonl"),
+            activeFileURL: directory.appendingPathComponent("network-active.jsonl")
+        )
+        let grantID = UUID()
+        let sampleCalls = CallCounter()
+        let inspectionCalls = CallCounter()
+        let samples = [
+            InjectedProcessTreeSample(
+                pid: 10,
+                ppid: 1,
+                startTime: 100,
+                executable: "root",
+                arguments: ["root"]
+            ),
+            InjectedProcessTreeSample(
+                pid: 11,
+                ppid: 10,
+                startTime: 101,
+                executable: "helper",
+                arguments: ["helper"]
+            ),
+        ]
+        let watcher = InjectedProcessTreeWatcher(
+            store: treeStore,
+            commandHistoryStore: commandStore,
+            networkActivityStore: networkStore,
+            sampleProvider: { _ in
+                sampleCalls.increment()
+                return samples
+            },
+            networkInspectionProvider: { receivedSamples, observedAt in
+                inspectionCalls.increment()
+                XCTAssertEqual(receivedSamples.map(\.pid), [10, 11])
+                return AgentNetworkInspectionResult(
+                    observations: [
+                        AgentNetworkSocketObservation(
+                            connectionID: "synthetic-socket",
+                            observedAt: observedAt,
+                            pid: 11,
+                            processStartTime: 101,
+                            executable: "helper",
+                            depth: 1,
+                            remoteAddress: "203.0.113.8",
+                            remotePort: 443,
+                            networkProtocol: .tcp,
+                            sentBytes: nil,
+                            receivedBytes: nil
+                        ),
+                    ],
+                    coverage: .observed,
+                    failedProcessIdentityKeys: []
+                )
+            },
+            pollInterval: 60,
+            networkCheckpointInterval: 2,
+            context: InjectedProcessTreeWatchContext(
+                agentJITGrantIDs: [grantID],
+                agentPlatform: "codex"
+            )
+        )
+
+        watcher.start(
+            rootPID: 10,
+            rootExecutable: "root",
+            rootArguments: ["root"],
+            now: Date(timeIntervalSince1970: 0)
+        )
+        watcher.sampleNow(now: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(
+            try networkStore.loadAll(now: Date(timeIntervalSince1970: 1))
+                .first?.updatedAt,
+            Date(timeIntervalSince1970: 0)
+        )
+        watcher.sampleNow(now: Date(timeIntervalSince1970: 2))
+        XCTAssertEqual(
+            try networkStore.loadAll(now: Date(timeIntervalSince1970: 2))
+                .first?.updatedAt,
+            Date(timeIntervalSince1970: 2)
+        )
+        watcher.stop(exitStatus: 0, now: Date(timeIntervalSince1970: 3))
+
+        XCTAssertEqual(sampleCalls.value, 4)
+        XCTAssertEqual(inspectionCalls.value, 4)
+        let snapshot = try XCTUnwrap(
+            try networkStore.loadAll(now: Date(timeIntervalSince1970: 3)).first
+        )
+        XCTAssertEqual(snapshot.endedAt, Date(timeIntervalSince1970: 3))
+        XCTAssertEqual(snapshot.records.count, 1)
+        XCTAssertEqual(snapshot.records[0].connectionCount, 1)
+        XCTAssertEqual(snapshot.survivingDescendantIdentityKeys, ["11:101"])
+    }
+
+    func testWatcherIgnoresNetworkStoreFailureAndStillFinalizesProcessTree() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let treeStore = InjectedProcessTreeStore(
+            fileURL: directory.appendingPathComponent("trees.jsonl")
+        )
+        let watcher = InjectedProcessTreeWatcher(
+            store: treeStore,
+            commandHistoryStore: AgentCommandHistoryStore(
+                fileURL: directory.appendingPathComponent("commands.jsonl")
+            ),
+            networkActivityStore: AgentNetworkActivityStore(
+                historyFileURL: directory,
+                activeFileURL: directory
+            ),
+            sampleProvider: { _ in
+                [
+                    InjectedProcessTreeSample(
+                        pid: 10,
+                        ppid: 1,
+                        startTime: 100,
+                        executable: "root",
+                        arguments: ["root"]
+                    ),
+                ]
+            },
+            networkInspectionProvider: { _, _ in
+                AgentNetworkInspectionResult(
+                    observations: [],
+                    coverage: .partial,
+                    failedProcessIdentityKeys: ["10:100"]
+                )
+            },
+            pollInterval: 60,
+            context: InjectedProcessTreeWatchContext(
+                agentJITGrantIDs: [UUID()]
+            )
+        )
+
+        watcher.start(
+            rootPID: 10,
+            rootExecutable: "root",
+            rootArguments: ["root"],
+            now: Date(timeIntervalSince1970: 0)
+        )
+        watcher.stop(exitStatus: 7, now: Date(timeIntervalSince1970: 1))
+
+        XCTAssertEqual(try treeStore.loadAll().first?.rootExitStatus, 7)
+    }
+
     func testFindingsDoNotTreatInjectedTreeAsProcessOnlyCapture() {
         let grantID = UUID()
         let grant = AgentJITGrant(
@@ -217,5 +373,20 @@ final class InjectedProcessTreeTests: XCTestCase {
         XCTAssertFalse(findings.contains { $0.type == .processOnlyCapture })
         XCTAssertFalse(findings.contains { $0.type == .processFallbackUsed })
         XCTAssertTrue(findings.contains { $0.type == .injectedTreeCapture })
+    }
+}
+
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func increment() {
+        lock.withLock {
+            count += 1
+        }
     }
 }

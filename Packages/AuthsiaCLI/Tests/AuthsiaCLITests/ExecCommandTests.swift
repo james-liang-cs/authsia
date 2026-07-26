@@ -1526,6 +1526,10 @@ struct ExecCollectSecretsTests {
         let grantID = UUID()
         let treeStore = InjectedProcessTreeStore(fileURL: directory.appendingPathComponent("trees.jsonl"))
         let commandStore = AgentCommandHistoryStore(fileURL: directory.appendingPathComponent("commands.jsonl"))
+        let networkStore = AgentNetworkActivityStore(
+            historyFileURL: directory.appendingPathComponent("network.jsonl"),
+            activeFileURL: directory.appendingPathComponent("network-active.jsonl")
+        )
         let output = Pipe()
         let error = Pipe()
 
@@ -1543,6 +1547,7 @@ struct ExecCollectSecretsTests {
             ),
             treeStore: treeStore,
             commandHistoryStore: commandStore,
+            networkActivityStore: networkStore,
             treeSampleProvider: { rootPID in
                 [
                     InjectedProcessTreeSample(
@@ -1560,6 +1565,28 @@ struct ExecCollectSecretsTests {
                         arguments: ["helper"]
                     ),
                 ]
+            },
+            networkInspectionProvider: { samples, observedAt in
+                let helper = samples.last!
+                return AgentNetworkInspectionResult(
+                    observations: [
+                        AgentNetworkSocketObservation(
+                            connectionID: "synthetic-socket",
+                            observedAt: observedAt,
+                            pid: helper.pid,
+                            processStartTime: helper.startTime,
+                            executable: helper.executable,
+                            depth: 1,
+                            remoteAddress: "203.0.113.8",
+                            remotePort: 443,
+                            networkProtocol: .tcp,
+                            sentBytes: nil,
+                            receivedBytes: nil
+                        ),
+                    ],
+                    coverage: .observed,
+                    failedProcessIdentityKeys: []
+                )
             }
         )
         try output.fileHandleForWriting.close()
@@ -1572,6 +1599,10 @@ struct ExecCollectSecretsTests {
         #expect(runs[0].nodes.map(\.executable).contains("helper"))
         let events = try commandStore.loadAll()
         #expect(events.contains { $0.captureSource == .injectedTree && $0.executable == "helper" })
+        let networkSnapshots = try networkStore.loadAll()
+        #expect(networkSnapshots.count == 1)
+        #expect(networkSnapshots[0].grantIDs == [grantID])
+        #expect(networkSnapshots[0].records.first?.remotePort == 443)
     }
 }
 

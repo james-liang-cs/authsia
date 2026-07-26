@@ -597,28 +597,48 @@ public final class InjectedProcessTreeStore: @unchecked Sendable {
 
 public final class InjectedProcessTreeWatcher: @unchecked Sendable {
     public typealias SampleProvider = @Sendable (Int32) -> [InjectedProcessTreeSample]
+    public typealias NetworkInspectionProvider = @Sendable (
+        [InjectedProcessTreeSample],
+        Date
+    ) -> AgentNetworkInspectionResult
 
     private let store: InjectedProcessTreeStore
     private let commandHistoryStore: AgentCommandHistoryStore
+    private let networkActivityStore: AgentNetworkActivityStore
     private let sampleProvider: SampleProvider
+    private let networkInspectionProvider: NetworkInspectionProvider
     private let pollInterval: TimeInterval
+    private let networkCheckpointInterval: TimeInterval
     private let context: InjectedProcessTreeWatchContext
     private let lock = NSLock()
+    private let samplingSemaphore = DispatchSemaphore(value: 1)
     private var run: InjectedProcessTreeRun?
     private var timer: DispatchSourceTimer?
     private var recordedCommandKeys = Set<String>()
+    private var networkAccumulator: AgentNetworkActivityAccumulator?
+    private var networkCoverage: AgentNetworkCaptureCoverage = .observed
+    private var lastNetworkCheckpointAt: Date?
+    private var lastSurvivingDescendantIdentityKeys: [String] = []
 
     public init(
         store: InjectedProcessTreeStore = InjectedProcessTreeStore(),
         commandHistoryStore: AgentCommandHistoryStore = AgentCommandHistoryStore(),
+        networkActivityStore: AgentNetworkActivityStore = AgentNetworkActivityStore(),
         sampleProvider: @escaping SampleProvider = { InjectedProcessTreeSampler.liveSamples(rootPID: $0) },
+        networkInspectionProvider: @escaping NetworkInspectionProvider = {
+            AgentNetworkSocketInspector.liveInspection(samples: $0, observedAt: $1)
+        },
         pollInterval: TimeInterval = 0.5,
+        networkCheckpointInterval: TimeInterval = 2,
         context: InjectedProcessTreeWatchContext = InjectedProcessTreeWatchContext()
     ) {
         self.store = store
         self.commandHistoryStore = commandHistoryStore
+        self.networkActivityStore = networkActivityStore
         self.sampleProvider = sampleProvider
+        self.networkInspectionProvider = networkInspectionProvider
         self.pollInterval = pollInterval
+        self.networkCheckpointInterval = max(0, networkCheckpointInterval)
         self.context = context
     }
 
@@ -642,15 +662,24 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         lock.lock()
         run = opened
         recordedCommandKeys.removeAll()
+        networkAccumulator = context.agentJITGrantIDs.isEmpty
+            ? nil
+            : AgentNetworkActivityAccumulator(
+                runID: opened.id,
+                grantIDs: context.agentJITGrantIDs
+            )
+        networkCoverage = .observed
+        lastNetworkCheckpointAt = nil
+        lastSurvivingDescendantIdentityKeys = []
         lock.unlock()
         try? store.upsert(opened)
         recordCommandEvents(for: opened.nodes, grantIDs: context.agentJITGrantIDs, now: now)
-        sampleOnce(now: now)
+        performSample(now: now, waitForActiveSample: true)
 
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now() + pollInterval, repeating: pollInterval)
         timer.setEventHandler { [weak self] in
-            self?.sampleOnce(now: Date())
+            self?.performSample(now: Date(), waitForActiveSample: false)
         }
         self.timer = timer
         timer.resume()
@@ -659,7 +688,7 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
     public func stop(exitStatus: Int32?, now: Date = Date()) {
         timer?.cancel()
         timer = nil
-        sampleOnce(now: now)
+        performSample(now: now, waitForActiveSample: true)
         lock.lock()
         guard let current = run else {
             lock.unlock()
@@ -667,8 +696,34 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         }
         let finished = InjectedProcessTreeMerger.finish(current, exitStatus: exitStatus, at: now)
         run = finished
+        let accumulator = networkAccumulator
+        let coverage = networkCoverage
+        let survivingDescendants = lastSurvivingDescendantIdentityKeys
         lock.unlock()
         try? store.upsert(finished)
+        if let accumulator {
+            let snapshot = AgentNetworkActivityRunSnapshot(
+                runID: accumulator.runID,
+                grantIDs: accumulator.grantIDs,
+                coverage: coverage,
+                updatedAt: now,
+                endedAt: now,
+                survivingDescendantIdentityKeys: survivingDescendants,
+                records: accumulator.records
+            )
+            try? networkActivityStore.finalize(snapshot, now: now)
+        }
+    }
+
+    func sampleNow(now: Date = Date()) {
+        performSample(now: now, waitForActiveSample: true)
+    }
+
+    private func performSample(now: Date, waitForActiveSample: Bool) {
+        let timeout: DispatchTime = waitForActiveSample ? .distantFuture : .now()
+        guard samplingSemaphore.wait(timeout: timeout) == .success else { return }
+        defer { samplingSemaphore.signal() }
+        sampleOnce(now: now)
     }
 
     private func sampleOnce(now: Date) {
@@ -678,17 +733,68 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
             return
         }
         let rootPID = current.rootPID
+        var sampledAccumulator = networkAccumulator
+        let sampledCoverage = networkCoverage
         lock.unlock()
 
         let table = sampleProvider(rootPID)
         let ranked = InjectedProcessTreeSampler.samples(rootPID: rootPID, from: table)
         let result = InjectedProcessTreeMerger.apply(samples: ranked, to: current, at: now)
+        let verifiedSamples = ranked.map(\.sample)
+        let survivingDescendants = ranked
+            .filter { $0.depth > 0 }
+            .map(\.sample.identityKey)
+            .sorted()
+        let updatedCoverage: AgentNetworkCaptureCoverage?
+        if var accumulator = sampledAccumulator {
+            let inspection = networkInspectionProvider(verifiedSamples, now)
+            accumulator.apply(inspection.observations)
+            sampledAccumulator = accumulator
+            updatedCoverage = mergedCoverage(sampledCoverage, inspection.coverage)
+        } else {
+            updatedCoverage = nil
+        }
 
+        var networkSnapshot: AgentNetworkActivityRunSnapshot?
         lock.lock()
+        if let accumulator = sampledAccumulator, let updatedCoverage {
+            networkAccumulator = accumulator
+            networkCoverage = updatedCoverage
+            if lastNetworkCheckpointAt.map({
+                now.timeIntervalSince($0) >= networkCheckpointInterval
+            }) ?? true {
+                lastNetworkCheckpointAt = now
+                networkSnapshot = AgentNetworkActivityRunSnapshot(
+                    runID: accumulator.runID,
+                    grantIDs: accumulator.grantIDs,
+                    coverage: networkCoverage,
+                    updatedAt: now,
+                    records: accumulator.records
+                )
+            }
+        }
+        lastSurvivingDescendantIdentityKeys = survivingDescendants
         run = result.run
         lock.unlock()
+
         try? store.upsert(result.run)
+        if let networkSnapshot {
+            try? networkActivityStore.checkpoint(networkSnapshot)
+        }
         recordCommandEvents(for: result.newlySeenNodes, grantIDs: context.agentJITGrantIDs, now: now)
+    }
+
+    private func mergedCoverage(
+        _ current: AgentNetworkCaptureCoverage,
+        _ next: AgentNetworkCaptureCoverage
+    ) -> AgentNetworkCaptureCoverage {
+        if current == .unavailable || next == .unavailable {
+            return .unavailable
+        }
+        if current == .partial || next == .partial {
+            return .partial
+        }
+        return .observed
     }
 
     private func recordCommandEvents(for nodes: [InjectedProcessTreeNode], grantIDs: [UUID], now: Date) {

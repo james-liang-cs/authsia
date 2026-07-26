@@ -381,6 +381,7 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
 
     private func loadFile(_ fileURL: URL) throws -> [AgentNetworkActivityRunSnapshot] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
+        try requireRegularFile(fileURL)
         try enforceFilePermissions(fileURL)
         let data = try Data(contentsOf: fileURL)
         return data.split(separator: 0x0A)
@@ -397,6 +398,9 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
         _ snapshots: [AgentNetworkActivityRunSnapshot],
         to fileURL: URL
     ) throws {
+        if fileManager.fileExists(atPath: fileURL.path) {
+            try requireRegularFile(fileURL)
+        }
         try ensureDirectory(for: fileURL)
         var data = Data()
         for snapshot in snapshots.sorted(by: { $0.updatedAt < $1.updatedAt }) {
@@ -463,8 +467,16 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
         )
     }
 
+    private func requireRegularFile(_ fileURL: URL) throws {
+        let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            throw POSIXError(.EINVAL)
+        }
+    }
+
     private func removeFileIfPresent(_ fileURL: URL) throws {
         guard fileManager.fileExists(atPath: fileURL.path) else { return }
+        try requireRegularFile(fileURL)
         try fileManager.removeItem(at: fileURL)
     }
 

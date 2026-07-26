@@ -2263,8 +2263,10 @@ struct Exec: ParsableCommand {
         fileScrubContext: InjectedSecretFileScrubContext? = nil,
         treeStore: InjectedProcessTreeStore = InjectedProcessTreeStore(),
         commandHistoryStore: AgentCommandHistoryStore = AgentCommandHistoryStore(),
+        networkActivityStore: AgentNetworkActivityStore = AgentNetworkActivityStore(),
         fileActivityStore: AgentFileActivityStore = AgentFileActivityStore(),
         treeSampleProvider: (@Sendable (Int32) -> [InjectedProcessTreeSample])? = nil,
+        networkInspectionProvider: InjectedProcessTreeWatcher.NetworkInspectionProvider? = nil,
         fileTouchWatcher: InjectedFileTouchWatcher? = nil,
         signalCoordinator: ChildSignalForwardingCoordinator = .shared,
         childProcess: Process = Process(),
@@ -2318,10 +2320,18 @@ struct Exec: ParsableCommand {
         let watcher: InjectedProcessTreeWatcher?
         if let treeContext {
             let provider = treeSampleProvider ?? { InjectedProcessTreeSampler.liveSamples(rootPID: $0) }
+            let inspectionProvider = networkInspectionProvider ?? {
+                AgentNetworkSocketInspector.liveInspection(
+                    samples: $0,
+                    observedAt: $1
+                )
+            }
             let created = InjectedProcessTreeWatcher(
                 store: treeStore,
                 commandHistoryStore: commandHistoryStore,
+                networkActivityStore: networkActivityStore,
                 sampleProvider: provider,
+                networkInspectionProvider: inspectionProvider,
                 context: treeContext
             )
             let rootExecutable = command.first.map { URL(fileURLWithPath: $0).lastPathComponent }
