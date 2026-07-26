@@ -1,5 +1,8 @@
 import XCTest
 @testable import AuthenticatorBridge
+#if os(macOS)
+import Darwin
+#endif
 
 final class AgentNetworkActivityTests: XCTestCase {
     func testDestinationZoneClassifiesLoopbackPrivatePublicAndUnknown() {
@@ -39,6 +42,105 @@ final class AgentNetworkActivityTests: XCTestCase {
         XCTAssertEqual(https?.firstSeenAt, Date(timeIntervalSince1970: 10))
         XCTAssertEqual(https?.lastSeenAt, Date(timeIntervalSince1970: 12))
         XCTAssertEqual(https?.destinationZone, .publicInternet)
+    }
+
+    func testAccumulatorBoundsRunRecordsAndConnectionTracking() {
+        let runID = UUID()
+        var accumulator = AgentNetworkActivityAccumulator(
+            runID: runID,
+            grantIDs: [UUID()],
+            recordLimit: 2,
+            connectionLimit: 3
+        )
+
+        let wasComplete = accumulator.apply([
+            observation(connectionID: "socket-a", port: 443, observedAt: 10),
+            observation(connectionID: "socket-b", port: 443, observedAt: 11),
+            observation(connectionID: "socket-c", port: 8443, observedAt: 12),
+            observation(connectionID: "socket-d", port: 9443, observedAt: 13),
+        ])
+
+        XCTAssertFalse(wasComplete)
+        XCTAssertEqual(accumulator.records.count, 2)
+        XCTAssertEqual(
+            accumulator.records.first { $0.remotePort == 443 }?.connectionCount,
+            2
+        )
+    }
+
+    func testAccumulatorDefaultLimitsKeepStressFixtureBelowMemoryBudget() throws {
+        let observations = (0..<5_000).map { index in
+            observation(
+                connectionID: "socket-\(index)",
+                port: UInt16(index + 1),
+                observedAt: TimeInterval(index)
+            )
+        }
+        var accumulator = AgentNetworkActivityAccumulator(
+            runID: UUID(),
+            grantIDs: [UUID()]
+        )
+        let memoryBefore = try residentMemoryBytes()
+
+        let wasComplete = accumulator.apply(observations)
+
+        let memoryDelta = max(0, try residentMemoryBytes() - memoryBefore)
+        print("Network accumulator incremental memory: \(memoryDelta) bytes")
+        XCTAssertFalse(wasComplete)
+        XCTAssertEqual(accumulator.records.count, 2_048)
+        XCTAssertLessThan(memoryDelta, 10 * 1_024 * 1_024)
+    }
+
+    func testLiveInspectorP95LatencyStaysBelowBudget() {
+        #if os(macOS)
+        let sample = processSample(
+            pid: getpid(),
+            ppid: getppid(),
+            startTime: 1
+        )
+        var durations: [TimeInterval] = []
+
+        for _ in 0..<40 {
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            _ = AgentNetworkSocketInspector.liveInspection(
+                samples: [sample],
+                observedAt: Date()
+            )
+            durations.append(ProcessInfo.processInfo.systemUptime - startedAt)
+        }
+
+        let ordered = durations.sorted()
+        let p95 = ordered[Int(Double(ordered.count - 1) * 0.95)]
+        print("Network inspector p95 sample latency: \(p95) seconds")
+        XCTAssertLessThan(p95, 0.2)
+        #endif
+    }
+
+    func testInspectorCapStressP95LatencyStaysBelowBudget() {
+        let samples = (1...256).map { index in
+            processSample(
+                pid: Int32(index),
+                ppid: index == 1 ? 0 : 1,
+                startTime: UInt64(index)
+            )
+        }
+        var durations: [TimeInterval] = []
+
+        for _ in 0..<20 {
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            let result = AgentNetworkSocketInspector.inspect(
+                samples: samples,
+                observedAt: Date(),
+                socketProvider: { sample, _ in self.stressSocketBatch(for: sample) }
+            )
+            XCTAssertEqual(result.observations.count, 4_096)
+            durations.append(ProcessInfo.processInfo.systemUptime - startedAt)
+        }
+
+        let ordered = durations.sorted()
+        let p95 = ordered[Int(Double(ordered.count - 1) * 0.95)]
+        print("Network inspector capped-fixture p95 sample latency: \(p95) seconds")
+        XCTAssertLessThan(p95, 0.2)
     }
 
     func testStoreReplacesActiveCheckpointAndMovesFinalRunToHistory() throws {
@@ -156,6 +258,41 @@ final class AgentNetworkActivityTests: XCTestCase {
             ).map(\.runID),
             [matching.runID]
         )
+    }
+
+    func testStoreReusesUnchangedHistoryWhileActiveCheckpointChanges() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let historyURL = directory.appendingPathComponent("history.jsonl")
+        let activeURL = directory.appendingPathComponent("active.jsonl")
+        let writer = AgentNetworkActivityStore(
+            historyFileURL: historyURL,
+            activeFileURL: activeURL
+        )
+        try writer.finalize(
+            snapshot(runID: UUID(), grantID: UUID(), updatedAt: 10),
+            now: Date(timeIntervalSince1970: 10)
+        )
+
+        let counter = NetworkDataLoadCounter()
+        let reader = AgentNetworkActivityStore(
+            historyFileURL: historyURL,
+            activeFileURL: activeURL,
+            dataLoader: { url in
+                if url == historyURL {
+                    counter.increment()
+                }
+                return try Data(contentsOf: url)
+            }
+        )
+
+        _ = try reader.loadAll(now: Date(timeIntervalSince1970: 10))
+        try reader.checkpoint(
+            snapshot(runID: UUID(), grantID: UUID(), updatedAt: 20)
+        )
+        _ = try reader.loadAll(now: Date(timeIntervalSince1970: 20))
+
+        XCTAssertEqual(counter.value, 1)
     }
 
     func testInspectorConvertsTCPAndConnectedUDPAndExcludesUnsupportedSockets() {
@@ -417,6 +554,24 @@ final class AgentNetworkActivityTests: XCTestCase {
         )
     }
 
+    private func stressSocketBatch(
+        for sample: InjectedProcessTreeSample
+    ) -> AgentNetworkSocketBatch {
+        var sockets: [AgentNetworkSocketMetadata] = []
+        for index in 0..<16 {
+            let port = UInt16(10_000 + (Int(sample.pid) * 16) + index)
+            sockets.append(AgentNetworkSocketMetadata(
+                fileDescriptor: Int32(index),
+                socketGeneration: UInt64(index),
+                transport: .tcp,
+                remoteAddress: .ipv4([203, 0, 113, 8]),
+                remotePort: port,
+                isListening: false
+            ))
+        }
+        return AgentNetworkSocketBatch(sockets: sockets, wasTruncated: false)
+    }
+
     private func snapshot(
         runID: UUID,
         grantID: UUID,
@@ -506,5 +661,48 @@ final class AgentNetworkActivityTests: XCTestCase {
             lastUsedAt: nil,
             approvedBy: "test"
         )
+    }
+
+    private func residentMemoryBytes() throws -> Int64 {
+        #if os(macOS)
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(
+                to: integer_t.self,
+                capacity: Int(count)
+            ) {
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    $0,
+                    &count
+                )
+            }
+        }
+        guard result == KERN_SUCCESS else {
+            throw NSError(domain: NSMachErrorDomain, code: Int(result))
+        }
+        return Int64(info.resident_size)
+        #else
+        return 0
+        #endif
+    }
+}
+
+private final class NetworkDataLoadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func increment() {
+        lock.withLock {
+            count += 1
+        }
     }
 }
