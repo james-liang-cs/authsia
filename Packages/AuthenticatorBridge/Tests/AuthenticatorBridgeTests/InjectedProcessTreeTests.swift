@@ -16,6 +16,32 @@ final class InjectedProcessTreeTests: XCTestCase {
         XCTAssertEqual(ranked.map(\.depth), [0, 1, 2])
     }
 
+    func testSamplerReadsProcessDetailsOnlyForRootAndDescendants() {
+        let topology = [
+            InjectedProcessTopologySample(pid: 10, ppid: 1, startTime: 100),
+            InjectedProcessTopologySample(pid: 11, ppid: 10, startTime: 101),
+            InjectedProcessTopologySample(pid: 12, ppid: 11, startTime: 102),
+            InjectedProcessTopologySample(pid: 99, ppid: 1, startTime: 103),
+        ]
+        var detailedPIDs: [Int32] = []
+
+        let samples = InjectedProcessTreeSampler.samples(
+            rootPID: 10,
+            topology: topology,
+            detailProvider: { pid in
+                detailedPIDs.append(pid)
+                return InjectedProcessDetail(
+                    executable: "process-\(pid)",
+                    arguments: ["process-\(pid)"]
+                )
+            }
+        )
+
+        XCTAssertEqual(samples.map(\.pid), [10, 11, 12])
+        XCTAssertEqual(detailedPIDs, [10, 11, 12])
+        XCTAssertFalse(detailedPIDs.contains(99))
+    }
+
     func testMergerDedupesByPidAndStartTimeAndMarksExited() throws {
         let opened = InjectedProcessTreeMerger.openRun(
             rootPID: 10,
