@@ -29,6 +29,28 @@ public struct InjectedProcessTreeSample: Equatable, Sendable {
     }
 }
 
+public struct InjectedProcessTopologySample: Equatable, Sendable {
+    public let pid: Int32
+    public let ppid: Int32
+    public let startTime: UInt64
+
+    public init(pid: Int32, ppid: Int32, startTime: UInt64) {
+        self.pid = pid
+        self.ppid = ppid
+        self.startTime = startTime
+    }
+}
+
+public struct InjectedProcessDetail: Equatable, Sendable {
+    public let executable: String
+    public let arguments: [String]
+
+    public init(executable: String, arguments: [String]) {
+        self.executable = executable
+        self.arguments = arguments
+    }
+}
+
 public struct InjectedProcessTreeNode: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let runID: UUID
@@ -160,6 +182,8 @@ public enum InjectedProcessTreeQuery {
 }
 
 public enum InjectedProcessTreeSampler {
+    public typealias DetailProvider = (Int32) -> InjectedProcessDetail?
+
     /// Returns the root and its descendants from a flat process table, with depth from root.
     public static func samples(
         rootPID: Int32,
@@ -190,10 +214,39 @@ public enum InjectedProcessTreeSampler {
         return result
     }
 
+    public static func samples(
+        rootPID: Int32,
+        topology: [InjectedProcessTopologySample],
+        detailProvider: DetailProvider
+    ) -> [InjectedProcessTreeSample] {
+        let topologyTable = topology.map {
+            InjectedProcessTreeSample(
+                pid: $0.pid,
+                ppid: $0.ppid,
+                startTime: $0.startTime,
+                executable: "unknown",
+                arguments: []
+            )
+        }
+        return samples(rootPID: rootPID, from: topologyTable).map { ranked in
+            let detail = detailProvider(ranked.sample.pid)
+            return InjectedProcessTreeSample(
+                pid: ranked.sample.pid,
+                ppid: ranked.sample.ppid,
+                startTime: ranked.sample.startTime,
+                executable: detail?.executable ?? "unknown",
+                arguments: detail?.arguments ?? []
+            )
+        }
+    }
+
     public static func liveSamples(rootPID: Int32) -> [InjectedProcessTreeSample] {
         #if os(macOS)
-        let table = allLiveSamples()
-        return samples(rootPID: rootPID, from: table).map(\.sample)
+        return samples(
+            rootPID: rootPID,
+            topology: allLiveTopology(),
+            detailProvider: processDetail
+        )
         #else
         _ = rootPID
         return []
@@ -201,39 +254,26 @@ public enum InjectedProcessTreeSampler {
     }
 
     #if os(macOS)
-    private static func allLiveSamples() -> [InjectedProcessTreeSample] {
+    private static func allLiveTopology() -> [InjectedProcessTopologySample] {
         processIDs().compactMap { pid in
-            guard let ppid = TerminalSessionScope.parentProcessIdentifier(pid: pid) ?? optionalRootParent(pid: pid),
-                  let startTime = processStartTime(for: pid) else {
-                return nil
-            }
-            let arguments = processArguments(for: pid)
-            let executable = processExecutableName(arguments: arguments) ?? "unknown"
-            return InjectedProcessTreeSample(
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            let result = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
+            guard result == size else { return nil }
+            return InjectedProcessTopologySample(
                 pid: pid,
-                ppid: ppid,
-                startTime: startTime,
-                executable: executable,
-                arguments: arguments
+                ppid: Int32(info.pbi_ppid),
+                startTime: info.pbi_start_tvsec
             )
         }
     }
 
-    private static func optionalRootParent(pid: Int32) -> Int32? {
-        // launchd / orphan root: allow listing with ppid 0/1 for table completeness
-        var info = proc_bsdshortinfo()
-        let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
-        let result = proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &info, size)
-        guard result == size else { return nil }
-        return Int32(info.pbsi_ppid)
-    }
-
-    private static func processStartTime(for pid: pid_t) -> UInt64? {
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        let result = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
-        guard result == size else { return nil }
-        return info.pbi_start_tvsec
+    private static func processDetail(for pid: Int32) -> InjectedProcessDetail? {
+        let arguments = processArguments(for: pid)
+        return InjectedProcessDetail(
+            executable: processExecutableName(arguments: arguments) ?? "unknown",
+            arguments: arguments
+        )
     }
 
     private static func processIDs() -> [pid_t] {

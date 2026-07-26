@@ -158,6 +158,129 @@ final class AgentNetworkActivityTests: XCTestCase {
         )
     }
 
+    func testInspectorConvertsTCPAndConnectedUDPAndExcludesUnsupportedSockets() {
+        let sample = processSample(pid: 42, ppid: 1, startTime: 100)
+        let result = AgentNetworkSocketInspector.inspect(
+            samples: [sample],
+            observedAt: Date(timeIntervalSince1970: 50),
+            socketProvider: { _, _ in
+                AgentNetworkSocketBatch(
+                    sockets: [
+                        socket(
+                            fd: 3,
+                            transport: .tcp,
+                            address: .ipv4([203, 0, 113, 8]),
+                            port: 443
+                        ),
+                        socket(
+                            fd: 4,
+                            transport: .udp,
+                            address: .ipv6([
+                                0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0, 0, 1,
+                            ]),
+                            port: 53
+                        ),
+                        socket(
+                            fd: 5,
+                            transport: .tcp,
+                            address: .ipv4([127, 0, 0, 1]),
+                            port: 8080,
+                            isListening: true
+                        ),
+                        socket(
+                            fd: 6,
+                            transport: .udp,
+                            address: .ipv4([127, 0, 0, 1]),
+                            port: 0
+                        ),
+                        socket(
+                            fd: 7,
+                            transport: .unsupported,
+                            address: .unsupported,
+                            port: 1
+                        ),
+                    ],
+                    wasTruncated: false
+                )
+            }
+        )
+
+        XCTAssertEqual(result.coverage, .observed)
+        XCTAssertEqual(result.observations.map(\.networkProtocol), [.tcp, .udp])
+        XCTAssertEqual(
+            result.observations.map(\.remoteAddress),
+            ["203.0.113.8", "2001:db8::1"]
+        )
+        XCTAssertEqual(result.observations.map(\.remotePort), [443, 53])
+        XCTAssertTrue(result.failedProcessIdentityKeys.isEmpty)
+    }
+
+    func testInspectorCapsProcessesAndDescriptorsAndNeverReadsUnrelatedSamples() {
+        var samples: [InjectedProcessTreeSample] = []
+        for index in 0..<257 {
+            let pid = Int32(index + 1)
+            let parentPID: Int32 = index == 0 ? 0 : 1
+            samples.append(
+                processSample(
+                    pid: pid,
+                    ppid: parentPID,
+                    startTime: UInt64(index + 100)
+                )
+            )
+        }
+        var inspectedPIDs: [Int32] = []
+
+        let result = AgentNetworkSocketInspector.inspect(
+            samples: samples,
+            observedAt: Date(timeIntervalSince1970: 50),
+            processLimit: 256,
+            descriptorLimit: 4_096,
+            socketProvider: { sample, remainingDescriptorCount in
+                inspectedPIDs.append(sample.pid)
+                return AgentNetworkSocketBatch(
+                    sockets: [
+                        self.socket(
+                            fd: sample.pid,
+                            transport: .tcp,
+                            address: .ipv4([203, 0, 113, 8]),
+                            port: 443
+                        ),
+                    ],
+                    wasTruncated: remainingDescriptorCount == 0
+                )
+            }
+        )
+
+        XCTAssertEqual(result.coverage, .partial)
+        XCTAssertEqual(inspectedPIDs.count, 256)
+        XCTAssertFalse(inspectedPIDs.contains(257))
+        XCTAssertEqual(result.observations.count, 256)
+
+        let descriptorLimited = AgentNetworkSocketInspector.inspect(
+            samples: Array(samples.prefix(2)),
+            observedAt: Date(timeIntervalSince1970: 50),
+            processLimit: 256,
+            descriptorLimit: 1,
+            socketProvider: { sample, remainingDescriptorCount in
+                XCTAssertEqual(remainingDescriptorCount, 1)
+                return AgentNetworkSocketBatch(
+                    sockets: [
+                        self.socket(
+                            fd: sample.pid,
+                            transport: .tcp,
+                            address: .ipv4([203, 0, 113, 8]),
+                            port: 443
+                        ),
+                    ],
+                    wasTruncated: true
+                )
+            }
+        )
+        XCTAssertEqual(descriptorLimited.coverage, .partial)
+        XCTAssertEqual(descriptorLimited.observations.count, 1)
+    }
+
     private func observation(
         connectionID: String,
         port: UInt16,
@@ -175,6 +298,37 @@ final class AgentNetworkActivityTests: XCTestCase {
             networkProtocol: .tcp,
             sentBytes: nil,
             receivedBytes: nil
+        )
+    }
+
+    private func processSample(
+        pid: Int32,
+        ppid: Int32,
+        startTime: UInt64
+    ) -> InjectedProcessTreeSample {
+        InjectedProcessTreeSample(
+            pid: pid,
+            ppid: ppid,
+            startTime: startTime,
+            executable: "synthetic-client",
+            arguments: ["synthetic-client"]
+        )
+    }
+
+    private func socket(
+        fd: Int32,
+        transport: AgentNetworkSocketTransport,
+        address: AgentNetworkIPAddress,
+        port: UInt16,
+        isListening: Bool = false
+    ) -> AgentNetworkSocketMetadata {
+        AgentNetworkSocketMetadata(
+            fileDescriptor: fd,
+            socketGeneration: UInt64(fd),
+            transport: transport,
+            remoteAddress: address,
+            remotePort: port,
+            isListening: isListening
         )
     }
 
