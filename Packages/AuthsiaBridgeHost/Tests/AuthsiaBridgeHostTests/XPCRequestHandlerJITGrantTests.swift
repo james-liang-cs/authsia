@@ -313,7 +313,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(approver.requests[0].remoteRequests.count, 3)
     }
 
-    func testBroadPairedIPhoneApprovalAttributesEveryResolutionAndAuditRecord() async throws {
+    func testBroadPairedIPhoneApprovalKeepsRemoteResolutionsAndPersistsOneGrant() async throws {
         let builder = RemoteRequestBuilderSpy()
         let remoteSource = try RemoteJITApprovalPairedIPhoneSource(
             pairingGenerationID: builder.pairing.pairingGenerationID,
@@ -322,9 +322,10 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         let store = MemoryAgentJITGrantStore()
         let (auditLogger, auditURL, tempDir) = try makeAuditLogger()
         defer { try? FileManager.default.removeItem(at: tempDir) }
+        let approver = JITApprovalTracker(outcome: .approved(source: .pairedIPhone(remoteSource)))
         let handler = makeHandler(
             store: store,
-            approver: JITApprovalTracker(outcome: .approved(source: .pairedIPhone(remoteSource))),
+            approver: approver,
             auditLogger: auditLogger,
             requestBuilder: builder,
             clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
@@ -346,12 +347,22 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
 
         XCTAssertNil(response.error)
-        XCTAssertEqual(store.grants.count, 3)
-        XCTAssertEqual(store.grants.map(\.approvedBy), Array(repeating: builder.remoteAttribution, count: 3))
+        XCTAssertEqual(builder.inputBatches.first?.map(\.folderScope), [
+            .root, .folder("Team/API"), .folder("Team/Web"),
+        ])
+        XCTAssertEqual(approver.requests.first?.remoteRequests.count, 3)
+        XCTAssertEqual(response.payload?.grantIDs.count, 1)
+        let grant = try XCTUnwrap(store.grants.first)
+        XCTAssertEqual(grant.approvedBy, builder.remoteAttribution)
+        XCTAssertEqual(grant.folderScope, .root)
+        XCTAssertEqual(grant.requestedItems.count, 6)
         XCTAssertEqual(
-            try auditRecords(at: auditURL).map(\.approvedBy),
-            Array(repeating: builder.remoteAttribution, count: 3)
+            grant.resourceScope,
+            .items(Set(grant.requestedItems.compactMap(\.itemIdentity)))
         )
+        let records = try auditRecords(at: auditURL)
+        XCTAssertEqual(records.map(\.approvedBy), [builder.remoteAttribution])
+        XCTAssertEqual(records.map(\.itemName), ["6 listed items"])
     }
 
     func testExactItemBatchBuildsAllRemoteRequestsTogetherAndKeepsOneAttribution() async throws {
@@ -466,7 +477,12 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
 
             XCTAssertNil(response.error, "mode: \(mode)")
             XCTAssertEqual(approver.requests.first?.remoteRequests, [], "mode: \(mode)")
-            XCTAssertEqual(store.grants.count, 3, "mode: \(mode)")
+            XCTAssertEqual(store.grants.count, 1, "mode: \(mode)")
+            XCTAssertEqual(
+                store.grants.first?.resourceScope,
+                .items(Set(store.grants.first?.requestedItems.compactMap(\.itemIdentity) ?? [])),
+                "mode: \(mode)"
+            )
         }
     }
 
@@ -1246,7 +1262,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(approver.requests.first?.prompt.contains("temporary scoped list access"), true)
     }
 
-    func testBroadListPreflightApprovesOnceForAllResolvedFolderGrants() async throws {
+    func testBroadListPreflightApprovesOnceAndPersistsOneExactItemGrant() async throws {
         let store = MemoryAgentJITGrantStore()
         let approver = JITApprovalTracker(result: true)
         let handler = makeHandler(store: store, approver: approver)
@@ -1272,14 +1288,53 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(approver.requests.count, 1)
         XCTAssertEqual(approver.requests.first?.command, .agentJITPreflight)
         XCTAssertEqual(approver.requests.first?.itemLabel, "All folders")
+        XCTAssertEqual(response.payload?.grantIDs.count, 1)
+        let grant = try XCTUnwrap(store.grants.first)
+        XCTAssertEqual(grant.folderScope, .root)
+        XCTAssertEqual(grant.capabilities, [.list])
+        XCTAssertEqual(grant.requestedItems.count, 6)
         XCTAssertEqual(
-            store.grants.map(\.folderScope),
-            [.root, .folder("Team/API"), .folder("Team/Web")]
+            grant.resourceScope,
+            .items(Set(grant.requestedItems.compactMap(\.itemIdentity)))
         )
-        XCTAssertEqual(store.grants.map(\.capabilities), Array(repeating: [.list], count: 3))
-        XCTAssertEqual(response.payload?.grantIDs.count, 3)
-        let apiGrant = try XCTUnwrap(store.grants.first { $0.folderScope == .folder("Team/API") })
-        XCTAssertEqual(Set(apiGrant.requestedItems.compactMap(\.folderPath)), ["Team/API", "Team/API/Prod"])
+        XCTAssertEqual(
+            Set(grant.requestedItems.compactMap(\.folderPath)),
+            ["Team/API", "Team/API/Prod", "Team/Web"]
+        )
+    }
+
+    func testBroadListPreflightReusesOneAggregateGrantWithoutDuplicateIDs() async throws {
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(store: store, approver: approver)
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "list",
+            references: [
+                AgentJITPreflightReference(
+                    type: "password",
+                    query: "",
+                    folderPath: nil,
+                    isFolderScoped: false
+                ),
+            ]
+        )
+
+        let first: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            requestedCommand: "list"
+        )
+        let second: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            requestedCommand: "list"
+        )
+
+        XCTAssertNil(first.error)
+        XCTAssertNil(second.error)
+        XCTAssertEqual(approver.requests.count, 1)
+        XCTAssertEqual(store.grants.count, 1)
+        XCTAssertEqual(second.payload?.grantIDs, first.payload?.grantIDs)
     }
 
     func testListPreflightSupportsSSHMetadataScope() async throws {
@@ -1801,9 +1856,16 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertFalse(prompt.contains("RootOne"))
         XCTAssertFalse(prompt.contains("API Nested"))
         XCTAssertFalse(prompt.contains("Shared"))
+        XCTAssertEqual(store.grants.count, 2)
+        let aggregate = try XCTUnwrap(store.grants.first { $0.id != grant.id })
+        XCTAssertEqual(aggregate.folderScope, .root)
         XCTAssertEqual(
-            Set(store.grants.map(\.folderScope)),
-            [.root, .folder("Team/API"), .folder("Team/Web")]
+            Set(aggregate.requestedItems.map(\.folderPath)),
+            [nil, "Team/Web"]
+        )
+        XCTAssertEqual(
+            aggregate.resourceScope,
+            .items(Set(aggregate.requestedItems.compactMap(\.itemIdentity)))
         )
     }
 

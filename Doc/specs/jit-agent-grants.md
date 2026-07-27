@@ -460,8 +460,13 @@ Agent exec secret reads require a valid JIT preflight grant for this item scope.
 For direct agent `authsia list passwords`, `authsia list api-keys`,
 `authsia list certs`, `authsia list notes`, or `authsia list ssh`, the CLI sends `agentJITPreflight`
 with `requestedCommand=list` before loading metadata. These approvals create
-list-only grants. If no matching list grant exists, the bridge fails closed
-instead of falling back to the normal list approval prompt:
+list-only grants. A broad unscoped list keeps its per-folder approval
+descriptors through local or paired-iPhone approval and live revalidation, then
+persists the approved batch as one exact-item grant containing every resolved
+item identity. This preserves the signed remote approval contract while
+avoiding one Access Center grant per folder. If no matching list grant exists,
+the bridge fails closed instead of falling back to the normal list approval
+prompt:
 
 ```text
 Agent list requests require a valid JIT preflight grant for a supported Vault scope.
