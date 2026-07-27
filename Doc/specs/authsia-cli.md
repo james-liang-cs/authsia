@@ -138,7 +138,7 @@ Key properties:
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
 | `authsia env add` | Add an environment scope profile | `authsia env add --name prod --folder Production --folder Shared` |
-| `authsia env list` | List profiles outside a workspace; inside one, list tags from the workspace vault-folder tree, active state, reference counts, and matching profiles | `authsia env list --format table` |
+| `authsia env list` | List profiles outside a workspace; inside one, list tags from the workspace vault-folder tree, active state, and reference counts | `authsia env list --format table` |
 | `authsia env show` | Show the active workspace environment or global profile | `authsia env show` |
 | `authsia env use <name>` | Activate one healthy, referenced environment for the current workspace, or a global profile outside one | `authsia env use Production` |
 | `authsia env clear` | Return the current workspace to the Default environment, or clear the global profile outside one | `authsia env clear` |
