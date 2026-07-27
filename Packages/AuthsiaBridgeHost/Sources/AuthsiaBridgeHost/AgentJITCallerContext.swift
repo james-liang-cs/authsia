@@ -17,7 +17,10 @@ public enum AgentJITCallerContext {
             hostProcessName: caller.hostProcess?.processName,
             hostBundleIdentifier: caller.hostProcess?.bundleIdentifier,
             sessionScope: sessionScope(for: request, caller: caller),
-            workingDirectory: request.context.workingDirectory
+            workingDirectory: WorkspaceAuthority.validatedRootPath(
+                request.context.workspaceAuthorityPath,
+                containing: request.context.workingDirectory
+            ) ?? request.context.workingDirectory
         )
     }
 

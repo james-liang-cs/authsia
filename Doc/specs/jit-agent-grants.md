@@ -459,7 +459,7 @@ the stored grant plus caller fingerprint comparison.
    returned to the CLI.
 8. The `exec` internal metadata list can use the grant's `list` capability only
    within the displayed exact-item or explicit folder scope.
-9. Final secret reads rerun live item, caller, exact working-directory/workspace,
+9. Final secret reads rerun live item, caller, workspace authority,
    environment, capability, and grant policy and must find an active matching
    `exec` grant.
    Without it, the bridge fails closed with:
@@ -517,9 +517,14 @@ Important edge cases:
   scopes.
 - Moving the same exact item preserves its identity but does not bypass a live
   folder or environment restriction.
-- Workspace authority is the exact working-directory string, including
-  nil-versus-present state. The workspace name is derived display context, not
-  a second mutable authority key.
+- Inside a managed workspace, workspace authority is its canonical root. The
+  CLI sends that root separately from the invocation directory, and the Bridge
+  independently verifies that the canonical invocation directory is the root
+  or a descendant before using it for reuse. The workspace name remains display
+  context and is never an authority key.
+- Outside a valid managed workspace, workspace authority remains the exact
+  working-directory string, including nil-versus-present state. Unsafe roots
+  and symlink escapes fall back to this exact-directory behavior.
 - A changed caller, working-directory/workspace, environment, or capability
   requires matching authority and can require another approval.
 
@@ -604,9 +609,10 @@ scopes replace the short-lived CLI process-session component with the
 Bridge-observed agent parent PID (`agent:<platform>:pid:<parent>`). That parent
 is the agent binary for standalone hosts (for example Codex under ChatGPT) or
 the trusted IDE extension-host process for Cursor-hosted sessions. Repeated
-calls from the same agent parent and working directory therefore reuse the
-grant, while closing that parent triggers the same lazy revocation path as a
-closed terminal session. Liveness probes both rewritten
+calls from the same agent parent and canonical managed-workspace root therefore
+reuse the grant across descendant directories. Non-workspace calls still
+require the same exact working directory. Closing that parent triggers the same
+lazy revocation path as a closed terminal session. Liveness probes both rewritten
 `agent:<platform>:pid:<n>` scopes and legacy `agent:<platform>:sid:<n>` scopes
 by treating `<n>` as a process id (session-leader pid for `:sid:`).
 

@@ -846,7 +846,10 @@ public enum AgentCommandFindingDetector {
               let grantWorkingDirectory = normalizedPath(grant.callerFingerprint.workingDirectory) else {
             return true
         }
-        return eventWorkingDirectory == grantWorkingDirectory
+        return WorkspaceAuthority.matchesWorkingDirectory(
+            eventWorkingDirectory,
+            authorityPath: grantWorkingDirectory
+        )
     }
 
     private static func isHookCapable(event: AgentCommandEvent, grant: AgentJITGrant) -> Bool {

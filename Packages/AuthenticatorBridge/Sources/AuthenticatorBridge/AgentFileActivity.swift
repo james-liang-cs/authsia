@@ -180,7 +180,10 @@ public enum AgentFileActivityQuery {
         }
         guard let eventWorkingDirectory = normalizedPath(event.workingDirectory),
               let grantWorkingDirectory = normalizedPath(grant.callerFingerprint.workingDirectory),
-              eventWorkingDirectory == grantWorkingDirectory else {
+              WorkspaceAuthority.matchesWorkingDirectory(
+                  eventWorkingDirectory,
+                  authorityPath: grantWorkingDirectory
+              ) else {
             return false
         }
         return true

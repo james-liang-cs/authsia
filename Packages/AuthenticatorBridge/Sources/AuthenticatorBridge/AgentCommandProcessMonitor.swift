@@ -103,7 +103,10 @@ public struct AgentCommandProcessMonitor: Sendable {
                   let grantWorkingDirectory = normalizedPath(grant.callerFingerprint.workingDirectory) else {
                 return true
             }
-            return snapshotWorkingDirectory == grantWorkingDirectory
+            return WorkspaceAuthority.matchesWorkingDirectory(
+                snapshotWorkingDirectory,
+                authorityPath: grantWorkingDirectory
+            )
         }
     }
 

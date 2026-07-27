@@ -1049,6 +1049,55 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(reused.requestedItems.map(\.name), ["Renamed API"])
     }
 
+    func testActiveGrantReusesAcrossManagedWorkspaceDescendants() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-jit-reuse-\(UUID().uuidString)", isDirectory: true)
+        let nested = root.appendingPathComponent("Am-I-Impacted-IaC/envs/prod", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            clock: AgentJITApprovalClockSpy([now, now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+            ]
+        )
+
+        let first: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: execContext(
+                workingDirectory: root.path,
+                workspaceAuthorityPath: root.path
+            )
+        )
+        let second: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: execContext(
+                workingDirectory: nested.path,
+                workspaceAuthorityPath: root.path
+            )
+        )
+
+        XCTAssertNil(first.error)
+        XCTAssertNil(second.error)
+        XCTAssertEqual(second.payload?.grantIDs, first.payload?.grantIDs)
+        XCTAssertEqual(approver.requests.count, 1)
+        XCTAssertEqual(store.grants.count, 1)
+        XCTAssertEqual(
+            store.grants.first?.callerFingerprint.workingDirectory,
+            root.resolvingSymlinksInPath().standardizedFileURL.path
+        )
+    }
+
     func testActiveGrantReuseSucceedsWhenRequestedItemMetadataSaveFails() async throws {
         let existing = AgentJITGrant.fixture(
             callerFingerprint: callerFingerprint(requestedCommand: "exec"),
@@ -3312,14 +3361,15 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
     private func addItem<T: Codable & Equatable>(
         _ handler: XPCRequestHandler,
         body: T,
-        requestedCommand: String = "exec"
+        requestedCommand: String = "exec",
+        context: BridgeContext? = nil
     ) async throws -> BridgeResponse<AgentJITPreflightResultPayload> {
         let request = BridgeRequest(
             id: UUID(),
             type: .agentJITPreflight,
             query: "",
             options: .init(field: nil, copy: false),
-            context: execContext(requestedCommand: requestedCommand),
+            context: context ?? execContext(requestedCommand: requestedCommand),
             body: try BridgeCoder.encode(body)
         )
         let requestData = try BridgeCoder.encode(request)
@@ -3474,7 +3524,9 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         requestedCommand: String? = "exec",
         automationCredentialID: String? = nil,
         automationCredentialToken: String? = nil,
-        agentRuntimeContext: AgentRuntimeContext? = nil
+        agentRuntimeContext: AgentRuntimeContext? = nil,
+        workingDirectory: String = "/repo",
+        workspaceAuthorityPath: String? = nil
     ) -> BridgeContext {
         BridgeContext(
             isTTY: true,
@@ -3486,7 +3538,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             automationCredentialToken: automationCredentialToken,
             requestedCommand: requestedCommand,
             sessionScope: "tty:/dev/ttys001",
-            workingDirectory: "/repo",
+            workingDirectory: workingDirectory,
+            workspaceAuthorityPath: workspaceAuthorityPath,
             agentRuntimeContext: agentRuntimeContext
         )
     }

@@ -225,6 +225,9 @@ enum AutomationAccessResolver {
         } else {
             credential = nil
         }
+        let workspace = WorkspaceRuntimeContextResolver.resolveWithAuthority(
+            currentDirectoryPath: currentDirectoryPath
+        )
         return BridgeContext(
             isTTY: isatty(FileHandle.standardInput.fileDescriptor) != 0,
             isPiped: isatty(FileHandle.standardOutput.fileDescriptor) == 0,
@@ -248,6 +251,7 @@ enum AutomationAccessResolver {
                 processSessionIdentifier: processSessionIdentifier
             ),
             workingDirectory: currentDirectoryPath,
+            workspaceAuthorityPath: workspace?.authorityPath,
             agentRuntimeContext: AgentRuntimeContextResolver.resolve(
                 now: now,
                 currentDirectoryPath: currentDirectoryPath,
@@ -255,9 +259,7 @@ enum AutomationAccessResolver {
                 eventsURL: agentRuntimeContextEventsURL,
                 environment: environment
             ),
-            workspaceContext: WorkspaceRuntimeContextResolver.resolve(
-                currentDirectoryPath: currentDirectoryPath
-            )
+            workspaceContext: workspace?.context
         )
     }
 

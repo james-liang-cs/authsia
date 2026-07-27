@@ -1884,6 +1884,7 @@ struct InjectedSecretFileScrubberTests {
             roots: [directory.path],
             startOverride: { true }
         )
+        watcher.recordForTesting(envPath)
         let context = InjectedSecretFileScrubContext(
             agentJITGrantIDs: [UUID()],
             agentPlatform: "codex",
