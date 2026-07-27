@@ -709,7 +709,8 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
                 updatedAt: now,
                 endedAt: now,
                 survivingDescendantIdentityKeys: survivingDescendants,
-                records: accumulator.records
+                records: accumulator.records,
+                domainEvidence: accumulator.domainEvidence
             )
             try? networkActivityStore.finalize(snapshot, now: now)
         }
@@ -748,7 +749,13 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         let updatedCoverage: AgentNetworkCaptureCoverage?
         if var accumulator = sampledAccumulator {
             let inspection = networkInspectionProvider(verifiedSamples, now)
-            let aggregationWasComplete = accumulator.apply(inspection.observations)
+            let socketAggregationWasComplete = accumulator.apply(inspection.observations)
+            let domainAggregationWasComplete = accumulator.applyDomainEvidence(
+                from: verifiedSamples,
+                observedAt: now
+            )
+            let aggregationWasComplete = socketAggregationWasComplete
+                && domainAggregationWasComplete
             sampledAccumulator = accumulator
             let aggregationCoverage: AgentNetworkCaptureCoverage = aggregationWasComplete
                 ? .observed
@@ -775,7 +782,8 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
                     grantIDs: accumulator.grantIDs,
                     coverage: networkCoverage,
                     updatedAt: now,
-                    records: accumulator.records
+                    records: accumulator.records,
+                    domainEvidence: accumulator.domainEvidence
                 )
             }
         }

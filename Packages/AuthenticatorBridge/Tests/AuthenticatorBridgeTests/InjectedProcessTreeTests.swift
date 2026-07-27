@@ -191,8 +191,8 @@ final class InjectedProcessTreeTests: XCTestCase {
                 pid: 11,
                 ppid: 10,
                 startTime: 101,
-                executable: "helper",
-                arguments: ["helper"]
+                executable: "curl",
+                arguments: ["curl", "https://packages.example.com/archive.tgz"]
             ),
         ]
         let watcher = InjectedProcessTreeWatcher(
@@ -240,6 +240,11 @@ final class InjectedProcessTreeTests: XCTestCase {
             rootArguments: ["root"],
             now: Date(timeIntervalSince1970: 0)
         )
+        XCTAssertEqual(
+            try networkStore.loadAll(now: Date(timeIntervalSince1970: 0))
+                .first?.domainEvidence.map(\.hostname),
+            ["packages.example.com"]
+        )
         watcher.sampleNow(now: Date(timeIntervalSince1970: 1))
         XCTAssertEqual(
             try networkStore.loadAll(now: Date(timeIntervalSince1970: 1))
@@ -262,6 +267,8 @@ final class InjectedProcessTreeTests: XCTestCase {
         XCTAssertEqual(snapshot.endedAt, Date(timeIntervalSince1970: 3))
         XCTAssertEqual(snapshot.records.count, 1)
         XCTAssertEqual(snapshot.records[0].connectionCount, 1)
+        XCTAssertEqual(snapshot.domainEvidence.map(\.hostname), ["packages.example.com"])
+        XCTAssertEqual(snapshot.domainEvidence.first?.confidence, .inferred)
         XCTAssertEqual(snapshot.survivingDescendantIdentityKeys, ["11:101"])
     }
 

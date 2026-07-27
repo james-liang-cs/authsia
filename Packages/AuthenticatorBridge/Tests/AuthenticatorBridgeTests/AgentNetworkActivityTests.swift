@@ -19,6 +19,151 @@ final class AgentNetworkActivityTests: XCTestCase {
         XCTAssertEqual(AgentNetworkDestinationZone.classify("invalid"), .unknown)
     }
 
+    func testDomainExtractorKeepsOnlyNormalizedHostnamesFromCommandArguments() {
+        let samples = [
+            InjectedProcessTreeSample(
+                pid: 42,
+                ppid: 1,
+                startTime: 100,
+                executable: "sh",
+                arguments: [
+                    "sh",
+                    "-c",
+                    "curl 'https://user:synthetic-password@API.Example.COM:8443/v1/items?token=synthetic#part'",
+                ]
+            ),
+            InjectedProcessTreeSample(
+                pid: 43,
+                ppid: 42,
+                startTime: 101,
+                executable: "npm",
+                arguments: [
+                    "npm",
+                    "install",
+                    "--registry=https://Registry.NPMJS.org/private/path",
+                ]
+            ),
+            InjectedProcessTreeSample(
+                pid: 44,
+                ppid: 42,
+                startTime: 102,
+                executable: "git",
+                arguments: ["git", "fetch", "git@GitHub.com:synthetic/project.git"]
+            ),
+        ]
+
+        let evidence = AgentNetworkDomainExtractor.evidence(
+            from: samples,
+            observedAt: Date(timeIntervalSince1970: 10)
+        )
+
+        XCTAssertEqual(evidence.map(\.hostname).sorted(), [
+            "api.example.com",
+            "github.com",
+            "registry.npmjs.org",
+        ])
+        XCTAssertTrue(evidence.allSatisfy { $0.source == .commandArgument })
+        XCTAssertTrue(evidence.allSatisfy { $0.confidence == .inferred })
+        XCTAssertFalse(
+            evidence.map(\.hostname).joined().contains("synthetic-password")
+        )
+    }
+
+    func testDomainExtractorRejectsEnvironmentValuesAndIPLiterals() {
+        let samples = [
+            InjectedProcessTreeSample(
+                pid: 42,
+                ppid: 1,
+                startTime: 100,
+                executable: "env",
+                arguments: [
+                    "env",
+                    "TOKEN=secret.example.com",
+                    "curl",
+                    "https://203.0.113.8/private",
+                ]
+            ),
+            InjectedProcessTreeSample(
+                pid: 43,
+                ppid: 42,
+                startTime: 101,
+                executable: "curl",
+                arguments: [
+                    "curl",
+                    "--header",
+                    "Authorization: Bearer secret.example.com",
+                    "--password=https://password.example.com/private",
+                ]
+            ),
+        ]
+
+        XCTAssertTrue(
+            AgentNetworkDomainExtractor.evidence(
+                from: samples,
+                observedAt: Date(timeIntervalSince1970: 10)
+            ).isEmpty
+        )
+    }
+
+    func testAccumulatorDeduplicatesDomainEvidenceByProcessAndHostname() {
+        let runID = UUID()
+        let grantID = UUID()
+        let sample = InjectedProcessTreeSample(
+            pid: 42,
+            ppid: 1,
+            startTime: 100,
+            executable: "curl",
+            arguments: ["curl", "https://example.com/one", "https://example.com/two"]
+        )
+        var accumulator = AgentNetworkActivityAccumulator(
+            runID: runID,
+            grantIDs: [grantID]
+        )
+
+        accumulator.applyDomainEvidence(
+            from: [sample],
+            observedAt: Date(timeIntervalSince1970: 10)
+        )
+        accumulator.applyDomainEvidence(
+            from: [sample],
+            observedAt: Date(timeIntervalSince1970: 11)
+        )
+
+        XCTAssertEqual(accumulator.domainEvidence.count, 1)
+        XCTAssertEqual(accumulator.domainEvidence[0].runID, runID)
+        XCTAssertEqual(accumulator.domainEvidence[0].grantIDs, [grantID])
+        XCTAssertEqual(accumulator.domainEvidence[0].hostname, "example.com")
+        XCTAssertEqual(accumulator.domainEvidence[0].observationCount, 2)
+        XCTAssertEqual(
+            accumulator.domainEvidence[0].lastSeenAt,
+            Date(timeIntervalSince1970: 11)
+        )
+    }
+
+    func testSnapshotDecodesLegacyPayloadWithoutDomainEvidence() throws {
+        let runID = UUID()
+        let grantID = UUID()
+        let payload = """
+        {
+          "runID":"\(runID.uuidString)",
+          "grantIDs":["\(grantID.uuidString)"],
+          "coverage":"observed",
+          "updatedAt":"1970-01-01T00:00:00Z",
+          "survivingDescendantIdentityKeys":[],
+          "records":[]
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let snapshot = try decoder.decode(
+            AgentNetworkActivityRunSnapshot.self,
+            from: Data(payload.utf8)
+        )
+
+        XCTAssertTrue(snapshot.domainEvidence.isEmpty)
+    }
+
     func testAccumulatorMergesRepeatedSocketAndCountsDistinctConnections() {
         let runID = UUID()
         let grantID = UUID()

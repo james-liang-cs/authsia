@@ -168,6 +168,7 @@ public struct AgentNetworkActivityRunSnapshot: Codable, Equatable, Sendable {
     public let endedAt: Date?
     public let survivingDescendantIdentityKeys: [String]
     public let records: [AgentNetworkActivityRecord]
+    public let domainEvidence: [AgentNetworkDomainEvidence]
 
     public init(
         runID: UUID,
@@ -176,7 +177,8 @@ public struct AgentNetworkActivityRunSnapshot: Codable, Equatable, Sendable {
         updatedAt: Date,
         endedAt: Date? = nil,
         survivingDescendantIdentityKeys: [String] = [],
-        records: [AgentNetworkActivityRecord]
+        records: [AgentNetworkActivityRecord],
+        domainEvidence: [AgentNetworkDomainEvidence] = []
     ) {
         self.runID = runID
         self.grantIDs = Array(Set(grantIDs)).sorted { $0.uuidString < $1.uuidString }
@@ -190,6 +192,64 @@ public struct AgentNetworkActivityRunSnapshot: Codable, Equatable, Sendable {
             }
             return $0.lastSeenAt < $1.lastSeenAt
         }
+        self.domainEvidence = domainEvidence.sorted {
+            if $0.lastSeenAt == $1.lastSeenAt {
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            return $0.lastSeenAt < $1.lastSeenAt
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runID
+        case grantIDs
+        case coverage
+        case updatedAt
+        case endedAt
+        case survivingDescendantIdentityKeys
+        case records
+        case domainEvidence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            runID: try container.decode(UUID.self, forKey: .runID),
+            grantIDs: try container.decode([UUID].self, forKey: .grantIDs),
+            coverage: try container.decode(
+                AgentNetworkCaptureCoverage.self,
+                forKey: .coverage
+            ),
+            updatedAt: try container.decode(Date.self, forKey: .updatedAt),
+            endedAt: try container.decodeIfPresent(Date.self, forKey: .endedAt),
+            survivingDescendantIdentityKeys: try container.decodeIfPresent(
+                [String].self,
+                forKey: .survivingDescendantIdentityKeys
+            ) ?? [],
+            records: try container.decode(
+                [AgentNetworkActivityRecord].self,
+                forKey: .records
+            ),
+            domainEvidence: try container.decodeIfPresent(
+                [AgentNetworkDomainEvidence].self,
+                forKey: .domainEvidence
+            ) ?? []
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(runID, forKey: .runID)
+        try container.encode(grantIDs, forKey: .grantIDs)
+        try container.encode(coverage, forKey: .coverage)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(endedAt, forKey: .endedAt)
+        try container.encode(
+            survivingDescendantIdentityKeys,
+            forKey: .survivingDescendantIdentityKeys
+        )
+        try container.encode(records, forKey: .records)
+        try container.encode(domainEvidence, forKey: .domainEvidence)
     }
 }
 
@@ -199,20 +259,24 @@ public struct AgentNetworkActivityAccumulator: Sendable {
 
     private let recordLimit: Int
     private let connectionLimit: Int
+    private let domainEvidenceLimit: Int
     private var recordsByKey: [String: AgentNetworkActivityRecord] = [:]
     private var connectionIDsByKey: [String: Set<String>] = [:]
     private var byteCountsByConnectionID: [String: (sent: UInt64?, received: UInt64?)] = [:]
+    private var domainEvidenceByKey: [String: AgentNetworkDomainEvidence] = [:]
 
     public init(
         runID: UUID,
         grantIDs: [UUID],
         recordLimit: Int = 2_048,
-        connectionLimit: Int = 4_096
+        connectionLimit: Int = 4_096,
+        domainEvidenceLimit: Int = 512
     ) {
         self.runID = runID
         self.grantIDs = Array(Set(grantIDs)).sorted { $0.uuidString < $1.uuidString }
         self.recordLimit = max(1, recordLimit)
         self.connectionLimit = max(1, connectionLimit)
+        self.domainEvidenceLimit = max(1, domainEvidenceLimit)
     }
 
     public var records: [AgentNetworkActivityRecord] {
@@ -222,6 +286,50 @@ public struct AgentNetworkActivityAccumulator: Sendable {
             }
             return $0.lastSeenAt < $1.lastSeenAt
         }
+    }
+
+    public var domainEvidence: [AgentNetworkDomainEvidence] {
+        domainEvidenceByKey.values.sorted {
+            if $0.lastSeenAt == $1.lastSeenAt {
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            return $0.lastSeenAt < $1.lastSeenAt
+        }
+    }
+
+    @discardableResult
+    public mutating func applyDomainEvidence(
+        from samples: [InjectedProcessTreeSample],
+        observedAt: Date
+    ) -> Bool {
+        var wasComplete = true
+        for observation in AgentNetworkDomainExtractor.evidence(
+            from: samples,
+            observedAt: observedAt
+        ) {
+            let key = [
+                String(observation.pid),
+                String(observation.processStartTime),
+                observation.hostname,
+                observation.source.rawValue,
+            ].joined(separator: ":")
+            guard domainEvidenceByKey[key] != nil
+                    || domainEvidenceByKey.count < domainEvidenceLimit else {
+                wasComplete = false
+                continue
+            }
+            if var evidence = domainEvidenceByKey[key] {
+                evidence.apply(observation)
+                domainEvidenceByKey[key] = evidence
+            } else {
+                domainEvidenceByKey[key] = AgentNetworkDomainEvidence(
+                    runID: runID,
+                    grantIDs: grantIDs,
+                    observation: observation
+                )
+            }
+        }
+        return wasComplete
     }
 
     @discardableResult
@@ -416,7 +524,8 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
                 updatedAt: snapshot.updatedAt,
                 endedAt: snapshot.endedAt ?? now,
                 survivingDescendantIdentityKeys: snapshot.survivingDescendantIdentityKeys,
-                records: snapshot.records
+                records: snapshot.records,
+                domainEvidence: snapshot.domainEvidence
             )
 
             var active = try loadFile(activeFileURL)
@@ -520,17 +629,18 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
         let retained = snapshots
             .filter { ($0.endedAt ?? $0.updatedAt) >= cutoff }
             .sorted { $0.updatedAt > $1.updatedAt }
-        var remainingRecords = aggregateLimit
+        var remainingRows = aggregateLimit
         var result: [AgentNetworkActivityRunSnapshot] = []
 
         for snapshot in retained {
-            let records: [AgentNetworkActivityRecord]
-            if snapshot.records.isEmpty {
-                records = []
-            } else {
-                guard remainingRecords > 0 else { continue }
-                records = Array(snapshot.records.suffix(remainingRecords))
-                remainingRecords -= records.count
+            let hasActivity = !snapshot.records.isEmpty || !snapshot.domainEvidence.isEmpty
+            guard !hasActivity || remainingRows > 0 else { continue }
+            let records = Array(snapshot.records.suffix(remainingRows))
+            remainingRows -= records.count
+            let domainEvidence = Array(snapshot.domainEvidence.suffix(remainingRows))
+            remainingRows -= domainEvidence.count
+            if hasActivity, records.isEmpty, domainEvidence.isEmpty {
+                continue
             }
             result.append(
                 AgentNetworkActivityRunSnapshot(
@@ -540,7 +650,8 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
                     updatedAt: snapshot.updatedAt,
                     endedAt: snapshot.endedAt,
                     survivingDescendantIdentityKeys: snapshot.survivingDescendantIdentityKeys,
-                    records: records
+                    records: records,
+                    domainEvidence: domainEvidence
                 )
             )
         }
