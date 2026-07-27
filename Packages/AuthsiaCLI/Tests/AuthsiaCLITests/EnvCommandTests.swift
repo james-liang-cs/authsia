@@ -122,6 +122,31 @@ struct EnvCommandTests {
         #expect(!implementation.contains("AuthsiaBridgeClient.shared.list()"))
     }
 
+    @Test("workspace env list omits global profile metadata")
+    func workspaceEnvListOmitsGlobalProfileMetadata() throws {
+        let fixture = Data(
+            """
+            [{
+              "name": "Production",
+              "isActive": true,
+              "referencedItemCount": 2,
+              "matchingProfileScope": "Workspaces/api"
+            }]
+            """.utf8
+        )
+        let items = try JSONDecoder().decode([Env.WorkspaceListItem].self, from: fixture)
+
+        let table = try Env.renderWorkspaceList(items: items, format: .table)
+        #expect(!table.contains("Matching profile"))
+        #expect(!table.contains("Workspaces/api"))
+
+        let json = try Env.renderWorkspaceList(items: items, format: .json)
+        let output = try #require(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
+        )
+        #expect(Set(output[0].keys) == ["name", "isActive", "referencedItemCount"])
+    }
+
     @Test("workspace env selection uses scoped workspace metadata")
     func workspaceEnvSelectionUsesScopedWorkspaceMetadata() throws {
         let testFileURL = URL(fileURLWithPath: #filePath)

@@ -253,11 +253,10 @@ struct Env: ParsableCommand {
         return TableFormatter.renderTable(headers: headers, rows: rows)
     }
 
-    private struct WorkspaceListItem: Codable {
+    struct WorkspaceListItem: Codable {
         let name: String
         let isActive: Bool
         let referencedItemCount: Int
-        let matchingProfileScope: String?
     }
 
     private static func renderWorkspaceList(root: URL, format: OutputFormat) async throws -> String {
@@ -277,15 +276,17 @@ struct Env: ParsableCommand {
             selection: .defaultOnly
         )
         let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
-        let profiles = try EnvironmentProfileStore().loadAll()
         let items = workspaceEnvironmentNames(payload).map { name in
             WorkspaceListItem(
                 name: name,
                 isActive: active.map { VaultEnvironmentTags.contains($0, in: [name]) } ?? false,
-                referencedItemCount: referencedItemCount(name, evaluation: evaluation),
-                matchingProfileScope: profiles.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.scopeDisplayName
+                referencedItemCount: referencedItemCount(name, evaluation: evaluation)
             )
         }
+        return try renderWorkspaceList(items: items, format: format)
+    }
+
+    static func renderWorkspaceList(items: [WorkspaceListItem], format: OutputFormat) throws -> String {
         switch format {
         case .json:
             let encoder = JSONEncoder()
@@ -294,8 +295,8 @@ struct Env: ParsableCommand {
         case .table:
             if items.isEmpty { return "No tagged workspace items found. Default environment is active." }
             return TableFormatter.renderTable(
-                headers: ["Name", "Active", "References", "Matching profile"],
-                rows: items.map { [$0.name, $0.isActive ? "yes" : "no", String($0.referencedItemCount), $0.matchingProfileScope ?? ""] }
+                headers: ["Name", "Active", "References"],
+                rows: items.map { [$0.name, $0.isActive ? "yes" : "no", String($0.referencedItemCount)] }
             )
         }
     }
