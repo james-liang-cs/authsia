@@ -535,6 +535,12 @@ built-in SSH-agent flow. Direct agent commands that intentionally emit plaintext
 API keys, certificates, notes, and SSH metadata runs through JIT preflight and returns only the approved
 named-folder subtrees or root-only scope.
 
+Within a managed Authsia workspace, an active agent JIT grant follows the same
+agent session across descendant directories of the canonical workspace root.
+The Bridge revalidates that root-to-directory relationship; sibling workspaces,
+symlink escapes, and unsafe roots do not inherit the grant. Outside a managed
+workspace, reuse remains bound to the exact current directory.
+
 ### `authsia code <query>` — Generate a TOTP code
 
 Generates a time-based one-time password. Requires biometric authentication or an active session.

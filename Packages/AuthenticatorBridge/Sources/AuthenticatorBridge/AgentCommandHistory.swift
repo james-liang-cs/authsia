@@ -124,7 +124,10 @@ public enum AgentCommandHistoryQuery {
               let grantWorkingDirectory = normalizedPath(grant.callerFingerprint.workingDirectory) else {
             return true
         }
-        return eventWorkingDirectory == grantWorkingDirectory
+        return WorkspaceAuthority.matchesWorkingDirectory(
+            eventWorkingDirectory,
+            authorityPath: grantWorkingDirectory
+        )
     }
 
     private static func normalizedPlatform(_ value: String?) -> String? {

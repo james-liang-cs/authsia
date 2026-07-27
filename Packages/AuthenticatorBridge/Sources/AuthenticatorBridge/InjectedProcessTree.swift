@@ -166,7 +166,10 @@ public enum InjectedProcessTreeQuery {
               let grantWorkingDirectory = normalizedPath(grant.callerFingerprint.workingDirectory) else {
             return true
         }
-        return runWorkingDirectory == grantWorkingDirectory
+        return WorkspaceAuthority.matchesWorkingDirectory(
+            runWorkingDirectory,
+            authorityPath: grantWorkingDirectory
+        )
     }
 
     private static func normalizedPath(_ value: String?) -> String? {

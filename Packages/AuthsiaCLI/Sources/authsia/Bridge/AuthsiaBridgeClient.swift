@@ -1232,6 +1232,7 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
             fullCommand: context.fullCommand,
             sessionScope: sessionScope,
             workingDirectory: context.workingDirectory,
+            workspaceAuthorityPath: context.workspaceAuthorityPath,
             agentRuntimeContext: context.agentRuntimeContext,
             workspaceContext: context.workspaceContext
         )

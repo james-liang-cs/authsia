@@ -173,6 +173,60 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertEqual(fingerprint?.workingDirectory, "/tmp/project")
     }
 
+    func testFingerprintUsesValidatedWorkspaceRootAcrossDescendantDirectories() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-jit-workspace-\(UUID().uuidString)", isDirectory: true)
+        let firstDirectory = root.appendingPathComponent("Am-I-Impacted", isDirectory: true)
+        let secondDirectory = root.appendingPathComponent("Am-I-Impacted-IaC/envs/prod", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: firstDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondDirectory, withIntermediateDirectories: true)
+
+        let first = AgentJITCallerContext.fingerprint(
+            for: makeRequest(
+                sessionScope: "agent:claude-code:sid:1001",
+                workingDirectory: firstDirectory.path,
+                workspaceAuthorityPath: root.path
+            ),
+            caller: claudeCaller()
+        )
+        let second = AgentJITCallerContext.fingerprint(
+            for: makeRequest(
+                sessionScope: "agent:claude-code:sid:1001",
+                workingDirectory: secondDirectory.path,
+                workspaceAuthorityPath: root.path
+            ),
+            caller: claudeCaller()
+        )
+
+        XCTAssertEqual(first?.workingDirectory, root.resolvingSymlinksInPath().standardizedFileURL.path)
+        XCTAssertEqual(second?.workingDirectory, first?.workingDirectory)
+        XCTAssertTrue(try XCTUnwrap(first).matches(XCTUnwrap(second)))
+    }
+
+    func testFingerprintRejectsWorkspaceRootAfterSymlinkEscape() throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-jit-escape-\(UUID().uuidString)", isDirectory: true)
+        let root = container.appendingPathComponent("workspace", isDirectory: true)
+        let outside = container.appendingPathComponent("outside", isDirectory: true)
+        let escape = root.appendingPathComponent("escape", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: escape, withDestinationURL: outside)
+
+        let fingerprint = AgentJITCallerContext.fingerprint(
+            for: makeRequest(
+                sessionScope: "agent:claude-code:sid:1001",
+                workingDirectory: escape.path,
+                workspaceAuthorityPath: root.path
+            ),
+            caller: claudeCaller()
+        )
+
+        XCTAssertEqual(fingerprint?.workingDirectory, escape.path)
+    }
+
     func testCursorExtensionHostFingerprintReusesParentProcessScopeAcrossChildSessions() {
         let caller = cursorHostedCaller()
         let first = AgentJITCallerContext.fingerprint(
@@ -287,7 +341,11 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertTrue(AgentJITCallerContext.hasAgenticCaller(nestedAuthsiaCaller(context: context)))
     }
 
-    private func makeRequest(sessionScope: String?, workingDirectory: String?) -> BridgeRequest {
+    private func makeRequest(
+        sessionScope: String?,
+        workingDirectory: String?,
+        workspaceAuthorityPath: String? = nil
+    ) -> BridgeRequest {
         BridgeRequest(
             id: UUID(),
             type: .getPassword,
@@ -301,7 +359,8 @@ final class AgentJITCallerContextTests: XCTestCase {
                 timestamp: Date(),
                 requestedCommand: "exec",
                 sessionScope: sessionScope,
-                workingDirectory: workingDirectory
+                workingDirectory: workingDirectory,
+                workspaceAuthorityPath: workspaceAuthorityPath
             )
         )
     }

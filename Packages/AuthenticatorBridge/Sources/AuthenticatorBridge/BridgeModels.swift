@@ -136,6 +136,9 @@ public struct BridgeContext: Codable, Equatable {
     public let fullCommand: String?
     public let sessionScope: String?
     public let workingDirectory: String?
+    /// Canonical managed-workspace root proposed as JIT reuse authority.
+    /// The Bridge must validate it contains `workingDirectory` before use.
+    public let workspaceAuthorityPath: String?
     public let agentRuntimeContext: AgentRuntimeContext?
     public let workspaceContext: WorkspaceRuntimeContext?
     /// Required for requests whose authority depends on exact item, caller,
@@ -159,6 +162,7 @@ public struct BridgeContext: Codable, Equatable {
         fullCommand: String? = nil,
         sessionScope: String? = nil,
         workingDirectory: String? = nil,
+        workspaceAuthorityPath: String? = nil,
         agentRuntimeContext: AgentRuntimeContext? = nil,
         workspaceContext: WorkspaceRuntimeContext? = nil,
         securityProtocolVersion: Int? = Self.securityProtocolVersion
@@ -175,6 +179,7 @@ public struct BridgeContext: Codable, Equatable {
         self.fullCommand = fullCommand
         self.sessionScope = sessionScope
         self.workingDirectory = workingDirectory
+        self.workspaceAuthorityPath = workspaceAuthorityPath
         self.agentRuntimeContext = agentRuntimeContext
         self.workspaceContext = workspaceContext
         self.securityProtocolVersion = securityProtocolVersion

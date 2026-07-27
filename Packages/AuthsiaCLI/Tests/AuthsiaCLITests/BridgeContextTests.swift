@@ -26,6 +26,7 @@ struct BridgeContextTests {
         #expect(ctx.fullCommand == nil)
         #expect(ctx.sessionScope == nil)
         #expect(ctx.workingDirectory == nil)
+        #expect(ctx.workspaceAuthorityPath == nil)
         #expect(ctx.agentRuntimeContext == nil)
         #expect(ctx.workspaceContext == nil)
     }
@@ -54,7 +55,7 @@ struct BridgeContextTests {
         #expect(ctx.workspaceContext == nil)
     }
 
-    @Test("explicit requestedCommand, sessionScope, and workingDirectory round-trip")
+    @Test("explicit requestedCommand, sessionScope, and directory authority round-trip")
     func requestedCommandSessionScopeAndWorkingDirectoryRoundTrip() throws {
         let original = BridgeContext(
             isTTY: true,
@@ -68,6 +69,7 @@ struct BridgeContextTests {
             fullCommand: "authsia exec password SERVICE_ENDPOINT -- npm start",
             sessionScope: "tty:/dev/ttys001",
             workingDirectory: "/Users/example/project",
+            workspaceAuthorityPath: "/Users/example",
             agentRuntimeContext: AgentRuntimeContext(
                 platform: "codex",
                 sessionID: "session-1",
@@ -88,6 +90,7 @@ struct BridgeContextTests {
         #expect(decoded.fullCommand == "authsia exec password SERVICE_ENDPOINT -- npm start")
         #expect(decoded.sessionScope == "tty:/dev/ttys001")
         #expect(decoded.workingDirectory == "/Users/example/project")
+        #expect(decoded.workspaceAuthorityPath == "/Users/example")
         #expect(decoded.agentRuntimeContext?.platform == "codex")
         #expect(decoded.agentRuntimeContext?.agentType == "reviewer")
         #expect(decoded.agentRuntimeContext?.toolUseID == "tool-1")
@@ -173,6 +176,48 @@ struct BridgeContextTests {
         #expect(ctx.workspaceContext?.authsiaFolder == "Workspaces/selected-api")
         #expect(ctx.workspaceContext?.displayName == "selected-api (\(root.lastPathComponent))")
         #expect(ctx.workspaceContext?.displayName.contains(root.path) == false)
+        #expect(ctx.workspaceAuthorityPath == root.resolvingSymlinksInPath().standardizedFileURL.path)
+    }
+
+    @Test("invalid workspace authority preserves display context and exact-directory fallback")
+    func invalidWorkspaceAuthorityPreservesDisplayContext() throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-workspace-escape-\(UUID().uuidString)", isDirectory: true)
+        let root = container.appendingPathComponent("workspace", isDirectory: true)
+        let outside = container.appendingPathComponent("outside", isDirectory: true)
+        let escape = root.appendingPathComponent("escape", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                workspace: WorkspaceConfig.Workspace(
+                    name: "selected-api",
+                    authsiaFolder: "Workspaces/selected-api"
+                ),
+                managedEnvFiles: [".env"],
+                agents: nil
+            ),
+            toWorkspaceRoot: root
+        )
+        try FileManager.default.createSymbolicLink(at: escape, withDestinationURL: outside)
+
+        let ctx = AutomationAccessResolver.bridgeContext(
+            requestedCommand: "exec",
+            environment: [:],
+            terminalIdentifier: nil,
+            processSessionIdentifier: nil,
+            ancestralScope: { nil },
+            currentDirectoryPath: escape.path,
+            processAncestry: [
+                AgenticProcessReference(processName: "authsia", bundleIdentifier: "com.authsia.cli"),
+            ],
+            agentRuntimeContextEventsURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        )
+
+        #expect(ctx.workspaceContext?.name == "selected-api")
+        #expect(ctx.workspaceAuthorityPath == nil)
+        #expect(ctx.workingDirectory == escape.path)
     }
 
     @Test("CLI context resolves explicit agent environment marker")
