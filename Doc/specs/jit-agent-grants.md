@@ -305,7 +305,7 @@ receives one primary classification:
 | Standard output | Mediated | `authsia exec` masks known secret values and common transforms; novel transforms can bypass masking. |
 | Standard error | Mediated | Uses the same masking boundary and has the same limitations as stdout. |
 | Invalid or incomplete UTF-8 output | Prevented by default | Strict output buffers a valid multibyte code point split across read chunks. Invalid sequences, or a partial code point still incomplete when the stream closes, are withheld; the child is terminated and the CLI exits `74`. Explicit `masked-compatibility` may pass those bytes with a warning. Valid UTF-8 using a novel transform remains mediated, not categorically prevented. |
-| File writes | Detected and reduced | After any secret-injected mediated run, Authsia reads only bounded observed candidates and automatically replaces eligible exact injected tokens while preserving other file content. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
+| File writes | Detected and reduced for Agent JIT runs | After a secret-injected Agent JIT run, Authsia reads only bounded observed candidates and automatically replaces eligible exact injected tokens while preserving other file content. Ordinary human CLI sessions and reusable automation credentials do not start file observation or cleanup. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
 | Network | Detected for Authsia-mediated agent runs | Best-effort remote endpoint metadata and hostname-only command evidence are recorded for the secret-bearing launched child and verified descendants. Traffic is not blocked or inspected; arbitrary agent, terminal, user, and system network activity remains out of scope. |
 | Subprocesses | Detected | Command and ancestry evidence can identify supported activity; child-process behavior is not contained. |
 | Clipboard | Out of scope | Authsia does not monitor arbitrary child clipboard access. |
@@ -683,10 +683,11 @@ sandbox and does not block, kill, or auto-revoke from tree activity.
 
 Post-exit file handling:
 
-- Every secret-bearing `authsia exec` and `authsia workspace run` automatically
-  remediates safely verified exact matches in observed files, whether invoked
-  by a human, agent, or automation credential. There is no cleanup flag or
-  opt-out.
+- After an Agent JIT grant authorizes a secret-bearing `authsia exec` or
+  `authsia workspace run`, Authsia automatically remediates safely verified
+  exact matches in observed files. Ordinary human CLI sessions and reusable
+  automation credentials do not start file observation or cleanup. There is no
+  cleanup flag or opt-out.
 - Inspection starts only when the final child environment contains an original
   injected value of at least 12 characters. Short-only default runs are
   unobserved and quiet; mixed runs ignore shorter values without adding an
