@@ -197,7 +197,9 @@ extension XPCRequestHandler {
                     if merged.requestedItems != existing.requestedItems {
                         try? agentJITGrantStore.save(merged)
                     }
-                    grantIDs.append(existing.id)
+                    if !grantIDs.contains(existing.id) {
+                        grantIDs.append(existing.id)
+                    }
                     continue
                 }
             } catch {
@@ -435,18 +437,35 @@ extension XPCRequestHandler {
                 return
             }
 
-            let pendingGrants = approvedResolutions.map { approved in
-                makeAgentJITGrant(
-                    caller: freshCaller,
-                    scope: approved.resolution.scope,
-                    capabilities: Set(grantCapabilities),
-                    createdAt: timing.issuedAt,
-                    expiresAt: timing.grantExpiresAt,
-                    requestedItems: approved.resolution.requestedItems,
-                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
-                    environmentScope: payload.environmentScope,
-                    approvedBy: approved.attribution
-                )
+            let pendingGrants: [AgentJITGrant]
+            if isBroadListBatch, let approved = approvedResolutions.first {
+                pendingGrants = [
+                    makeAgentJITGrant(
+                        caller: freshCaller,
+                        scope: .root,
+                        capabilities: Set(grantCapabilities),
+                        createdAt: timing.issuedAt,
+                        expiresAt: timing.grantExpiresAt,
+                        requestedItems: approvedResolutions.flatMap(\.resolution.requestedItems),
+                        agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                        environmentScope: payload.environmentScope,
+                        approvedBy: approved.attribution
+                    ),
+                ]
+            } else {
+                pendingGrants = approvedResolutions.map { approved in
+                    makeAgentJITGrant(
+                        caller: freshCaller,
+                        scope: approved.resolution.scope,
+                        capabilities: Set(grantCapabilities),
+                        createdAt: timing.issuedAt,
+                        expiresAt: timing.grantExpiresAt,
+                        requestedItems: approved.resolution.requestedItems,
+                        agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                        environmentScope: payload.environmentScope,
+                        approvedBy: approved.attribution
+                    )
+                }
             }
             do {
                 try agentJITGrantStore.saveAll(pendingGrants)
@@ -461,10 +480,16 @@ extension XPCRequestHandler {
             }
 
             for grant in pendingGrants {
+                let auditItemName: String
+                if isBroadListBatch, case .items = grant.resourceScope {
+                    auditItemName = "\(grant.requestedItems.count) listed items"
+                } else {
+                    auditItemName = grant.folderScope.displayName
+                }
                 recordAudit(
                     command: .agentJITPreflight,
                     itemId: grant.id.uuidString,
-                    itemName: grant.folderScope.displayName,
+                    itemName: auditItemName,
                     approvedBy: grant.approvedBy,
                     caller: callerIdentity,
                     requestedCommand: bridgeRequest.context.requestedCommand,
