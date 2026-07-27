@@ -368,10 +368,11 @@ struct Exec: ParsableCommand {
             let processAncestry = AgenticProcessDetector.currentProcessAncestry()
             let workingDirectory = FileManager.default.currentDirectoryPath
             let workspaceRoot = parentEnvironment["AUTHSIA_WORKSPACE_ROOT"] ?? workingDirectory
+            let agentJITGrantIDs = Array(Set(accumulatedGrantIDs))
             let treeContext: InjectedProcessTreeWatchContext? = allSecrets.isEmpty
                 ? nil
                 : InjectedProcessTreeWatchContext(
-                    agentJITGrantIDs: Array(Set(accumulatedGrantIDs)),
+                    agentJITGrantIDs: agentJITGrantIDs,
                     agentPlatform: Self.injectedTreeAgentPlatform(
                         parentEnvironment: parentEnvironment,
                         processAncestry: processAncestry
@@ -379,12 +380,14 @@ struct Exec: ParsableCommand {
                     terminalSessionScope: TerminalSessionScope.currentAncestralScope(),
                     workingDirectory: workingDirectory
                 )
-            let shouldCleanupSecretFiles = Self.shouldCleanupSecretFiles()
+            let shouldCleanupSecretFiles = Self.shouldCleanupSecretFiles(
+                agentJITGrantIDs: agentJITGrantIDs
+            )
             let fileScrubContext = Self.selectedFileScrubContext(
                 cleanupSelection: fileCleanupSelection,
                 cleanupSecretFiles: shouldCleanupSecretFiles,
                 candidate: InjectedSecretFileScrubContext(
-                    agentJITGrantIDs: Array(Set(accumulatedGrantIDs)),
+                    agentJITGrantIDs: agentJITGrantIDs,
                     agentPlatform: treeContext?.agentPlatform,
                     terminalSessionScope: treeContext?.terminalSessionScope,
                     workingDirectory: workingDirectory,
@@ -942,15 +945,17 @@ struct Exec: ParsableCommand {
         cleanupSecretFiles: Bool,
         candidate: @autoclosure () -> InjectedSecretFileScrubContext
     ) -> InjectedSecretFileScrubContext? {
-        guard !cleanupSelection.secrets.isEmpty
+        let context = candidate()
+        guard !context.agentJITGrantIDs.isEmpty,
+              !cleanupSelection.secrets.isEmpty
                 || (cleanupSecretFiles && cleanupSelection.isIncomplete) else {
             return nil
         }
-        return candidate()
+        return context
     }
 
-    static func shouldCleanupSecretFiles() -> Bool {
-        true
+    static func shouldCleanupSecretFiles(agentJITGrantIDs: [UUID]) -> Bool {
+        !agentJITGrantIDs.isEmpty
     }
 
     static func fileEventMetadataMasker(

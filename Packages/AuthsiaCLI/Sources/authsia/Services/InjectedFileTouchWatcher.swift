@@ -79,6 +79,7 @@ final class InjectedFileTouchWatcher: @unchecked Sendable {
     private let lock = NSLock()
     private var touched = Set<String>()
     private var streamIncomplete = false
+    private var eventObservationStarted = false
     #if os(macOS)
     private var stream: FSEventStreamRef?
     private let callbackQueue = DispatchQueue(label: "app.authsia.injected-file-touch", qos: .utility)
@@ -190,7 +191,11 @@ final class InjectedFileTouchWatcher: @unchecked Sendable {
 
     func start() -> Bool {
         if let startOverride {
-            return startOverride()
+            let started = startOverride()
+            lock.lock()
+            eventObservationStarted = started
+            lock.unlock()
+            return started
         }
 
         #if os(macOS)
@@ -231,6 +236,9 @@ final class InjectedFileTouchWatcher: @unchecked Sendable {
             return false
         }
         stream = created
+        lock.lock()
+        eventObservationStarted = true
+        lock.unlock()
         return true
         #else
         return false
@@ -252,6 +260,7 @@ final class InjectedFileTouchWatcher: @unchecked Sendable {
         lock.lock()
         let touchedPaths = touched
         var isIncomplete = streamIncomplete || rootBindingCaptureIncomplete
+        let didStartEventObservation = eventObservationStarted
         lock.unlock()
 
         let validatedRootBindings = rootBindings.compactMap {
@@ -275,19 +284,21 @@ final class InjectedFileTouchWatcher: @unchecked Sendable {
             }
             paths.insert(path)
         }
-        let fallback = Self.highSignalModifiedSince(
-            startedAt,
-            rootBindings: validatedRootBindings,
-            fileManager: fileManager
-        )
-        for path in fallback.paths {
-            guard paths.contains(path) || paths.count < maximumCandidatePaths else {
-                isIncomplete = true
-                break
+        if !didStartEventObservation {
+            let fallback = Self.highSignalModifiedSince(
+                startedAt,
+                rootBindings: validatedRootBindings,
+                fileManager: fileManager
+            )
+            for path in fallback.paths {
+                guard paths.contains(path) || paths.count < maximumCandidatePaths else {
+                    isIncomplete = true
+                    break
+                }
+                paths.insert(path)
             }
-            paths.insert(path)
+            isIncomplete = isIncomplete || fallback.isIncomplete
         }
-        isIncomplete = isIncomplete || fallback.isIncomplete
         return InjectedFileTouchWatchResult(
             paths: Array(paths).sorted(),
             validatedRootBindings: validatedRootBindings,
