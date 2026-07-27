@@ -384,11 +384,11 @@ it was given.
 **Signal forwarding:** SIGINT, SIGTERM, and SIGHUP are forwarded to the child process. Exit codes
 follow shell convention: signal-killed processes exit with `128 + signum` (e.g. 130 for SIGINT).
 
-**Post-exit file inspection:** `exec` inspects bounded observed files for exact injected values of
-at least 12 characters and automatically replaces only those exact values while preserving all
-surrounding file content. This applies to human, agent, and automation invocations. The
-cleanup behavior has no command-line flag or opt-out. Neither inspection nor cleanup changes the
-child exit status.
+**Post-exit file inspection:** after an Agent JIT grant authorizes `exec`, Authsia inspects bounded
+observed files for exact injected values of at least 12 characters and automatically replaces only
+those exact values while preserving all surrounding file content. Ordinary human CLI sessions and
+reusable automation credentials do not start file observation or cleanup. Agent-granted cleanup has
+no command-line flag or opt-out. Neither inspection nor cleanup changes the child exit status.
 
 Examples:
 
@@ -2210,9 +2210,9 @@ loss between truncation, writing, and restoration can therefore leave partial or
 contents; the rewrite is not crash-atomic.
 
 Cleanup failures may persist `verification-failed` or `remediation-failed` evidence and the Review
-finding `Secret-file cleanup incomplete`. Confirmed default detections, incomplete inspections,
+finding `Secret-file cleanup incomplete`. Legacy confirmed detections, incomplete inspections,
 successful scrubs, and cleanup failures are separate findings. Evidence persistence is best-effort,
-so a CLI warning may occur without a finding, including in human or automation contexts.
+so a CLI warning may occur without a finding.
 Outside-root candidates have no per-file event.
 
 Before persistence, injected-exec path, working-directory, and workspace metadata is redacted using
