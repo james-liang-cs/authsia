@@ -1110,6 +1110,52 @@ struct InjectedSecretFileScrubberTests {
         #expect(result.paths.count <= 1)
     }
 
+    @Test("healthy event observation does not run fallback discovery")
+    func healthyEventObservationSkipsFallbackDiscovery() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let watcher = InjectedFileTouchWatcher(
+            roots: [directory.path],
+            startOverride: { true }
+        )
+        let unreportedPath = directory.appendingPathComponent(".env").path
+
+        #expect(watcher.start())
+        try "TOKEN=not-an-injected-value\n".write(
+            toFile: unreportedPath,
+            atomically: true,
+            encoding: .utf8
+        )
+        let result = watcher.stop()
+
+        #expect(result.paths.isEmpty)
+        #expect(!result.isIncomplete)
+    }
+
+    @Test("failed event observation retains fallback discovery")
+    func failedEventObservationUsesFallbackDiscovery() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let watcher = InjectedFileTouchWatcher(
+            roots: [directory.path],
+            startOverride: { false }
+        )
+        let fallbackPath = directory.appendingPathComponent(".env").path
+
+        #expect(!watcher.start())
+        try "TOKEN=not-an-injected-value\n".write(
+            toFile: fallbackPath,
+            atomically: true,
+            encoding: .utf8
+        )
+        let result = watcher.stop()
+
+        #expect(result.paths == [fallbackPath])
+        #expect(!result.isIncomplete)
+    }
+
     @Test("mtime fallback stops at its deadline")
     func mtimeFallbackDeadlineMarksIncomplete() throws {
         let directory = try temporaryDirectory()
@@ -1919,8 +1965,28 @@ struct InjectedSecretFileScrubberTests {
         #expect(events.contains { $0.detail == InjectedSecretFileActivityDetail.scrubbed })
     }
 
-    @Test("mediated runs automatically replace only the exact injected secret")
-    func mediatedRunAutomaticallyReplacesOnlyExactInjectedSecret() throws {
+    @Test("human CLI runs do not select file observation or cleanup")
+    func humanCLIRunDoesNotSelectFileScrubContext() {
+        let context = Exec.selectedFileScrubContext(
+            cleanupSelection: Exec.FileCleanupSecretSelection(
+                secrets: ["eligible-secret-value"],
+                isIncomplete: false
+            ),
+            cleanupSecretFiles: false,
+            candidate: InjectedSecretFileScrubContext(
+                agentJITGrantIDs: [],
+                agentPlatform: nil,
+                terminalSessionScope: nil,
+                workingDirectory: "/workspace",
+                workspaceRoot: "/workspace"
+            )
+        )
+
+        #expect(context == nil)
+    }
+
+    @Test("Agent JIT granted runs automatically replace only the exact injected secret")
+    func agentGrantedRunAutomaticallyReplacesOnlyExactInjectedSecret() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -1932,13 +1998,15 @@ struct InjectedSecretFileScrubberTests {
         )
         watcher.recordForTesting(path)
         let context = InjectedSecretFileScrubContext(
-            agentJITGrantIDs: [],
-            agentPlatform: nil,
+            agentJITGrantIDs: [UUID()],
+            agentPlatform: "codex",
             terminalSessionScope: nil,
             workingDirectory: directory.path,
             workspaceRoot: directory.path
         )
-        let automaticCleanup = Exec.shouldCleanupSecretFiles()
+        let automaticCleanup = Exec.shouldCleanupSecretFiles(
+            agentJITGrantIDs: context.agentJITGrantIDs
+        )
         let quotedPath = path.replacingOccurrences(of: "'", with: "'\\''")
 
         let result = Exec.runChildProcess(
@@ -2155,7 +2223,7 @@ struct InjectedSecretFileScrubberTests {
             cleanupSelection: cleanupSelection,
             cleanupSecretFiles: true,
             candidate: InjectedSecretFileScrubContext(
-                agentJITGrantIDs: [],
+                agentJITGrantIDs: [UUID()],
                 agentPlatform: "codex",
                 terminalSessionScope: nil,
                 workingDirectory: "/",
@@ -2220,7 +2288,13 @@ struct InjectedSecretFileScrubberTests {
         let fileScrubContext = Exec.selectedFileScrubContext(
             cleanupSelection: cleanupSelection,
             cleanupSecretFiles: false,
-            candidate: scrubContext(directory: directory)
+            candidate: InjectedSecretFileScrubContext(
+                agentJITGrantIDs: [UUID()],
+                agentPlatform: "codex",
+                terminalSessionScope: nil,
+                workingDirectory: directory.path,
+                workspaceRoot: directory.path
+            )
         )
         let error = Pipe()
         let quotedPath = path.replacingOccurrences(of: "'", with: "'\\''")

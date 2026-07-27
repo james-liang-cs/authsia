@@ -191,9 +191,10 @@ struct ExecCommandTests {
         }
     }
 
-    @Test("secret-file cleanup is automatic for every mediated run")
+    @Test("secret-file cleanup applies only to Agent JIT granted runs")
     func secretFileCleanupPolicy() {
-        #expect(Exec.shouldCleanupSecretFiles())
+        #expect(!Exec.shouldCleanupSecretFiles(agentJITGrantIDs: []))
+        #expect(Exec.shouldCleanupSecretFiles(agentJITGrantIDs: [UUID()]))
     }
 
     @Test("masked compatibility requires an explicit option")

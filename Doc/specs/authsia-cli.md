@@ -2156,9 +2156,10 @@ not store file contents, command output, stdin, environment values, or plaintext
 uses workspace-relative paths for workspace-contained file activity and omits the matching absolute
 path, working directory, and workspace root.
 
-After `authsia exec` or a secret-bearing `authsia workspace run`, Authsia performs bounded
-post-exit file inspection and automatically enables cleanup for human, agent, and automation
-invocations. Cleanup has no command-line flag or opt-out.
+After an Agent JIT grant authorizes `authsia exec` or a secret-bearing
+`authsia workspace run`, Authsia performs bounded post-exit file inspection and automatically
+enables cleanup. Ordinary human CLI sessions and reusable automation credentials do not start file
+observation or cleanup. Agent-granted cleanup has no command-line flag or opt-out.
 
 Inspection considers only original injected values that remain in the final child environment and
 are at least 12 characters long. Output-only derived masking tokens, env-file-overridden values, and
@@ -2177,7 +2178,10 @@ across the batch, and no additional candidate starts after one monotonic second.
 incomplete when remaining work is blocked by one of these caps. A separate post-exit
 high-signal-name fallback is bounded across deduplicated roots to 10,000 visited entries or one
 monotonic second and prunes `.git`, `.build`, `DerivedData`, and `node_modules`. Discovery remains
-best-effort: a missed ordinary-file event can leave that file unexamined without a warning.
+best-effort: a missed ordinary-file event can leave that file unexamined without a warning. The
+fallback runs only when filesystem event observation fails to start. Once event observation starts,
+inspection uses only event-reported candidates; event loss or root-integrity failure makes
+inspection incomplete without starting a directory scan.
 
 Eligible candidates are within identity-bound roots, regular single-link files, valid UTF-8, no
 larger than 2 MiB, and stable during verification. A completed no-match inspection is quiet. If
