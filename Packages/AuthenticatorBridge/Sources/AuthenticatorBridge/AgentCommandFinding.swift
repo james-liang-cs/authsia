@@ -197,6 +197,7 @@ public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
     public let files: [AgentFileActivityExportEvent]
     public let processTrees: [InjectedProcessTreeRun]
     public let network: [AgentNetworkActivityRecord]
+    public let networkDomains: [AgentNetworkDomainEvidence]?
     public let networkCoverage: [AgentNetworkActivityCoverageExport]
     public let findings: [AgentCommandFinding]
     public let summary: AgentCommandFindingSummary
@@ -230,6 +231,14 @@ public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
         }
         self.network = networkSnapshots
             .flatMap(\.records)
+            .sorted { lhs, rhs in
+                if lhs.lastSeenAt == rhs.lastSeenAt {
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+                return lhs.lastSeenAt < rhs.lastSeenAt
+            }
+        self.networkDomains = networkSnapshots
+            .flatMap(\.domainEvidence)
             .sorted { lhs, rhs in
                 if lhs.lastSeenAt == rhs.lastSeenAt {
                     return lhs.id.uuidString < rhs.id.uuidString

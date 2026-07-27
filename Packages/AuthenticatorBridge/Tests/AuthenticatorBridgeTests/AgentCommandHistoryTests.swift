@@ -939,7 +939,22 @@ final class AgentCommandHistoryTests: XCTestCase {
             coverage: .partial,
             updatedAt: Date(timeIntervalSince1970: 103),
             endedAt: Date(timeIntervalSince1970: 104),
-            records: [laterNetwork, earlierNetwork]
+            records: [laterNetwork, earlierNetwork],
+            domainEvidence: [
+                AgentNetworkDomainEvidence(
+                    runID: runID,
+                    grantIDs: [grantID],
+                    observation: AgentNetworkDomainObservation(
+                        observedAt: Date(timeIntervalSince1970: 101),
+                        pid: 42,
+                        processStartTime: 100,
+                        executable: "curl",
+                        hostname: "example.com",
+                        source: .commandArgument,
+                        confidence: .inferred
+                    )
+                ),
+            ]
         )
 
         let export = AgentSessionActivityExport(
@@ -955,6 +970,7 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(export.commands.count, 1)
         XCTAssertEqual(export.files.count, 1)
         XCTAssertEqual(export.network.map(\.id), [earlierNetwork.id, laterNetwork.id])
+        XCTAssertEqual(export.networkDomains?.map(\.hostname), ["example.com"])
         XCTAssertEqual(export.networkCoverage.map(\.coverage), [.partial])
         XCTAssertEqual(export.findings.count, 1)
         XCTAssertEqual(export.summary.totalCount, 1)
@@ -965,6 +981,7 @@ final class AgentCommandHistoryTests: XCTestCase {
                 "files",
                 "processTrees",
                 "network",
+                "networkDomains",
                 "networkCoverage",
                 "findings",
                 "summary",
