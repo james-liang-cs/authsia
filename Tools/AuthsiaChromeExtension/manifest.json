@@ -12,11 +12,6 @@
   "permissions": [
     "nativeMessaging"
   ],
-  "host_permissions": [
-    "https://*/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
-  ],
   "background": {
     "service_worker": "service_worker.js"
   },
@@ -43,15 +38,14 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "popup/menu.html",
-        "popup/menu.css",
-        "popup/menu.js"
+        "popup/menu.html"
       ],
       "matches": [
         "https://*/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
-      ]
+      ],
+      "use_dynamic_url": true
     }
   ],
   "action": {
