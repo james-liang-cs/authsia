@@ -19,7 +19,7 @@ public enum WorkspaceAuthority {
         let directory = canonicalPath(workingDirectory)
         var isDirectory: ObjCBool = false
         guard root != "/",
-              root != canonicalPath(fileManager.homeDirectoryForCurrentUser.path),
+              root != canonicalPath(NSHomeDirectory()),
               fileManager.fileExists(atPath: root, isDirectory: &isDirectory),
               isDirectory.boolValue,
               fileManager.fileExists(atPath: directory, isDirectory: &isDirectory),
