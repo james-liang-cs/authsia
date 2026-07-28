@@ -40,6 +40,7 @@
   let focusedInput = null;
   let focusGeneration = 0;
   const matchCache = new Map();
+  const pendingMatchRequests = new Map();
 
   // ============================================================================
   // Utility Functions
@@ -170,11 +171,20 @@
       return Promise.resolve(cached);
     }
 
-    return new Promise((resolve) => {
-      let settled = false;
+    // A cold native host blocks on an approval prompt, and showing that prompt
+    // pulls focus away from the page. Regaining it re-fires focusin, so without
+    // sharing the in-flight request each round trip would queue its own prompt.
+    const pending = pendingMatchRequests.get(key);
+    if (pending) {
+      return pending;
+    }
+
+    let settled = false;
+    const inFlight = new Promise((resolve) => {
       const finish = (count) => {
         if (settled) return;
         settled = true;
+        pendingMatchRequests.delete(key);
         if (count >= 0) {
           matchCache.set(key, { count, timestamp: Date.now() });
         }
@@ -208,6 +218,11 @@
         })
         .catch(() => finish(-1));
     });
+
+    if (!settled) {
+      pendingMatchRequests.set(key, inFlight);
+    }
+    return inFlight;
   }
 
   // ============================================================================
