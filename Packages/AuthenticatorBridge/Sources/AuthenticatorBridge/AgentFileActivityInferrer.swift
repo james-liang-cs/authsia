@@ -155,7 +155,7 @@ public enum AgentFileActivityInferrer {
             return URL(fileURLWithPath: path).standardizedFileURL.path
         }
         if path.hasPrefix("~/") {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let home = NSHomeDirectory()
             return URL(fileURLWithPath: home)
                 .appendingPathComponent(String(path.dropFirst(2)))
                 .standardizedFileURL.path
