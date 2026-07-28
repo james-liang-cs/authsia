@@ -1,16 +1,29 @@
 import Foundation
 
+public enum NativeHostCredentialKind: String, Codable, Equatable {
+    case password
+    case otp
+}
+
 public struct NativeHostRequest: Codable, Equatable {
     public let type: String
     public let host: String?
     public let currentURL: String?
     public let credentialId: UUID?
+    public let kind: NativeHostCredentialKind?
 
-    public init(type: String, host: String? = nil, currentURL: String? = nil, credentialId: UUID? = nil) {
+    public init(
+        type: String,
+        host: String? = nil,
+        currentURL: String? = nil,
+        credentialId: UUID? = nil,
+        kind: NativeHostCredentialKind? = nil
+    ) {
         self.type = type
         self.host = host
         self.currentURL = currentURL
         self.credentialId = credentialId
+        self.kind = kind
     }
 }
 
@@ -111,7 +124,11 @@ public struct CredentialResolver {
         self.cliClient = cliClient
     }
 
-    public func listCredentials(forHost host: String, currentURL: String? = nil) throws -> NativeHostResponse {
+    public func listCredentials(
+        forHost host: String,
+        currentURL: String? = nil,
+        kind: NativeHostCredentialKind? = nil
+    ) throws -> NativeHostResponse {
         guard let sanitizedHost = sanitizeHost(host) else {
             return .failure(.invalidHost)
         }
@@ -119,13 +136,6 @@ public struct CredentialResolver {
         let passwords: [CLIListPassword]
         do {
             passwords = try cliClient.listPasswords()
-        } catch {
-            return .failure(.cliFailure, detail: String(describing: error))
-        }
-
-        let accounts: [CLIListAccount]
-        do {
-            accounts = try cliClient.listAccounts()
         } catch {
             return .failure(.cliFailure, detail: String(describing: error))
         }
@@ -145,6 +155,17 @@ public struct CredentialResolver {
             Self.passwordMatchesHost($0, host: sanitizedHost, currentURL: currentURL)
         }
         let relatedTokens = Self.relatedTokens(from: matchedPasswords)
+
+        if kind == .password {
+            return .success(credentials: passwordMatches)
+        }
+
+        let accounts: [CLIListAccount]
+        do {
+            accounts = try cliClient.listAccounts()
+        } catch {
+            return .failure(.cliFailure, detail: String(describing: error))
+        }
 
         let otpMatches = accounts.enumerated().compactMap { index, account -> OTPMatchCandidate? in
             guard let score = Self.accountMatchScore(
@@ -173,10 +194,15 @@ public struct CredentialResolver {
             return $0.score > $1.score
         }.map(\.match)
         
-        return .success(credentials: passwordMatches + otpMatches)
+        return .success(credentials: (kind == .otp ? [] : passwordMatches) + otpMatches)
     }
 
-    public func getCredential(forHost host: String, currentURL: String? = nil, credentialId: UUID?) throws -> NativeHostResponse {
+    public func getCredential(
+        forHost host: String,
+        currentURL: String? = nil,
+        credentialId: UUID?,
+        kind: NativeHostCredentialKind? = nil
+    ) throws -> NativeHostResponse {
         guard let sanitizedHost = sanitizeHost(host) else {
             return .failure(.invalidHost)
         }
@@ -189,16 +215,20 @@ public struct CredentialResolver {
         }
 
         let accounts: [CLIListAccount]
-        do {
-            accounts = try cliClient.listAccounts()
-        } catch {
-            return .failure(.cliFailure, detail: String(describing: error))
+        if kind == .password {
+            accounts = []
+        } else {
+            do {
+                accounts = try cliClient.listAccounts()
+            } catch {
+                return .failure(.cliFailure, detail: String(describing: error))
+            }
         }
-        
+
         // Find matching password metadata
         if let targetId = credentialId {
             // Case 1: Specific ID requested (from menu click)
-            if let found = passwords.first(where: { $0.id == targetId }) {
+            if kind != .otp, let found = passwords.first(where: { $0.id == targetId }) {
                 guard Self.passwordMatchesHost(found, host: sanitizedHost, currentURL: currentURL) else {
                     return .failure(.accessDenied, detail: "Host mismatch for requested ID")
                 }
@@ -206,7 +236,7 @@ public struct CredentialResolver {
                 return fetchPassword(found)
             }
 
-            if let found = accounts.first(where: { $0.id == targetId }) {
+            if kind != .password, let found = accounts.first(where: { $0.id == targetId }) {
                 let matchedPasswords = passwords.filter {
                     Self.passwordMatchesHost($0, host: sanitizedHost, currentURL: currentURL)
                 }
@@ -226,6 +256,9 @@ public struct CredentialResolver {
 
             return .failure(.noMatch)
         } else {
+            guard kind != .otp else {
+                return .failure(.noMatch)
+            }
             // Case 2: Auto-selection (legacy single-match behavior)
             var candidates: [HostMatchCandidate] = []
             var byId: [UUID: CLIListPassword] = [:]

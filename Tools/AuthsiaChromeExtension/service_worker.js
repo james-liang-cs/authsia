@@ -1,7 +1,7 @@
 const NATIVE_HOST_NAME = 'com.authsia.nativehost';
 const MESSAGE_TYPE_GET_CREDENTIALS = 'AUTHsia_GET_CREDENTIALS';
 const MESSAGE_TYPE_LIST_CREDENTIALS = 'AUTHsia_LIST_CREDENTIALS';
-const NATIVE_MESSAGE_TIMEOUT_MS = 8000;
+const NATIVE_MESSAGE_TIMEOUT_MS = 45000;
 
 function sanitizeHost(host) {
   if (typeof host !== 'string') {
@@ -44,27 +44,47 @@ function comparableURL(currentURL) {
   return url.href;
 }
 
+function isLoopbackHostname(hostname) {
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+}
+
 function attestPageRequest(message, sender) {
   const host = sanitizeHost(message.host);
   const senderURL = comparableURL(sender && sender.url);
-  if (!host || !senderURL) {
-    return null;
+  if (!host) {
+    return { error: 'invalidHost' };
+  }
+  if (!senderURL) {
+    return { error: 'senderMismatch' };
   }
 
   const parsedSenderURL = new URL(senderURL);
   if (parsedSenderURL.hostname.toLowerCase() !== host) {
-    return null;
+    return { error: 'senderMismatch' };
+  }
+  if (parsedSenderURL.protocol === 'http:' && !isLoopbackHostname(parsedSenderURL.hostname)) {
+    return { error: 'insecureContext' };
   }
 
   let currentURL = null;
   if (message.currentURL !== undefined) {
     currentURL = comparableURL(message.currentURL);
     if (!currentURL || currentURL !== senderURL) {
-      return null;
+      return { error: 'senderMismatch' };
     }
   }
 
   return { host, currentURL };
+}
+
+function credentialKind(message) {
+  if (message.kind === undefined) {
+    return { kind: null };
+  }
+  if (message.kind === 'password' || message.kind === 'otp') {
+    return { kind: message.kind };
+  }
+  return { error: 'invalidCredentialKind' };
 }
 
 function sendNativeMessage(message) {
@@ -99,9 +119,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Handle LIST_CREDENTIALS - returns metadata only (no passwords)
   if (message.type === MESSAGE_TYPE_LIST_CREDENTIALS) {
+    const kindResult = credentialKind(message);
+    if (kindResult.error) {
+      sendResponse({ ok: false, error: kindResult.error });
+      return false;
+    }
     const requestContext = attestPageRequest(message, sender);
-    if (!requestContext) {
-      sendResponse({ ok: false, error: sanitizeHost(message.host) ? 'senderMismatch' : 'invalidHost' });
+    if (requestContext.error) {
+      sendResponse({ ok: false, error: requestContext.error });
       return false;
     }
 
@@ -110,6 +135,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const requestPayload = { type: 'listCredentials', host: requestContext.host };
         if (requestContext.currentURL) {
           requestPayload.currentURL = requestContext.currentURL;
+        }
+        if (kindResult.kind) {
+          requestPayload.kind = kindResult.kind;
         }
 
         const response = await sendNativeMessage(requestPayload);
@@ -134,9 +162,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Handle GET_CREDENTIALS - returns full credential with password
   if (message.type === MESSAGE_TYPE_GET_CREDENTIALS) {
+    const kindResult = credentialKind(message);
+    if (kindResult.error) {
+      sendResponse({ ok: false, error: kindResult.error });
+      return false;
+    }
     const requestContext = attestPageRequest(message, sender);
-    if (!requestContext) {
-      sendResponse({ ok: false, error: sanitizeHost(message.host) ? 'senderMismatch' : 'invalidHost' });
+    if (requestContext.error) {
+      sendResponse({ ok: false, error: requestContext.error });
       return false;
     }
 
@@ -149,6 +182,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // If a specific credential ID is provided, include it
         if (message.credentialId) {
           requestPayload.credentialId = message.credentialId;
+        }
+        if (kindResult.kind) {
+          requestPayload.kind = kindResult.kind;
         }
 
         const response = await sendNativeMessage(requestPayload);

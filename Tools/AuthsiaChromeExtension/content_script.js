@@ -197,6 +197,7 @@
           type: MESSAGE_TYPE_LIST,
           host: host,
           currentURL: currentURL,
+          kind: expectedKindForFieldType(fieldType),
         });
       } catch (error) {
         handleContextInvalidated(error);
@@ -267,7 +268,7 @@
       if (currentMenuFrame) {
         removeMenu();
       } else {
-        injectMenu(iconInput);
+        injectMenu(iconInput, 'manual');
       }
     });
 
@@ -354,7 +355,7 @@
   // Menu Injection
   // ============================================================================
 
-  function injectMenu(input) {
+  function injectMenu(input, trigger) {
     if (!isExtensionContextValid) {
       return;
     }
@@ -394,6 +395,7 @@
       currentURL: getCurrentURL(),
       fieldType: fieldType,
       frameId: FRAME_ID,
+      trigger: trigger === 'manual' ? 'manual' : 'auto',
     });
     iframe.src = `${menuUrl}?${params.toString()}`;
 
@@ -649,7 +651,7 @@
           isExtensionContextValid &&
           !loginFormAlreadyFilled(target)
         ) {
-          injectMenu(target);
+          injectMenu(target, 'auto');
         }
       });
     }, DEBOUNCE_MS);
@@ -753,6 +755,9 @@
         if (requestedMessage.type === 'AUTHsia_GET_CREDENTIALS' &&
             typeof requestedMessage.credentialId === 'string') {
           runtimeMessage.credentialId = requestedMessage.credentialId;
+        }
+        if (requestedMessage.kind === 'password' || requestedMessage.kind === 'otp') {
+          runtimeMessage.kind = requestedMessage.kind;
         }
 
         Promise.resolve(root.chrome.runtime.sendMessage(runtimeMessage))

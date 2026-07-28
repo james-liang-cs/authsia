@@ -24,7 +24,11 @@ public struct NativeHostHandler {
                     response = .failure(.invalidHost)
                     break
                 }
-                response = try resolver.listCredentials(forHost: host, currentURL: request.currentURL)
+                response = try resolver.listCredentials(
+                    forHost: host,
+                    currentURL: request.currentURL,
+                    kind: request.kind
+                )
             case "getCredentials":
                 guard let host = request.host else {
                     response = .failure(.invalidHost)
@@ -33,7 +37,8 @@ public struct NativeHostHandler {
                 response = try resolver.getCredential(
                     forHost: host,
                     currentURL: request.currentURL,
-                    credentialId: request.credentialId
+                    credentialId: request.credentialId,
+                    kind: request.kind
                 )
             case "openApp":
                 Self.openAuthsiaApp()

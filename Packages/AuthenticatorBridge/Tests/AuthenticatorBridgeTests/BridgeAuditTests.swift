@@ -47,6 +47,42 @@ final class BridgeAuditTests: XCTestCase {
         XCTAssertEqual(decoded.caller?.processName, "authsia")
     }
 
+    func testParentProcessExecutablePathRoundTripsAndLegacyRecordDecodesNil() throws {
+        let caller = CallerIdentity(
+            pid: 5678,
+            processName: "authsia",
+            bundleIdentifier: nil,
+            signingTeamId: nil,
+            signingIdentity: nil,
+            parentProcess: ParentProcessInfo(
+                pid: 1234,
+                processName: "AuthsiaNativeHost",
+                bundleIdentifier: nil,
+                executablePath: "/Applications/Authsia.app/Contents/Helpers/AuthsiaNativeHost"
+            )
+        )
+
+        let data = try BridgeCoder.encode(caller)
+        let decoded = try BridgeCoder.decode(CallerIdentity.self, from: data)
+        XCTAssertEqual(
+            decoded.parentProcess?.executablePath,
+            "/Applications/Authsia.app/Contents/Helpers/AuthsiaNativeHost"
+        )
+
+        let legacyJSON = """
+        {
+          "pid": 5678,
+          "processName": "authsia",
+          "parentProcess": {
+            "pid": 1234,
+            "processName": "AuthsiaNativeHost"
+          }
+        }
+        """
+        let legacyCaller = try BridgeCoder.decode(CallerIdentity.self, from: Data(legacyJSON.utf8))
+        XCTAssertNil(legacyCaller.parentProcess?.executablePath)
+    }
+
     func testAuditRecordWithoutCallerBackwardCompat() throws {
         let record = BridgeAuditRecord(
             command: .getOTP,
