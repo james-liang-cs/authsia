@@ -1202,6 +1202,46 @@ async function testBlurInvalidatesPendingMatchLookup() {
     assert.strictEqual(findFieldIcon(appendedChildren), null);
 }
 
+async function testPendingMatchLookupIsSharedAcrossRefocus() {
+    const passwordInput = createMockInput({ type: 'password', name: 'password' });
+    const listMessages = [];
+    let releasePending = null;
+    const { context, timers, docEventListeners } = createMockContext({
+        inputs: [passwordInput],
+        sendMessage(message) {
+            listMessages.push(message);
+            // A cold native host blocks here until the user answers the approval
+            // prompt, and showing that prompt pulls focus away from the page.
+            return new Promise((resolve) => {
+                releasePending = () => resolve({
+                    ok: true,
+                    credentials: [{ kind: 'password', id: 'p1' }],
+                });
+            });
+        },
+    });
+
+    loadScripts(context, timers);
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+
+    assert.strictEqual(listMessages.length, 1);
+
+    // Approval prompt takes focus, then the field gets it back.
+    (docEventListeners.focusout || []).forEach((handler) => handler({ target: passwordInput }));
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+
+    assert.strictEqual(
+        listMessages.length,
+        1,
+        'refocus while a lookup is pending must reuse the in-flight request, not queue another approval'
+    );
+
+    releasePending();
+    await flushAsync(timers);
+}
+
 async function testMenuRequestsAreBridgedWithDocumentContext() {
     const passwordInput = createMockInput({ type: 'password', name: 'password' });
     const runtimeMessages = [];
@@ -1282,6 +1322,7 @@ async function run() {
     await testResizeMessageClampsMenuHeight();
     await testMatchCacheIsScopedToCurrentURL();
     await testBlurInvalidatesPendingMatchLookup();
+    await testPendingMatchLookupIsSharedAcrossRefocus();
     await testMenuRequestsAreBridgedWithDocumentContext();
     console.log('autofill tests passed');
 }

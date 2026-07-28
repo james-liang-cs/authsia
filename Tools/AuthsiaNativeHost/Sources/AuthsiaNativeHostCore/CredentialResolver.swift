@@ -310,7 +310,7 @@ public struct CredentialResolver {
         _ account: CLIListAccount,
         host: String,
         currentURL: String?,
-        relatedTokens: Set<String> = []
+        relatedTokens: RelatedTokens = RelatedTokens()
     ) -> Bool {
         accountMatchScore(account, host: host, currentURL: currentURL, relatedTokens: relatedTokens) != nil
     }
@@ -319,7 +319,7 @@ public struct CredentialResolver {
         _ account: CLIListAccount,
         host: String,
         currentURL: String?,
-        relatedTokens: Set<String> = []
+        relatedTokens: RelatedTokens = RelatedTokens()
     ) -> Int? {
         var score: Int?
 
@@ -332,9 +332,11 @@ public struct CredentialResolver {
         let issuer = normalizeForHostMatch(account.issuer)
         let label = normalizeForHostMatch(account.label)
 
-        if relatedTokens.contains(where: { token in
-            label.contains(token) || issuer.contains(token)
-        }) {
+        // Issuer names the service, so a matched password's item name may identify it.
+        // Labels name the *person* (usually an email reused across services), so only
+        // account-scoping aliases may match there — never the password's username.
+        if relatedTokens.service.contains(where: { issuer.contains($0) })
+            || relatedTokens.alias.contains(where: { label.contains($0) }) {
             score = max(score ?? 0, 0) + 50
         }
 
@@ -371,17 +373,25 @@ public struct CredentialResolver {
         return 30 + min(storedHost.count, 40)
     }
 
-    private static func relatedTokens(from passwords: [CLIListPassword]) -> Set<String> {
-        var tokens = Set<String>()
+    /// Tokens derived from host-matched passwords, split by what they may identify.
+    /// `service` may match an OTP issuer; `alias` may additionally match an OTP label.
+    struct RelatedTokens {
+        var service = Set<String>()
+        var alias = Set<String>()
+    }
+
+    private static func relatedTokens(from passwords: [CLIListPassword]) -> RelatedTokens {
+        var tokens = RelatedTokens()
 
         for password in passwords {
-            addToken(password.name, to: &tokens)
-            addToken(password.username, to: &tokens)
+            addToken(password.name, to: &tokens.service)
 
             if let host = parseStoredHost(from: password.website) {
                 let awsSuffix = ".signin.aws.amazon.com"
                 if host.hasSuffix(awsSuffix) {
-                    addToken(String(host.dropLast(awsSuffix.count)), to: &tokens)
+                    let alias = String(host.dropLast(awsSuffix.count))
+                    addToken(alias, to: &tokens.service)
+                    addToken(alias, to: &tokens.alias)
                 }
             }
         }

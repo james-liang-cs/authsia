@@ -844,4 +844,128 @@ final class NativeHostCoreTests: XCTestCase {
         XCTAssertEqual(response.credential?.password, "pass")
         XCTAssertEqual(response.match?.name, "Match")
     }
+
+    // A shared login email is an identity, not a service. An OTP labelled with the
+    // same address must not ride along on every site whose password uses it.
+    private func sharedEmailFixtures() -> (password: CLIListPassword, account: CLIListAccount, otpId: UUID) {
+        let passwordId = UUID(uuidString: "67676767-6767-6767-6767-676767676767")!
+        let otpId = UUID(uuidString: "78787878-7878-7878-7878-787878787878")!
+        let password = CLIListPassword(
+            id: passwordId,
+            name: "Jira",
+            username: "liang.chen@gt.tech.gov.sg",
+            website: "https://atlassian.net",
+            isFavorite: false,
+            isCliEnabled: true
+        )
+        let account = CLIListAccount(
+            id: otpId,
+            issuer: "Google Workspace",
+            label: "liang.chen@gt.tech.gov.sg",
+            hosts: ["google.com"],
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        return (password, account, otpId)
+    }
+
+    private func sharedEmailClient(
+        password: CLIListPassword,
+        account: CLIListAccount
+    ) -> CLIClient {
+        CLIClient { command in
+            switch command {
+            case .listPasswordsJSON:
+                return try JSONEncoder().encode([password])
+            case .listOTPJSON:
+                return try self.encodeFixture([account])
+            case .getPasswordJSON, .getChromePasswordJSON, .getOTPJSON:
+                XCTFail("Did not expect password lookup")
+                return Data()
+            case .getChromeOTPJSON:
+                XCTFail("Did not expect OTP lookup for an unrelated host")
+                return Data()
+            }
+        }
+    }
+
+    func testCredentialResolverDoesNotListOTPMatchedOnlyByPasswordUsername() throws {
+        let fixtures = sharedEmailFixtures()
+        let resolver = CredentialResolver(
+            cliClient: sharedEmailClient(password: fixtures.password, account: fixtures.account)
+        )
+
+        let response = try resolver.listCredentials(
+            forHost: "atlassian.net",
+            currentURL: "https://atlassian.net/login"
+        )
+
+        let otpMatches = response.credentials?.filter { $0.kind == "otp" } ?? []
+        XCTAssertEqual(otpMatches, [])
+        XCTAssertEqual(response.credentials?.filter { $0.kind == "password" }.count, 1)
+    }
+
+    func testCredentialResolverDeniesOTPMatchedOnlyByPasswordUsername() throws {
+        let fixtures = sharedEmailFixtures()
+        let resolver = CredentialResolver(
+            cliClient: sharedEmailClient(password: fixtures.password, account: fixtures.account)
+        )
+
+        let response = try resolver.getCredential(
+            forHost: "atlassian.net",
+            currentURL: "https://atlassian.net/login",
+            credentialId: fixtures.otpId
+        )
+
+        XCTAssertEqual(response.ok, false)
+        XCTAssertEqual(response.error, .accessDenied)
+        XCTAssertNil(response.credential?.otpCode)
+    }
+
+    func testCredentialResolverStillListsOTPMatchedByPasswordName() throws {
+        let passwordId = UUID(uuidString: "89898989-8989-8989-8989-898989898989")!
+        let otpId = UUID(uuidString: "90909090-9090-9090-9090-909090909090")!
+        let password = CLIListPassword(
+            id: passwordId,
+            name: "GitHub",
+            username: "tianlang8158",
+            website: "https://github.com",
+            isFavorite: false,
+            isCliEnabled: true
+        )
+        let account = CLIListAccount(
+            id: otpId,
+            issuer: "GitHub",
+            label: "tianlang8158",
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        let client = CLIClient { command in
+            switch command {
+            case .listPasswordsJSON:
+                return try JSONEncoder().encode([password])
+            case .listOTPJSON:
+                return try self.encodeFixture([account])
+            default:
+                XCTFail("Did not expect secret lookup")
+                return Data()
+            }
+        }
+
+        let resolver = CredentialResolver(cliClient: client)
+        let response = try resolver.listCredentials(
+            forHost: "github.com",
+            currentURL: "https://github.com/login"
+        )
+
+        let otpMatches = response.credentials?.filter { $0.kind == "otp" } ?? []
+        XCTAssertEqual(otpMatches.map(\.id), [otpId])
+    }
 }
