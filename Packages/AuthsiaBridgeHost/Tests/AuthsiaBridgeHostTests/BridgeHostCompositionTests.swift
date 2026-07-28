@@ -27,4 +27,18 @@ final class BridgeHostCompositionTests: XCTestCase {
         let export = try XCTUnwrap(source.range(of: "newConnection.exportedObject = handler"))
         XCTAssertLessThan(validation.lowerBound, export.lowerBound)
     }
+
+    func testListenerRequestsSigningMetadataForItsTeamIdentifier() throws {
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let sourceURL = testFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/AuthsiaBridgeHost/XPCListenerManager.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains(
+            "SecCSFlags(rawValue: kSecCSSigningInformation)"
+        ))
+    }
 }

@@ -143,7 +143,7 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
         let teamIdentifier = signingInfo[kSecCodeInfoTeamIdentifier as String] as? String
         
         // Get our own team identifier for comparison
-        let ourTeamID = getOurTeamIdentifier()
+        let ourTeamID = Self.getOurTeamIdentifier()
         
         // Debug logging
         #if DEBUG
@@ -253,7 +253,7 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
     }
     
     /// Retrieves the team identifier of the current process
-    private func getOurTeamIdentifier() -> String? {
+    static func getOurTeamIdentifier() -> String? {
         var selfCode: SecCode?
         let status = SecCodeCopySelf(SecCSFlags(), &selfCode)
         
@@ -270,7 +270,11 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
         }
         
         var info: CFDictionary?
-        let infoStatus = SecCodeCopySigningInformation(staticSelfCode, SecCSFlags(), &info)
+        let infoStatus = SecCodeCopySigningInformation(
+            staticSelfCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &info
+        )
         
         guard infoStatus == errSecSuccess, let signingInfo = info as? [String: Any] else {
             return nil

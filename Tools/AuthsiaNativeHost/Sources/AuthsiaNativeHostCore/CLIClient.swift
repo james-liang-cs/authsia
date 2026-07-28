@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public enum CLIClientError: Error, Equatable {
     case emptyOutput
@@ -129,6 +130,8 @@ public struct CLIGetOTPResult: Codable, Equatable {
 public struct CLIClient {
     public typealias Runner = (CLICommand) throws -> Data
 
+    static let signingInformationFlags = SecCSFlags(rawValue: kSecCSSigningInformation)
+
     private let runner: Runner
     private let decoder: JSONDecoder
 
@@ -183,19 +186,25 @@ public struct CLIClient {
         return try decoder.decode(CLIGetOTPResult.self, from: data)
     }
 
-    private static let candidatePaths: [String] = {
-        var paths = [
-            "/usr/local/bin/authsia",
-            "/opt/homebrew/bin/authsia",
-        ]
-        // Also check ~/.local/bin (common user-local install path)
-        if let home = ProcessInfo.processInfo.environment["HOME"] ?? homeDirectoryFallback() {
-            paths.append(home + "/.local/bin/authsia")
+    static func candidatePaths(executableURL: URL?, homeDirectory: String?) -> [URL] {
+        var paths: [URL] = []
+        if let executableURL {
+            paths.append(
+                executableURL
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("authsia", isDirectory: false)
+            )
         }
-        // Check inside the app bundle (symlink target)
-        paths.append("/Applications/Authsia.app/Contents/Helpers/authsia")
+        paths.append(URL(fileURLWithPath: "/usr/local/bin/authsia"))
+        paths.append(URL(fileURLWithPath: "/opt/homebrew/bin/authsia"))
+        if let homeDirectory {
+            paths.append(
+                URL(fileURLWithPath: homeDirectory, isDirectory: true)
+                    .appendingPathComponent(".local/bin/authsia", isDirectory: false)
+            )
+        }
         return paths
-    }()
+    }
 
     private static func homeDirectoryFallback() -> String? {
         let pw = getpwuid(getuid())
@@ -203,30 +212,69 @@ public struct CLIClient {
         return String(cString: dir)
     }
 
-    private static func resolveExecutablePath() -> URL? {
-        for path in candidatePaths {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return URL(fileURLWithPath: path)
-            }
+    static func resolveExecutablePath(
+        candidatePaths: [URL],
+        expectedTeamIdentifier: String?,
+        isExecutable: (String) -> Bool,
+        teamIdentifierForExecutable: (URL) -> String?
+    ) -> URL? {
+        guard let expectedTeamIdentifier else {
+            return nil
         }
-        // Fallback: check PATH via /usr/bin/which
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["authsia"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let path = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) {
-                return URL(fileURLWithPath: path)
-            }
-        } catch {}
-        return nil
+        return candidatePaths.first { candidate in
+            isExecutable(candidate.path)
+                && teamIdentifierForExecutable(candidate) == expectedTeamIdentifier
+        }
+    }
+
+    private static func resolveExecutablePath() -> URL? {
+        let homeDirectory = ProcessInfo.processInfo.environment["HOME"] ?? homeDirectoryFallback()
+        return resolveExecutablePath(
+            candidatePaths: candidatePaths(
+                executableURL: Bundle.main.executableURL,
+                homeDirectory: homeDirectory
+            ),
+            expectedTeamIdentifier: currentTeamIdentifier(),
+            isExecutable: FileManager.default.isExecutableFile(atPath:),
+            teamIdentifierForExecutable: teamIdentifier(forExecutable:)
+        )
+    }
+
+    private static func currentTeamIdentifier() -> String? {
+        var code: SecCode?
+        guard SecCodeCopySelf(SecCSFlags(), &code) == errSecSuccess,
+              let code else {
+            return nil
+        }
+        return signingTeamIdentifier(for: code)
+    }
+
+    private static func teamIdentifier(forExecutable url: URL) -> String? {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, SecCSFlags(), &code) == errSecSuccess,
+              let code,
+              SecStaticCodeCheckValidity(code, SecCSFlags(), nil) == errSecSuccess else {
+            return nil
+        }
+        return signingTeamIdentifier(for: code)
+    }
+
+    private static func signingTeamIdentifier(for code: SecStaticCode) -> String? {
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, signingInformationFlags, &information) == errSecSuccess,
+              let signingInformation = information as? [String: Any] else {
+            return nil
+        }
+        return signingInformation[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+
+    private static func signingTeamIdentifier(for code: SecCode) -> String? {
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, SecCSFlags(), &staticCode) == errSecSuccess,
+              let staticCode else {
+            return nil
+        }
+        return signingTeamIdentifier(for: staticCode)
     }
 
     public static func processRunner(command: CLICommand) throws -> Data {
@@ -234,7 +282,7 @@ public struct CLIClient {
         guard let execURL = resolveExecutablePath() else {
             throw CLIClientError.nonZeroExit(
                 status: -1,
-                stderr: "authsia CLI not found. Install it or ensure it is on your PATH."
+                stderr: "A signed Authsia CLI could not be found."
             )
         }
         process.executableURL = execURL

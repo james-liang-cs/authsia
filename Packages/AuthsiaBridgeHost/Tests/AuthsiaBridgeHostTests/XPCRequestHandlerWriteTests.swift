@@ -927,13 +927,63 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
             )
         )
 
+        let expectedTeamIdentifier = "TESTTEAM123"
+        let expectedExecutableURL = URL(
+            fileURLWithPath: "/Applications/Authsia.app/Contents/Helpers/AuthsiaNativeHost"
+        )
+        #if DEBUG
+        let devBypassKey = "AUTHSIA_DEV_ALLOW_UNSIGNED_NATIVE_HOST"
+        let previousDevBypass = ProcessInfo.processInfo.environment[devBypassKey]
+        unsetenv(devBypassKey)
+        defer {
+            if let previousDevBypass {
+                setenv(devBypassKey, previousDevBypass, 1)
+            } else {
+                unsetenv(devBypassKey)
+            }
+        }
+        #endif
         let nativeHostCaller = CallerIdentity(
             pid: 100,
             processName: "authsia",
             bundleIdentifier: nil,
             signingTeamId: nil,
             signingIdentity: nil,
-            parentProcess: ParentProcessInfo(pid: 99, processName: "AuthsiaNativeHost", bundleIdentifier: nil)
+            parentProcess: ParentProcessInfo(
+                pid: 99,
+                processName: "AuthsiaNativeHost",
+                bundleIdentifier: nil,
+                signingTeamId: expectedTeamIdentifier,
+                executablePath: expectedExecutableURL.path
+            )
+        )
+        let wrongTeamCaller = CallerIdentity(
+            pid: 100,
+            processName: "authsia",
+            bundleIdentifier: nil,
+            signingTeamId: nil,
+            signingIdentity: nil,
+            parentProcess: ParentProcessInfo(
+                pid: 99,
+                processName: "AuthsiaNativeHost",
+                bundleIdentifier: nil,
+                signingTeamId: "OTHERTEAM",
+                executablePath: expectedExecutableURL.path
+            )
+        )
+        let wrongPathCaller = CallerIdentity(
+            pid: 100,
+            processName: "authsia",
+            bundleIdentifier: nil,
+            signingTeamId: nil,
+            signingIdentity: nil,
+            parentProcess: ParentProcessInfo(
+                pid: 99,
+                processName: "AuthsiaNativeHost",
+                bundleIdentifier: nil,
+                signingTeamId: expectedTeamIdentifier,
+                executablePath: "/tmp/AuthsiaNativeHost"
+            )
         )
         let shellCaller = CallerIdentity(
             pid: 100,
@@ -941,13 +991,21 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
             bundleIdentifier: nil,
             signingTeamId: nil,
             signingIdentity: nil,
-            parentProcess: ParentProcessInfo(pid: 99, processName: "zsh", bundleIdentifier: nil)
+            parentProcess: ParentProcessInfo(
+                pid: 99,
+                processName: "zsh",
+                bundleIdentifier: nil,
+                signingTeamId: expectedTeamIdentifier,
+                executablePath: expectedExecutableURL.path
+            )
         )
 
         XCTAssertFalse(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
             isCliEnabled: false,
             request: normalRequest,
-            callerIdentity: nativeHostCaller
+            callerIdentity: nativeHostCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
         ))
         XCTAssertTrue(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
             isCliEnabled: true,
@@ -957,25 +1015,65 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         XCTAssertFalse(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
             isCliEnabled: false,
             request: chromeRequest,
-            callerIdentity: shellCaller
+            callerIdentity: shellCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
         ))
         XCTAssertFalse(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
             isCliEnabled: false,
             request: chromeRequest,
-            callerIdentity: nil
+            callerIdentity: nil,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
+        ))
+        XCTAssertFalse(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: false,
+            request: chromeRequest,
+            callerIdentity: wrongTeamCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
+        ))
+        XCTAssertFalse(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: false,
+            request: chromeRequest,
+            callerIdentity: wrongPathCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
         ))
         XCTAssertTrue(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
             isCliEnabled: false,
             request: chromeRequest,
-            callerIdentity: nativeHostCaller
+            callerIdentity: nativeHostCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
         ))
         // API keys intentionally mirror password CLI-toggle bypass behavior for
         // the authenticated Chrome native-host context.
         XCTAssertTrue(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
             isCliEnabled: false,
             request: chromeAPIKeyRequest,
-            callerIdentity: nativeHostCaller
+            callerIdentity: nativeHostCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
         ))
+
+        #if DEBUG
+        setenv(devBypassKey, "1", 1)
+        XCTAssertTrue(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: false,
+            request: chromeRequest,
+            callerIdentity: wrongTeamCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
+        ))
+        XCTAssertFalse(XPCRequestHandler.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: false,
+            request: chromeRequest,
+            callerIdentity: wrongPathCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: expectedExecutableURL
+        ))
+        #endif
     }
 
     func testUpdatePasswordRejectsAmbiguousExactNameWithoutMutation() async throws {

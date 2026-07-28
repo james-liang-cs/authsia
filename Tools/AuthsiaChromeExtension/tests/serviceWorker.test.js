@@ -87,13 +87,32 @@ async function testCurrentUrlIsForwardedToNativeHost() {
     type: 'AUTHsia_LIST_CREDENTIALS',
     host: 'example.com',
     currentURL: 'https://example.com/app/login',
+    kind: 'otp',
   });
 
   assert.deepStrictEqual(calls[0].message, {
     type: 'listCredentials',
     host: 'example.com',
     currentURL: 'https://example.com/app/login',
+    kind: 'otp',
   });
+}
+
+async function testInvalidCredentialKindRejected() {
+  const { onMessageHandler, calls } = loadServiceWorker({
+    sendNativeMessageImpl(_host, _message, callback) {
+      callback({ ok: true });
+    },
+  });
+
+  const result = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_LIST_CREDENTIALS',
+    host: 'example.com',
+    kind: 'secret',
+  });
+
+  assert.strictEqual(calls.length, 0);
+  assert.deepStrictEqual(result.response, { ok: false, error: 'invalidCredentialKind' });
 }
 
 async function testInvalidHostRejected() {
@@ -147,6 +166,67 @@ async function testSenderPathMismatchRejected() {
   assert.deepStrictEqual(result.response, { ok: false, error: 'senderMismatch' });
 }
 
+async function testSubframeIsAttestedAgainstItsOwnURL() {
+  const { onMessageHandler, calls } = loadServiceWorker({
+    sendNativeMessageImpl(_host, _message, callback) {
+      callback({ ok: true, credentials: [] });
+    },
+  });
+  const sender = { url: 'https://login.identity.example/embedded' };
+
+  const allowed = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_LIST_CREDENTIALS',
+    host: 'login.identity.example',
+    currentURL: sender.url,
+  }, sender);
+  const rejected = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_LIST_CREDENTIALS',
+    host: 'shop.example',
+    currentURL: 'https://shop.example/checkout',
+  }, sender);
+
+  assert.strictEqual(allowed.response.ok, true);
+  assert.strictEqual(calls.length, 1, 'only the frame-scoped host should reach the native host');
+  assert.deepStrictEqual(rejected.response, { ok: false, error: 'senderMismatch' });
+}
+
+async function testPlainHttpSenderRejectedBeforeNativeMessage() {
+  const { onMessageHandler, calls } = loadServiceWorker({
+    sendNativeMessageImpl(_host, _message, callback) {
+      callback({ ok: true });
+    },
+  });
+
+  const result = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_LIST_CREDENTIALS',
+    host: 'example.com',
+    currentURL: 'http://example.com/login',
+  });
+
+  assert.strictEqual(calls.length, 0, 'plain HTTP pages must not reach the native host');
+  assert.deepStrictEqual(result.response, { ok: false, error: 'insecureContext' });
+}
+
+async function testLoopbackHttpSendersAllowed() {
+  for (const currentURL of ['http://localhost:3000/login', 'http://127.0.0.1/login']) {
+    const { onMessageHandler, calls } = loadServiceWorker({
+      sendNativeMessageImpl(_host, _message, callback) {
+        callback({ ok: true, credentials: [] });
+      },
+    });
+    const host = new URL(currentURL).hostname;
+
+    const result = await invokeHandler(onMessageHandler, {
+      type: 'AUTHsia_LIST_CREDENTIALS',
+      host,
+      currentURL,
+    });
+
+    assert.strictEqual(calls.length, 1, `${host} should reach the native host`);
+    assert.strictEqual(result.response.ok, true);
+  }
+}
+
 async function testWebAccessibleMenuCannotAssertPageOrigin() {
   const { onMessageHandler, calls } = loadServiceWorker({
     sendNativeMessageImpl(_host, _message, callback) {
@@ -187,7 +267,9 @@ async function testNativeMessagingFailureReported() {
 async function testNativeMessagingTimeoutReported() {
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
-  global.setTimeout = (fn) => {
+  let scheduledDelay = 0;
+  global.setTimeout = (fn, delay) => {
+    scheduledDelay = delay;
     fn();
     return 1;
   };
@@ -208,6 +290,7 @@ async function testNativeMessagingTimeoutReported() {
     assert.strictEqual(result.keepOpen, true);
     assert.strictEqual(result.response.ok, false);
     assert.strictEqual(result.response.error, 'nativeMessagingTimeout');
+    assert.ok(scheduledDelay >= 45000, 'native messaging must allow time for biometric approval');
   } finally {
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
@@ -217,9 +300,13 @@ async function testNativeMessagingTimeoutReported() {
 async function run() {
   await testValidHostForwardsNativeResponse();
   await testCurrentUrlIsForwardedToNativeHost();
+  await testInvalidCredentialKindRejected();
   await testInvalidHostRejected();
   await testSenderHostMismatchRejected();
   await testSenderPathMismatchRejected();
+  await testSubframeIsAttestedAgainstItsOwnURL();
+  await testPlainHttpSenderRejectedBeforeNativeMessage();
+  await testLoopbackHttpSendersAllowed();
   await testWebAccessibleMenuCannotAssertPageOrigin();
   await testNativeMessagingFailureReported();
   await testNativeMessagingTimeoutReported();

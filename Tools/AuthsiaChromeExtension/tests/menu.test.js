@@ -74,6 +74,8 @@ function attachDocument(element, document) {
 function createContext(sendMessage, search, documentHeight) {
     const elements = new Map();
     const documentListeners = {};
+    const timeoutCallbacks = new Map();
+    let nextTimeoutId = 1;
     const document = {
         activeElement: null,
         documentElement: { scrollHeight: 999 },
@@ -102,13 +104,31 @@ function createContext(sendMessage, search, documentHeight) {
     emptyText.className = 'authsia-empty-text';
     document.getElementById('authsia-empty').appendChild(emptyText);
 
+    const loadingHint = attachDocument(new Element('span'), document);
+    loadingHint.className = 'authsia-loading-hint';
+    document.getElementById('authsia-loading').appendChild(loadingHint);
+
     const postedMessages = [];
+    const postedTargets = [];
     const windowListeners = {};
     const context = {
         console,
+        chrome: {
+            runtime: {
+                sendMessage() {},
+            },
+        },
         document,
         URLSearchParams,
         URL,
+        setTimeout(callback) {
+            const id = nextTimeoutId++;
+            timeoutCallbacks.set(id, callback);
+            return id;
+        },
+        clearTimeout(id) {
+            timeoutCallbacks.delete(id);
+        },
         setInterval() { return 1; },
         clearInterval() {},
         window: {
@@ -116,8 +136,9 @@ function createContext(sendMessage, search, documentHeight) {
                 search: search || '?host=github.com&currentURL=https%3A%2F%2Fgithub.com%2Flogin&frameId=test-frame',
             },
             parent: {
-                postMessage(message) {
+                postMessage(message, targetOrigin) {
                     postedMessages.push(message);
+                    postedTargets.push(targetOrigin);
                     if (message.type === 'AUTHSIA_REQUEST') {
                         Promise.resolve(sendMessage(message.message)).then((response) => {
                             const handler = windowListeners.message;
@@ -144,7 +165,18 @@ function createContext(sendMessage, search, documentHeight) {
     };
 
     context.globalThis = context;
-    return { context, elements, postedMessages, documentListeners };
+    return {
+        context,
+        elements,
+        postedMessages,
+        postedTargets,
+        documentListeners,
+        runTimeouts() {
+            const callbacks = Array.from(timeoutCallbacks.values());
+            timeoutCallbacks.clear();
+            callbacks.forEach((callback) => callback());
+        },
+    };
 }
 
 async function flushPromises() {
@@ -195,6 +227,10 @@ async function testOTPClickPostsFillMessage() {
     const item = elements.get('authsia-list').querySelector('.authsia-item');
 
     assert.strictEqual(messages.length, 1, 'rendering must request metadata only');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(messages[0])), {
+        type: 'AUTHsia_LIST_CREDENTIALS',
+        kind: 'otp',
+    });
 
     item.listeners.click();
     await flushPromises();
@@ -203,6 +239,7 @@ async function testOTPClickPostsFillMessage() {
     assert.deepStrictEqual(JSON.parse(JSON.stringify(messages[1])), {
         type: 'AUTHsia_GET_CREDENTIALS',
         credentialId: 'o1',
+        kind: 'otp',
     });
     const fillMessage = postedMessages.find((message) => message.type === 'AUTHSIA_FILL');
     assert.deepStrictEqual(JSON.parse(JSON.stringify(fillMessage)), {
@@ -250,7 +287,10 @@ async function testOTPItemDoesNotDisplayOrFetchLiveCode() {
 
     const item = elements.get('authsia-list').querySelector('.authsia-item');
     assert.strictEqual(item.children.length, 2, 'OTP rows should remain metadata-only before selection');
-    assert.deepStrictEqual(JSON.parse(JSON.stringify(messages)), [{ type: 'AUTHsia_LIST_CREDENTIALS' }]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(messages)), [{
+        type: 'AUTHsia_LIST_CREDENTIALS',
+        kind: 'otp',
+    }]);
 }
 
 async function testMenuPostsResizeAfterRender() {
@@ -266,6 +306,94 @@ async function testMenuPostsResizeAfterRender() {
     const resizeMessages = postedMessages.filter((m) => m.type === 'AUTHSIA_RESIZE');
     assert.ok(resizeMessages.length > 0, 'menu should post a resize message after rendering');
     assert.strictEqual(resizeMessages[0].height, 240);
+}
+
+async function testMenuMessagesUseOnlyThePageOrigin() {
+    const { context, elements, postedTargets, documentListeners } = createContext(async (message) => {
+        if (message.type === 'AUTHsia_LIST_CREDENTIALS') {
+            return {
+                ok: true,
+                credentials: [{ kind: 'password', id: 'p1', name: 'GitHub', username: 'alice' }],
+            };
+        }
+        return {
+            ok: true,
+            credential: { username: 'alice', password: 'secret' },
+        };
+    });
+
+    vm.createContext(context);
+    vm.runInContext(menuCode, context, { filename: 'menu.js' });
+    await flushPromises();
+
+    elements.get('authsia-list').querySelector('.authsia-item').listeners.click();
+    await flushPromises();
+    documentListeners.keydown({ key: 'Escape' });
+    elements.get('authsia-footer-link').listeners.click();
+
+    assert.ok(postedTargets.length > 0, 'menu should communicate with its parent');
+    assert.ok(
+        postedTargets.every((target) => target === 'https://github.com'),
+        'every parent message must target the attested page origin'
+    );
+}
+
+async function testMalformedCurrentUrlSuppressesParentMessages() {
+    const { context, elements, postedMessages } = createContext(
+        async () => ({ ok: true, credentials: [] }),
+        '?host=github.com&currentURL=not-a-valid-url&trigger=manual'
+    );
+
+    vm.createContext(context);
+    vm.runInContext(menuCode, context, { filename: 'menu.js' });
+    await flushPromises();
+
+    assert.deepStrictEqual(postedMessages, [], 'an unknown page origin must never receive a broadcast');
+    assert.strictEqual(elements.get('authsia-error').style.display, 'flex');
+}
+
+async function testAutoTriggerDoesNotClaimFocus() {
+    const { context } = createContext(async () => ({
+        ok: true,
+        credentials: [{ kind: 'password', id: 'p1', name: 'GitHub', username: 'alice' }],
+    }), '?host=github.com&currentURL=https%3A%2F%2Fgithub.com%2Flogin&trigger=auto');
+
+    vm.createContext(context);
+    vm.runInContext(menuCode, context, { filename: 'menu.js' });
+    await flushPromises();
+
+    assert.strictEqual(context.document.activeElement, null);
+}
+
+async function testManualTriggerFocusesFirstItem() {
+    const { context, elements } = createContext(async () => ({
+        ok: true,
+        credentials: [{ kind: 'password', id: 'p1', name: 'GitHub', username: 'alice' }],
+    }), '?host=github.com&currentURL=https%3A%2F%2Fgithub.com%2Flogin&trigger=manual');
+
+    vm.createContext(context);
+    vm.runInContext(menuCode, context, { filename: 'menu.js' });
+    await flushPromises();
+
+    assert.strictEqual(
+        context.document.activeElement,
+        elements.get('authsia-list').querySelector('.authsia-item')
+    );
+}
+
+async function testLoadingStateEscalatesToApprovalHint() {
+    const { context, elements, runTimeouts } = createContext(
+        () => new Promise(() => {})
+    );
+
+    vm.createContext(context);
+    vm.runInContext(menuCode, context, { filename: 'menu.js' });
+    await flushPromises();
+
+    const hint = elements.get('authsia-loading').querySelector('.authsia-loading-hint');
+    runTimeouts();
+
+    assert.strictEqual(hint.textContent, 'Waiting for approval in Authsia…');
 }
 
 async function testEmptyStateNamesCurrentHost() {
@@ -286,6 +414,11 @@ async function run() {
     await testOTPFieldFiltersPasswordItems();
     await testOTPItemDoesNotDisplayOrFetchLiveCode();
     await testMenuPostsResizeAfterRender();
+    await testMenuMessagesUseOnlyThePageOrigin();
+    await testMalformedCurrentUrlSuppressesParentMessages();
+    await testAutoTriggerDoesNotClaimFocus();
+    await testManualTriggerFocusesFirstItem();
+    await testLoadingStateEscalatesToApprovalHint();
     await testEmptyStateNamesCurrentHost();
     console.log('menu tests passed');
 }

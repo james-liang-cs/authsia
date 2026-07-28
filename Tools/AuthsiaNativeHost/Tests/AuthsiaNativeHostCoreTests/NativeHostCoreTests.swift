@@ -1,5 +1,6 @@
 import XCTest
 @testable import AuthsiaNativeHostCore
+import Security
 
 final class NativeHostCoreTests: XCTestCase {
     private func encodeFixture<T: Encodable>(_ value: T) throws -> Data {
@@ -16,13 +17,6 @@ final class NativeHostCoreTests: XCTestCase {
 
         XCTAssertEqual(decoded.payload, payload)
         XCTAssertEqual(decoded.bytesConsumed, framed.count)
-    }
-
-    func testCLIListAccountsUsesCanonicalOTPScope() {
-        XCTAssertEqual(
-            CLICommand.listOTPJSON.arguments,
-            ["authsia", "list", "otp", "--format", "json"]
-        )
     }
 
     func testCLIGetCommandsUseChromeNativeHostMarker() {
@@ -47,6 +41,65 @@ final class NativeHostCoreTests: XCTestCase {
         XCTAssertEqual(
             CLICommand.listOTPJSON.arguments,
             ["authsia", "list", "otp", "--format", "json", "--chrome-native-host"]
+        )
+    }
+
+    func testCLIResolutionPrefersBundledSiblingHelper() {
+        let nativeHost = URL(fileURLWithPath: "/Applications/Authsia.app/Contents/Helpers/AuthsiaNativeHost")
+        let candidates = CLIClient.candidatePaths(
+            executableURL: nativeHost,
+            homeDirectory: "/Users/test"
+        )
+
+        XCTAssertEqual(candidates.map(\.path), [
+            "/Applications/Authsia.app/Contents/Helpers/authsia",
+            "/usr/local/bin/authsia",
+            "/opt/homebrew/bin/authsia",
+            "/Users/test/.local/bin/authsia",
+        ])
+
+        var inspected: [URL] = []
+        let result = CLIClient.resolveExecutablePath(
+            candidatePaths: candidates,
+            expectedTeamIdentifier: "TEAM123",
+            isExecutable: { _ in true },
+            teamIdentifierForExecutable: { url in
+                inspected.append(url)
+                return "TEAM123"
+            }
+        )
+
+        XCTAssertEqual(result, candidates[0])
+        XCTAssertEqual(inspected, [candidates[0]])
+    }
+
+    func testCLIResolutionRefusesCandidatesThatDoNotVerify() {
+        let candidates = [
+            URL(fileURLWithPath: "/app/authsia"),
+            URL(fileURLWithPath: "/usr/local/bin/authsia"),
+        ]
+
+        let mismatched = CLIClient.resolveExecutablePath(
+            candidatePaths: candidates,
+            expectedTeamIdentifier: "TEAM123",
+            isExecutable: { _ in true },
+            teamIdentifierForExecutable: { _ in "OTHERTEAM" }
+        )
+        let missingHostIdentity = CLIClient.resolveExecutablePath(
+            candidatePaths: candidates,
+            expectedTeamIdentifier: nil,
+            isExecutable: { _ in true },
+            teamIdentifierForExecutable: { _ in "TEAM123" }
+        )
+
+        XCTAssertNil(mismatched)
+        XCTAssertNil(missingHostIdentity)
+    }
+
+    func testCLITeamValidationRequestsSigningInformationMetadata() {
+        XCTAssertEqual(
+            CLIClient.signingInformationFlags,
+            SecCSFlags(rawValue: kSecCSSigningInformation)
         )
     }
 
@@ -95,6 +148,105 @@ final class NativeHostCoreTests: XCTestCase {
 
         XCTAssertEqual(response.credentials?.map(\.id), [passwordId, otpId])
         XCTAssertEqual(response.credentials?.map(\.kind), ["password", "otp"])
+    }
+
+    func testPasswordKindListsOnlyPasswords() throws {
+        let passwordId = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let passwords = [
+            CLIListPassword(
+                id: passwordId,
+                name: "Password",
+                username: "user",
+                website: "https://example.com/login",
+                isFavorite: false,
+                isCliEnabled: true
+            ),
+        ]
+        var commands: [CLICommand] = []
+        let client = CLIClient { command in
+            commands.append(command)
+            switch command {
+            case .listPasswordsJSON:
+                return try JSONEncoder().encode(passwords)
+            case .listOTPJSON:
+                XCTFail("Password-only requests must not list OTP accounts")
+                return Data("[]".utf8)
+            default:
+                XCTFail("Did not expect a secret lookup")
+                return Data()
+            }
+        }
+
+        let resolver = CredentialResolver(cliClient: client)
+        let filtered = try resolver.listCredentials(
+            forHost: "example.com",
+            currentURL: "https://example.com/login",
+            kind: .password
+        )
+
+        XCTAssertEqual(commands, [.listPasswordsJSON])
+        XCTAssertEqual(filtered.credentials?.map(\.id), [passwordId])
+        XCTAssertEqual(filtered.credentials?.map(\.kind), ["password"])
+    }
+
+    func testOTPKindStillListsPasswordsAndAccounts() throws {
+        let passwordId = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let otpId = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let passwords = [
+            CLIListPassword(
+                id: passwordId,
+                name: "GitHub",
+                username: "user",
+                website: "https://github.com/login",
+                isFavorite: false,
+                isCliEnabled: true
+            ),
+        ]
+        let accounts = [
+            CLIListAccount(
+                id: otpId,
+                issuer: "GitHub",
+                label: "user",
+                isFavorite: false,
+                isCliEnabled: true,
+                isScraped: false,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)
+            ),
+        ]
+        var commands: [CLICommand] = []
+        let client = CLIClient { command in
+            commands.append(command)
+            switch command {
+            case .listPasswordsJSON:
+                return try JSONEncoder().encode(passwords)
+            case .listOTPJSON:
+                return try self.encodeFixture(accounts)
+            default:
+                XCTFail("Did not expect a secret lookup")
+                return Data()
+            }
+        }
+
+        let resolver = CredentialResolver(cliClient: client)
+        let filtered = try resolver.listCredentials(
+            forHost: "github.com",
+            currentURL: "https://github.com/login",
+            kind: .otp
+        )
+
+        XCTAssertEqual(commands, [.listPasswordsJSON, .listOTPJSON])
+        XCTAssertEqual(filtered.credentials?.map(\.id), [otpId])
+        XCTAssertEqual(filtered.credentials?.map(\.kind), ["otp"])
+    }
+
+    func testMissingKindPreservesMixedCredentialListing() throws {
+        let requestData = Data(
+            "{\"type\":\"listCredentials\",\"host\":\"example.com\"}".utf8
+        )
+        let request = try JSONDecoder().decode(NativeHostRequest.self, from: requestData)
+
+        XCTAssertNil(request.kind)
     }
 
     func testCredentialResolverFetchesCliDisabledPasswordForChromeAutofill() throws {

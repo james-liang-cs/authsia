@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import OSLog
 import Security
 @preconcurrency import AuthenticatorBridge
 import AuthenticatorData
@@ -7,6 +8,11 @@ import AuthenticatorCore
 
 public typealias CallerIdentityRevalidationProvider = (CallerIdentity) -> CallerIdentity?
 public typealias AgentJITApprovalClock = () -> Date
+
+private let chromeNativeHostAuthorizationLogger = Logger(
+    subsystem: "app.authsia",
+    category: "ChromeNativeHostAuthorization"
+)
 
 final class XPCReply: @unchecked Sendable {
     private let callback: (Data?, NSError?) -> Void
@@ -77,7 +83,9 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     static func itemCLIRestrictionAllowsAccess(
         isCliEnabled: Bool,
         request: BridgeRequest,
-        callerIdentity: CallerIdentity?
+        callerIdentity: CallerIdentity?,
+        expectedTeamIdentifier: String? = XPCListenerManager.getOurTeamIdentifier(),
+        expectedExecutableURL: URL? = ChromeNativeHostLocation.executableURL()
     ) -> Bool {
         if isCliEnabled {
             return true
@@ -85,7 +93,42 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         guard request.context.requestedCommand == BridgeContext.chromeNativeHostRequestedCommand else {
             return false
         }
-        return BridgeContext.isChromeNativeHostProcessName(callerIdentity?.parentProcess?.processName)
+        guard let parentProcess = callerIdentity?.parentProcess,
+              BridgeContext.isChromeNativeHostProcessName(parentProcess.processName),
+              let parentExecutablePath = parentProcess.executablePath,
+              let expectedExecutableURL else {
+            return false
+        }
+
+        let resolvedParentPath = URL(fileURLWithPath: parentExecutablePath)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        let resolvedExpectedPath = expectedExecutableURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        guard resolvedParentPath == resolvedExpectedPath else {
+            return false
+        }
+
+        guard let expectedTeamIdentifier,
+              parentProcess.signingTeamId == expectedTeamIdentifier else {
+            #if DEBUG
+            guard ProcessInfo.processInfo.environment[
+                "AUTHSIA_DEV_ALLOW_UNSIGNED_NATIVE_HOST"
+            ] == "1" else {
+                return false
+            }
+            chromeNativeHostAuthorizationLogger.warning(
+                "Allowing unsigned Chrome native host from canonical bundled path in DEBUG"
+            )
+            return true
+            #else
+            return false
+            #endif
+        }
+        return true
     }
 
     /// These default providers must be built outside the @MainActor init: closure

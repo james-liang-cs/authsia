@@ -2776,6 +2776,30 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         ))
     }
 
+    func testAgentRuntimeContextCannotMasqueradeAsChromeNativeHost() {
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .list,
+            query: "",
+            options: .init(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: false,
+                isPiped: true,
+                isSSH: false,
+                isCI: false,
+                timestamp: now,
+                requestedCommand: BridgeContext.chromeNativeHostRequestedCommand,
+                sessionScope: BridgeContext.chromeNativeHostSessionScope,
+                agentRuntimeContext: agentRuntimeContext()
+            )
+        )
+
+        XCTAssertTrue(XPCRequestHandler.isAgentJITCaller(
+            request: request,
+            callerIdentity: chromeNativeHostCallerIdentity
+        ))
+    }
+
     func testChromeNativeHostListWithoutJITDoesNotRequirePreflight() async throws {
         let approver = JITApprovalTracker(result: true)
         let handler = makeHandler(

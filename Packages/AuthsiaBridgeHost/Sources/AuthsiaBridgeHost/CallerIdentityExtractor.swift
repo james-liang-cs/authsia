@@ -94,10 +94,7 @@ public enum CallerIdentityExtractor {
 
     private static func processName(for pid: pid_t) -> String? {
         let arguments = processArguments(for: pid)
-        var pathBuffer = [CChar](repeating: 0, count: 4096)
-        let length = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
-        guard length > 0 else { return nil }
-        let fullPath = String(cString: pathBuffer)
+        guard let fullPath = executablePath(for: pid) else { return nil }
         let baseName = (fullPath as NSString).lastPathComponent
 
         // For generic runtimes, inspect argv to find the actual application name
@@ -105,6 +102,13 @@ public enum CallerIdentityExtractor {
             return appName
         }
         return baseName
+    }
+
+    private static func executablePath(for pid: pid_t) -> String? {
+        var pathBuffer = [CChar](repeating: 0, count: 4096)
+        let length = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: pathBuffer)
     }
 
     private static let runtimeNames: Set<String> = ["node", "python", "python3", "ruby", "java", "bun", "deno"]
@@ -174,6 +178,7 @@ public enum CallerIdentityExtractor {
             guard ppid > 1 else { return parentProcessContext(from: ancestry) }
 
             let name = processName(for: ppid) ?? "unknown"
+            let executablePath = executablePath(for: ppid)
             let signing = processSigningInfo(for: ppid)
             let info = ParentProcessInfo(
                 pid: ppid,
@@ -181,7 +186,8 @@ public enum CallerIdentityExtractor {
                 bundleIdentifier: signing?.identifier,
                 signingTeamId: signing?.teamID,
                 signingIdentity: signing?.identity,
-                isPlatformBinary: signing?.isPlatformBinary
+                isPlatformBinary: signing?.isPlatformBinary,
+                executablePath: executablePath
             )
             ancestry.append(info)
             currentPID = ppid

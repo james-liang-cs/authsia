@@ -364,6 +364,10 @@ async function testMenuInjectedOnLoginFieldFocus() {
         iframes[0].src.includes('host=login.example.com'),
         'iframe src should include the host parameter'
     );
+    assert.ok(
+        iframes[0].src.includes('trigger=auto'),
+        'focus-triggered menus must be automatic'
+    );
     assert.strictEqual(iframes[0].style.height, '72px', 'iframe should start compact until content resizes');
 }
 
@@ -1067,6 +1071,10 @@ async function testFieldIconClickTogglesMenu() {
         1,
         'icon click should open the menu'
     );
+    assert.ok(
+        findMenuFrames(appendedChildren)[0].src.includes('trigger=manual'),
+        'icon-triggered menus must be manual'
+    );
 
     icon.listeners.click(clickEvent);
     assert.strictEqual(
@@ -1242,6 +1250,34 @@ async function testPendingMatchLookupIsSharedAcrossRefocus() {
     await flushAsync(timers);
 }
 
+async function testMatchLookupSendsExpectedCredentialKind() {
+    const passwordInput = createMockInput({ type: 'password', name: 'password' });
+    const otpInput = createMockInput({
+        type: 'text',
+        name: 'otp',
+        autocomplete: 'one-time-code',
+    });
+    const requests = [];
+    const { context, timers, docEventListeners } = createMockContext({
+        inputs: [passwordInput, otpInput],
+        sendMessage(message) {
+            requests.push(message);
+            return Promise.resolve({ ok: true, credentials: [] });
+        },
+    });
+
+    loadScripts(context, timers);
+    focusField(docEventListeners, passwordInput);
+    await flushAsync(timers);
+    focusField(docEventListeners, otpInput);
+    await flushAsync(timers);
+
+    assert.deepStrictEqual(
+        JSON.parse(JSON.stringify(requests.map((request) => request.kind))),
+        ['password', 'otp']
+    );
+}
+
 async function testMenuRequestsAreBridgedWithDocumentContext() {
     const passwordInput = createMockInput({ type: 'password', name: 'password' });
     const runtimeMessages = [];
@@ -1275,6 +1311,7 @@ async function testMenuRequestsAreBridgedWithDocumentContext() {
                 host: 'forged.example',
                 currentURL: 'https://forged.example/login',
                 credentialId: 'credential-1',
+                kind: 'password',
             },
         },
     });
@@ -1285,6 +1322,7 @@ async function testMenuRequestsAreBridgedWithDocumentContext() {
         host: 'example.com',
         currentURL: 'https://example.com/actual-login',
         credentialId: 'credential-1',
+        kind: 'password',
     });
     assert.deepStrictEqual(JSON.parse(JSON.stringify(iframePostedMessages[0])), {
         message: {
@@ -1323,6 +1361,7 @@ async function run() {
     await testMatchCacheIsScopedToCurrentURL();
     await testBlurInvalidatesPendingMatchLookup();
     await testPendingMatchLookupIsSharedAcrossRefocus();
+    await testMatchLookupSendsExpectedCredentialKind();
     await testMenuRequestsAreBridgedWithDocumentContext();
     console.log('autofill tests passed');
 }

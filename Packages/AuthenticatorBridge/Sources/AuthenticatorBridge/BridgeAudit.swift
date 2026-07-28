@@ -38,6 +38,7 @@ public struct ParentProcessInfo: Codable, Equatable {
     public let signingTeamId: String?
     public let signingIdentity: String?
     public let isPlatformBinary: Bool?
+    public let executablePath: String?
 
     public init(
         pid: Int32,
@@ -45,7 +46,8 @@ public struct ParentProcessInfo: Codable, Equatable {
         bundleIdentifier: String?,
         signingTeamId: String? = nil,
         signingIdentity: String? = nil,
-        isPlatformBinary: Bool? = nil
+        isPlatformBinary: Bool? = nil,
+        executablePath: String? = nil
     ) {
         self.pid = pid
         self.processName = processName
@@ -53,6 +55,7 @@ public struct ParentProcessInfo: Codable, Equatable {
         self.signingTeamId = signingTeamId
         self.signingIdentity = signingIdentity
         self.isPlatformBinary = isPlatformBinary
+        self.executablePath = executablePath
     }
 }
 

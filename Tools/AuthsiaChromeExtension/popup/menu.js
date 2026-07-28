@@ -15,8 +15,10 @@
     const listContainer = document.getElementById('authsia-list');
     const emptyState = document.getElementById('authsia-empty');
     const loadingState = document.getElementById('authsia-loading');
+    const loadingHint = loadingState.querySelector('.authsia-loading-hint');
     const errorState = document.getElementById('authsia-error');
     const footerLink = document.getElementById('authsia-footer-link');
+    let approvalHintTimer = null;
 
     // Parse URL parameters
     function getParams() {
@@ -26,26 +28,43 @@
             currentURL: params.get('currentURL') || '',
             fieldType: params.get('fieldType') || 'username',
             frameId: params.get('frameId') || '',
+            trigger: params.get('trigger') === 'manual' ? 'manual' : 'auto',
         };
     }
 
     function pageOrigin() {
         try {
-            return new URL(getParams().currentURL).origin;
+            var url = new URL(getParams().currentURL);
+            if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin === 'null') {
+                return null;
+            }
+            return url.origin;
         } catch (err) {
-            return '*';
+            return null;
         }
     }
 
+    function postToPage(message) {
+        var origin = pageOrigin();
+        if (!origin || !window.parent) {
+            return false;
+        }
+        window.parent.postMessage(message, origin);
+        return true;
+    }
+
     function requestRuntime(message) {
-        return new Promise(function (resolve) {
+        return new Promise(function (resolve, reject) {
             const requestId = 'authsia-' + nextRequestId++;
             pendingRequests.set(requestId, resolve);
-            window.parent.postMessage({
+            if (!postToPage({
                 type: 'AUTHSIA_REQUEST',
                 requestId: requestId,
                 message: message,
-            }, pageOrigin());
+            })) {
+                pendingRequests.delete(requestId);
+                reject(new Error('Unable to verify the page origin.'));
+            }
         });
     }
 
@@ -64,10 +83,27 @@
 
     // Show/hide states
     function showState(state, detail) {
+        if (approvalHintTimer !== null) {
+            clearTimeout(approvalHintTimer);
+            approvalHintTimer = null;
+        }
         listContainer.style.display = state === 'list' ? 'block' : 'none';
         emptyState.style.display = state === 'empty' ? 'flex' : 'none';
         loadingState.style.display = state === 'loading' ? 'block' : 'none';
         errorState.style.display = state === 'error' ? 'flex' : 'none';
+
+        if (loadingHint) {
+            loadingHint.textContent = 'Loading passwords…';
+            if (state === 'loading') {
+                approvalHintTimer = setTimeout(function () {
+                    approvalHintTimer = null;
+                    if (loadingState.style.display === 'block') {
+                        loadingHint.textContent = 'Waiting for approval in Authsia…';
+                        postResize();
+                    }
+                }, 3000);
+            }
+        }
 
         // Show error detail hint if provided
         if (state === 'error' && detail) {
@@ -106,8 +142,8 @@
         if (!height && document.body && document.body.scrollHeight) {
             height = document.body.scrollHeight;
         }
-        if (height > 0 && window.parent) {
-            window.parent.postMessage({ type: 'AUTHSIA_RESIZE', height: height }, '*');
+        if (height > 0) {
+            postToPage({ type: 'AUTHSIA_RESIZE', height: height });
         }
     }
 
@@ -197,22 +233,27 @@
             const response = await requestRuntime({
                 type: MESSAGE_TYPE_GET,
                 credentialId: credential.id,
+                kind: credential.kind === 'otp' ? 'otp' : 'password',
             });
 
             if (response && response.ok && response.credential && response.credential.otpCode) {
-                window.parent.postMessage({
+                if (!postToPage({
                     type: 'AUTHSIA_FILL',
                     otpCode: response.credential.otpCode,
                     frameId: params.frameId,
-                }, pageOrigin());
+                })) {
+                    showState('error', 'Unable to verify the page origin.');
+                }
             } else if (response && response.ok && response.credential) {
                 // Send fill command to parent content script
-                window.parent.postMessage({
+                if (!postToPage({
                     type: 'AUTHSIA_FILL',
                     username: response.credential.username,
                     password: response.credential.password,
                     frameId: params.frameId,
-                }, pageOrigin());
+                })) {
+                    showState('error', 'Unable to verify the page origin.');
+                }
             } else {
                 showState('error', (response && response.detail) || '');
             }
@@ -244,7 +285,7 @@
 
         // Focus first item for keyboard navigation
         var firstItem = listContainer.querySelector('.authsia-item');
-        if (firstItem) {
+        if (firstItem && params.trigger === 'manual') {
             firstItem.focus();
         }
     }
@@ -261,7 +302,10 @@
         showState('loading');
 
         try {
-            const response = await requestRuntime({ type: MESSAGE_TYPE_LIST });
+            const response = await requestRuntime({
+                type: MESSAGE_TYPE_LIST,
+                kind: params.fieldType === 'otp' ? 'otp' : 'password',
+            });
 
             if (response && response.ok && Array.isArray(response.credentials)) {
                 renderCredentials(response.credentials);
@@ -278,7 +322,7 @@
     // Keyboard navigation
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
-            window.parent.postMessage({ type: 'AUTHSIA_CLOSE' }, '*');
+            postToPage({ type: 'AUTHSIA_CLOSE' });
             return;
         }
 
@@ -304,7 +348,7 @@
     if (footerLink) {
         footerLink.addEventListener('click', function () {
             chrome.runtime.sendMessage({ type: 'AUTHsia_OPEN_APP' });
-            window.parent.postMessage({ type: 'AUTHSIA_CLOSE' }, '*');
+            postToPage({ type: 'AUTHSIA_CLOSE' });
         });
     }
 

@@ -159,11 +159,9 @@ extension XPCRequestHandler {
     }
 
     static func isAgentJITCaller(request: BridgeRequest, callerIdentity: CallerIdentity?) -> Bool {
-        // Chrome autofill uses the CLI transport via AuthsiaNativeHost, but it is not an
-        // agent caller and must keep the normal biometric/session approval path.
-        if isChromeNativeHostCaller(request: request, callerIdentity: callerIdentity) {
-            return false
-        }
+        // Unforgeable agent evidence must win over transport classification. A caller
+        // cannot escape JIT policy by adding the private Chrome marker or imitating
+        // the native host process name.
         if request.context.agentRuntimeContext != nil {
             return true
         }
@@ -172,6 +170,11 @@ extension XPCRequestHandler {
         }
         if AgentJITCallerContext.hasAutomationSuspectCaller(callerIdentity) {
             return true
+        }
+        // Chrome autofill uses the CLI transport via AuthsiaNativeHost, but it is not an
+        // agent caller and must keep the normal biometric/session approval path.
+        if isChromeNativeHostCaller(request: request, callerIdentity: callerIdentity) {
+            return false
         }
         if AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity),
            hasValidatedInteractiveHumanSession(request: request, callerIdentity: callerIdentity) {
