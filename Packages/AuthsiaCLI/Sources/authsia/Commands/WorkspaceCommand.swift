@@ -1360,7 +1360,15 @@ struct Workspace: AsyncParsableCommand {
             }
             // Otherwise only suppress when the ancestry is agentic AND stdin is not a TTY.
             // Redirecting stdout must not make a human guarded-terminal command agentic.
-            return AgenticProcessDetector.containsAgenticProcess(processAncestry) && !stdinIsTTY
+            // This must stay the same ancestry test `Exec.shouldRunJITPreflight` applies,
+            // IDE hosts included: anything it calls agentic and does not suppress here
+            // delegates to `authsia exec` and fires a JIT approval. IDE extension hosts
+            // spawn shim traffic constantly (Pylance probing pytest options, language
+            // servers), none of which wants workspace secrets — a human at the same IDE's
+            // integrated terminal still has a stdin TTY and keeps human env resolution.
+            let hasNonHumanAncestry = AgenticProcessDetector.containsAgenticProcess(processAncestry)
+                || AgenticProcessDetector.containsAutomationSuspectProcess(processAncestry)
+            return hasNonHumanAncestry && !stdinIsTTY
         }
 
         static func isSecretFreeProbe(plan: WorkspaceRunPlan) -> Bool {

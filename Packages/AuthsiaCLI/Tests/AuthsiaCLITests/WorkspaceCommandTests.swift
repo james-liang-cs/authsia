@@ -3871,7 +3871,15 @@ struct WorkspaceRunPlannerTests {
             processAncestry: terminalAncestry,
             stdinIsTTY: false
         ))
+        // A human at the IDE's integrated terminal keeps human env resolution.
         #expect(!Workspace.Run.isAgentShimInvocation(
+            parentEnvironment: marked,
+            processAncestry: ideTerminalAncestry,
+            stdinIsTTY: true
+        ))
+        // An IDE extension host spawning shim traffic has no TTY: treat it like an
+        // agent so it runs without secrets instead of firing a JIT approval.
+        #expect(Workspace.Run.isAgentShimInvocation(
             parentEnvironment: marked,
             processAncestry: ideTerminalAncestry,
             stdinIsTTY: false
@@ -3882,6 +3890,40 @@ struct WorkspaceRunPlannerTests {
         #expect(!Workspace.Run.isAgentShimInvocation(
             parentEnvironment: automationEnvironment,
             processAncestry: agentAncestry,
+            stdinIsTTY: false
+        ))
+    }
+
+    /// Opening a guarded workspace with `code .` let the VS Code extension host spawn
+    /// shim traffic (Pylance probing pytest options) that the shim check did not treat
+    /// as agentic while the JIT check did — so the run delegated to `authsia exec` and
+    /// fired an agent approval nobody asked for. Both checks must agree on the ancestry.
+    @Test("IDE extension host shim traffic never fires a JIT approval")
+    func ideExtensionHostShimTrafficNeverFiresJITApproval() {
+        let extensionHostAncestry = [
+            AgenticProcessReference(processName: "authsia", bundleIdentifier: "com.authsia.cli"),
+            AgenticProcessReference(
+                processName: "Code Helper (Plugin)",
+                bundleIdentifier: nil,
+                arguments: [
+                    "/Applications/Visual Studio Code.app/Contents/Frameworks/"
+                        + "Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)",
+                    "--type=extensionHost",
+                ]
+            ),
+        ]
+        let environment = [WorkspaceGuardedTerminal.shimInvocationEnvironmentName: "1"]
+
+        // Suppressing the run and firing a JIT preflight are mutually exclusive: whenever
+        // the JIT check calls this ancestry agentic, the shim check must too.
+        #expect(Exec.shouldRunJITPreflight(
+            environment: environment,
+            processAncestry: extensionHostAncestry,
+            stdinIsTTY: false
+        ))
+        #expect(Workspace.Run.isAgentShimInvocation(
+            parentEnvironment: environment,
+            processAncestry: extensionHostAncestry,
             stdinIsTTY: false
         ))
     }
