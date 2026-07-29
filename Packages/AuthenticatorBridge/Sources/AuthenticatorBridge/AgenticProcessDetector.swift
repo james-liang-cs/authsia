@@ -138,7 +138,7 @@ public enum AgenticProcessDetector {
             return "copilot"
         }
 
-        if let platform = arguments.compactMap(agentPlatformReferencedByArgument).first {
+        if let platform = agentPlatformReferencedByArguments(arguments) {
             return platform
         }
 
@@ -162,7 +162,7 @@ public enum AgenticProcessDetector {
             return true
         }
 
-        if arguments.contains(where: argumentReferencesAutomationSuspectHost) {
+        if argumentsReferenceAutomationSuspectHost(arguments) {
             return true
         }
 
@@ -244,20 +244,30 @@ public enum AgenticProcessDetector {
     }
 
     /// Agent and IDE names double as ordinary words (`fleet`, `idea`, `rider`, `zed`) and
-    /// as repository names (`claude`, `codex`), so only a real filesystem path identifies
-    /// the process behind an argument. A bare token is command data — `grep codex notes.txt`
-    /// is not an agent — and a URL naming an IDE is a request target, not the requester.
-    /// Both used to match, classifying plain commands as agentic and firing JIT approvals
-    /// that a non-interactive caller cannot answer.
+    /// as repository names (`claude`, `codex`), so an *operand* naming one proves nothing:
+    /// `grep codex notes.txt` is not an agent, and a URL containing `cursor` is a request
+    /// target, not the requester. Only a real filesystem path identifies a process there.
     private static func hostMatchingPathComponents(_ value: String) -> [String]? {
         guard value.contains("/"), !value.contains("://") else { return nil }
         let components = (value as NSString).pathComponents
         return components.isEmpty ? nil : components
     }
 
-    private static func agentPlatformReferencedByArgument(_ value: String) -> String? {
-        guard let components = hostMatchingPathComponents(value) else { return nil }
-        return components.compactMap { component -> String? in
+    /// argv[0] is the invoked command name and identifies the process even as a bare word:
+    /// `codex` on PATH is a symlink to `codex-aarch64-apple-darwin`, which `proc_pidpath`
+    /// resolves, so the process name never matches and argv[0] is the only remaining
+    /// signal. Every later argument is an operand and must look like a path to count.
+    private static func identityComponents(in arguments: [String]) -> [String] {
+        arguments.enumerated().flatMap { index, value -> [String] in
+            if let components = hostMatchingPathComponents(value) {
+                return components
+            }
+            return index == 0 ? [value] : []
+        }
+    }
+
+    private static func agentPlatformReferencedByArguments(_ arguments: [String]) -> String? {
+        identityComponents(in: arguments).compactMap { component -> String? in
             guard let normalized = normalize(component) else { return nil }
             let withoutAppSuffix = normalized.hasSuffix(".app")
                 ? String(normalized.dropLast(".app".count))
@@ -312,9 +322,8 @@ public enum AgenticProcessDetector {
         return normalized.contains("github.copilot") || normalized.contains("github-copilot")
     }
 
-    private static func argumentReferencesAutomationSuspectHost(_ value: String) -> Bool {
-        guard let components = hostMatchingPathComponents(value) else { return false }
-        return components.contains { component in
+    private static func argumentsReferenceAutomationSuspectHost(_ arguments: [String]) -> Bool {
+        identityComponents(in: arguments).contains { component in
             guard let normalized = normalize(component) else { return false }
             let withoutAppSuffix = normalized.hasSuffix(".app")
                 ? String(normalized.dropLast(".app".count))

@@ -130,6 +130,40 @@ struct AgenticProcessDetectorTests {
         }
     }
 
+    /// `codex` on PATH is a symlink to a binary named `codex-aarch64-apple-darwin`, and
+    /// `proc_pidpath` resolves it — so the process name never matches the agent list and
+    /// argv[0] is the only signal. Requiring a filesystem path for *every* argument
+    /// silently disabled JIT for the real agent while the host still demanded a grant.
+    @Test("agent invoked through a PATH symlink is identified by argv[0]")
+    func agentInvokedThroughPathSymlinkIsIdentifiedByArgv0() {
+        #expect(AgenticProcessDetector.containsAgenticProcess([
+            AgenticProcessReference(processName: "authsia", bundleIdentifier: "com.authsia.cli"),
+            AgenticProcessReference(
+                processName: "codex-aarch64-apple-darwin",
+                bundleIdentifier: nil,
+                arguments: ["codex", "exec", "--full-auto"]
+            ),
+        ]))
+
+        // The resolved-path form of the same launch must also resolve.
+        #expect(AgenticProcessDetector.containsAgenticProcess([
+            AgenticProcessReference(
+                processName: "codex-aarch64-apple-darwin",
+                bundleIdentifier: nil,
+                arguments: ["/opt/homebrew/Caskroom/codex/0.145.0/codex-aarch64-apple-darwin"]
+            ),
+        ]))
+
+        // An operand naming an agent is still not an agent: only argv[0] carries identity.
+        #expect(!AgenticProcessDetector.containsAgenticProcess([
+            AgenticProcessReference(
+                processName: "zsh",
+                bundleIdentifier: nil,
+                arguments: ["grep", "codex", "notes.txt"]
+            ),
+        ]))
+    }
+
     @Test("does not treat human terminal hosts as agents")
     func doesNotTreatHumanTerminalHostsAsAgents() {
         let ancestry = [
