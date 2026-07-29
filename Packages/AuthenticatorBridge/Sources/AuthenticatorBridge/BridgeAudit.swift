@@ -39,6 +39,10 @@ public struct ParentProcessInfo: Codable, Equatable {
     public let signingIdentity: String?
     public let isPlatformBinary: Bool?
     public let executablePath: String?
+    /// Process argv. Agent and IDE identity often lives only here — GitHub Copilot is
+    /// recognised by its extension path, and Electron helpers by the `.app` bundle in
+    /// argv[0] — so `AgenticProcessDetector` cannot classify this process without it.
+    public let arguments: [String]?
 
     public init(
         pid: Int32,
@@ -47,7 +51,8 @@ public struct ParentProcessInfo: Codable, Equatable {
         signingTeamId: String? = nil,
         signingIdentity: String? = nil,
         isPlatformBinary: Bool? = nil,
-        executablePath: String? = nil
+        executablePath: String? = nil,
+        arguments: [String]? = nil
     ) {
         self.pid = pid
         self.processName = processName
@@ -56,6 +61,7 @@ public struct ParentProcessInfo: Codable, Equatable {
         self.signingIdentity = signingIdentity
         self.isPlatformBinary = isPlatformBinary
         self.executablePath = executablePath
+        self.arguments = arguments
     }
 }
 

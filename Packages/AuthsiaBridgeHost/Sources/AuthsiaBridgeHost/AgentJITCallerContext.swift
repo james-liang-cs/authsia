@@ -156,22 +156,30 @@ public enum AgentJITCallerContext {
             ),
         ]
         if let parent = callerIdentity.parentProcess {
-            ancestry.append(
-                AgenticProcessReference(
-                    processName: parent.processName,
-                    bundleIdentifier: parent.bundleIdentifier
-                )
-            )
+            ancestry.append(reference(for: parent))
         }
         if let host = callerIdentity.hostProcess {
-            ancestry.append(
-                AgenticProcessReference(
-                    processName: host.processName,
-                    bundleIdentifier: host.bundleIdentifier
-                )
-            )
+            ancestry.append(reference(for: host))
         }
         return ancestry
+    }
+
+    private static func reference(for process: ParentProcessInfo) -> AgenticProcessReference {
+        AgenticProcessReference(
+            processName: process.processName,
+            bundleIdentifier: process.bundleIdentifier,
+            arguments: detectorArguments(for: process)
+        )
+    }
+
+    /// The detector reads argv as `[executable path, arguments…]`, matching what the CLI
+    /// collects, so agent and IDE identity carried only in argv stays visible on this side.
+    /// The executable path alone still identifies the process when argv is unreadable.
+    private static func detectorArguments(for process: ParentProcessInfo) -> [String] {
+        if let arguments = process.arguments, !arguments.isEmpty {
+            return arguments
+        }
+        return process.executablePath.map { [$0] } ?? []
     }
 }
 #endif

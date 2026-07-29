@@ -58,6 +58,78 @@ struct AgenticProcessDetectorTests {
         )
     }
 
+    /// Agent and IDE names double as ordinary English words (fleet, idea, rider, zed)
+    /// and as repository names (claude, codex). Scanning every argument as a path meant
+    /// `grep codex notes.txt` classified a plain shell command as agentic, which fires a
+    /// JIT approval no non-interactive caller can answer. Only real filesystem paths
+    /// identify the process; bare tokens and URL targets are command data.
+    @Test("ordinary arguments that merely contain an agent or IDE name are not references")
+    func ordinaryArgumentsContainingAgentNamesAreNotReferences() {
+        func ancestry(_ argv: [String]) -> [AgenticProcessReference] {
+            [AgenticProcessReference(processName: "zsh", bundleIdentifier: nil, arguments: argv)]
+        }
+
+        for argv in [
+            ["grep", "codex", "notes.txt"],
+            ["grep", "claude", "README"],
+            ["echo", "fleet"],
+            ["echo", "idea"],
+            ["git", "clone", "https://github.com/example/codex"],
+            ["curl", "https://example.com/cursor/api"],
+        ] {
+            #expect(
+                !AgenticProcessDetector.containsAgenticProcess(ancestry(argv)),
+                "unexpected agent match: \(argv.joined(separator: " "))"
+            )
+            #expect(
+                !AgenticProcessDetector.containsAutomationSuspectProcess(ancestry(argv)),
+                "unexpected automation-suspect match: \(argv.joined(separator: " "))"
+            )
+        }
+
+        // Genuine executable paths must still resolve.
+        #expect(AgenticProcessDetector.containsAgenticProcess(
+            ancestry(["node", "/opt/homebrew/lib/claude/cli.js"])
+        ))
+        #expect(AgenticProcessDetector.containsAutomationSuspectProcess(
+            ancestry(["/Applications/Cursor.app/Contents/MacOS/Cursor", "--type=extensionHost"])
+        ))
+    }
+
+    /// Electron names its child processes `X Helper (Plugin)` / `(Renderer)` / `(GPU)`.
+    /// The suspect list holds the base name (`code-helper`), so the extension host — the
+    /// process that actually spawns IDE automation — did not match by name, leaving CLI
+    /// callers dependent on the `.app` path in argv and host callers on the bundle id.
+    @Test("Electron helper role qualifiers do not defeat name matching")
+    func electronHelperRoleQualifiersDoNotDefeatNameMatching() {
+        for name in [
+            "Code Helper (Plugin)",
+            "Code Helper (Renderer)",
+            "Cursor Helper (Plugin)",
+            "Windsurf Helper (Plugin)",
+            "Zed Helper (GPU)",
+        ] {
+            #expect(
+                AgenticProcessDetector.isAutomationSuspectProcess(
+                    processName: name,
+                    bundleIdentifier: nil
+                ),
+                "expected automation suspect by name alone: \(name)"
+            )
+        }
+
+        // Unrelated processes must not become suspects.
+        for name in ["Terminal", "zsh", "python3", "Finder"] {
+            #expect(
+                !AgenticProcessDetector.isAutomationSuspectProcess(
+                    processName: name,
+                    bundleIdentifier: nil
+                ),
+                "unexpected automation suspect: \(name)"
+            )
+        }
+    }
+
     @Test("does not treat human terminal hosts as agents")
     func doesNotTreatHumanTerminalHostsAsAgents() {
         let ancestry = [

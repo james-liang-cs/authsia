@@ -28,6 +28,51 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertFalse(AgentJITCallerContext.hasAgenticCaller(humanTerminalCaller()))
     }
 
+    /// The host built detector references without argv, so every argument-based rule was
+    /// dead on this side — GitHub Copilot is detected only through its extension path, so
+    /// an agent running inside the IDE looked like the human and never took the JIT path.
+    func testDetectsCopilotExtensionHostFromCallerArguments() {
+        let caller = CallerIdentity(
+            pid: 501,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "33M8QU65SP",
+            signingIdentity: "Developer ID Application: CHEN LIANG (33M8QU65SP)",
+            parentProcess: ParentProcessInfo(
+                pid: 500,
+                processName: "Code Helper (Plugin)",
+                bundleIdentifier: "com.microsoft.VSCode.helper",
+                arguments: [
+                    "/Applications/Visual Studio Code.app/Contents/Frameworks/"
+                        + "Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)",
+                    "--type=extensionHost",
+                    "--extensionDevelopmentPath=/Users/example/.vscode/extensions/github.copilot-chat-1.2.3",
+                ]
+            )
+        )
+
+        XCTAssertTrue(AgentJITCallerContext.hasAgenticCaller(caller))
+    }
+
+    /// argv is unavailable for some processes; the executable path must still identify the host.
+    func testFallsBackToExecutablePathWhenArgumentsAreUnavailable() {
+        let caller = CallerIdentity(
+            pid: 601,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: nil,
+            signingIdentity: nil,
+            parentProcess: ParentProcessInfo(
+                pid: 600,
+                processName: "unknown",
+                bundleIdentifier: nil,
+                executablePath: "/Applications/Cursor.app/Contents/MacOS/Cursor"
+            )
+        )
+
+        XCTAssertTrue(AgentJITCallerContext.hasAutomationSuspectCaller(caller))
+    }
+
     func testTrustsSignedTerminalAndShellAncestry() {
         XCTAssertTrue(AgentJITCallerContext.isTrustedHumanTerminal(humanTerminalCaller()))
     }

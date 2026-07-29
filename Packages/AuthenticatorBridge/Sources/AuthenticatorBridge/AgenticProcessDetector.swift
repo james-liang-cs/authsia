@@ -219,8 +219,23 @@ public enum AgenticProcessDetector {
 
     private static func normalizeProcessName(_ value: String?) -> String? {
         guard let normalized = normalize(value) else { return nil }
-        guard normalized.hasSuffix(".exe") else { return normalized }
-        return String(normalized.dropLast(".exe".count))
+        let base = droppingRoleQualifier(normalized)
+        guard base.hasSuffix(".exe") else { return base }
+        return String(base.dropLast(".exe".count))
+    }
+
+    /// Electron names its child processes `X Helper (Plugin)`, `X Helper (Renderer)`,
+    /// `X Helper (GPU)`. The parenthesized qualifier is the process role, not the
+    /// application, so it must not defeat a name lookup: the suspect list holds the base
+    /// name (`code-helper`), and `(Plugin)` is precisely the IDE extension host that
+    /// spawns the automation worth classifying.
+    private static func droppingRoleQualifier(_ normalizedValue: String) -> String {
+        guard normalizedValue.hasSuffix(")"),
+              let qualifier = normalizedValue.range(of: "-(", options: .backwards) else {
+            return normalizedValue
+        }
+        let base = String(normalizedValue[normalizedValue.startIndex..<qualifier.lowerBound])
+        return base.isEmpty ? normalizedValue : base
     }
 
     private static func isShellProcess(_ processName: String?) -> Bool {
@@ -228,9 +243,20 @@ public enum AgenticProcessDetector {
         return shellProcessNames.contains(normalizedName)
     }
 
+    /// Agent and IDE names double as ordinary words (`fleet`, `idea`, `rider`, `zed`) and
+    /// as repository names (`claude`, `codex`), so only a real filesystem path identifies
+    /// the process behind an argument. A bare token is command data — `grep codex notes.txt`
+    /// is not an agent — and a URL naming an IDE is a request target, not the requester.
+    /// Both used to match, classifying plain commands as agentic and firing JIT approvals
+    /// that a non-interactive caller cannot answer.
+    private static func hostMatchingPathComponents(_ value: String) -> [String]? {
+        guard value.contains("/"), !value.contains("://") else { return nil }
+        let components = (value as NSString).pathComponents
+        return components.isEmpty ? nil : components
+    }
+
     private static func agentPlatformReferencedByArgument(_ value: String) -> String? {
-        let pathComponents: [String] = (value as NSString).pathComponents
-        let components: [String] = pathComponents.isEmpty ? [value] : pathComponents
+        guard let components = hostMatchingPathComponents(value) else { return nil }
         return components.compactMap { component -> String? in
             guard let normalized = normalize(component) else { return nil }
             let withoutAppSuffix = normalized.hasSuffix(".app")
@@ -287,8 +313,7 @@ public enum AgenticProcessDetector {
     }
 
     private static func argumentReferencesAutomationSuspectHost(_ value: String) -> Bool {
-        let pathComponents = (value as NSString).pathComponents
-        let components = pathComponents.isEmpty ? [value] : pathComponents
+        guard let components = hostMatchingPathComponents(value) else { return false }
         return components.contains { component in
             guard let normalized = normalize(component) else { return false }
             let withoutAppSuffix = normalized.hasSuffix(".app")

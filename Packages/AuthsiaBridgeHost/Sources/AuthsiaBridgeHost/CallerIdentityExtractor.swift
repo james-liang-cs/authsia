@@ -93,8 +93,14 @@ public enum CallerIdentityExtractor {
     }
 
     private static func processName(for pid: pid_t) -> String? {
-        let arguments = processArguments(for: pid)
-        guard let fullPath = executablePath(for: pid) else { return nil }
+        processName(
+            arguments: processArguments(for: pid),
+            executablePath: executablePath(for: pid)
+        )
+    }
+
+    private static func processName(arguments: [String], executablePath: String?) -> String? {
+        guard let fullPath = executablePath else { return nil }
         let baseName = (fullPath as NSString).lastPathComponent
 
         // For generic runtimes, inspect argv to find the actual application name
@@ -177,8 +183,9 @@ public enum CallerIdentityExtractor {
             }
             guard ppid > 1 else { return parentProcessContext(from: ancestry) }
 
-            let name = processName(for: ppid) ?? "unknown"
+            let arguments = processArguments(for: ppid)
             let executablePath = executablePath(for: ppid)
+            let name = processName(arguments: arguments, executablePath: executablePath) ?? "unknown"
             let signing = processSigningInfo(for: ppid)
             let info = ParentProcessInfo(
                 pid: ppid,
@@ -187,7 +194,8 @@ public enum CallerIdentityExtractor {
                 signingTeamId: signing?.teamID,
                 signingIdentity: signing?.identity,
                 isPlatformBinary: signing?.isPlatformBinary,
-                executablePath: executablePath
+                executablePath: executablePath,
+                arguments: arguments
             )
             ancestry.append(info)
             currentPID = ppid
