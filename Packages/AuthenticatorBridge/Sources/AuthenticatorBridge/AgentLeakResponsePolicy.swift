@@ -5,9 +5,9 @@ public extension Notification.Name {
         "com.authsia.agentLeakIncidentDidRecord"
     )
 
-    /// Posted (as a `DistributedNotificationCenter` name) by the Bridge host when a new
-    /// agent JIT grant is approved and saved, so Access Center refreshes immediately
-    /// instead of waiting for its periodic poll.
+    /// Posted (as a `DistributedNotificationCenter` name) by the Bridge host whenever the
+    /// agent JIT grant set changes — approval, scope merge, or revocation — so Access
+    /// Center refreshes immediately instead of waiting for its periodic poll.
     static let agentJITGrantDidChange = Notification.Name(
         "com.authsia.agentJITGrantDidChange"
     )

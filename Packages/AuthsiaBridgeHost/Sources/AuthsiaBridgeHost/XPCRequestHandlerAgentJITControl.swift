@@ -72,6 +72,7 @@ extension XPCRequestHandler {
                 revokedAt: agentJITApprovalClock()
             )
             recordGrantRevocation(revoked)
+            postAgentJITGrantDidChange()
             replyMutationSuccess(
                 id: bridgeRequest.id,
                 revokedGrantIDs: [revoked.id],
@@ -117,6 +118,9 @@ extension XPCRequestHandler {
         do {
             let revoked = try agentJITGrantStore.revokeAll(revokedAt: agentJITApprovalClock())
             revoked.forEach(recordGrantRevocation)
+            if !revoked.isEmpty {
+                postAgentJITGrantDidChange()
+            }
             replyMutationSuccess(
                 id: bridgeRequest.id,
                 revokedGrantIDs: revoked.map(\.id),
