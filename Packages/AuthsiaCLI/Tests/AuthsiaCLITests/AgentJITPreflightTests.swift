@@ -52,46 +52,35 @@ struct AgentJITPreflightTests {
         }
     }
 
-    @Test("agentic ancestry enables preflight only when stdin is not a TTY")
-    func agentAncestryEnablesPreflightOnlyWhenStdinIsNotTTY() {
-        // Human stdin TTY: never preflight, regardless of ancestry or redirected stdout.
-        #expect(!Exec.shouldRunJITPreflight(
-            environment: [:], processAncestry: Self.humanTerminalAncestry, stdinIsTTY: true
-        ))
-        #expect(!Exec.shouldRunJITPreflight(
-            environment: [:], processAncestry: Self.codexAncestry, stdinIsTTY: true
-        ))
-        #expect(!Exec.shouldRunJITPreflight(
-            environment: [:], processAncestry: Self.ideExtensionHostAncestry, stdinIsTTY: true
-        ))
-        // stdin TTY with redirected stdout has isInteractiveSession == false, but must not preflight.
-        #expect(!Exec.shouldRunJITPreflight(
-            environment: [:], processAncestry: Self.codexAncestry, stdinIsTTY: true
-        ))
-        // No stdin TTY with agentic ancestry: still preflight.
+    /// The host requires a JIT grant from agentic and IDE callers regardless of the
+    /// terminal, so skipping preflight at a TTY did not avoid an approval — it produced
+    /// requests the host rejected with no obtainable grant. Copilot at the VS Code
+    /// integrated terminal hit that every time. Ancestry alone decides now.
+    @Test("agentic ancestry enables preflight regardless of the terminal")
+    func agentAncestryEnablesPreflightRegardlessOfTerminal() {
+        // Agentic and IDE ancestry preflight even where a human may be sitting: the TTY
+        // cannot distinguish the human from an agent hosted in the same IDE.
         #expect(Exec.shouldRunJITPreflight(
-            environment: [:], processAncestry: Self.codexAncestry, stdinIsTTY: false
+            environment: [:], processAncestry: Self.codexAncestry
         ))
         #expect(Exec.shouldRunJITPreflight(
-            environment: [:], processAncestry: Self.claudeRuntimeAncestry, stdinIsTTY: false
+            environment: [:], processAncestry: Self.claudeRuntimeAncestry
         ))
         #expect(Exec.shouldRunJITPreflight(
-            environment: [:], processAncestry: Self.ideExtensionHostAncestry, stdinIsTTY: false
+            environment: [:], processAncestry: Self.ideExtensionHostAncestry
         ))
-        // No stdin TTY but no agentic ancestry: no preflight.
+        // A plain human terminal is not agentic ancestry: no preflight.
         #expect(!Exec.shouldRunJITPreflight(
-            environment: [:], processAncestry: Self.humanTerminalAncestry, stdinIsTTY: false
+            environment: [:], processAncestry: Self.humanTerminalAncestry
         ))
         // Automation credential always short-circuits to false; SSH-only cred does not.
         #expect(!Exec.shouldRunJITPreflight(
             environment: [AutomationAccessResolver.environmentKey: UUID().uuidString],
-            processAncestry: Self.codexAncestry,
-            stdinIsTTY: false
+            processAncestry: Self.codexAncestry
         ))
         #expect(Exec.shouldRunJITPreflight(
             environment: [AutomationAccessResolver.sshEnvironmentKey: UUID().uuidString],
-            processAncestry: Self.codexAncestry,
-            stdinIsTTY: false
+            processAncestry: Self.codexAncestry
         ))
     }
 
@@ -102,15 +91,13 @@ struct AgentJITPreflightTests {
                 AgentRuntimeContextResolver.environmentPlatformKey: "copilot",
                 AgentRuntimeContextResolver.environmentInvokesAuthsiaKey: "1",
             ],
-            processAncestry: Self.humanTerminalAncestry,
-            stdinIsTTY: true
+            processAncestry: Self.humanTerminalAncestry
         ))
         #expect(!Exec.shouldRunJITPreflight(
             environment: [
                 AgentRuntimeContextResolver.environmentPlatformKey: "copilot",
             ],
-            processAncestry: Self.humanTerminalAncestry,
-            stdinIsTTY: true
+            processAncestry: Self.humanTerminalAncestry
         ))
     }
 

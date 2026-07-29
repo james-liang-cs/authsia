@@ -3915,11 +3915,12 @@ struct WorkspaceRunPlannerTests {
         let environment = [WorkspaceGuardedTerminal.shimInvocationEnvironmentName: "1"]
 
         // Suppressing the run and firing a JIT preflight are mutually exclusive: whenever
-        // the JIT check calls this ancestry agentic, the shim check must too.
+        // the JIT check calls this ancestry agentic, the shim check must too. The JIT
+        // check no longer consults the terminal; the shim check still does, because a
+        // human driving a guarded terminal should keep resolving workspace secrets.
         #expect(Exec.shouldRunJITPreflight(
             environment: environment,
-            processAncestry: extensionHostAncestry,
-            stdinIsTTY: false
+            processAncestry: extensionHostAncestry
         ))
         #expect(Workspace.Run.isAgentShimInvocation(
             parentEnvironment: environment,

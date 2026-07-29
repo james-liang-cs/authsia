@@ -501,8 +501,7 @@ struct Exec: ParsableCommand {
 
     static func shouldRunJITPreflight(
         environment: [String: String],
-        processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
-        stdinIsTTY: Bool = TerminalContext.stdinIsTTY
+        processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry()
     ) -> Bool {
         guard environment[AutomationAccessResolver.environmentKey] == nil else {
             return false
@@ -511,13 +510,16 @@ struct Exec: ParsableCommand {
         if AgentRuntimeContextResolver.hasExplicitAgentInvocationMarker(environment: environment) {
             return true
         }
-        let hasAgenticAncestry = AgenticProcessDetector.containsAgenticProcess(processAncestry)
+        // Ancestry alone decides, with no terminal test. The bridge host requires a JIT
+        // grant from agentic and IDE callers regardless of the terminal
+        // (`XPCRequestHandler.isAgentJITCaller`), and it must: an agent hosted inside an
+        // IDE presents the same ancestry AND the same TTY as the human sitting there, so
+        // a TTY cannot tell them apart and trusting it would let the agent reuse the
+        // human's session authority. Skipping preflight at a TTY therefore did not avoid
+        // an approval — it produced requests the host rejected outright with no grant
+        // obtainable, which is how Copilot at the VS Code terminal failed every time.
+        return AgenticProcessDetector.containsAgenticProcess(processAncestry)
             || AgenticProcessDetector.containsAutomationSuspectProcess(processAncestry)
-        guard hasAgenticAncestry else { return false }
-        // An IDE/agent in the ancestry may be where a human developer sits. Only preflight
-        // ancestry-only invocations when stdin is not a TTY; redirected stdout does not change
-        // whether the human can complete the ordinary biometric/session approval flow.
-        return !stdinIsTTY
     }
 
     static func jitPreflightReferences(
