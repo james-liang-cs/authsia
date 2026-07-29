@@ -5806,6 +5806,46 @@ struct WorkspaceAgentLaunchTests {
             "AUTHSIA_AGENT_PLATFORM": "claude-code",
             "AUTHSIA_AGENT_INVOKES_AUTHSIA": "1",
         ])
+        // No guard shim in the environment: PATH untouched, nothing to unset.
+        #expect(request.environmentOverrides["PATH"] == nil)
+        #expect(request.environmentUnsets.isEmpty)
+    }
+
+    @Test("terminal agent launch strips the guard shim so the agent reaches real tools directly")
+    func terminalAgentLaunchStripsGuardShim() {
+        let root = URL(fileURLWithPath: "/tmp/My Project", isDirectory: true)
+        let shimDir = "/tmp/authsia-guard-ABC"
+
+        // Prefers the saved pre-guard PATH when present.
+        let withOriginal = WorkspaceAgentLauncher.currentTerminalLaunchRequest(
+            tool: .claudeCode,
+            workingDirectory: root,
+            environment: [
+                "TERM": "xterm-256color",
+                "PATH": "\(shimDir):/usr/bin:/bin",
+                "AUTHSIA_WORKSPACE_GUARD": "1",
+                "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": shimDir,
+                "AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH": "/usr/local/bin:/usr/bin:/bin",
+            ]
+        )
+        #expect(withOriginal.environmentOverrides["PATH"] == "/usr/local/bin:/usr/bin:/bin")
+        #expect(withOriginal.environmentUnsets.contains("AUTHSIA_WORKSPACE_GUARD"))
+        #expect(withOriginal.environmentUnsets.contains("AUTHSIA_WORKSPACE_GUARD_SHIM_DIR"))
+        #expect(withOriginal.environmentUnsets.contains("AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH"))
+        #expect(withOriginal.environmentUnsets.contains(WorkspaceGuardedTerminal.shimInvocationEnvironmentName))
+
+        // Falls back to removing the shim entry from PATH when no saved PATH exists.
+        let withoutOriginal = WorkspaceAgentLauncher.currentTerminalLaunchRequest(
+            tool: .claudeCode,
+            workingDirectory: root,
+            environment: [
+                "TERM": "xterm-256color",
+                "PATH": "\(shimDir):/usr/bin:/bin",
+                "AUTHSIA_WORKSPACE_GUARD": "1",
+                "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": shimDir,
+            ]
+        )
+        #expect(withoutOriginal.environmentOverrides["PATH"] == "/usr/bin:/bin")
     }
 
     @Test("agent launch failures explain install PATH guarded terminal and print fallback")

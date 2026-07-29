@@ -2967,6 +2967,21 @@ struct WorkspaceAgentTerminalLaunchRequest: Equatable {
     let arguments: [String]
     let workingDirectory: URL
     let environmentOverrides: [String: String]
+    let environmentUnsets: [String]
+
+    init(
+        executable: String,
+        arguments: [String],
+        workingDirectory: URL,
+        environmentOverrides: [String: String],
+        environmentUnsets: [String] = []
+    ) {
+        self.executable = executable
+        self.arguments = arguments
+        self.workingDirectory = workingDirectory
+        self.environmentOverrides = environmentOverrides
+        self.environmentUnsets = environmentUnsets
+    }
 }
 
 enum WorkspaceAgentLauncher {
@@ -2987,14 +3002,22 @@ enum WorkspaceAgentLauncher {
     }
 
     /// Run a terminal agent in the current terminal. Inherits stdio so the tool gets
-    /// this shell's TTY (interactive), and inherits the environment so a guarded shell's
-    /// PATH/shims still apply. Replacing this process gives the interactive tool direct
-    /// ownership of the terminal instead of nesting under `authsia`.
+    /// this shell's TTY (interactive). Replacing this process gives the interactive tool
+    /// direct ownership of the terminal instead of nesting under `authsia`.
+    ///
+    /// The agent does NOT inherit the guarded-terminal shim: launching from a guarded tab
+    /// would otherwise put the shim dir on the agent's PATH, so every `node`/`python3`/
+    /// language-server the agent spawns would route through `workspace run` and be
+    /// classified per-command. Agents reach real tools directly and request secrets
+    /// explicitly via `authsia exec` / `authsia workspace run`, so we strip the shim here.
     static func runInCurrentTerminal(tool: WorkspaceAgentTool, workingDirectory: URL) throws {
         let program = tool.shellCommand
         let request = currentTerminalLaunchRequest(tool: tool, workingDirectory: workingDirectory)
         guard FileManager.default.changeCurrentDirectoryPath(request.workingDirectory.path) else {
             throw ValidationError(enterDirectoryFailureMessage(path: request.workingDirectory.path))
+        }
+        for name in request.environmentUnsets {
+            unsetenv(name)
         }
         for (key, value) in request.environmentOverrides {
             setenv(key, value, 1)
@@ -3049,11 +3072,44 @@ enum WorkspaceAgentLauncher {
         if term == nil || term == "" || term == "dumb" {
             environmentOverrides["TERM"] = "xterm-256color"
         }
+
+        // Strip the guarded-terminal shim so the agent reaches real tools directly.
+        var environmentUnsets: [String] = []
+        if let shimDirectory = environment["AUTHSIA_WORKSPACE_GUARD_SHIM_DIR"], !shimDirectory.isEmpty {
+            if let unshimmedPath = pathWithoutShim(environment: environment, shimDirectory: shimDirectory) {
+                environmentOverrides["PATH"] = unshimmedPath
+            }
+            environmentUnsets = [
+                "AUTHSIA_WORKSPACE_GUARD",
+                "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR",
+                "AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH",
+                WorkspaceGuardedTerminal.shimInvocationEnvironmentName,
+            ]
+        }
+
         return WorkspaceAgentTerminalLaunchRequest(
             executable: program,
             arguments: [program],
             workingDirectory: workingDirectory,
-            environmentOverrides: environmentOverrides
+            environmentOverrides: environmentOverrides,
+            environmentUnsets: environmentUnsets
         )
+    }
+
+    /// Removes the guard shim directory from PATH, preferring the saved pre-guard PATH
+    /// when present (matches how `authsia unguard` restores a shell). Returns nil when
+    /// there is nothing to strip so the caller leaves PATH untouched.
+    private static func pathWithoutShim(
+        environment: [String: String],
+        shimDirectory: String
+    ) -> String? {
+        if let original = environment["AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH"], !original.isEmpty {
+            return original
+        }
+        guard let path = environment["PATH"] else { return nil }
+        let entries = path.split(separator: ":", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { $0 != shimDirectory }
+        return entries.joined(separator: ":")
     }
 }

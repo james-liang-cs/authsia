@@ -196,6 +196,7 @@ extension XPCRequestHandler {
                     let merged = grant(existing, adding: resolution.requestedItems)
                     if merged.requestedItems != existing.requestedItems {
                         try? agentJITGrantStore.save(merged)
+                        postAgentJITGrantDidChange()
                     }
                     if !grantIDs.contains(existing.id) {
                         grantIDs.append(existing.id)
@@ -478,6 +479,7 @@ extension XPCRequestHandler {
                 )
                 return
             }
+            postAgentJITGrantDidChange()
 
             for grant in pendingGrants {
                 let auditItemName: String

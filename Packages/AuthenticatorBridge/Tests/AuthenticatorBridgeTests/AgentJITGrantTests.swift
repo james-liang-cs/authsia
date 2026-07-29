@@ -669,6 +669,33 @@ final class AgentJITGrantTests: XCTestCase {
 
         XCTAssertNil(decoded.agentRuntimeContext)
     }
+
+    func testRevokedAtMarksActiveGrantRevokedPreservingIdentity() {
+        let now = Date(timeIntervalSince1970: 1_700_000_100)
+        let grant = AgentJITGrant.fixture(expiresAt: now.addingTimeInterval(600))
+        XCTAssertEqual(grant.status(asOf: now), .active)
+
+        let revoked = grant.revoked(at: now)
+
+        XCTAssertEqual(revoked.revokedAt, now)
+        XCTAssertEqual(revoked.status(asOf: now), .revoked)
+        XCTAssertEqual(revoked.id, grant.id)
+        XCTAssertEqual(revoked.requestedItems, grant.requestedItems)
+        XCTAssertEqual(revoked.capabilities, grant.capabilities)
+    }
+
+    func testRevokedAtLeavesAlreadyRevokedGrantUnchanged() {
+        let revokedAt = Date(timeIntervalSince1970: 1_700_000_050)
+        let grant = AgentJITGrant.fixture(
+            expiresAt: revokedAt.addingTimeInterval(600),
+            revokedAt: revokedAt
+        )
+
+        let reRevoked = grant.revoked(at: revokedAt.addingTimeInterval(10))
+
+        XCTAssertEqual(reRevoked.revokedAt, revokedAt)
+        XCTAssertEqual(reRevoked, grant)
+    }
 }
 
 private extension AgentJITGrant {

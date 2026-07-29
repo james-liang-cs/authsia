@@ -515,6 +515,29 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         return expiresAt > date ? .active : .expired
     }
 
+    /// Returns a copy marked revoked at `date`. Used by Access Center to reflect a
+    /// revocation optimistically the moment the Bridge confirms it, before the full
+    /// snapshot reload lands. A no-op if the grant is already revoked.
+    public func revoked(at date: Date) -> AgentJITGrant {
+        guard revokedAt == nil else { return self }
+        return AgentJITGrant(
+            id: id,
+            agentName: agentName,
+            callerFingerprint: callerFingerprint,
+            folderScope: folderScope,
+            resourceScope: resourceScope,
+            capabilities: capabilities,
+            createdAt: createdAt,
+            expiresAt: expiresAt,
+            revokedAt: date,
+            lastUsedAt: lastUsedAt,
+            requestedItems: requestedItems,
+            agentRuntimeContext: agentRuntimeContext,
+            approvedBy: approvedBy,
+            environmentScope: environmentScope
+        )
+    }
+
     public func allows(
         capability: AgentJITCapability,
         itemIdentity: AgentJITItemIdentity? = nil,
