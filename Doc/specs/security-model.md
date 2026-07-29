@@ -7,6 +7,7 @@
 - [Trust Boundaries](#trust-boundaries)
 - [Security Flow](#security-flow)
 - [Direct Bridge Access](#direct-bridge-access)
+- [Caller Classification](#caller-classification)
 - [Human CLI Path](#human-cli-path)
 - [AI Tool And JIT Path](#ai-tool-and-jit-path)
 - [SSH-Agent Path](#ssh-agent-path)
@@ -171,6 +172,119 @@ compromised or an unintended same-team binary speaks the bridge protocol, the
 signature boundary has already failed. Request policy still applies, but the
 system should not be described as protecting against compromised trusted code.
 
+## Caller Classification
+
+Every secret-bearing request is routed to exactly one of three actors before any
+gate runs: **automation**, **agent**, or **human**. Classification decides which
+authority a request may use, so it happens before approval, not after.
+
+### Evidence Per Actor
+
+| Actor | Selecting evidence | Forgeable by the caller? |
+| --- | --- | --- |
+| Automation | Automation credential ID/token in the request context or `AUTHSIA_*` credential environment key | Yes as a claim; useless without a stored, active, machine-matched credential |
+| Agent | Explicit agent runtime marker: platform key plus a truthy invokes-Authsia key | Yes — treated as a self-declaration that only ever *adds* restriction |
+| Agent | Agentic ancestry: process name, argv[0], or bundle identifier matching a known agent (`claude`, `codex`, `cursor-agent`, `github-copilot`, `windsurf-agent`), or a Copilot extension path in argv | No — read from the process tree by the bridge |
+| Agent | IDE / automation-suspect ancestry: editor helper process names, `.app` bundle paths in argv, `--type=extensionHost`, or IDE bundle identifiers | No — read from the process tree by the bridge |
+| Human | Trusted terminal ancestry (Terminal, iTerm2, Ghostty, Warp) with a shell parent, plus the server-current session token for that terminal scope | No — ancestry is observed; the token is server-held |
+
+Identity is read from the **process tree**, not from anything the caller says
+about itself. `argv[0]` counts even as a bare word, because a PATH symlink hides
+the agent's identity from the resolved executable name — `codex` resolves to a
+binary named `codex-aarch64-apple-darwin`. Later arguments count only when they
+are real filesystem paths, so an operand such as `grep codex notes.txt` never
+makes a plain command agentic.
+
+### Precedence
+
+```mermaid
+flowchart TB
+    start["Secret-bearing CLI request"]
+    autoCred{"Valid automation credential?"}
+    marker{"Explicit agent runtime marker?"}
+    agentic{"Agentic ancestry?<br/>known agent name, argv[0], bundle"}
+    ide{"IDE / automation-suspect ancestry?<br/>editor helper, extension host"}
+    chrome{"Chrome native host caller?"}
+    trusted{"Trusted terminal ancestry<br/>AND server-current session token?"}
+
+    automation["AUTOMATION<br/>machine ID, allowedCommands,<br/>scope, expiry"]
+    agentJIT["AGENT<br/>JIT preflight, scoped grant,<br/>exec + scoped list only"]
+    humanFlow["HUMAN<br/>approval or terminal-scoped session"]
+    bootstrap["HUMAN (bootstrap)<br/>stdin TTY, no agent evidence:<br/>approval before any metadata"]
+
+    start --> autoCred
+    autoCred -->|yes| automation
+    autoCred -->|no| marker
+    marker -->|yes| agentJIT
+    marker -->|no| agentic
+    agentic -->|yes| agentJIT
+    agentic -->|no| ide
+    ide -->|yes| agentJIT
+    ide -->|no| chrome
+    chrome -->|yes| humanFlow
+    chrome -->|no| trusted
+    trusted -->|yes| humanFlow
+    trusted -->|"no, but stdin TTY<br/>and no agent evidence"| bootstrap
+    trusted -->|"no"| agentJIT
+    bootstrap --> humanFlow
+
+    classDef humanPath fill:#e8f4ff,stroke:#1a5fb4,color:#0b2f55;
+    classDef agentPath fill:#fff4e5,stroke:#b06000,color:#3f2600;
+    classDef autoPath fill:#f3e8ff,stroke:#6b21a8,color:#2e1065;
+    classDef gate fill:#f5f5f5,stroke:#666,color:#111;
+
+    class humanFlow,bootstrap humanPath;
+    class agentJIT agentPath;
+    class automation autoPath;
+    class autoCred,marker,agentic,ide,chrome,trusted gate;
+```
+
+The default at the bottom of the chain is the agent path: a caller that is
+neither recognizable automation nor a trusted terminal with a live session is
+treated as an agent and must obtain a JIT grant. Classification fails toward
+more restriction, not less.
+
+### Both Sides Must Agree
+
+Classification runs twice, from different vantage points:
+
+- The **CLI** decides whether to run a JIT preflight
+  (`Exec.shouldRunJITPreflight`), using its own process ancestry and
+  environment.
+- The **bridge host** decides whether a grant is required
+  (`XPCRequestHandler.isAgentJITCaller`), using the XPC peer's ancestry.
+
+These must reach the same verdict for the same caller. If the host demands a
+grant the CLI never sought, the request fails with no grant obtainable and no
+way for the user to satisfy the error. If the CLI seeks a grant the host does
+not require, the user sees an approval prompt that authorizes nothing.
+
+Because the two run in different processes, they read different evidence:
+the CLI has argv for the whole ancestry, and the host has code-signing identity
+and bundle identifiers. Any classification rule added to one side needs the
+matching rule on the other, and any signal available to only one side must not
+become the sole basis for a decision.
+
+### What The Terminal Does And Does Not Decide
+
+A TTY is **not** a classifier. An agent hosted inside an IDE presents the same
+process ancestry *and* the same controlling terminal as the human sitting at
+that IDE, so the terminal cannot separate them. Treating stdin TTY as evidence
+of a human would let an IDE-hosted agent reuse the human's session authority.
+
+The terminal is therefore used only where a human is already established by
+other means:
+
+- as one requirement of an ongoing human session, alongside the server-current
+  session token for the same terminal scope
+- to admit the narrow biometric bootstrap, which is available only when there is
+  no agent evidence at all and which releases no metadata or secret before
+  approval
+
+Redirected stdout does not affect routing. `TerminalContext.isInteractiveSession`
+is a separate stdin-and-stdout check for terminal user interfaces, not an
+authorization input.
+
 ## Human CLI Path
 
 Human terminal use follows the normal CLI path:
@@ -189,21 +303,21 @@ scope.
 ## AI Tool And JIT Path
 
 Coding agents are treated as a separate actor from the human who owns the
-terminal. When no explicit automation credential is supplied, confirmed
-`agentRuntimeContext` selects JIT; automation credentials are evaluated through
-their separate authorization path. An ancestry-only agent or IDE helper
-invocation also selects JIT when stdin is not a TTY.
+terminal. See [Caller Classification](#caller-classification) for how a request
+is routed to this path. When no explicit automation credential is supplied,
+confirmed `agentRuntimeContext` selects JIT; automation credentials are
+evaluated through their separate authorization path. An ancestry-only agent or
+IDE helper invocation selects JIT on ancestry alone, regardless of the
+terminal, because the bridge host requires a grant from those callers either
+way.
 
 An IDE or agent name in the ancestry is not enough to establish an ongoing
 human session. That path requires stdin TTY plus the server-current session
 token for the same terminal scope. TTY alone is neither authorization nor a
-classifier override. A first stdin-TTY request with no confirmed agent runtime
-context can reach a narrow biometric bootstrap, but it receives no metadata or
-secret before approval and then mints the normal scoped terminal session.
-Active JIT grants do not authorize bootstrap or human list requests. Redirected
-stdout does not change routing because this decision uses stdin TTY;
-`TerminalContext.isInteractiveSession` remains a separate stdin-and-stdout UI
-check for interactive terminal interfaces.
+classifier override. A first stdin-TTY request with no agent evidence at all
+can reach a narrow biometric bootstrap, but it receives no metadata or secret
+before approval and then mints the normal scoped terminal session. Active JIT
+grants do not authorize bootstrap or human list requests.
 
 When JIT is required:
 
