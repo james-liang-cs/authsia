@@ -265,6 +265,8 @@ public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
 
 public enum AgentCommandFindingDetector {
     private static let hookMatchWindow: TimeInterval = 10
+    /// History grants older than this window are omitted from multi-grant finding derivation.
+    public static let findingGrantRecencyWindow: TimeInterval = 30 * 24 * 60 * 60
     private static let directSecretReadCommands: Set<String> = ["get", "read", "load", "inject"]
     private static let environmentExecutables: Set<String> = ["env", "printenv"]
     private static let environmentFileReadExecutables: Set<String> = [
@@ -274,23 +276,26 @@ public enum AgentCommandFindingDetector {
     public static func findings(
         for grants: [AgentJITGrant],
         events: [AgentCommandEvent],
-        auditRecords: [BridgeAuditRecord]
+        auditRecords: [BridgeAuditRecord],
+        now: Date = Date()
     ) -> [AgentCommandFinding] {
-        findings(for: grants, events: events, fileEvents: [], auditRecords: auditRecords)
+        findings(for: grants, events: events, fileEvents: [], auditRecords: auditRecords, now: now)
     }
 
     public static func findings(
         for grants: [AgentJITGrant],
         events: [AgentCommandEvent],
         fileEvents: [AgentFileActivityEvent],
-        auditRecords: [BridgeAuditRecord]
+        auditRecords: [BridgeAuditRecord],
+        now: Date = Date()
     ) -> [AgentCommandFinding] {
         findings(
             for: grants,
             events: events,
             fileEvents: fileEvents,
             networkSnapshots: [],
-            auditRecords: auditRecords
+            auditRecords: auditRecords,
+            now: now
         )
     }
 
@@ -299,9 +304,10 @@ public enum AgentCommandFindingDetector {
         events: [AgentCommandEvent],
         fileEvents: [AgentFileActivityEvent],
         networkSnapshots: [AgentNetworkActivityRunSnapshot],
-        auditRecords: [BridgeAuditRecord]
+        auditRecords: [BridgeAuditRecord],
+        now: Date = Date()
     ) -> [AgentCommandFinding] {
-        grants
+        grantsEligibleForFindings(grants, now: now)
             .flatMap { grant in
                 findings(
                     for: grant,
@@ -317,6 +323,20 @@ public enum AgentCommandFindingDetector {
                 }
                 return lhs.recordedAt < rhs.recordedAt
             }
+    }
+
+    public static func grantsEligibleForFindings(
+        _ grants: [AgentJITGrant],
+        now: Date = Date()
+    ) -> [AgentJITGrant] {
+        let cutoff = now.addingTimeInterval(-findingGrantRecencyWindow)
+        return grants.filter { grant in
+            if grant.status(asOf: now) == .active {
+                return true
+            }
+            let endedAt = grant.revokedAt ?? grant.expiresAt
+            return endedAt >= cutoff
+        }
     }
 
     public static func findings(
@@ -356,33 +376,43 @@ public enum AgentCommandFindingDetector {
         var findings: [AgentCommandFinding] = []
 
         for event in grantEvents {
-            if grantEndedBefore(event.recordedAt, grant: grant) {
+            let isExactGrantMatch = event.agentJITGrantID == grant.id
+
+            // Review/Warning require an exact grant ID so reused terminal scopes do not
+            // fan one command out across historical grants.
+            if isExactGrantMatch, grantEndedBefore(event.recordedAt, grant: grant) {
                 findings.append(commandAfterGrantEndedFinding(for: event, grant: grant))
             }
 
-            if event.captureSource == .process {
-                if isHookCapable(event: event, grant: grant) {
-                    if !hasMatchingHookEvent(for: event, grant: grant, events: events) {
-                        findings.append(processOnlyCaptureFinding(for: event, grant: grant))
+            if allowsInformationalFinding(for: event, grant: grant, isExactGrantMatch: isExactGrantMatch) {
+                if event.captureSource == .process {
+                    if isHookCapable(event: event, grant: grant) {
+                        if !hasMatchingHookEvent(for: event, grant: grant, events: events) {
+                            findings.append(processOnlyCaptureFinding(for: event, grant: grant))
+                        }
+                    } else {
+                        findings.append(processFallbackUsedFinding(for: event, grant: grant))
                     }
-                } else {
-                    findings.append(processFallbackUsedFinding(for: event, grant: grant))
+                }
+
+                if event.captureSource == .injectedTree {
+                    findings.append(injectedTreeCaptureFinding(for: event, grant: grant))
                 }
             }
 
-            if event.captureSource == .injectedTree {
-                findings.append(injectedTreeCaptureFinding(for: event, grant: grant))
-            }
-
-            if isDeniedDirectSecretRead(event) {
+            if isExactGrantMatch, isDeniedDirectSecretRead(event) {
                 findings.append(deniedDirectSecretReadFinding(for: event, grant: grant))
             }
 
-            if isPossibleEnvironmentExposure(event), grant.status(asOf: event.recordedAt) == .active {
+            if isExactGrantMatch,
+               isPossibleEnvironmentExposure(event),
+               grant.status(asOf: event.recordedAt) == .active {
                 findings.append(possibleEnvironmentExposureFinding(for: event, grant: grant))
             }
 
-            if let responseOutcome = event.responseOutcome, responseOutcome != .allow {
+            if isExactGrantMatch,
+               let responseOutcome = event.responseOutcome,
+               responseOutcome != .allow {
                 findings.append(mediatedResponseFinding(for: event, grant: grant))
             }
         }
@@ -392,7 +422,10 @@ public enum AgentCommandFindingDetector {
         }
 
         for fileEvent in grantFileEvents {
+            let isExactGrantMatch = fileEvent.agentJITGrantID == grant.id
+
             if fileEvent.captureSource == .injectedExec {
+                guard isExactGrantMatch else { continue }
                 if fileEvent.detail == InjectedSecretFileActivityDetail.scrubbed {
                     findings.append(secretFileScrubbedFinding(for: fileEvent, grant: grant))
                 } else if fileEvent.detail == InjectedSecretFileActivityDetail.secretDetected {
@@ -408,11 +441,15 @@ public enum AgentCommandFindingDetector {
                 continue
             }
 
-            if isSensitiveFileActivity(fileEvent) {
+            if isExactGrantMatch, isSensitiveFileActivity(fileEvent) {
                 findings.append(sensitiveFileActivityFinding(for: fileEvent, grant: grant))
             }
 
-            if isOutsideWorkspaceFileActivity(fileEvent) {
+            if allowsInformationalFileFinding(
+                for: fileEvent,
+                grant: grant,
+                isExactGrantMatch: isExactGrantMatch
+            ), isOutsideWorkspaceFileActivity(fileEvent) {
                 findings.append(outsideWorkspaceFileActivityFinding(for: fileEvent, grant: grant))
             }
         }
@@ -450,6 +487,29 @@ public enum AgentCommandFindingDetector {
             }
             return lhs.recordedAt < rhs.recordedAt
         }
+    }
+
+    private static func allowsInformationalFinding(
+        for event: AgentCommandEvent,
+        grant: AgentJITGrant,
+        isExactGrantMatch: Bool
+    ) -> Bool {
+        if isExactGrantMatch {
+            return true
+        }
+        // Scope/runtime matches may still surface Info while the grant was active.
+        return grant.status(asOf: event.recordedAt) == .active
+    }
+
+    private static func allowsInformationalFileFinding(
+        for event: AgentFileActivityEvent,
+        grant: AgentJITGrant,
+        isExactGrantMatch: Bool
+    ) -> Bool {
+        if isExactGrantMatch {
+            return true
+        }
+        return grant.status(asOf: event.recordedAt) == .active
     }
 
     private static func networkAfterGrantEndedFinding(

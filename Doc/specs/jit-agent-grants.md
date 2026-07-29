@@ -636,22 +636,28 @@ display-only: they do not call AI, send data out, store command output, block a
 command, revoke a grant, or change authorization. Severities are limited to
 `Info`, `Review`, and `Warning`.
 
+Finding derivation uses active grants plus history grants that ended within the
+last 30 days. `Review` and `Warning` findings require an exact
+`agentJITGrantID` match on the evidence record so reused terminal session scopes
+do not fan one command out across unrelated historical grants. Scope and runtime
+correlation may still attach `Info` findings while a grant was active.
+
 The first rules are intentionally narrow:
 
-- `Warning`: a command was recorded after the matching grant expired or was
-  revoked.
+- `Warning`: a command with an exact grant ID was recorded after that grant
+  expired or was revoked.
 - `Review`: a direct agent secret-read command such as `authsia get`,
-  `authsia read`, `authsia load`, or `authsia inject` was recorded or appears in
-  a matching audit record.
-- `Review`: an active-grant command dumps environment (`env`, `printenv`) or
-  clearly reads a high-signal dotenv file (for example `cat .env` /
-  `.env.production`). Benign mentions such as `.env.example` or `ls .env*` are
-  not flagged.
-- `Review`: file activity touched a high-signal secret path (`.env` /
-  `.env.<name>` excluding example/sample/template/dist, `.envrc`, `.netrc`,
-  `id_rsa` / `id_ed25519` / `id_ecdsa`, `*.pem` / `*.p12` / `*.pfx`). Broad
-  names such as bare `credentials`, `*.key`, `.npmrc`, and `.pypirc` are not
-  Review flags.
+  `authsia read`, `authsia load`, or `authsia inject` was recorded with an exact
+  grant ID or appears in a matching audit record.
+- `Review`: an active-grant command with an exact grant ID dumps environment
+  (`env`, `printenv`) or clearly reads a high-signal dotenv file (for example
+  `cat .env` / `.env.production`). Benign mentions such as `.env.example` or
+  `ls .env*` are not flagged.
+- `Review`: file activity with an exact grant ID touched a high-signal secret
+  path (`.env` / `.env.<name>` excluding example/sample/template/dist, `.envrc`,
+  `.netrc`, `id_rsa` / `id_ed25519` / `id_ecdsa`, `*.pem` / `*.p12` / `*.pfx`).
+  Broad names such as bare `credentials`, `*.key`, `.npmrc`, and `.pypirc` are
+  not Review flags.
 - `Review`: legacy detect-only releases may persist a confirmed unchanged match
   (`Secret detected in file`) or an incomplete inspection that does not confirm
   secret presence (`Secret-file inspection incomplete`).

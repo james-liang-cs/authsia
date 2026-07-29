@@ -527,6 +527,134 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(findings.map(\.severity), [.warning])
     }
 
+    func testFindingDetectorDoesNotWarnForScopeOnlyMatchAfterGrantEnded() {
+        let grant = makeGrant(expiresAt: Date(timeIntervalSince1970: 100))
+        let event = AgentCommandEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            recordedAt: Date(timeIntervalSince1970: 120),
+            agentPlatform: "claude-code",
+            agentJITGrantID: nil,
+            captureSource: .hook,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "swift",
+            arguments: ["swift", "test"],
+            command: "swift test",
+            exitStatus: 0
+        )
+
+        let findings = AgentCommandFindingDetector.findings(for: grant, events: [event], auditRecords: [])
+
+        XCTAssertFalse(findings.contains { $0.type == .commandAfterGrantEnded })
+        XCTAssertFalse(findings.contains { $0.severity == .warning || $0.severity == .review })
+    }
+
+    func testFindingDetectorDoesNotFanOutPostExpiryWarningsAcrossSharedTerminalScope() {
+        let firstGrant = makeGrant(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            expiresAt: Date(timeIntervalSince1970: 100)
+        )
+        let secondGrant = makeGrant(
+            id: UUID(uuidString: "BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF")!,
+            expiresAt: Date(timeIntervalSince1970: 110)
+        )
+        let event = AgentCommandEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            recordedAt: Date(timeIntervalSince1970: 200),
+            agentPlatform: "claude-code",
+            agentJITGrantID: firstGrant.id,
+            captureSource: .hook,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "swift",
+            arguments: ["swift", "test"],
+            command: "swift test",
+            exitStatus: 0
+        )
+
+        let findings = AgentCommandFindingDetector.findings(
+            for: [firstGrant, secondGrant],
+            events: [event],
+            auditRecords: [],
+            now: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(findings.map(\.type), [.commandAfterGrantEnded])
+        XCTAssertEqual(findings.map(\.agentJITGrantID), [firstGrant.id])
+    }
+
+    func testFindingDetectorDoesNotReviewScopeOnlyEnvironmentExposure() {
+        let grant = makeGrant()
+        let event = AgentCommandEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            recordedAt: Date(timeIntervalSince1970: 100),
+            agentPlatform: "claude-code",
+            agentJITGrantID: nil,
+            captureSource: .hook,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "printenv",
+            arguments: ["printenv"],
+            command: "printenv",
+            exitStatus: 0
+        )
+
+        let findings = AgentCommandFindingDetector.findings(for: grant, events: [event], auditRecords: [])
+
+        XCTAssertFalse(findings.contains { $0.type == .possibleEnvironmentExposure })
+        XCTAssertFalse(findings.contains { $0.severity == .review || $0.severity == .warning })
+    }
+
+    func testFindingDetectorSkipsStaleHistoryGrantsOutsideRecencyWindow() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let staleGrant = makeGrant(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            createdAt: now.addingTimeInterval(-90 * 24 * 60 * 60),
+            expiresAt: now.addingTimeInterval(-60 * 24 * 60 * 60)
+        )
+        let recentGrant = makeGrant(
+            id: UUID(uuidString: "BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF")!,
+            createdAt: now.addingTimeInterval(-10 * 24 * 60 * 60),
+            expiresAt: now.addingTimeInterval(-2 * 24 * 60 * 60)
+        )
+        let staleEvent = AgentCommandEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            recordedAt: staleGrant.expiresAt.addingTimeInterval(30),
+            agentPlatform: "claude-code",
+            agentJITGrantID: staleGrant.id,
+            captureSource: .hook,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "swift",
+            arguments: ["swift", "test"],
+            command: "swift test",
+            exitStatus: 0
+        )
+        let recentEvent = AgentCommandEvent(
+            id: UUID(uuidString: "22222222-3333-4444-5555-666666666666")!,
+            recordedAt: recentGrant.expiresAt.addingTimeInterval(30),
+            agentPlatform: "claude-code",
+            agentJITGrantID: recentGrant.id,
+            captureSource: .hook,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "swift",
+            arguments: ["swift", "test"],
+            command: "swift test",
+            exitStatus: 0
+        )
+
+        let findings = AgentCommandFindingDetector.findings(
+            for: [staleGrant, recentGrant],
+            events: [staleEvent, recentEvent],
+            auditRecords: [],
+            now: now
+        )
+
+        XCTAssertEqual(findings.map(\.type), [.commandAfterGrantEnded])
+        XCTAssertEqual(findings.map(\.agentJITGrantID), [recentGrant.id])
+    }
+
     func testFindingDetectorRecordsProcessOnlyCaptureAsInfoForHookCapableAgent() {
         let grant = makeGrant()
         let event = AgentCommandEvent(
@@ -798,7 +926,8 @@ final class AgentCommandHistoryTests: XCTestCase {
             for: [grant],
             events: [],
             fileEvents: [workspaceRootEvent, relativeInsideEvent, outsideEvent],
-            auditRecords: []
+            auditRecords: [],
+            now: Date(timeIntervalSince1970: 200)
         )
 
         XCTAssertEqual(findings.map(\.type), [.outsideWorkspaceFileActivity])
@@ -1238,12 +1367,14 @@ final class AgentCommandHistoryTests: XCTestCase {
     }
 
     private func makeGrant(
+        id: UUID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
         agentName: String = "Claude Code",
+        createdAt: Date = Date(timeIntervalSince1970: 50),
         expiresAt: Date = Date(timeIntervalSince1970: 500),
         revokedAt: Date? = nil
     ) -> AgentJITGrant {
         AgentJITGrant(
-            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            id: id,
             agentName: agentName,
             callerFingerprint: AgentJITCallerFingerprint(
                 processName: "authsia",
@@ -1257,7 +1388,7 @@ final class AgentCommandHistoryTests: XCTestCase {
             ),
             folderScope: .folder("Team/API"),
             capabilities: [.exec, .list],
-            createdAt: Date(timeIntervalSince1970: 50),
+            createdAt: createdAt,
             expiresAt: expiresAt,
             revokedAt: revokedAt,
             lastUsedAt: nil,
