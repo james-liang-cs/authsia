@@ -195,6 +195,63 @@ final class SSHAgentListenerAuthorizationTests: XCTestCase {
         XCTAssertEqual(persistence.values, [])
     }
 
+    // MARK: - Session scope
+
+    func testSessionScopePrefersTerminalOwningAncestor() {
+        let scope = SSHAgentListener.sessionScope(
+            from: makeAncestry([(10, "ssh"), (11, "git"), (12, "zsh"), (13, "Cursor")]),
+            terminalScope: { $0 == 12 ? "tty:/dev/ttys004:sid:12" : nil },
+            agentPlatform: { $0.name == "Cursor" ? "cursor" : nil }
+        )
+
+        XCTAssertEqual(scope, "tty:/dev/ttys004:sid:12")
+    }
+
+    func testSessionScopeFallsBackToOutermostAgentHostWhenNoAncestorOwnsTerminal() {
+        let scope = SSHAgentListener.sessionScope(
+            from: makeAncestry([
+                (10, "ssh"),
+                (11, "git"),
+                (12, "Cursor Helper (Plugin)"),
+                (13, "Cursor"),
+            ]),
+            terminalScope: { _ in nil },
+            agentPlatform: { process in
+                switch process.name {
+                case "Cursor": return "cursor"
+                case "Cursor Helper (Plugin)": return "cursor-helper"
+                default: return nil
+                }
+            }
+        )
+
+        XCTAssertEqual(scope, "agent:cursor:pid:13")
+    }
+
+    func testSessionScopeIsNilWhenNoAncestorOwnsTerminalOrHostsAutomation() {
+        let scope = SSHAgentListener.sessionScope(
+            from: makeAncestry([(10, "ssh"), (11, "git"), (12, "zsh")]),
+            terminalScope: { _ in nil },
+            agentPlatform: { _ in nil }
+        )
+
+        XCTAssertNil(scope)
+    }
+
+    func testAgentFallbackScopeResolvesBackToItsProcessIdentifier() {
+        let scope = SSHAgentListener.sessionScope(
+            from: makeAncestry([(10, "ssh"), (11, "Cursor")]),
+            terminalScope: { _ in nil },
+            agentPlatform: { $0.name == "Cursor" ? "cursor" : nil }
+        )
+
+        XCTAssertEqual(TerminalSessionScope.agentScopedProcessIdentifier(from: scope), 11)
+    }
+
+    private func makeAncestry(_ entries: [(pid_t, String)]) -> [SSHAgentListener.ProcessRef] {
+        entries.map { SSHAgentListener.ProcessRef(pid: $0.0, name: $0.1, path: nil) }
+    }
+
     private func makeListener(
         approvalDecision: SSHAgentApprovalDecision,
         passphrases: [String?]

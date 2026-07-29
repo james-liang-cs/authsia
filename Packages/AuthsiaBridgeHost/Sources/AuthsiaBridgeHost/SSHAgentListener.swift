@@ -583,13 +583,41 @@ public final class SSHAgentListener: @unchecked Sendable {
         TerminalSessionScope.process(pid: Int32(pid))
     }
 
-    static func sessionScope(from ancestry: [ProcessRef]) -> String? {
+    /// Resolves the scope an approval is cached against. A controlling terminal is the
+    /// preferred anchor, but IDE-launched tooling has none anywhere in its chain — an
+    /// editor's built-in Git runs as `ssh → git → <IDE helper> → <IDE>`, with no shell.
+    /// Without a fallback those requesters get a nil scope, which means no caching at
+    /// all and a prompt on every signature, so bind them to the outermost automation
+    /// host instead: it outlives the per-command processes below it.
+    static func sessionScope(
+        from ancestry: [ProcessRef],
+        terminalScope: (pid_t) -> String? = { sessionScope(pid: $0) },
+        agentPlatform: (ProcessRef) -> String? = { agentPlatform(for: $0) }
+    ) -> String? {
         for process in ancestry {
-            if let scope = sessionScope(pid: process.pid) {
+            if let scope = terminalScope(process.pid) {
                 return scope
             }
         }
+        for process in ancestry.reversed() {
+            if let platform = agentPlatform(process) {
+                return "agent:\(platform):pid:\(process.pid)"
+            }
+        }
         return nil
+    }
+
+    private static func agentPlatform(for process: ProcessRef) -> String? {
+        let arguments = kernelProcessArgumentsAndEnvironment(pid: process.pid)?.arguments ?? []
+        return AgenticProcessDetector.agentPlatform(
+            processName: process.name,
+            bundleIdentifier: nil,
+            arguments: arguments
+        ) ?? AgenticProcessDetector.automationSuspectPlatform(
+            processName: process.name,
+            bundleIdentifier: nil,
+            arguments: arguments
+        )
     }
 
     private static func processName(pid: pid_t) -> String? {

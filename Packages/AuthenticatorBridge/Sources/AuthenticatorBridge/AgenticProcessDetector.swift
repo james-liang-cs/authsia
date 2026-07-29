@@ -175,6 +175,24 @@ public enum AgenticProcessDetector {
         return automationSuspectBundleFragments.contains { normalizedBundle.contains($0) }
     }
 
+    /// Platform label for a process that *hosts* automation without being a known agent
+    /// binary — IDEs and their Electron extension hosts. Shells are excluded: a shell is
+    /// the vehicle automation runs through, never the host, and its lifetime is too short
+    /// to anchor anything to.
+    public static func automationSuspectPlatform(
+        processName: String?,
+        bundleIdentifier: String?,
+        arguments: [String] = []
+    ) -> String? {
+        guard !isShellProcess(processName) else { return nil }
+        guard isAutomationSuspectProcess(
+            processName: processName,
+            bundleIdentifier: bundleIdentifier,
+            arguments: arguments
+        ) else { return nil }
+        return normalizeProcessName(processName)
+    }
+
     public static func currentProcessAncestry(maxHops: Int = 8) -> [AgenticProcessReference] {
         #if os(macOS)
         processAncestry(startingAt: getpid(), maxHops: maxHops)

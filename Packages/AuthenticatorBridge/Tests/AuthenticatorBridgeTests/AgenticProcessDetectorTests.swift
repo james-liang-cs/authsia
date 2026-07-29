@@ -223,4 +223,43 @@ struct AgenticProcessDetectorTests {
         #expect(context.parent?.processName == "authsia")
         #expect(context.host?.processName == "claude.exe")
     }
+
+    @Test("labels IDE hosts with a scope-safe platform name")
+    func labelsIDEHostsWithScopeSafePlatformName() {
+        #expect(
+            AgenticProcessDetector.automationSuspectPlatform(
+                processName: "Cursor",
+                bundleIdentifier: nil
+            ) == "cursor"
+        )
+        #expect(
+            AgenticProcessDetector.automationSuspectPlatform(
+                processName: "Cursor Helper (Plugin)",
+                bundleIdentifier: nil
+            ) == "cursor-helper"
+        )
+    }
+
+    @Test("does not label shells or ordinary tooling as automation hosts")
+    func doesNotLabelShellsOrOrdinaryToolingAsAutomationHosts() {
+        for processName in ["zsh", "bash", "login", "git", "ssh"] {
+            #expect(
+                AgenticProcessDetector.automationSuspectPlatform(
+                    processName: processName,
+                    bundleIdentifier: nil
+                ) == nil
+            )
+        }
+    }
+
+    @Test("does not label a shell that merely references an IDE path")
+    func doesNotLabelShellThatMerelyReferencesIDEPath() {
+        #expect(
+            AgenticProcessDetector.automationSuspectPlatform(
+                processName: "zsh",
+                bundleIdentifier: nil,
+                arguments: ["/bin/zsh", "-c", "source /Applications/Cursor.app/Contents/Resources/shell-integration.zsh"]
+            ) == nil
+        )
+    }
 }
