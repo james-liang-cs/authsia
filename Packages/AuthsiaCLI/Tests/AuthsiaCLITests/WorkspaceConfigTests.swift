@@ -30,7 +30,7 @@ struct WorkspaceConfigTests {
         #expect(help.contains("agent"))
         #expect(help.contains("Open or print a secret-free AI tool launch"))
         #expect(help.contains("env"))
-        #expect(help.contains("Manage workspace env bindings"))
+        #expect(help.contains("Manage workspace env bindings and environment selection"))
         #expect(help.contains("sync"))
         #expect(help.contains("Reconcile workspace vault folder and env bindings"))
         #expect(!help.contains("forget"))
@@ -146,6 +146,8 @@ struct WorkspaceConfigTests {
                     "authsia workspace env list",
                     "authsia workspace env add API_KEY authsia://api-key/API_KEY/key",
                     "authsia workspace env validate",
+                    "authsia workspace env available",
+                    "authsia workspace env use Production",
                 ]
             ),
         ]
@@ -194,6 +196,26 @@ struct WorkspaceConfigTests {
                 "workspace env validate",
                 Workspace.Env.Validate.helpMessage(columns: 160),
                 ["authsia workspace env validate"]
+            ),
+            (
+                "workspace env available",
+                Env.WorkspaceAvailable.helpMessage(columns: 160),
+                ["authsia workspace env available"]
+            ),
+            (
+                "workspace env show",
+                Env.WorkspaceShow.helpMessage(columns: 160),
+                ["authsia workspace env show"]
+            ),
+            (
+                "workspace env use",
+                Env.WorkspaceUse.helpMessage(columns: 160),
+                ["authsia workspace env use Production"]
+            ),
+            (
+                "workspace env clear",
+                Env.WorkspaceClear.helpMessage(columns: 160),
+                ["authsia workspace env clear"]
             ),
         ]
 

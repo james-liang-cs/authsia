@@ -1601,15 +1601,28 @@ struct Workspace: AsyncParsableCommand {
     struct Env: ParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "env",
-            abstract: "Manage workspace env bindings",
+            abstract: "Manage workspace env bindings and environment selection",
             discussion: """
                 Examples:
                   authsia workspace env list
                   authsia workspace env add API_KEY authsia://api-key/API_KEY/key
                   authsia workspace env remove API_KEY
                   authsia workspace env validate
+                  authsia workspace env available
+                  authsia workspace env use Production
+                  authsia workspace env show
+                  authsia workspace env clear
                 """,
-            subcommands: [List.self, Add.self, Remove.self, Validate.self]
+            subcommands: [
+                List.self,
+                Add.self,
+                Remove.self,
+                Validate.self,
+                authsia.Env.WorkspaceAvailable.self,
+                authsia.Env.WorkspaceUse.self,
+                authsia.Env.WorkspaceShow.self,
+                authsia.Env.WorkspaceClear.self,
+            ]
         )
 
         struct EnvBindingStatus: Equatable {

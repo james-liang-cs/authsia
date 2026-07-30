@@ -26,7 +26,7 @@ struct ShortOptionAliasTests {
         #expect(try Exec.parse(["password", "-f", "Team/API", "--", "env"]).folder == "Team/API")
         #expect(try Scrape.parse(["-f", "Team/API", "--dry-run"]).folder == "Team/API")
         #expect(try SSH.Adopt.parse(["-f", "Infra/SSH", "--dry-run"]).folder == "Infra/SSH")
-        #expect(try Env.Add.parse(["--name", "prod", "-f", "Team/API", "-f", "Team/Web"]).folder == [
+        #expect(try Env.Profile.Add.parse(["--name", "prod", "-f", "Team/API", "-f", "Team/Web"]).folder == [
             "Team/API",
             "Team/Web",
         ])

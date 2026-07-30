@@ -345,7 +345,8 @@ struct Access: ParsableCommand {
             guard let profile = try environmentStore.load(named: trimmedEnvName) else {
                 throw ValidationError(
                     "No environment profile named '\(trimmedEnvName)' was found. " +
-                        "Run `authsia env list`, or create it with `authsia env add --name \(trimmedEnvName) --folder <folder>`."
+                        "Run `authsia env profile list`, or create it with " +
+                        "`authsia env profile add --name \(trimmedEnvName) --folder <folder>`."
                 )
             }
             return try credentialScope(for: profile)
@@ -368,7 +369,8 @@ struct Access: ParsableCommand {
             guard let normalized = AutomationCredentialScope.normalizeForCreation(folderPaths: paths) else {
                 throw ValidationError(
                     "Environment profile '\(profile.name)' has no folders. " +
-                        "Create a folder-scoped profile with `authsia env add --name \(profile.name) --folder <folder>`."
+                        "Create a folder-scoped profile with " +
+                        "`authsia env profile add --name \(profile.name) --folder <folder>`."
                 )
             }
             return normalized

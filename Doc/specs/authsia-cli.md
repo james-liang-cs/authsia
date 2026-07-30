@@ -137,11 +137,10 @@ Key properties:
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
-| `authsia env add` | Add an environment scope profile | `authsia env add --name prod --folder Production --folder Shared` |
-| `authsia env list` | List profiles outside a workspace; inside one, list tags from the workspace vault-folder tree, active state, and reference counts | `authsia env list --format table` |
-| `authsia env show` | Show the active workspace environment or global profile | `authsia env show` |
-| `authsia env use <name>` | Activate one healthy, referenced environment for the current workspace, or a global profile outside one | `authsia env use Production` |
-| `authsia env clear` | Return the current workspace to the Default environment, or clear the global profile outside one | `authsia env clear` |
+| `authsia env profile add` | Add a global environment scope profile | `authsia env profile add --name prod --folder Production --folder Shared` |
+| `authsia env profile list/show/use/clear` | Manage global profiles regardless of the current directory | `authsia env profile use prod` |
+| `authsia workspace env available` | List selectable tags for the current workspace | `authsia workspace env available --format table` |
+| `authsia workspace env show/use/clear` | Manage the current workspace's machine-local environment selection | `authsia workspace env use Production` |
 | `authsia ssh adopt` | Adopt existing SSH private keys into Authsia, replace disk keys with stubs, and enable shell integration in the user's shell startup file without creating duplicate backup notes | `authsia ssh adopt --path ~/.ssh --dry-run` |
 | `authsia ssh adopt --revert <path>` | Restore a private key file from a legacy SSH adoption backup | `authsia ssh adopt --revert ~/.ssh/id_ed25519` |
 | `authsia ssh adopt --revert-all` | Restore all private key files with legacy SSH adoption backups on the current machine | `authsia ssh adopt --revert-all` |
@@ -1689,15 +1688,16 @@ authsia access revoke <uuid>
 AUTHSIA_ACCESS_CREDENTIAL=<exec-token> authsia exec password --folder CI -- make deploy
 ```
 
-### `authsia env` — Environment profiles
+### `authsia env profile` — Global environment profiles
 
 Named mappings of scope selections for quick switching. Profiles can target all CLI-enabled items
 of the selected type, or one or more folders. The active profile is used as the default scope when
-no explicit scope (`<query>`, `--folder`, `--all`, or `--env`) is given.
+no explicit scope (`<query>`, `--folder`, `--all`, or `--env`) is given. These commands always use
+the global profile store and never change meaning based on the current directory.
 
 **Subcommands:**
 
-#### `authsia env add`
+#### `authsia env profile add`
 
 | Parameter | Required | Values | Description |
 |-----------|----------|--------|-------------|
@@ -1707,46 +1707,50 @@ no explicit scope (`<query>`, `--folder`, `--all`, or `--env`) is given.
 
 Use either one or more `--folder` values, or `--all`.
 
-#### `authsia env list`
+#### `authsia env profile list`
 
 | Parameter | Required | Values | Description |
 |-----------|----------|--------|-------------|
 | `--format` | No | `table` (default), `json` | Output format |
 
-Inside a workspace, the command reads non-secret metadata only from CLI-enabled
-passwords and API keys in the configured workspace vault-folder tree. Tags from
-other workspaces are excluded, while unreferenced tagged items in the active
-workspace remain visible.
-
-#### `authsia env use <name>`
+#### `authsia env profile use <name>`
 
 | Parameter | Required | Values | Description |
 |-----------|----------|--------|-------------|
 | `<name>` | Yes | string | Profile name to activate |
 
-Inside a workspace, activation uses the same exact configured references,
-managed env files, environment precedence, and blocking checks as
-`authsia workspace run`. A catalog-only tag cannot be activated until at least
-one workspace reference uses it, and conflicts, missing values, disabled CLI
-access, or unavailable metadata leave the previous selection unchanged.
-
-#### `authsia env clear`
+#### `authsia env profile clear`
 
 Clears the active environment profile without deleting saved profiles.
 
 Examples:
 
 ```bash
-authsia env add --name prod --folder Production
-authsia env add --name prod-apps --folder Team/API --folder Team/Web
-authsia env add --name default --all
-authsia env add --name staging --folder Staging
-authsia env list
-authsia env use prod
+authsia env profile add --name prod --folder Production
+authsia env profile add --name prod-apps --folder Team/API --folder Team/Web
+authsia env profile add --name default --all
+authsia env profile add --name staging --folder Staging
+authsia env profile list
+authsia env profile use prod
 # Now "authsia exec password -- make deploy" uses the Production folder scope
-authsia env clear
+authsia env profile clear
 # Explicit scope still wins: --all loads all CLI-enabled items of the selected type
 ```
+
+Workspace environment selection uses explicit workspace commands:
+
+```bash
+authsia workspace env available
+authsia workspace env show
+authsia workspace env use Production
+authsia workspace env clear
+```
+
+`available` reads non-secret metadata only from CLI-enabled passwords and API
+keys in the configured workspace vault-folder tree. `use` applies the same
+exact configured references, managed env files, environment precedence, and
+blocking checks as `authsia workspace run`; validation failure leaves the
+previous selection unchanged.
 
 ### `authsia ssh` — SSH tooling
 
@@ -2731,7 +2735,7 @@ authsia unlock                          # Explicit session start
 authsia inject --help
 authsia completion zsh
 authsia access list
-authsia env list
+authsia env profile list
 authsia ssh --help
 authsia ssh adopt --help
 authsia status

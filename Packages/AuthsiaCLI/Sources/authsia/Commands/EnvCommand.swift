@@ -6,8 +6,8 @@ import Foundation
 struct Env: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "env",
-        abstract: "Manage environment profiles",
-        subcommands: [Add.self, List.self, Show.self, Use.self, Clear.self]
+        abstract: "Manage explicit environment scopes",
+        subcommands: [Profile.self]
     )
 
     struct ListItem: Codable, Equatable, Identifiable {
@@ -21,96 +21,87 @@ struct Env: ParsableCommand {
         let isActive: Bool
     }
 
-    struct Add: ParsableCommand {
+    struct Profile: ParsableCommand {
         static let configuration = CommandConfiguration(
-            commandName: "add",
-            abstract: "Add an environment profile"
+            commandName: "profile",
+            abstract: "Manage global environment profiles",
+            subcommands: [Add.self, List.self, Show.self, Use.self, Clear.self]
         )
 
-        @Option(name: .long, help: "Environment profile name")
-        var name: String
+        struct Add: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "add",
+                abstract: "Add a global environment profile"
+            )
 
-        @Option(
-            name: .shortAndLong,
-            help: "Folder path to use when no explicit scope is selected; repeat for multiple folders",
-            completion: .custom(ShellCompletionMetadata.completeFolders)
-        )
-        var folder: [String] = []
+            @Option(name: .long, help: "Environment profile name")
+            var name: String
 
-        @Flag(name: .long, help: "Use all CLI-enabled items of the selected type")
-        var all = false
+            @Option(
+                name: .shortAndLong,
+                help: "Folder path to use when no explicit scope is selected; repeat for multiple folders",
+                completion: .custom(ShellCompletionMetadata.completeFolders)
+            )
+            var folder: [String] = []
 
-        func run() throws {
-            let profile = try Env.addProfile(name: name, folders: folder, all: all)
-            print(Env.renderAddMessage(profile))
+            @Flag(name: .long, help: "Use all CLI-enabled items of the selected type")
+            var all = false
+
+            func run() throws {
+                let profile = try Env.addProfile(name: name, folders: folder, all: all)
+                print(Env.renderAddMessage(profile))
+            }
         }
-    }
 
-    struct List: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(
-            commandName: "list",
-            abstract: "List environment profiles"
-        )
+        struct List: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "list",
+                abstract: "List global environment profiles"
+            )
 
-        @Option(name: .long, help: "Output format: table (default), json")
-        var format: OutputFormat = .table
+            @Option(name: .long, help: "Output format: table (default), json")
+            var format: OutputFormat = .table
 
-        func run() async throws {
-            if let root = Env.currentWorkspaceRoot() {
-                print(try await Env.renderWorkspaceList(root: root, format: format))
-            } else {
+            func run() throws {
                 let items = try Env.listItems()
                 print(try Env.renderList(items: items, format: format))
             }
         }
-    }
 
-    struct Show: ParsableCommand {
-        static let configuration = CommandConfiguration(commandName: "show", abstract: "Show the active workspace environment or profile")
+        struct Show: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "show",
+                abstract: "Show the active global environment profile"
+            )
 
-        func run() throws {
-            if let root = Env.currentWorkspaceRoot() {
-                let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
-                print(active.map { "Active workspace environment: \($0)." } ?? "Active workspace environment: Default environment.")
-            } else {
+            func run() throws {
                 let active = try EnvironmentProfileStore().loadActiveProfileName()
                 print(active.map { "Active environment profile: \($0)." } ?? "No active environment profile.")
             }
         }
-    }
 
-    struct Use: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(
-            commandName: "use",
-            abstract: "Set the active environment profile"
-        )
+        struct Use: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "use",
+                abstract: "Set the active global environment profile"
+            )
 
-        @Argument(help: "Environment profile name")
-        var name: String
+            @Argument(help: "Environment profile name")
+            var name: String
 
-        func run() async throws {
-            if let root = Env.currentWorkspaceRoot() {
-                let normalized = try await Env.validateWorkspaceEnvironment(name, root: root)
-                try WorkspaceEnvironmentSelectionStore().setActiveEnvironment(normalized, for: root)
-                print("Active workspace environment set to \(normalized).")
-            } else {
+            func run() throws {
                 let profile = try Env.useProfile(name: name)
                 print("Active environment set to \(profile.name).")
             }
         }
-    }
 
-    struct Clear: ParsableCommand {
-        static let configuration = CommandConfiguration(
-            commandName: "clear",
-            abstract: "Clear the active environment profile"
-        )
+        struct Clear: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "clear",
+                abstract: "Clear the active global environment profile"
+            )
 
-        func run() throws {
-            if let root = Env.currentWorkspaceRoot() {
-                let cleared = try WorkspaceEnvironmentSelectionStore().clearActiveEnvironment(for: root)
-                print(cleared ? "Active workspace environment cleared. Default environment is active." : "Workspace already uses Default environment.")
-            } else {
+            func run() throws {
                 print(try Env.clearActiveProfile())
             }
         }
@@ -132,13 +123,13 @@ struct Env: ParsableCommand {
     ) throws -> EnvironmentProfile {
         let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedName.isEmpty else {
-            throw ValidationError("Environment name cannot be empty. Example: authsia env add --name Production --all")
+            throw ValidationError("Environment name cannot be empty. Example: authsia env profile add --name Production --all")
         }
 
         if all && !folders.isEmpty {
             throw ValidationError(
                 "Use either --all or --folder, not both. " +
-                    "Example: authsia env add --name Production --folder Team/API"
+                    "Example: authsia env profile add --name Production --folder Team/API"
             )
         }
 
@@ -150,7 +141,7 @@ struct Env: ParsableCommand {
             for folder in folders {
                 guard let normalizedFolder = normalizeFolderPath(folder) else {
                     throw ValidationError(
-                        "Environment folder cannot be empty. Example: authsia env add --name Production --folder Team/API"
+                        "Environment folder cannot be empty. Example: authsia env profile add --name Production --folder Team/API"
                     )
                 }
                 if !normalizedFolders.contains(normalizedFolder) {
@@ -160,8 +151,8 @@ struct Env: ParsableCommand {
             guard !normalizedFolders.isEmpty else {
                 throw ValidationError(
                     "Provide --all or at least one --folder. " +
-                        "Examples: authsia env add --name Production --all; " +
-                        "authsia env add --name Production --folder Team/API"
+                        "Examples: authsia env profile add --name Production --all; " +
+                        "authsia env profile add --name Production --folder Team/API"
                 )
             }
             scope = .folders(normalizedFolders)
@@ -205,7 +196,7 @@ struct Env: ParsableCommand {
     ) throws -> EnvironmentProfile {
         let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedName.isEmpty else {
-            throw ValidationError("Environment name cannot be empty. Run `authsia env list` to see profile names.")
+            throw ValidationError("Environment name cannot be empty. Run `authsia env profile list` to see profile names.")
         }
         return try store.setActive(name: normalizedName)
     }
@@ -330,13 +321,14 @@ struct Env: ParsableCommand {
     ) throws -> String {
         let normalized = VaultEnvironmentTags.normalize([name]).first ?? ""
         guard !normalized.isEmpty else {
-            throw ValidationError("Environment name cannot be empty. Run `authsia env list`.")
+            throw ValidationError("Environment name cannot be empty. Run `authsia workspace env available`.")
         }
         guard let canonicalName = status.availableEnvironments.first(where: {
             VaultEnvironmentTags.contains(normalized, in: [$0])
         }) else {
             throw ValidationError(
-                "Environment '\(normalized)' is not referenced by this workspace. Run `authsia env list`."
+                "Environment '\(normalized)' is not referenced by this workspace. " +
+                    "Run `authsia workspace env available`."
             )
         }
         guard status.missingReferences.isEmpty,
@@ -382,9 +374,93 @@ struct Env: ParsableCommand {
         return candidates.filter { VaultEnvironmentTags.contains(name, in: $0.environments) }.count
     }
 
-    private static func currentWorkspaceRoot() -> URL? {
-        WorkspaceRootResolver.findWorkspaceRoot(
-            startingAt: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    struct WorkspaceAvailable: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "available",
+            abstract: "List selectable workspace environments",
+            discussion: """
+                Examples:
+                  authsia workspace env available
+                """
         )
+
+        @Option(name: .long, help: "Output format: table (default), json")
+        var format: OutputFormat = .table
+
+        func run() async throws {
+            let root = try Env.workspaceRoot()
+            print(try await Env.renderWorkspaceList(root: root, format: format))
+        }
+    }
+
+    struct WorkspaceShow: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "show",
+            abstract: "Show the active workspace environment",
+            discussion: """
+                Examples:
+                  authsia workspace env show
+                """
+        )
+
+        func run() throws {
+            let root = try Env.workspaceRoot()
+            let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
+            print(
+                active.map { "Active workspace environment: \($0)." } ??
+                    "Active workspace environment: Default environment."
+            )
+        }
+    }
+
+    struct WorkspaceUse: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "use",
+            abstract: "Set the active workspace environment",
+            discussion: """
+                Examples:
+                  authsia workspace env use Production
+                """
+        )
+
+        @Argument(help: "Workspace environment name")
+        var name: String
+
+        func run() async throws {
+            let root = try Env.workspaceRoot()
+            let normalized = try await Env.validateWorkspaceEnvironment(name, root: root)
+            try WorkspaceEnvironmentSelectionStore().setActiveEnvironment(normalized, for: root)
+            print("Active workspace environment set to \(normalized).")
+        }
+    }
+
+    struct WorkspaceClear: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "clear",
+            abstract: "Return the workspace to its Default environment",
+            discussion: """
+                Examples:
+                  authsia workspace env clear
+                """
+        )
+
+        func run() throws {
+            let root = try Env.workspaceRoot()
+            let cleared = try WorkspaceEnvironmentSelectionStore().clearActiveEnvironment(for: root)
+            print(
+                cleared ?
+                    "Active workspace environment cleared. Default environment is active." :
+                    "Workspace already uses Default environment."
+            )
+        }
+    }
+
+    private static func workspaceRoot() throws -> URL {
+        guard let root = WorkspaceRootResolver.findWorkspaceRoot(
+            startingAt: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        ) else {
+            throw WorkspaceConfigError.missingConfig
+        }
+        return root
     }
 }

@@ -5,6 +5,11 @@ import Foundation
 
 @Suite("BridgeContext")
 struct BridgeContextTests {
+    @Test("workspace environment metadata commands use explicit CLI paths")
+    func workspaceEnvironmentMetadataCommandsUseExplicitCLIPaths() {
+        #expect(BridgeContext.workspaceEnvListRequestedCommand == "workspace env available")
+        #expect(BridgeContext.workspaceEnvUseRequestedCommand == "workspace env use")
+    }
 
     @Test("legacy JSON (no requestedCommand or workingDirectory) decodes as nil")
     func legacyDecodeTreatsFieldAsNil() throws {

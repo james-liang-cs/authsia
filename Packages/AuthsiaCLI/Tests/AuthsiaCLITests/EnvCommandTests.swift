@@ -5,6 +5,26 @@ import AuthenticatorBridge
 
 @Suite("Environment command")
 struct EnvCommandTests {
+    @Test("global profiles use an explicit command namespace")
+    func globalProfilesUseExplicitCommandNamespace() throws {
+        _ = try Authsia.parseAsRoot(["env", "profile", "add", "--name", "Production", "--all"])
+        _ = try Authsia.parseAsRoot(["env", "profile", "list"])
+        _ = try Authsia.parseAsRoot(["env", "profile", "show"])
+        _ = try Authsia.parseAsRoot(["env", "profile", "use", "Production"])
+        _ = try Authsia.parseAsRoot(["env", "profile", "clear"])
+
+        #expect(throws: (any Error).self) {
+            _ = try Authsia.parseAsRoot(["env", "use", "Production"])
+        }
+    }
+
+    @Test("workspace environment selection uses the workspace command namespace")
+    func workspaceEnvironmentSelectionUsesWorkspaceCommandNamespace() throws {
+        _ = try Authsia.parseAsRoot(["workspace", "env", "available"])
+        _ = try Authsia.parseAsRoot(["workspace", "env", "show"])
+        _ = try Authsia.parseAsRoot(["workspace", "env", "use", "Production"])
+        _ = try Authsia.parseAsRoot(["workspace", "env", "clear"])
+    }
 
     @Test("workspace environments include tags referenced only by managed env files")
     func workspaceEnvironmentsIncludeManagedEnvFileReferences() throws {

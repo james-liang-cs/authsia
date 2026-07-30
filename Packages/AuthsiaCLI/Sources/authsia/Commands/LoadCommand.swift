@@ -564,8 +564,8 @@ struct Load: ParsableCommand {
            !envName.isEmpty {
             guard let profile = try store.load(named: envName) else {
                 throw ValidationError(
-                    "No environment profile named '\(envName)' was found. Run `authsia env list`, " +
-                        "or create it with `authsia env add --name \(envName) --folder <folder>`."
+                    "No environment profile named '\(envName)' was found. Run `authsia env profile list`, " +
+                        "or create it with `authsia env profile add --name \(envName) --folder <folder>`."
                 )
             }
             return scopeSelection(for: profile)

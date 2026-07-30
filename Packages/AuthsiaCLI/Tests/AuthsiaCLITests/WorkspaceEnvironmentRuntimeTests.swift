@@ -745,12 +745,13 @@ struct WorkspaceEnvironmentRuntimeTests {
         #expect(environment["LOG_LEVEL"] == "debug")
     }
 
-    @Test("global env command includes workspace show without removing profile commands")
-    func envCommandIncludesWorkspaceShow() {
+    @Test("env command exposes only the explicit global profile namespace")
+    func envCommandExposesOnlyGlobalProfileNamespace() {
         let help = Env.helpMessage(columns: 140)
-        #expect(help.contains("show"))
-        #expect(help.contains("add"))
-        #expect(help.contains("use"))
-        #expect(help.contains("clear"))
+        #expect(help.contains("profile"))
+        #expect(!help.contains("\n  show"))
+        #expect(!help.contains("\n  add"))
+        #expect(!help.contains("\n  use"))
+        #expect(!help.contains("\n  clear"))
     }
 }

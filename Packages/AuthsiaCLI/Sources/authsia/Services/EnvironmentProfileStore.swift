@@ -7,9 +7,11 @@ enum EnvironmentProfileStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notFound(let name):
-            return "No environment profile named '\(name)' was found. Run `authsia env list`, or create it with `authsia env add`."
+            return "No environment profile named '\(name)' was found. Run `authsia env profile list`, " +
+                "or create it with `authsia env profile add`."
         case .corruptedStore:
-            return "The environment profile store is corrupted and could not be decoded. Recreate profiles with `authsia env add`."
+            return "The environment profile store is corrupted and could not be decoded. " +
+                "Recreate profiles with `authsia env profile add`."
         }
     }
 }

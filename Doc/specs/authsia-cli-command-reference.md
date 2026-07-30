@@ -356,11 +356,11 @@ Named folder-path mappings for quick scope switching.
 
 | Step | Activity | Test Payload | Command | Notes |
 |------|---------|--------------|---------|-------|
-| 1 | Add profile | name=prod, folder=Production | `authsia env add --name prod --folder Production` | Creates profile |
-| 2 | Add profile | name=staging, folder=Staging | `authsia env add --name staging --folder Staging` | Another profile |
-| 3 | List profiles | N/A | `authsia env list --format table` | Shows name, folder, active status |
-| 4 | Set active | name=prod | `authsia env use prod` | Sets prod as active |
-| 5 | List JSON | N/A | `authsia env list --format json` | Machine-readable, check isActive field |
+| 1 | Add profile | name=prod, folder=Production | `authsia env profile add --name prod --folder Production` | Creates profile |
+| 2 | Add profile | name=staging, folder=Staging | `authsia env profile add --name staging --folder Staging` | Another profile |
+| 3 | List profiles | N/A | `authsia env profile list --format table` | Shows name, folder, active status |
+| 4 | Set active | name=prod | `authsia env profile use prod` | Sets prod as active |
+| 5 | List JSON | N/A | `authsia env profile list --format json` | Machine-readable, check isActive field |
 
 ## SSH Tooling
 

@@ -51,9 +51,10 @@ struct Authsia: AsyncParsableCommand {
               eval "$(authsia init bash)"  # bash
               authsia load password DB_PASSWORD
               authsia load api-key API_KEY --silent
-              authsia env add --name Production --folder Team/API --folder Team/Web
-              authsia env add --name Default --all
-              authsia env use Production
+              authsia env profile add --name Production --folder Team/API --folder Team/Web
+              authsia env profile add --name Default --all
+              authsia env profile use Production
+              authsia workspace env use Production
               authsia ssh generate --name github-work
               authsia ssh generate --name corp-key --type rsa --bits 4096
               authsia ssh config --host github.com --alias github-work --user git --key github-work
