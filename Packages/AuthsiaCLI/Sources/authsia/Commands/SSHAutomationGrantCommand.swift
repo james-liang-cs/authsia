@@ -25,7 +25,8 @@ struct SSHAutomationGrantCommand: ParsableCommand {
         store: AccessCredentialStore = AccessCredentialStore(),
         now: Date = Date(),
         sessionScope: String? = TerminalSessionScope.currentAncestralScope(),
-        grantFileURL: URL = SSHAutomationGrantStore.defaultFileURL
+        grantFileURL: URL = SSHAutomationGrantStore.defaultFileURL,
+        leaseIssuer: SSHAutomationExecutionLeaseIssuing = AuthsiaBridgeClient.shared
     ) throws {
         guard let credential = try AutomationAccessResolver.resolveActiveSSHCredential(
             environment: environment,
@@ -39,17 +40,52 @@ struct SSHAutomationGrantCommand: ParsableCommand {
                 "SSH automation requires a separate SSH-only credential created with --allow ssh."
             )
         }
-        // Bearer tokens are intentionally never copied into the user-writable
-        // transient grant file. SSH children inherit the scoped token directly.
-        _ = sessionScope
-        _ = grantFileURL
+        guard let token = credential.bearerToken,
+              let sessionScope else {
+            return
+        }
+        let lease = try leaseIssuer.issueSSHAutomationExecutionLease(
+            token: token,
+            binding: SSHAutomationExecutionLeaseBinding(sessionScope: sessionScope)
+        )
+        try SSHAutomationGrantStore.saveGrant(
+            leaseID: lease.id,
+            sessionScope: sessionScope,
+            rootProcessID: nil,
+            expiresAt: lease.expiresAt,
+            fileURL: grantFileURL,
+            currentDate: now
+        )
     }
 
     static func clearCurrentSessionGrant(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        store: AccessCredentialStore = AccessCredentialStore(),
+        now: Date = Date(),
         sessionScope: String? = TerminalSessionScope.currentAncestralScope(),
-        grantFileURL: URL = SSHAutomationGrantStore.defaultFileURL
+        grantFileURL: URL = SSHAutomationGrantStore.defaultFileURL,
+        leaseIssuer: SSHAutomationExecutionLeaseIssuing = AuthsiaBridgeClient.shared
     ) {
         guard let sessionScope else { return }
-        SSHAutomationGrantStore.clearSessionScope(sessionScope, fileURL: grantFileURL)
+        let leaseIDs = SSHAutomationGrantStore.clearSessionScope(
+            sessionScope,
+            fileURL: grantFileURL
+        )
+        guard !leaseIDs.isEmpty,
+              let credential = try? AutomationAccessResolver.resolveActiveSSHCredential(
+                environment: environment,
+                store: store,
+                now: now
+              ),
+              credential.allowedCommands == [.ssh],
+              let token = credential.bearerToken else {
+            return
+        }
+        for leaseID in leaseIDs {
+            try? leaseIssuer.retireSSHAutomationExecutionLease(
+                token: token,
+                leaseID: leaseID
+            )
+        }
     }
 }

@@ -489,14 +489,14 @@ struct Exec: ParsableCommand {
         store: AccessCredentialStore = AccessCredentialStore(),
         now: Date = Date()
     ) throws -> Bool {
-        guard let credential = try AutomationAccessResolver.resolveActiveCredential(
+        guard let credential = try AutomationAccessResolver.resolveActiveSSHCredential(
             environment: environment,
             store: store,
             now: now
         ) else {
             return false
         }
-        return credential.allowedCommands.contains(.ssh)
+        return credential.allowedCommands == [.ssh]
     }
 
     static func shouldRunJITPreflight(
@@ -2277,7 +2277,11 @@ struct Exec: ParsableCommand {
         fileTouchWatcher: InjectedFileTouchWatcher? = nil,
         signalCoordinator: ChildSignalForwardingCoordinator = .shared,
         childProcess: Process = Process(),
-        processExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/env")
+        processExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/env"),
+        sshAutomationLeaseIssuer:
+            SSHAutomationExecutionLeaseIssuing = AuthsiaBridgeClient.shared,
+        sshAutomationGrantFileURL: URL = SSHAutomationGrantStore.defaultFileURL,
+        currentProcessID: Int32 = getpid()
     ) -> ChildRunResult {
         let process = childProcess
         process.executableURL = processExecutableURL
@@ -2308,6 +2312,41 @@ struct Exec: ParsableCommand {
             touchWatcherStarted = false
         }
 
+        let sshAutomationGrant: SSHAutomationGrantRecord?
+        do {
+            sshAutomationGrant = try activateSSHAutomationProcessGrant(
+                credential: sshAutomationCredential,
+                rootProcessID: currentProcessID,
+                leaseIssuer: sshAutomationLeaseIssuer,
+                grantFileURL: sshAutomationGrantFileURL
+            )
+        } catch {
+            _ = touchWatcher?.stop()
+            StandardError.writeLine(
+                "Error: Could not activate the transient SSH automation grant."
+            )
+            return ChildRunResult(
+                terminationStatus: 1,
+                terminationReason: .exit,
+                outputFailure: nil,
+                fileCleanupStatus: .notRequested
+            )
+        }
+        defer {
+            if let sshAutomationGrant {
+                SSHAutomationGrantStore.clearGrant(
+                    id: sshAutomationGrant.id,
+                    fileURL: sshAutomationGrantFileURL
+                )
+                if let token = sshAutomationCredential?.bearerToken {
+                    try? sshAutomationLeaseIssuer.retireSSHAutomationExecutionLease(
+                        token: token,
+                        leaseID: sshAutomationGrant.leaseID
+                    )
+                }
+            }
+        }
+
         do {
             try process.run()
         } catch {
@@ -2322,7 +2361,6 @@ struct Exec: ParsableCommand {
         }
         let signalRegistration = signalCoordinator.register(process)
         defer { signalRegistration.unregister() }
-        _ = sshAutomationCredential
 
         let watcher: InjectedProcessTreeWatcher?
         if let treeContext {
@@ -2458,6 +2496,34 @@ struct Exec: ParsableCommand {
             terminationReason: process.terminationReason,
             outputFailure: outputCoordinator.failure,
             fileCleanupStatus: fileCleanupStatus
+        )
+    }
+
+    static func activateSSHAutomationProcessGrant(
+        credential: AccessCredential?,
+        rootProcessID: Int32,
+        now: Date = Date(),
+        leaseIssuer: SSHAutomationExecutionLeaseIssuing,
+        grantFileURL: URL
+    ) throws -> SSHAutomationGrantRecord? {
+        guard let credential,
+              credential.allowedCommands == [.ssh],
+              let token = credential.bearerToken else {
+            return nil
+        }
+        let lease = try leaseIssuer.issueSSHAutomationExecutionLease(
+            token: token,
+            binding: SSHAutomationExecutionLeaseBinding(
+                rootProcessID: rootProcessID
+            )
+        )
+        return try SSHAutomationGrantStore.saveGrant(
+            leaseID: lease.id,
+            sessionScope: nil,
+            rootProcessID: rootProcessID,
+            expiresAt: lease.expiresAt,
+            fileURL: grantFileURL,
+            currentDate: now
         )
     }
 

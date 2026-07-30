@@ -95,6 +95,8 @@ public protocol AuthorityStoring: Sendable {
     func record(id: UUID, asOf date: Date) throws -> AuthorityRecord?
     func consume(id: UUID, bindingDigest: Data, asOf date: Date) throws -> AuthorityRecord
     func revoke(id: UUID, at date: Date) throws
+    func removeRecord(id: UUID, ofType type: AuthorityRecordType) throws
+    func pruneExpiredRecords(ofType type: AuthorityRecordType, asOf date: Date) throws
     func activeRecords(asOf date: Date) throws -> [AuthorityRecord]
     func allRecords() throws -> [AuthorityRecord]
 }

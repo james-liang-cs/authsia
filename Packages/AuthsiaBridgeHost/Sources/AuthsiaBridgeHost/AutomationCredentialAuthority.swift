@@ -275,7 +275,7 @@ public final class AutomationCredentialAuthority: @unchecked Sendable {
         }
     }
 
-    private static func metadata(from record: AuthorityRecord) throws -> AutomationCredentialMetadata {
+    static func metadata(from record: AuthorityRecord) throws -> AutomationCredentialMetadata {
         guard let payload = record.payload,
               var metadata = try? decoder.decode(AutomationCredentialMetadata.self, from: payload),
               metadata.id == record.id,

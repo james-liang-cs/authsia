@@ -64,6 +64,26 @@ final class TestAuthorityStore: AuthorityStoring, @unchecked Sendable {
         }
     }
 
+    func pruneExpiredRecords(
+        ofType type: AuthorityRecordType,
+        asOf date: Date
+    ) {
+        lock.withLock {
+            records.removeAll {
+                $0.type == type && $0.expiresAt <= date
+            }
+        }
+    }
+
+    func removeRecord(
+        id: UUID,
+        ofType type: AuthorityRecordType
+    ) {
+        lock.withLock {
+            records.removeAll { $0.id == id && $0.type == type }
+        }
+    }
+
     func activeRecords(asOf date: Date) throws -> [AuthorityRecord] {
         try lock.withLock {
             try records.filter {

@@ -202,12 +202,51 @@ extension XPCRequestHandler {
         }
 
         do {
+            let now = agentJITApprovalClock()
+            let hasLeaseBinding = payload.sshExecutionLeaseBinding != nil
+            let hasLeaseRetirement = payload.sshExecutionLeaseRetirementID != nil
+            if hasLeaseBinding && hasLeaseRetirement {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .invalidRequest,
+                    message: "SSH execution lease requests must issue or retire, not both",
+                    reply: reply
+                )
+                return
+            }
+            if (hasLeaseBinding || hasLeaseRetirement),
+               payload.requestedCommand != .ssh {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .invalidRequest,
+                    message: "SSH execution leases require the ssh capability",
+                    reply: reply
+                )
+                return
+            }
             let credential = try automationCredentialAuthorityProvider().validate(
                 token: payload.token,
                 requestedCommand: payload.requestedCommand,
                 currentMachineId: machineId,
-                now: agentJITApprovalClock()
+                now: now,
+                consumingUse: !hasLeaseBinding && !hasLeaseRetirement
             )
+            let leaseAuthority = SSHAutomationExecutionLeaseAuthority(
+                authorityStore: authorityStore
+            )
+            let leaseID = try payload.sshExecutionLeaseBinding.map {
+                try leaseAuthority.create(
+                    credential: credential,
+                    binding: $0,
+                    now: now
+                )
+            }
+            if let retirementID = payload.sshExecutionLeaseRetirementID {
+                try leaseAuthority.retire(
+                    leaseID: retirementID,
+                    credentialID: credential.id
+                )
+            }
             recordAudit(
                 command: .validateAccess,
                 itemId: credential.id.uuidString,
@@ -219,7 +258,10 @@ extension XPCRequestHandler {
             let response: BridgeResponse<AutomationCredentialValidationPayload> =
                 BridgeResponseBuilder.success(
                     id: bridgeRequest.id,
-                    payload: AutomationCredentialValidationPayload(credential: credential)
+                    payload: AutomationCredentialValidationPayload(
+                        credential: credential,
+                        sshExecutionLeaseID: leaseID
+                    )
                 )
             reply(encodeResponse(response), nil)
         } catch AutomationCredentialAuthorityError.repeatedDeniedTokenUse(let credentialID) {

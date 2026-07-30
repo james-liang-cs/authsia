@@ -101,7 +101,7 @@ public struct BridgeOptions: Codable, Equatable {
 }
 
 public struct BridgeContext: Codable, Equatable {
-    public static let securityProtocolVersion = 2
+    public static let securityProtocolVersion = 3
     public static let chromeNativeHostRequestedCommand = "chromeNativeHost"
     public static let chromeNativeHostProcessName = "AuthsiaNativeHost"
     /// Stable Bridge session scope for Chrome autofill CLI invocations.

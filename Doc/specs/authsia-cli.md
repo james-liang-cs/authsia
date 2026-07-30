@@ -134,7 +134,7 @@ Key properties:
 | `authsia workspace status` | Show non-secret workspace health, env references, rule state, and recovery guidance | `authsia workspace status --format json` |
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
-| `authsia access create` | Create an automation credential | `authsia access create --name ci --ttl 2h --allow exec,ssh` |
+| `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
 | `authsia env add` | Add an environment scope profile | `authsia env add --name prod --folder Production --folder Shared` |
@@ -1635,9 +1635,11 @@ denied approval leaves no credential behind.
 - OTP export/backup is not available through the CLI; use the app UI.
 - Allow SSH signing only when the credential explicitly includes `ssh`; normal CLI unlocks and
   `exec`-only automation credentials do not bypass SSH approval. Shell integration creates a
-  transient per-terminal SSH automation grant before foreground commands when
+  Bridge-issued, Keychain-backed per-terminal execution lease before foreground commands when
   `AUTHSIA_ACCESS_CREDENTIAL` or `AUTHSIA_SSH_ACCESS_CREDENTIAL` is set; `authsia exec` creates a
-  process-bound grant for its launched child.
+  process-bound lease for its launched child. The runtime grant file contains only opaque lease IDs
+  and binding hints; it is never credential authority. Foreground cleanup retires the authoritative
+  lease, while the Bridge caps active leases per credential and prunes expired records.
 - Bypass biometric prompts (intended for headless environments).
 - Expire automatically after TTL.
 
@@ -1654,12 +1656,13 @@ denied approval leaves no credential behind.
 | `list` | List CLI-enabled item metadata within the allowed scope. | No secret values. |
 
 Both the CLI and the main app (XPC service) enforce the allowlist. A tampered CLI cannot bypass
-the check — the service re-reads the credential file and validates independently.
+the check — the Bridge owns credential and execution-lease authority in Keychain and validates
+independently.
 
 **Usage:** `authsia access create` prints copy-pasteable `export` lines for the credential it created.
 Credentials with any non-SSH capability use `AUTHSIA_ACCESS_CREDENTIAL`. Credentials with `ssh` use
-`AUTHSIA_SSH_ACCESS_CREDENTIAL`; mixed credentials print both, while SSH-only credentials print only
-the SSH variable.
+`AUTHSIA_SSH_ACCESS_CREDENTIAL`. SSH credentials must be SSH-only, so automation that needs both
+secret injection and SSH signing creates one credential for each authority path.
 
 Examples:
 
@@ -1674,14 +1677,15 @@ authsia access create --name ci --scope CI --ttl 2h --allow exec,list
 authsia access create --name ci --scope CI --ttl 2h --allow exec,load
 # Reuse an environment profile; multi-folder profiles grant each folder tree
 authsia access create --name ci-prod --env prod-apps --ttl 2h --allow exec,load
-# Exec + SSH signing for a local coding agent that needs Git over SSH
-authsia access create --name agent --scope Team/API --ttl 15m --allow exec,ssh
-export AUTHSIA_ACCESS_CREDENTIAL=<uuid>
-export AUTHSIA_SSH_ACCESS_CREDENTIAL=<uuid>
+# Separate credentials for a local coding agent that needs exec and Git over SSH
+authsia access create --name agent-exec --scope Team/API --ttl 15m --allow exec
+export AUTHSIA_ACCESS_CREDENTIAL=<exec-token>
+authsia access create --name agent-ssh --scope Team/API --ttl 15m --allow ssh
+export AUTHSIA_SSH_ACCESS_CREDENTIAL=<ssh-token>
 
 authsia access list --format table      # shows an "Allow" column
 authsia access revoke <uuid>
-AUTHSIA_ACCESS_CREDENTIAL=<uuid> authsia exec password --folder CI -- make deploy
+AUTHSIA_ACCESS_CREDENTIAL=<exec-token> authsia exec password --folder CI -- make deploy
 ```
 
 ### `authsia env` — Environment profiles
@@ -2043,7 +2047,7 @@ Add instructions to the agent's rules file so it uses `authsia://` references by
 - Run commands that need secrets through:
   - env AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia exec -- <command>
   - env AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia exec --env-file path/to/.env -- <command>
-- For background runs, use automation credentials with --allow exec, plus list only when metadata discovery is required, and ssh only when Git/SSH signing is required.
+- For background runs, use automation credentials with --allow exec, plus list only when metadata discovery is required. Create a separate SSH-only credential with --allow ssh only when Git/SSH signing is required.
 - Masking is always enabled for `authsia exec`.
 - Do not use authsia get/load/read/inject to expose plaintext secrets to the agent context.
 - List non-secret item names with: env AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia list passwords --format table
@@ -2286,15 +2290,17 @@ to reuse an environment profile with one or more folders, or omit both to apply 
 CLI-enabled non-OTP items:
 
 ```bash
-# Exec + SSH credential scoped to Team/API, expires in 15 minutes
-authsia access create --name claude-code --scope Team/API --ttl 15m --allow exec,ssh
+# Separate exec and SSH credentials scoped to Team/API, each expires in 15 minutes
+authsia access create --name claude-code-exec --scope Team/API --ttl 15m --allow exec
+authsia access create --name claude-code-ssh --scope Team/API --ttl 15m --allow ssh
 
 # Or scope to every folder in an environment profile
-authsia access create --name claude-code --env prod-apps --ttl 15m --allow exec,ssh
+authsia access create --name claude-code-exec --env prod-apps --ttl 15m --allow exec
+authsia access create --name claude-code-ssh --env prod-apps --ttl 15m --allow ssh
 
 # Set the env vars printed by the create command so Authsia CLI and SSH agent can validate this session
-export AUTHSIA_ACCESS_CREDENTIAL=<uuid>
-export AUTHSIA_SSH_ACCESS_CREDENTIAL=<uuid>
+export AUTHSIA_ACCESS_CREDENTIAL=<exec-token>
+export AUTHSIA_SSH_ACCESS_CREDENTIAL=<ssh-token>
 
 # Agent can now inject secrets via exec — no biometric prompt
 authsia exec -- npm test
@@ -2320,7 +2326,7 @@ Guardrails:
 
 | Property | Protection |
 |----------|------------|
-| `--allow` | Only the listed capabilities are permitted. `--allow exec` keeps secrets inside child processes; add `list` only for scoped metadata discovery, and `ssh` only when the agent also needs Git/SSH signing. |
+| `--allow` | Only the listed capabilities are permitted. `--allow exec` keeps secrets inside child processes; add `list` only for scoped metadata discovery. SSH authority is always a separate SSH-only credential created with `--allow ssh`. |
 | `--scope` / `--env` | Optional. `--scope` grants one folder tree; `--env` grants the all/folder scope from an environment profile, including multiple folder trees. When both are omitted, the credential applies to all CLI-enabled non-OTP items. |
 | `--ttl` | Credential auto-expires after the time window. |
 | Local only | Credential is machine-bound — cannot be used remotely. |
@@ -2337,15 +2343,17 @@ by the built-in Authsia SSH agent because OpenSSH asks the agent to sign, not th
 workflows, grant `ssh` explicitly on the automation credential:
 
 ```bash
-authsia access create --name claude-code --ttl 15m --allow exec,ssh
-export AUTHSIA_ACCESS_CREDENTIAL=<uuid>
-export AUTHSIA_SSH_ACCESS_CREDENTIAL=<uuid>
+authsia access create --name claude-code-ssh --ttl 15m --allow ssh
+export AUTHSIA_SSH_ACCESS_CREDENTIAL=<ssh-token>
 git push
 ```
 
 With Authsia shell integration, `git push` runs through the built-in SSH agent. The shell hook creates
-a transient grant for the current terminal, and the SSH agent re-validates `AUTHSIA_SSH_ACCESS_CREDENTIAL`
-before signing.
+a Bridge-issued, Keychain-backed execution lease for the current terminal. `authsia exec` creates the
+same kind of lease bound to its process tree. The SSH agent re-validates the lease binding, credential
+status, machine, `ssh` capability, and key scope before signing, then consumes the credential use only
+after signing succeeds. Shell and `authsia exec` cleanup retire their authoritative lease records;
+the Bridge also caps active leases per credential and prunes expired leases.
 
 Without an automation credential, a key with session-based approval prompts through the Authsia app
 and caches that SSH approval per key for the current terminal until the SSH approval session TTL
@@ -2369,7 +2377,7 @@ available to agentic or CLI workflows.
 | Windsurf | `.windsurf/rules/authsia.md` | `authsia exec -- <cmd>` |
 | GitHub Copilot | `AGENTS.md` | Local IDE: `authsia exec -- <cmd>`; cloud agents leave `authsia://` refs for local execution |
 | GitHub Actions | `.github/workflows/*.yml` | `authsia exec -- make deploy` with automation credential |
-| Any terminal agent | — | Set `AUTHSIA_ACCESS_CREDENTIAL` + `authsia exec`; add `--allow list` for metadata discovery and `--allow ssh` only for Git/SSH signing |
+| Any terminal agent | — | Set `AUTHSIA_ACCESS_CREDENTIAL` + `authsia exec`; add `--allow list` for metadata discovery, and create a separate `--allow ssh` credential only for Git/SSH signing |
 
 ### Migration: existing plaintext secrets
 

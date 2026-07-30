@@ -197,6 +197,42 @@ final class AuthorityStoreTests: XCTestCase {
         XCTAssertEqual(results.errors.compactMap { $0 as? AuthorityStoreError }, [.consumed])
     }
 
+    func testPruneExpiredRecordsRemovesOnlyTheRequestedRecordType() throws {
+        let store = makeStore()
+        let expiredLease = makeRecord(expiresAt: now.addingTimeInterval(-1))
+        let activeLease = AuthorityRecord(
+            type: .executionLease,
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(300),
+            revokedAt: nil,
+            maximumUses: 1,
+            consumedUses: 0,
+            bindingDigest: Data(repeating: 0x22, count: 32),
+            displayMetadata: [:]
+        )
+        let expiredCredential = AuthorityRecord(
+            type: .automationCredential,
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+            createdAt: now.addingTimeInterval(-60),
+            expiresAt: now.addingTimeInterval(-1),
+            revokedAt: nil,
+            maximumUses: 1,
+            consumedUses: 0,
+            bindingDigest: Data(repeating: 0x33, count: 32),
+            displayMetadata: [:]
+        )
+        try store.upsert([expiredLease, activeLease, expiredCredential])
+
+        try store.pruneExpiredRecords(ofType: .executionLease, asOf: now)
+
+        XCTAssertEqual(try store.allRecords(), [activeLease, expiredCredential])
+
+        try store.removeRecord(id: activeLease.id, ofType: .executionLease)
+
+        XCTAssertEqual(try store.allRecords(), [expiredCredential])
+    }
+
     func testNewStoreInstanceLoadsPersistedRecordsAfterRestart() throws {
         let blobStore = TestAuthorityBlobStore()
         let firstStore = KeychainAuthorityStore(blobStore: blobStore)

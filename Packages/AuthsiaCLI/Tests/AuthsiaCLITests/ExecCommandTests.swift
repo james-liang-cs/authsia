@@ -312,8 +312,8 @@ struct ExecCommandTests {
         }
     }
 
-    @Test("allows credential-only exec when automation credential permits ssh")
-    func allowsCredentialOnlyExecForSSHWhenAllowed() throws {
+    @Test("allows credential-only exec with the dedicated SSH credential variable")
+    func allowsCredentialOnlyExecForDedicatedSSHCredential() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let (store, directory) = try AccessCredentialStoreFixture.make(prefix: "exec-ssh-only")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -330,7 +330,7 @@ struct ExecCommandTests {
 
         let allowed = try Exec.allowsCredentialOnlyExecForSSH(
             environment: [
-                AutomationAccessResolver.environmentKey:
+                AutomationAccessResolver.sshEnvironmentKey:
                     AccessCredentialStoreFixture.token(for: credential)
             ],
             store: store,
@@ -577,6 +577,102 @@ struct ExecCommandTests {
         #expect(result[AutomationAccessResolver.environmentKey] == nil)
         #expect(result[AutomationAccessResolver.sshEnvironmentKey] == token)
         #expect(result[AutomationAccessResolver.sshEnvironmentKey] != id.uuidString)
+    }
+
+    @Test("exec creates a process-bound token-free SSH execution lease")
+    func execCreatesProcessBoundTokenFreeSSHExecutionLease() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let credentialID = UUID()
+        let token = try AutomationCredentialToken.issue(
+            id: credentialID,
+            randomBytes: Data(
+                repeating: 0x41,
+                count: AutomationCredentialToken.randomByteCount
+            )
+        )
+        let credential = AccessCredential(
+            id: credentialID,
+            name: "agent",
+            scope: "Team/API",
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(900),
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h",
+            allowedCommands: [.ssh],
+            bearerToken: token
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let grantFileURL = directory.appendingPathComponent("ssh-grants.json")
+        let lease = SSHAutomationExecutionLease(
+            id: UUID(),
+            expiresAt: credential.expiresAt
+        )
+        let issuer = RecordingSSHAutomationExecutionLeaseIssuer(lease: lease)
+
+        let grant = try Exec.activateSSHAutomationProcessGrant(
+            credential: credential,
+            rootProcessID: 4242,
+            now: now.addingTimeInterval(1),
+            leaseIssuer: issuer,
+            grantFileURL: grantFileURL
+        )
+        let persisted = try Data(contentsOf: grantFileURL)
+
+        #expect(issuer.token == token)
+        #expect(issuer.binding == SSHAutomationExecutionLeaseBinding(rootProcessID: 4242))
+        #expect(grant?.leaseID == lease.id)
+        #expect(grant?.rootProcessID == 4242)
+        #expect(!persisted.contains(Data(token.utf8)))
+    }
+
+    @Test("exec retires its process-bound SSH execution lease after the child exits")
+    func execRetiresProcessBoundSSHExecutionLease() throws {
+        let now = Date()
+        let token = try AutomationCredentialToken.issue(
+            id: UUID(),
+            randomBytes: Data(
+                repeating: 0x41,
+                count: AutomationCredentialToken.randomByteCount
+            )
+        )
+        let credential = AccessCredential(
+            id: try AutomationCredentialToken.parse(token).id,
+            name: "agent",
+            scope: "Team/API",
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(900),
+            revokedAt: nil,
+            machineId: "m",
+            machineName: "h",
+            allowedCommands: [.ssh],
+            bearerToken: token
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let grantFileURL = directory.appendingPathComponent("ssh-grants.json")
+        let lease = SSHAutomationExecutionLease(
+            id: UUID(),
+            expiresAt: credential.expiresAt
+        )
+        let issuer = RecordingSSHAutomationExecutionLeaseIssuer(lease: lease)
+
+        let result = Exec.runChildProcess(
+            command: ["/usr/bin/true"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            masker: OutputMasker(secrets: []),
+            sshAutomationCredential: credential,
+            sshAutomationLeaseIssuer: issuer,
+            sshAutomationGrantFileURL: grantFileURL,
+            currentProcessID: 4242
+        )
+
+        #expect(result.exitCode == 0)
+        #expect(issuer.retiredLeaseID == lease.id)
+        #expect(SSHAutomationGrantStore.load(fileURL: grantFileURL).isEmpty)
     }
 
     @Test("forwards ssh-only marker when automation credential allows ssh")
@@ -1618,5 +1714,35 @@ private final class RecordingExecJITPreflightClient: ExecJITPreflightClient {
     func agentJITPreflight(_ payload: AgentJITPreflightPayload) throws -> AgentJITPreflightResultPayload {
         payloads.append(payload)
         return AgentJITPreflightResultPayload(grantIDs: grantIDs)
+    }
+}
+
+private final class RecordingSSHAutomationExecutionLeaseIssuer:
+    SSHAutomationExecutionLeaseIssuing
+{
+    private let lease: SSHAutomationExecutionLease
+    private(set) var token: String?
+    private(set) var binding: SSHAutomationExecutionLeaseBinding?
+    private(set) var retiredLeaseID: UUID?
+
+    init(lease: SSHAutomationExecutionLease) {
+        self.lease = lease
+    }
+
+    func issueSSHAutomationExecutionLease(
+        token: String,
+        binding: SSHAutomationExecutionLeaseBinding
+    ) throws -> SSHAutomationExecutionLease {
+        self.token = token
+        self.binding = binding
+        return lease
+    }
+
+    func retireSSHAutomationExecutionLease(
+        token: String,
+        leaseID: UUID
+    ) throws {
+        self.token = token
+        retiredLeaseID = leaseID
     }
 }

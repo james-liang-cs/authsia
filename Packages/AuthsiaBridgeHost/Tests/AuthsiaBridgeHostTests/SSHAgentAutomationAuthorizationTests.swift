@@ -170,6 +170,7 @@ final class SSHAgentAutomationAuthorizationTests: XCTestCase {
     }
 
     func testAllowsSessionGrantWhenProcessEnvironmentIsHidden() {
+        let leaseID = UUID()
         let credentialID = UUID()
         let credential = makeCredential(id: credentialID, scope: "Team/API", allowedCommands: [.ssh])
 
@@ -178,20 +179,52 @@ final class SSHAgentAutomationAuthorizationTests: XCTestCase {
             keyFolderPath: "Team/API/Deploy",
             sessionScope: "tty:/dev/ttys001:sid:100",
             ancestryPIDs: [300, 200],
-            credentialLookup: { id in
-                XCTAssertEqual(id, credentialID)
-                return .found(credential)
-            },
-            grantCredentialLookup: { sessionScope, ancestryPIDs, _ in
+            grantLeaseLookup: { sessionScope, ancestryPIDs, _ in
                 XCTAssertEqual(sessionScope, "tty:/dev/ttys001:sid:100")
                 XCTAssertEqual(ancestryPIDs, [300, 200])
-                return credentialID
+                return [leaseID]
+            },
+            executionLeaseLookup: { suppliedLeaseID, sessionScope, ancestryPIDs, _ in
+                XCTAssertEqual(suppliedLeaseID, leaseID)
+                XCTAssertEqual(sessionScope, "tty:/dev/ttys001:sid:100")
+                XCTAssertEqual(ancestryPIDs, [300, 200])
+                return .found(credential)
             },
             now: Date(timeIntervalSince1970: 1_700_000_100),
             currentMachineId: "machine-1"
         )
 
-        XCTAssertEqual(decision, .allowWithoutApproval(scope: .folder("Team/API")))
+        XCTAssertEqual(
+            decision,
+            .allowWithoutApprovalUsingLease(
+                scope: .folder("Team/API"),
+                leaseID: leaseID
+            )
+        )
+    }
+
+    func testExecutionLeaseIsConsumedOnlyAfterSigningSucceeds() {
+        let leaseID = UUID()
+        var consumedLeaseID: UUID?
+
+        let consumed = SSHAgentListener.consumeAutomationCredentialIfNeeded(
+            decision: .allowWithoutApprovalUsingLease(
+                scope: .folder("Team/API"),
+                leaseID: leaseID
+            ),
+            environment: [:],
+            validation: { _, _, _ in
+                XCTFail("bearer validation should not run for an execution lease")
+                return .credentialNotFound
+            },
+            executionLeaseConsumption: { suppliedLeaseID, _ in
+                consumedLeaseID = suppliedLeaseID
+                return true
+            }
+        )
+
+        XCTAssertTrue(consumed)
+        XCTAssertEqual(consumedLeaseID, leaseID)
     }
 
     func testReturnsNotAutomationWhenNoEnvironmentOrGrantExists() {
@@ -201,7 +234,21 @@ final class SSHAgentAutomationAuthorizationTests: XCTestCase {
             sessionScope: "tty:/dev/ttys001:sid:100",
             ancestryPIDs: [300, 200],
             credentialLookup: { _ in XCTFail("lookup should not run"); return .credentialNotFound },
-            grantCredentialLookup: { _, _, _ in nil },
+            grantLeaseLookup: { _, _, _ in [] },
+            currentMachineId: "machine-1"
+        )
+
+        XCTAssertEqual(decision, .notAutomation)
+    }
+
+    func testUserWritableGrantWithoutAuthorityDoesNotEnableAutomation() {
+        let decision = SSHAgentAutomationAuthorization.authorize(
+            environment: [:],
+            keyFolderPath: "Team/API",
+            sessionScope: "tty:/dev/ttys001:sid:100",
+            ancestryPIDs: [300, 200],
+            grantLeaseLookup: { _, _, _ in [UUID()] },
+            executionLeaseLookup: { _, _, _, _ in .credentialNotFound },
             currentMachineId: "machine-1"
         )
 

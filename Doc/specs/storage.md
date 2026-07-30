@@ -81,7 +81,8 @@ Application Support unless noted otherwise.
 | `~/.authsia/agent.sock` | SSH-agent LaunchAgent | Unix-domain socket used by `git`, `ssh`, and shell integration via `SSH_AUTH_SOCK`. |
 | `~/.authsia/cli-session-status.json` | Bridge | Current bridge session status for `authsia status` and Developer Control Center display. |
 | `~/.authsia/ssh-agent-session.json` | SSH agent | Current SSH approval-session status. |
-| `~/.authsia/ssh-automation-grants.json` | App / bridge / CLI | Temporary SSH automation grants tied to automation credentials. |
+| `~/.authsia/ssh-automation-grants.json` | CLI / app display | Token-free SSH execution-lease IDs and process/session binding hints. The authoritative lease and credential records remain in Keychain. |
+| `~/.authsia/ssh-automation-grants.json.lock` | CLI / SSH agent | Empty advisory-lock sidecar that serializes concurrent runtime-hint updates. |
 | `~/.authsia/access-credential-metadata.json` | CLI | Token-free, non-authoritative metadata cache refreshed from Bridge create, list, and revoke responses. |
 | `~/.authsia/access-credentials.json` | Legacy CLI | Disabled legacy automation metadata shown only with compatibility listing. It is never accepted as authority. |
 | `~/.authsia/environment-profiles.json` | CLI | `authsia env` profiles and the active profile name. |

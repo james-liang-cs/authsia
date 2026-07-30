@@ -169,8 +169,8 @@ struct AccessCredentialStoreRevocationTests {
 
 @Suite("SSH automation grant command")
 struct SSHAutomationGrantCommandTests {
-    @Test("bearer credentials are never persisted as SSH session grants")
-    func bearerCredentialsAreNeverPersistedAsSSHSessionGrants() throws {
+    @Test("activation writes a token-free SSH session grant")
+    func activationWritesTokenFreeSSHSessionGrant() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let (store, directory) = try AccessCredentialStoreFixture.make(prefix: "ssh-grant-command")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -185,27 +185,48 @@ struct SSHAutomationGrantCommandTests {
             allowedCommands: [.ssh]
         )
         let grantFileURL = directory.appendingPathComponent("ssh-automation-grants.json")
+        let token = AccessCredentialStoreFixture.token(for: credential)
+        let leaseID = UUID()
+        let leaseIssuer = SSHAutomationExecutionLeaseIssuerFake(
+            lease: SSHAutomationExecutionLease(
+                id: leaseID,
+                expiresAt: credential.expiresAt
+            )
+        )
 
         try SSHAutomationGrantCommand.activateCurrentSessionGrant(
             environment: [
                 AutomationAccessResolver.sshEnvironmentKey:
-                    AccessCredentialStoreFixture.token(for: credential)
+                    token
             ],
             store: store,
             now: now.addingTimeInterval(60),
             sessionScope: "tty:/dev/ttys001:sid:100",
-            grantFileURL: grantFileURL
+            grantFileURL: grantFileURL,
+            leaseIssuer: leaseIssuer
         )
 
-        let grantCredentialID = SSHAutomationGrantStore.activeCredentialID(
+        let grants = SSHAutomationGrantStore.load(fileURL: grantFileURL)
+        let persisted = try Data(contentsOf: grantFileURL)
+
+        #expect(grants.count == 1)
+        #expect(grants.first?.leaseID == leaseID)
+        #expect(grants.first?.sessionScope == "tty:/dev/ttys001:sid:100")
+        #expect(!persisted.contains(Data(token.utf8)))
+
+        SSHAutomationGrantCommand.clearCurrentSessionGrant(
+            environment: [
+                AutomationAccessResolver.sshEnvironmentKey: token
+            ],
+            store: store,
+            now: now.addingTimeInterval(61),
             sessionScope: "tty:/dev/ttys001:sid:100",
-            ancestryPIDs: [],
-            currentDate: now.addingTimeInterval(61),
-            fileURL: grantFileURL
+            grantFileURL: grantFileURL,
+            leaseIssuer: leaseIssuer
         )
 
-        #expect(grantCredentialID == nil)
-        #expect(!FileManager.default.fileExists(atPath: grantFileURL.path))
+        #expect(leaseIssuer.retiredLeaseIDs == [leaseID])
+        #expect(SSHAutomationGrantStore.load(fileURL: grantFileURL).isEmpty)
     }
 
     @Test("activate rejects credentials without ssh capability")
@@ -236,5 +257,30 @@ struct SSHAutomationGrantCommandTests {
                 grantFileURL: directory.appendingPathComponent("ssh-automation-grants.json")
             )
         }
+    }
+}
+
+private final class SSHAutomationExecutionLeaseIssuerFake:
+    SSHAutomationExecutionLeaseIssuing
+{
+    let lease: SSHAutomationExecutionLease
+    private(set) var retiredLeaseIDs: [UUID] = []
+
+    init(lease: SSHAutomationExecutionLease) {
+        self.lease = lease
+    }
+
+    func issueSSHAutomationExecutionLease(
+        token: String,
+        binding: SSHAutomationExecutionLeaseBinding
+    ) throws -> SSHAutomationExecutionLease {
+        lease
+    }
+
+    func retireSSHAutomationExecutionLease(
+        token: String,
+        leaseID: UUID
+    ) throws {
+        retiredLeaseIDs.append(leaseID)
     }
 }

@@ -160,7 +160,28 @@ extension BridgeRequestType {
 
 // MARK: - AuthsiaBridgeClient
 
-final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @unchecked Sendable {
+struct SSHAutomationExecutionLease: Equatable {
+    let id: UUID
+    let expiresAt: Date
+}
+
+protocol SSHAutomationExecutionLeaseIssuing {
+    func issueSSHAutomationExecutionLease(
+        token: String,
+        binding: SSHAutomationExecutionLeaseBinding
+    ) throws -> SSHAutomationExecutionLease
+    func retireSSHAutomationExecutionLease(
+        token: String,
+        leaseID: UUID
+    ) throws
+}
+
+final class AuthsiaBridgeClient:
+    AccessCreateApproving,
+    SessionLocking,
+    SSHAutomationExecutionLeaseIssuing,
+    @unchecked Sendable
+{
     static let shared = AuthsiaBridgeClient()
     private static let shellCompletionRequestedCommand = "completion"
     private static let remoteJITReplyBuffer: TimeInterval = 5
@@ -1130,6 +1151,87 @@ final class AuthsiaBridgeClient: AccessCreateApproving, SessionLocking, @uncheck
         }
         guard let payload = response.payload else { throw BridgeClientError.invalidResponse }
         return payload.credential
+    }
+
+    func issueSSHAutomationExecutionLease(
+        token: String,
+        binding: SSHAutomationExecutionLeaseBinding
+    ) throws -> SSHAutomationExecutionLease {
+        try withRequestedCommand(
+            CapabilityCommand.ssh.rawValue,
+            includeAutomationCredential: false
+        ) {
+            let body = try BridgeCoder.encode(
+                AutomationCredentialValidatePayload(
+                    token: token,
+                    requestedCommand: .ssh,
+                    sshExecutionLeaseBinding: binding
+                )
+            )
+            let request = BridgeRequest(
+                id: UUID(),
+                type: .validateAccess,
+                query: "",
+                options: BridgeOptions(field: nil, copy: false),
+                context: currentContext(),
+                body: body
+            )
+            let response: BridgeResponse<AutomationCredentialValidationPayload> =
+                try sendRequest(request)
+            if let error = response.error {
+                throw BridgeClientError.bridgeError(
+                    code: error.code.rawValue,
+                    message: error.message,
+                    query: nil
+                )
+            }
+            guard let payload = response.payload,
+                  let leaseID = payload.sshExecutionLeaseID else {
+                throw BridgeClientError.invalidResponse
+            }
+            return SSHAutomationExecutionLease(
+                id: leaseID,
+                expiresAt: payload.credential.expiresAt
+            )
+        }
+    }
+
+    func retireSSHAutomationExecutionLease(
+        token: String,
+        leaseID: UUID
+    ) throws {
+        try withRequestedCommand(
+            CapabilityCommand.ssh.rawValue,
+            includeAutomationCredential: false
+        ) {
+            let body = try BridgeCoder.encode(
+                AutomationCredentialValidatePayload(
+                    token: token,
+                    requestedCommand: .ssh,
+                    sshExecutionLeaseRetirementID: leaseID
+                )
+            )
+            let request = BridgeRequest(
+                id: UUID(),
+                type: .validateAccess,
+                query: "",
+                options: BridgeOptions(field: nil, copy: false),
+                context: currentContext(),
+                body: body
+            )
+            let response: BridgeResponse<AutomationCredentialValidationPayload> =
+                try sendRequest(request)
+            if let error = response.error {
+                throw BridgeClientError.bridgeError(
+                    code: error.code.rawValue,
+                    message: error.message,
+                    query: nil
+                )
+            }
+            guard response.payload != nil else {
+                throw BridgeClientError.invalidResponse
+            }
+        }
     }
 
     // MARK: - Private Helpers

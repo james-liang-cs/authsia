@@ -150,6 +150,38 @@ public final class KeychainAuthorityStore: AuthorityStoring, @unchecked Sendable
         }
     }
 
+    public func pruneExpiredRecords(
+        ofType type: AuthorityRecordType,
+        asOf date: Date
+    ) throws {
+        try Self.mutationLock.withLock {
+            var envelope = try loadEnvelope()
+            let originalCount = envelope.records.count
+            envelope.records.removeAll {
+                $0.type == type && $0.expiresAt <= date
+            }
+            if envelope.records.count != originalCount {
+                try save(envelope)
+            }
+        }
+    }
+
+    public func removeRecord(
+        id: UUID,
+        ofType type: AuthorityRecordType
+    ) throws {
+        try Self.mutationLock.withLock {
+            var envelope = try loadEnvelope()
+            guard let index = envelope.records.firstIndex(where: {
+                $0.id == id && $0.type == type
+            }) else {
+                return
+            }
+            envelope.records.remove(at: index)
+            try save(envelope)
+        }
+    }
+
     public func activeRecords(asOf date: Date) throws -> [AuthorityRecord] {
         try Self.mutationLock.withLock {
             let records = try loadEnvelope().records

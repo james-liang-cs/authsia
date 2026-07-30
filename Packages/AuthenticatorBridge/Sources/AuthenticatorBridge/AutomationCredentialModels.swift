@@ -150,17 +150,41 @@ public struct AutomationCredentialRevokePayload: Codable, Equatable, Sendable {
 public struct AutomationCredentialValidatePayload: Codable, Equatable, Sendable {
     public let token: String
     public let requestedCommand: CapabilityCommand
+    public let sshExecutionLeaseBinding: SSHAutomationExecutionLeaseBinding?
+    public let sshExecutionLeaseRetirementID: UUID?
 
-    public init(token: String, requestedCommand: CapabilityCommand) {
+    public init(
+        token: String,
+        requestedCommand: CapabilityCommand,
+        sshExecutionLeaseBinding: SSHAutomationExecutionLeaseBinding? = nil,
+        sshExecutionLeaseRetirementID: UUID? = nil
+    ) {
         self.token = token
         self.requestedCommand = requestedCommand
+        self.sshExecutionLeaseBinding = sshExecutionLeaseBinding
+        self.sshExecutionLeaseRetirementID = sshExecutionLeaseRetirementID
     }
 }
 
 public struct AutomationCredentialValidationPayload: Codable, Equatable, Sendable {
     public let credential: AutomationCredentialMetadata
+    public let sshExecutionLeaseID: UUID?
 
-    public init(credential: AutomationCredentialMetadata) {
+    public init(
+        credential: AutomationCredentialMetadata,
+        sshExecutionLeaseID: UUID? = nil
+    ) {
         self.credential = credential
+        self.sshExecutionLeaseID = sshExecutionLeaseID
+    }
+}
+
+public struct SSHAutomationExecutionLeaseBinding: Codable, Equatable, Sendable {
+    public let sessionScope: String?
+    public let rootProcessID: Int32?
+
+    public init(sessionScope: String? = nil, rootProcessID: Int32? = nil) {
+        self.sessionScope = sessionScope
+        self.rootProcessID = rootProcessID
     }
 }

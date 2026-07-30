@@ -14,6 +14,9 @@ public final class SSHAgentListener: @unchecked Sendable {
     private let passphraseProvider: SSHKeyPassphraseProviding
     private let automationCredentialValidationProvider:
         XPCRequestHandler.AutomationCredentialValidationProvider
+    private let executionLeaseLookupProvider:
+        (UUID, String?, [Int32], Date) -> AutomationCredentialLookup.Result
+    private let executionLeaseConsumptionProvider: (UUID, Date) -> Bool
     private let acceptQueue = DispatchQueue(label: "com.authsia.ssh-agent.accept", qos: .userInitiated)
     private let connectionQueue = DispatchQueue(label: "com.authsia.ssh-agent.connection", qos: .userInitiated, attributes: .concurrent)
 
@@ -45,11 +48,29 @@ public final class SSHAgentListener: @unchecked Sendable {
                 } catch {
                     return .credentialNotFound
                 }
-            }
+            },
+        executionLeaseLookupProvider:
+            @escaping (UUID, String?, [Int32], Date) -> AutomationCredentialLookup.Result = {
+                SSHAutomationExecutionLeaseAuthority(
+                    authorityStore: KeychainAuthorityStore()
+                ).lookup(
+                    leaseID: $0,
+                    sessionScope: $1,
+                    ancestryPIDs: $2,
+                    now: $3
+                )
+            },
+        executionLeaseConsumptionProvider: @escaping (UUID, Date) -> Bool = {
+            SSHAutomationExecutionLeaseAuthority(
+                authorityStore: KeychainAuthorityStore()
+            ).consume(leaseID: $0, now: $1)
+        }
     ) {
         self.approvalProvider = approvalProvider
         self.passphraseProvider = passphraseProvider
         self.automationCredentialValidationProvider = automationCredentialValidationProvider
+        self.executionLeaseLookupProvider = executionLeaseLookupProvider
+        self.executionLeaseConsumptionProvider = executionLeaseConsumptionProvider
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         socketPath = "\(home)/.authsia/agent.sock"
     }
@@ -338,7 +359,8 @@ public final class SSHAgentListener: @unchecked Sendable {
             keyFolderPath: keyItem.folderPath,
             sessionScope: requester.sessionScope,
             ancestryPIDs: requester.ancestry.map { Int32($0.pid) },
-            credentialValidation: automationCredentialValidationProvider
+            credentialValidation: automationCredentialValidationProvider,
+            executionLeaseLookup: executionLeaseLookupProvider
         )
         let keyIsEncrypted = isEncryptedPrivateKey(keyItem.privateKey)
         let approvalRequest = SSHAgentApprovalRequest(
@@ -380,7 +402,8 @@ public final class SSHAgentListener: @unchecked Sendable {
         guard Self.consumeAutomationCredentialIfNeeded(
             decision: automationDecision,
             environment: processEnvironment,
-            validation: automationCredentialValidationProvider
+            validation: automationCredentialValidationProvider,
+            executionLeaseConsumption: executionLeaseConsumptionProvider
         ) else {
             return SSHAgentResponse.failure.serialize()
         }
@@ -397,8 +420,13 @@ public final class SSHAgentListener: @unchecked Sendable {
     static func consumeAutomationCredentialIfNeeded(
         decision: SSHAgentAutomationAuthorizationDecision,
         environment: [String: String],
-        validation: XPCRequestHandler.AutomationCredentialValidationProvider
+        validation: XPCRequestHandler.AutomationCredentialValidationProvider,
+        executionLeaseConsumption: (UUID, Date) -> Bool = { _, _ in false },
+        now: Date = Date()
     ) -> Bool {
+        if case .allowWithoutApprovalUsingLease(_, let leaseID) = decision {
+            return executionLeaseConsumption(leaseID, now)
+        }
         guard case .allowWithoutApproval = decision else { return true }
         let token = [
             AutomationCredentialEnvironment.sshCredentialKey,
@@ -423,7 +451,7 @@ public final class SSHAgentListener: @unchecked Sendable {
     ) -> (signature: Data, approvedBy: String)? {
         let approvedBy: String
         switch automationDecision {
-        case .allowWithoutApproval:
+        case .allowWithoutApproval, .allowWithoutApprovalUsingLease:
             approvedBy = "automation"
         case .deny(let message):
             debugLog("sign request failed: \(message)")
