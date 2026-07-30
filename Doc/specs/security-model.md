@@ -38,12 +38,13 @@ For detailed JIT grant behavior, see [`jit-agent-grants.md`](jit-agent-grants.md
 4. Authsia strictly masks known values and recognized representations in that
    child's stdout and stderr. After an Agent JIT grant authorizes `authsia exec`
    or a secret-bearing `workspace run`, bounded post-exit inspection looks for
-   eligible exact injected values (12+ characters) in observed files and
-   automatically replaces only those exact values with `<concealed by authsia>`
-   while leaving surrounding and unrelated file content unchanged. Ordinary
-   human CLI sessions and reusable automation credentials do not start file
-   observation or cleanup. Child exit codes remain unchanged by inspection or
-   cleanup.
+   eligible injected values (12+ characters) and supported one-layer Base64,
+   URL-safe Base64, hexadecimal, percent/form, shell, HTML, and JSON
+   representations in observed files. Matching representations are replaced
+   with `<concealed by authsia>` while surrounding and unrelated file content
+   remains unchanged. Ordinary human CLI sessions and reusable automation
+   credentials do not start file observation or cleanup. Child exit codes
+   remain unchanged by inspection or cleanup.
 5. Access Center and redacted audit records make grants, sessions, findings,
    and revocation visible. This reduces accidental disclosure and limits
    authority; it is not operating-system-wide DLP and cannot stop an approved

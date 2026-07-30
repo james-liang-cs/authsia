@@ -98,6 +98,16 @@ struct OutputMaskerTests {
         #expect(masker.mask("encoded=aHVudGVyMg==") == "encoded=<concealed by authsia>")
     }
 
+    @Test("detects a derived token without producing masked output")
+    func detectsDerivedToken() {
+        let secret = "synthetic-secret-value"
+        let masker = OutputMasker(secrets: [secret])
+        let encoded = Data(secret.utf8).base64EncodedString()
+
+        #expect(masker.containsMatch(in: "value=\(encoded)"))
+        #expect(!masker.containsMatch(in: "value=ordinary"))
+    }
+
     @Test("masks unpadded base64 encoded secret")
     func masksUnpaddedBase64EncodedSecret() {
         let masker = OutputMasker(secrets: ["hunter2"])

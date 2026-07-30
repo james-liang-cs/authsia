@@ -38,6 +38,10 @@ struct OutputMasker {
         return result
     }
 
+    func containsMatch(in input: String) -> Bool {
+        sortedSecrets.contains { input.range(of: $0) != nil }
+    }
+
     private func matchedRanges(
         in input: String
     ) -> [(range: Range<String.Index>, lowerBound: Int, upperBound: Int)] {
