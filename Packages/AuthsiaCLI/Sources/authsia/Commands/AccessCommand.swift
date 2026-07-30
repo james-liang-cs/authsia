@@ -64,6 +64,10 @@ struct Access: ParsableCommand {
         @Flag(name: .customLong("default-only"), help: "Restrict the credential to untagged default-environment items")
         var defaultOnly = false
 
+        var credentialEnvironmentScope: EnvironmentAccessScope? {
+            defaultOnly ? .defaultOnly : nil
+        }
+
         @Option(name: .long, help: "Time-to-live. Use seconds or suffixes like 15m, 2h, 7d.")
         var ttl: String
 
@@ -80,7 +84,7 @@ struct Access: ParsableCommand {
                     name: name,
                     scope: scope,
                     envName: env,
-                    environmentScope: defaultOnly ? .defaultOnly : env.map(EnvironmentAccessScope.named),
+                    environmentScope: credentialEnvironmentScope,
                     ttl: ttl,
                     allowedCommands: capabilities,
                     approvalClient: AuthsiaBridgeClient.shared

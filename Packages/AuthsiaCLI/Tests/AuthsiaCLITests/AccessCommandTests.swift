@@ -62,6 +62,7 @@ struct AccessCommandTests {
         ])
 
         #expect(command.env == "Production")
+        #expect(command.credentialEnvironmentScope == nil)
     }
 
     @Test("create parses the Default-environment restriction")
@@ -74,6 +75,7 @@ struct AccessCommandTests {
         ])
 
         #expect(command.defaultOnly)
+        #expect(command.credentialEnvironmentScope == .defaultOnly)
     }
 
     @Test("create defaults missing scope to all")
