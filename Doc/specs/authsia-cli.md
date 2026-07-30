@@ -385,10 +385,11 @@ it was given.
 follow shell convention: signal-killed processes exit with `128 + signum` (e.g. 130 for SIGINT).
 
 **Post-exit file inspection:** after an Agent JIT grant authorizes `exec`, Authsia inspects bounded
-observed files for exact injected values of at least 12 characters and automatically replaces only
-those exact values while preserving all surrounding file content. Ordinary human CLI sessions and
-reusable automation credentials do not start file observation or cleanup. Agent-granted cleanup has
-no command-line flag or opt-out. Neither inspection nor cleanup changes the child exit status.
+observed files for eligible injected values of at least 12 characters and their supported one-layer
+representations. Exact, Base64, URL-safe Base64, hexadecimal, percent/form, shell, HTML, and JSON
+matches are replaced with `<concealed by authsia>`. Ordinary human CLI sessions and reusable
+automation credentials do not start file observation or cleanup. Agent-granted cleanup has no
+command-line flag or opt-out. Neither inspection nor cleanup changes the child exit status.
 
 Examples:
 
@@ -2172,10 +2173,12 @@ enables cleanup. Ordinary human CLI sessions and reusable automation credentials
 observation or cleanup. Agent-granted cleanup has no command-line flag or opt-out.
 
 Inspection considers only original injected values that remain in the final child environment and
-are at least 12 characters long. Output-only derived masking tokens, env-file-overridden values, and
-shorter values are excluded to limit collisions. A short-only default run starts no file
-observation and is quiet; in a mixed run the shorter values are ignored without making inspection
-incomplete.
+are at least 12 characters long. For those eligible values, cleanup also recognizes the same
+one-layer Base64, URL-safe Base64, hexadecimal, percent/form, shell, HTML, and JSON representations
+as output masking. Command-derived output tokens, env-file-overridden values, shorter values,
+recursive encodings, archives, and arbitrary transformations are excluded to limit collisions and
+resource use. A short-only default run starts no file observation and is quiet; in a mixed run the
+shorter values are ignored without making inspection incomplete.
 
 The canonical real cwd is always considered and is included only when it passes the bounded-root
 safety checks; a valid containing workspace and trusted temporary directories are also considered.
@@ -2200,10 +2203,11 @@ Authsia may record `inspection-failed` and the Review finding `Secret-file inspe
 that finding explicitly does not confirm secret presence. A combined detection plus inspection
 failure still produces only one warning.
 
-For every mediated run, each safely verified eligible exact match is replaced in place with
-`<concealed by authsia>`, regardless of filename. Replacement changes only the exact secret bytes;
-surrounding text and unrelated values remain intact. Values shorter than 12 characters remain
-excluded and make cleanup incomplete.
+For every mediated run, each safely verified eligible exact or supported transformed match is
+replaced in place with `<concealed by authsia>`, regardless of filename. Replacement changes only
+the matched representation; surrounding text and unrelated values remain intact. Replacing an
+encoded match intentionally invalidates that encoded payload rather than leaving recoverable secret
+material on disk. Values shorter than 12 characters remain excluded and make cleanup incomplete.
 Rewrites are descriptor-anchored: Authsia mutates or restores only the verified opened descriptor
 and creates no scrub temporary entry to rename or unlink by path. A bounded descriptor snapshot
 verifies extended attributes (including the resource fork), extended ACL, mode, ownership, flags,

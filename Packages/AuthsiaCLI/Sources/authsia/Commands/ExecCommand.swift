@@ -357,6 +357,7 @@ struct Exec: ParsableCommand {
             // Phase 7: Spawn child process with output masking
             let masker = OutputMasker(secrets: allSecrets)
             let fileCleanupMasker = OutputMasker(exactSecrets: fileCleanupSelection.secrets)
+            let fileRepresentationMasker = OutputMasker(secrets: fileCleanupSelection.secrets)
             let fileEventMetadataMasker = Self.fileEventMetadataMasker(
                 exactInjectedSecrets: exactInjectedSecrets
             )
@@ -399,6 +400,7 @@ struct Exec: ParsableCommand {
                 environment: environment,
                 masker: masker,
                 fileCleanupMasker: fileCleanupMasker,
+                fileRepresentationMasker: fileRepresentationMasker,
                 fileEventMetadataMasker: fileEventMetadataMasker,
                 fileCleanupSelectionIncomplete: fileCleanupSelection.isIncomplete,
                 cleanupSecretFiles: shouldCleanupSecretFiles,
@@ -2259,6 +2261,7 @@ struct Exec: ParsableCommand {
         environment: [String: String],
         masker: OutputMasker,
         fileCleanupMasker: OutputMasker? = nil,
+        fileRepresentationMasker: OutputMasker? = nil,
         fileEventMetadataMasker: OutputMasker? = nil,
         fileCleanupSelectionIncomplete: Bool = false,
         cleanupSecretFiles: Bool = false,
@@ -2432,6 +2435,7 @@ struct Exec: ParsableCommand {
                 results = InjectedSecretFileScrubber.scrub(
                     paths: observation.paths,
                     masker: fileCleanupMasker,
+                    representationMasker: fileRepresentationMasker,
                     allowedRootBindings: observation.validatedRootBindings,
                     context: fileScrubContext,
                     eventMetadataMasker: fileEventMetadataMasker,

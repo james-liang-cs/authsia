@@ -103,6 +103,7 @@ enum InjectedSecretFileScrubber {
     static func scrub(
         paths: [String],
         masker: OutputMasker,
+        representationMasker: OutputMasker? = nil,
         allowedRoots: [String],
         context: InjectedSecretFileScrubContext,
         eventMetadataMasker: OutputMasker? = nil,
@@ -121,6 +122,7 @@ enum InjectedSecretFileScrubber {
         scrub(
             paths: paths,
             masker: masker,
+            representationMasker: representationMasker,
             allowedRootBindings: allowedRoots.compactMap {
                 InjectedFileTouchRootBinding(path: $0)
             },
@@ -140,6 +142,7 @@ enum InjectedSecretFileScrubber {
     static func scrub(
         paths: [String],
         masker: OutputMasker,
+        representationMasker: OutputMasker? = nil,
         allowedRootBindings: [InjectedFileTouchRootBinding],
         context: InjectedSecretFileScrubContext,
         eventMetadataMasker: OutputMasker? = nil,
@@ -221,7 +224,7 @@ enum InjectedSecretFileScrubber {
             let result = scrubOne(
                 path: path,
                 masker: eventMetadataMasker ?? masker,
-                contentMasker: masker,
+                representationMasker: representationMasker ?? masker,
                 context: context,
                 maxBytes: budgetedMaxBytes,
                 allowedRootBindings: allowedRootBindings,
@@ -265,7 +268,7 @@ enum InjectedSecretFileScrubber {
     private static func scrubOne(
         path: String,
         masker: OutputMasker,
-        contentMasker: OutputMasker,
+        representationMasker: OutputMasker,
         context: InjectedSecretFileScrubContext,
         maxBytes: Int,
         allowedRootBindings: [InjectedFileTouchRootBinding],
@@ -412,8 +415,7 @@ enum InjectedSecretFileScrubber {
             )
         }
 
-        let masked = contentMasker.mask(content)
-        guard masked != content else {
+        guard representationMasker.containsMatch(in: content) else {
             return InjectedSecretFileScrubResult(path: path, outcome: .noMatch, event: nil)
         }
 
@@ -448,6 +450,23 @@ enum InjectedSecretFileScrubber {
             )
         }
 
+        let masked = representationMasker.mask(content)
+        guard masked != content else {
+            return InjectedSecretFileScrubResult(
+                path: path,
+                outcome: .detected,
+                events: makeEvents(
+                    path: path,
+                    masker: masker,
+                    context: context,
+                    detail: InjectedSecretFileActivityDetail.secretDetected,
+                    action: .modify,
+                    status: .inferred,
+                    now: now
+                )
+            )
+        }
+
         do {
             try rewriteAndVerify(
                 directoryDescriptor: directoryDescriptor,
@@ -457,7 +476,7 @@ enum InjectedSecretFileScrubber {
                 maskedData: Data(masked.utf8),
                 originalMetadata: initialTargetMetadata,
                 allowedRootBindings: allowedRootBindings,
-                masker: contentMasker,
+                masker: representationMasker,
                 hooks: hooks
             )
         } catch {

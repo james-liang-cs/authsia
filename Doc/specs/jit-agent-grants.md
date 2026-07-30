@@ -305,7 +305,7 @@ receives one primary classification:
 | Standard output | Mediated | `authsia exec` masks known secret values and common transforms; novel transforms can bypass masking. |
 | Standard error | Mediated | Uses the same masking boundary and has the same limitations as stdout. |
 | Invalid or incomplete UTF-8 output | Prevented by default | Strict output buffers a valid multibyte code point split across read chunks. Invalid sequences, or a partial code point still incomplete when the stream closes, are withheld; the child is terminated and the CLI exits `74`. Explicit `masked-compatibility` may pass those bytes with a warning. Valid UTF-8 using a novel transform remains mediated, not categorically prevented. |
-| File writes | Detected and reduced for Agent JIT runs | After a secret-injected Agent JIT run, Authsia reads only bounded observed candidates and automatically replaces eligible exact injected tokens while preserving other file content. Ordinary human CLI sessions and reusable automation credentials do not start file observation or cleanup. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
+| File writes | Remediated when observed for Agent JIT runs | After a secret-injected Agent JIT run, Authsia reads only bounded observed candidates and automatically replaces eligible exact injected tokens plus supported one-layer Base64, URL-safe Base64, hexadecimal, percent/form, shell, HTML, and JSON representations. Ordinary human CLI sessions and reusable automation credentials do not start file observation or cleanup. Missed ordinary-file events may leave files unexamined, and writes are not blocked. |
 | Network | Detected for Authsia-mediated agent runs | Best-effort remote endpoint metadata and hostname-only command evidence are recorded for the secret-bearing launched child and verified descendants. Traffic is not blocked or inspected; arbitrary agent, terminal, user, and system network activity remains out of scope. |
 | Subprocesses | Detected | Command and ancestry evidence can identify supported activity; child-process behavior is not contained. |
 | Clipboard | Out of scope | Authsia does not monitor arbitrary child clipboard access. |
@@ -691,9 +691,10 @@ Post-exit file handling:
 
 - After an Agent JIT grant authorizes a secret-bearing `authsia exec` or
   `authsia workspace run`, Authsia automatically remediates safely verified
-  exact matches in observed files. Ordinary human CLI sessions and reusable
-  automation credentials do not start file observation or cleanup. There is no
-  cleanup flag or opt-out.
+  exact matches and supported one-layer Base64, URL-safe Base64, hexadecimal,
+  percent/form, shell, HTML, and JSON representations in observed files.
+  Ordinary human CLI sessions and reusable automation credentials do not start
+  file observation or cleanup. There is no cleanup flag or opt-out.
 - Inspection starts only when the final child environment contains an original
   injected value of at least 12 characters. Short-only default runs are
   unobserved and quiet; mixed runs ignore shorter values without adding an
@@ -709,11 +710,12 @@ Post-exit file handling:
   `node_modules`. Discovery remains best-effort, so a missed ordinary-file
   event can leave that file unexamined without a warning.
 - Automatic cleanup accepts only an identity-stable, within-root, regular
-  single-link UTF-8 file no larger than 2 MiB. Eligible exact matches are
-  replaced in place with
-  `<concealed by authsia>`, regardless of filename. Surrounding and unrelated
-  file content stays unchanged. Values shorter than 12 characters remain
-  excluded and make cleanup incomplete.
+  single-link UTF-8 file no larger than 2 MiB. Eligible exact and supported
+  transformed matches are replaced in place with `<concealed by authsia>`,
+  regardless of filename. Surrounding and unrelated file content stays
+  unchanged. Replacing an encoded match intentionally invalidates that payload
+  rather than leaving recoverable secret material on disk. Values shorter than
+  12 characters remain excluded and make cleanup incomplete.
 - Cleanup rewrites are descriptor-anchored and verify a bounded snapshot of
   xattrs (including the resource fork), ACL, mode, ownership, flags, and exact
   creation/access/modification times. Pre-mutation rejection leaves content

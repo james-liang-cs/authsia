@@ -1626,6 +1626,96 @@ struct InjectedSecretFileScrubberTests {
         #expect(outputMasker.mask("61626364") == OutputMasker.placeholder)
     }
 
+    @Test("detect-only reports a transformed secret without rewriting the file")
+    func detectOnlyReportsTransformedSecret() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = "synthetic-secret-value"
+        let encoded = Data(secret.utf8).base64EncodedString()
+        let path = directory.appendingPathComponent("encoded.txt").path
+        let original = "base64=\(encoded)\n"
+        try original.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let results = InjectedSecretFileScrubber.scrub(
+            paths: [path],
+            masker: OutputMasker(exactSecrets: [secret]),
+            representationMasker: OutputMasker(secrets: [secret]),
+            allowedRoots: [directory.path],
+            context: scrubContext(directory: directory),
+            mode: .detectOnly
+        )
+
+        #expect(results.map(\.outcome) == [.detected])
+        #expect(results.flatMap(\.events).map(\.detail) == [
+            InjectedSecretFileActivityDetail.secretDetected,
+        ])
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == original)
+    }
+
+    @Test("cleanup scrubs a transformed-only secret")
+    func cleanupScrubsTransformedOnlySecret() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = "synthetic-secret-value"
+        let encoded = Data(secret.utf8).base64EncodedString()
+        let path = directory.appendingPathComponent("encoded.txt").path
+        let original = "base64=\(encoded)\n"
+        try original.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let results = InjectedSecretFileScrubber.scrub(
+            paths: [path],
+            masker: OutputMasker(exactSecrets: [secret]),
+            representationMasker: OutputMasker(secrets: [secret]),
+            allowedRoots: [directory.path],
+            context: scrubContext(directory: directory),
+            mode: .remediate
+        )
+
+        #expect(results.map(\.outcome) == [.scrubbed])
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
+        #expect(
+            try String(contentsOfFile: path, encoding: .utf8)
+                == "base64=\(OutputMasker.placeholder)\n"
+        )
+    }
+
+    @Test("cleanup scrubs exact and transformed forms together")
+    func cleanupScrubsExactAndTransformedForms() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = "synthetic-secret-value"
+        let encoded = Data(secret.utf8).base64EncodedString()
+        let path = directory.appendingPathComponent("mixed.txt").path
+        try "exact=\(secret)\nbase64=\(encoded)\n".write(
+            toFile: path,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let results = InjectedSecretFileScrubber.scrub(
+            paths: [path],
+            masker: OutputMasker(exactSecrets: [secret]),
+            representationMasker: OutputMasker(secrets: [secret]),
+            allowedRoots: [directory.path],
+            context: scrubContext(directory: directory),
+            mode: .remediate
+        )
+
+        #expect(results.map(\.outcome) == [.scrubbed])
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
+        #expect(results.flatMap(\.events).map(\.detail) == [
+            InjectedSecretFileActivityDetail.scrubbed,
+        ])
+        let content = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(content.contains("exact=\(OutputMasker.placeholder)"))
+        #expect(content.contains("base64=\(OutputMasker.placeholder)"))
+        #expect(!content.contains("exact=\(secret)"))
+        #expect(!content.contains(encoded))
+    }
+
     @Test("short injected values remain unchanged while eligible values scrub")
     func shortInjectedValuesRemainUnchangedAndMakeCleanupIncomplete() throws {
         let directory = try temporaryDirectory()
@@ -1870,6 +1960,54 @@ struct InjectedSecretFileScrubberTests {
         let secretContents = try String(contentsOfFile: secretPath, encoding: .utf8)
         #expect(secretContents.contains(OutputMasker.placeholder))
         #expect(!secretContents.contains(secret))
+    }
+
+    @Test("runChildProcess scrubs a transformed secret")
+    func runChildProcessScrubsTransformedSecret() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = "synthetic-secret-value"
+        let encoded = Data(secret.utf8).base64EncodedString()
+        let path = directory.appendingPathComponent("encoded.txt").path
+        let activityURL = directory.appendingPathComponent("files.jsonl")
+        let watcher = InjectedFileTouchWatcher(
+            roots: [directory.path],
+            startOverride: { true }
+        )
+        watcher.recordForTesting(path)
+        let error = Pipe()
+        let quotedPath = path.replacingOccurrences(of: "'", with: "'\\''")
+
+        let result = Exec.runChildProcess(
+            command: ["/bin/sh", "-c", "printf 'base64=\(encoded)\\n' > '\(quotedPath)'"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            masker: OutputMasker(secrets: [secret]),
+            fileCleanupMasker: OutputMasker(exactSecrets: [secret]),
+            fileRepresentationMasker: OutputMasker(secrets: [secret]),
+            cleanupSecretFiles: true,
+            standardError: error.fileHandleForWriting,
+            fileScrubContext: scrubContext(directory: directory),
+            fileActivityStore: AgentFileActivityStore(fileURL: activityURL),
+            fileTouchWatcher: watcher
+        )
+        try error.fileHandleForWriting.close()
+        let warning = String(
+            decoding: (try error.fileHandleForReading.readToEnd()) ?? Data(),
+            as: UTF8.self
+        )
+
+        #expect(result.fileCleanupStatus == .complete)
+        #expect(
+            try String(contentsOfFile: path, encoding: .utf8)
+                == "base64=\(OutputMasker.placeholder)\n"
+        )
+        #expect(warning.isEmpty)
+        #expect(!warning.contains(secret))
+        #expect(!warning.contains(encoded))
+        #expect(!warning.contains(path))
+        let events = try AgentFileActivityStore(fileURL: activityURL).loadAll()
+        #expect(events.map(\.detail) == [InjectedSecretFileActivityDetail.scrubbed])
     }
 
     @Test("runChildProcess scrubs high-signal secret files after exit")
