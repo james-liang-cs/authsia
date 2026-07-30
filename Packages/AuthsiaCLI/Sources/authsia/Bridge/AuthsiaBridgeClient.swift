@@ -569,7 +569,7 @@ final class AuthsiaBridgeClient:
             return nil
         }
 
-        return try withRequestedCommand(Self.shellCompletionRequestedCommand, includeAutomationCredential: false) {
+        return try withRequestedCommand(Self.shellCompletionRequestedCommand) {
             try list()
         }
     }
@@ -1292,12 +1292,25 @@ final class AuthsiaBridgeClient:
 
     static func shouldRequestShellCompletionMetadata(
         sessionToken: String?,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        store: AccessCredentialStore = AccessCredentialStore(),
+        now: Date = Date()
     ) -> Bool {
         if sessionToken?.isEmpty == false {
             return true
         }
-        return !isIntegratedIDETerminal(environment: environment)
+        guard isIntegratedIDETerminal(environment: environment) else {
+            return true
+        }
+        do {
+            return try AutomationAccessResolver.resolveActiveCredential(
+                environment: environment,
+                store: store,
+                now: now
+            ) != nil
+        } catch {
+            return false
+        }
     }
 
     private static func isIntegratedIDETerminal(environment: [String: String]) -> Bool {

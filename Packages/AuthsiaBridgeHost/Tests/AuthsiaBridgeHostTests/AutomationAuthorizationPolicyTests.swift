@@ -275,6 +275,55 @@ final class AutomationAuthorizationPolicyTests: XCTestCase {
         XCTAssertEqual(decision, .allowWithoutApproval(scope: .folder("Team/API")))
     }
 
+    func testShellCompletionListUsesListCapability() {
+        let credential = makeCredential(allowedCommands: [.list])
+        let request = makeRequest(
+            type: .list,
+            scope: "Team/API",
+            credentialID: credential.id,
+            requestedCommand: "completion"
+        )
+
+        let decision = AutomationAuthorizationPolicy.authorization(
+            for: request,
+            itemFolderPath: nil,
+            itemKind: "list",
+            credentialLookup: { _ in .found(credential) },
+            now: Date(timeIntervalSince1970: 1_700_000_100),
+            currentMachineId: "machine-1"
+        )
+
+        XCTAssertEqual(decision, .allowWithoutApproval(scope: .folder("Team/API")))
+    }
+
+    func testShellCompletionPreservesCredentialEnvironmentScope() {
+        let credential = makeCredential(
+            allowedCommands: [.list],
+            environmentScope: .defaultOnly
+        )
+        let token = "authsia_ac1_synthetic"
+        let request = makeRequest(
+            type: .list,
+            scope: "Team/API",
+            credentialID: credential.id,
+            credentialToken: token,
+            requestedCommand: "completion"
+        )
+
+        let environmentScope = AutomationAuthorizationPolicy.environmentScope(
+            for: request,
+            credentialLookup: { _ in .credentialNotFound },
+            credentialValidation: { suppliedToken, command, consume in
+                XCTAssertEqual(suppliedToken, token)
+                XCTAssertEqual(command, .list)
+                XCTAssertFalse(consume)
+                return .found(credential)
+            }
+        )
+
+        XCTAssertEqual(environmentScope, .defaultOnly)
+    }
+
     func testAutomationAuthorizationDeniesUnknownCredential() {
         let request = makeRequest(
             type: .getPassword,

@@ -1092,6 +1092,61 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         XCTAssertEqual(response.payload?.sshKeys.count, 0)
     }
 
+    func testAutomationShellCompletionWithListCapabilityBypassesApproval() async throws {
+        let approver = ApprovalTracker(result: true)
+        let credentialID = UUID()
+        let credential = AutomationCredentialLookup.CredentialRecord(
+            id: credentialID,
+            scope: nil,
+            expiresAt: Date(timeIntervalSince1970: 1_800_000_000),
+            revokedAt: nil,
+            machineId: "machine-1",
+            allowedCommands: [.list]
+        )
+        let token = "authsia_ac1_synthetic"
+        let handler = XPCRequestHandler(
+            listProvider: {
+                BridgeListPayload(
+                    accounts: [],
+                    passwords: [],
+                    apiKeys: [],
+                    certificates: [],
+                    notes: [],
+                    sshKeys: []
+                )
+            },
+            approver: approver,
+            automationCredentialValidationProvider: { suppliedToken, command, _ in
+                XCTAssertEqual(suppliedToken, token)
+                XCTAssertEqual(command, .list)
+                return .found(credential)
+            },
+            currentMachineIdProvider: { "machine-1" }
+        )
+        let requestData = makeListRequest(
+            automationCredentialID: credentialID.uuidString,
+            automationCredentialToken: token,
+            requestedCommand: "completion"
+        )
+
+        let expectation = XCTestExpectation(description: "automation shell completion reply")
+        var responseData: Data?
+        handler.list(requestData) { data, _ in
+            responseData = data
+            expectation.fulfill()
+        }
+
+        await fulfillment(of: [expectation], timeout: 1)
+        let response = try BridgeCoder.decode(
+            BridgeResponse<BridgeListPayload>.self,
+            from: responseData ?? Data()
+        )
+
+        XCTAssertNotNil(response.payload)
+        XCTAssertEqual(approver.callCount, 0)
+        XCTAssertNil(response.sessionToken)
+    }
+
     func testAutomationListAllowsAllNonOTPItemsForGlobalScope() async throws {
         let approver = ApprovalTracker(result: true)
         let listProvider = {

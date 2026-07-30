@@ -141,4 +141,50 @@ struct BridgeRequestedCommandTests {
             ]
         ))
     }
+
+    @Test("shell completion metadata uses only active automation credentials in IDE terminals")
+    func shellCompletionMetadataUsesOnlyActiveAutomationCredentialsInIDETerminals() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let machine = MachineIdentity(machineId: "machine-123", hostname: "Example-MacBook.local")
+        let (store, directory) = try AccessCredentialStoreFixture.make(prefix: "completion-access")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let credential = try Access.createCredential(
+            name: "Completion",
+            scope: "Team/API",
+            ttl: "15m",
+            store: store,
+            machineIdentity: machine,
+            now: now,
+            allowedCommands: [.list]
+        )
+        let token = AccessCredentialStoreFixture.token(for: credential)
+        let ideEnvironment = [
+            "TERM_PROGRAM": "vscode",
+            AutomationAccessResolver.environmentKey: token,
+        ]
+
+        #expect(AuthsiaBridgeClient.shouldRequestShellCompletionMetadata(
+            sessionToken: nil,
+            environment: ideEnvironment,
+            store: store,
+            now: now.addingTimeInterval(60)
+        ))
+        #expect(!AuthsiaBridgeClient.shouldRequestShellCompletionMetadata(
+            sessionToken: nil,
+            environment: [
+                "TERM_PROGRAM": "vscode",
+                AutomationAccessResolver.environmentKey: "malformed",
+            ],
+            store: store,
+            now: now.addingTimeInterval(60)
+        ))
+        #expect(!AuthsiaBridgeClient.shouldRequestShellCompletionMetadata(
+            sessionToken: nil,
+            environment: ideEnvironment,
+            store: store,
+            now: now.addingTimeInterval(901)
+        ))
+    }
+
 }

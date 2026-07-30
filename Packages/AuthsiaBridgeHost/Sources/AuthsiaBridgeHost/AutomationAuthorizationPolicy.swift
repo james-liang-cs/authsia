@@ -89,7 +89,7 @@ public enum AutomationAuthorizationPolicy {
         if let credentialValidation {
             guard let token = request.context.automationCredentialToken,
                   let rawCommand = request.context.requestedCommand,
-                  let command = CapabilityCommand(rawValue: rawCommand),
+                  let command = requestedCapabilityCommand(for: request, rawCommand: rawCommand),
                   case .found(let credential) = credentialValidation(token, command, false) else {
                 return nil
             }
@@ -115,7 +115,7 @@ public enum AutomationAuthorizationPolicy {
         guard let rawCommand = request.context.requestedCommand else {
             throw AuthorizationError(message: "Automation request is missing 'requestedCommand'. Upgrade the CLI.")
         }
-        guard let command = CapabilityCommand(rawValue: rawCommand) else {
+        guard let command = requestedCapabilityCommand(for: request, rawCommand: rawCommand) else {
             throw AuthorizationError(message: "Automation request has unknown 'requestedCommand' '\(rawCommand)'.")
         }
 
@@ -176,11 +176,21 @@ public enum AutomationAuthorizationPolicy {
         }
         guard let token = request.context.automationCredentialToken,
               let rawCommand = request.context.requestedCommand,
-              let command = CapabilityCommand(rawValue: rawCommand),
+              let command = requestedCapabilityCommand(for: request, rawCommand: rawCommand),
               case .found = credentialValidation(token, command, true) else {
             return .deny("Automation credential could not be consumed.")
         }
         return .allowWithoutApproval(scope: scope)
+    }
+
+    private static func requestedCapabilityCommand(
+        for request: BridgeRequest,
+        rawCommand: String
+    ) -> CapabilityCommand? {
+        if request.type == .list, rawCommand == "completion" {
+            return .list
+        }
+        return CapabilityCommand(rawValue: rawCommand)
     }
 }
 #endif
