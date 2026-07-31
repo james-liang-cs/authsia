@@ -392,6 +392,20 @@ struct EnvCommandTests {
         #expect(dirPerms == 0o700)
     }
 
+    @Test("profile store path can be isolated without changing the process home")
+    func profileStorePathCanBeIsolated() {
+        let override = FileManager.default.temporaryDirectory
+            .appendingPathComponent("isolated-environment-profiles.json")
+
+        let resolved = EnvironmentProfileStore.defaultFileURL(
+            environment: [
+                EnvironmentProfileStore.filePathEnvironmentKey: override.path,
+            ]
+        )
+
+        #expect(resolved == override.standardizedFileURL)
+    }
+
     private func makeStore() -> (EnvironmentProfileStore, URL) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("env-store-\(UUID().uuidString)", isDirectory: true)

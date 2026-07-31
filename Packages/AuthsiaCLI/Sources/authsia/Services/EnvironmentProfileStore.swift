@@ -17,6 +17,8 @@ enum EnvironmentProfileStoreError: LocalizedError {
 }
 
 final class EnvironmentProfileStore {
+    static let filePathEnvironmentKey = "AUTHSIA_ENV_PROFILE_STORE_PATH"
+
     struct State: Codable {
         var profiles: [EnvironmentProfile]
         var activeProfileName: String?
@@ -127,8 +129,16 @@ final class EnvironmentProfileStore {
         try? fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: fileURL.path)
     }
 
-    private static func defaultFileURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
+    static func defaultFileURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let path = environment[filePathEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            return URL(fileURLWithPath: path).standardizedFileURL
+        }
+        return fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".authsia", isDirectory: true)
             .appendingPathComponent("environment-profiles.json")
     }

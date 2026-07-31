@@ -1695,6 +1695,10 @@ of the selected type, or one or more folders. The active profile is used as the 
 no explicit scope (`<query>`, `--folder`, `--all`, or `--env`) is given. These commands always use
 the global profile store and never change meaning based on the current directory.
 
+`AUTHSIA_ENV_PROFILE_STORE_PATH` overrides only the environment-profile store file. It is intended
+for isolated validation; machine identity and automation-credential metadata continue using their
+normal locations.
+
 **Subcommands:**
 
 #### `authsia env profile add`
