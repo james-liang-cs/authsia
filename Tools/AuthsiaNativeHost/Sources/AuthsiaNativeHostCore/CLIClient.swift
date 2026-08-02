@@ -8,8 +8,7 @@ public enum CLIClientError: Error, Equatable {
 }
 
 public enum CLICommand: Equatable {
-    case listOTPJSON
-    case listPasswordsJSON
+    case autofillMatchesJSON(host: String, currentURL: String?, kind: NativeHostCredentialKind?)
     case getPasswordJSON(id: UUID)
     case getOTPJSON(id: UUID)
     case getChromePasswordJSON(id: UUID)
@@ -17,10 +16,16 @@ public enum CLICommand: Equatable {
 
     var arguments: [String] {
         switch self {
-        case .listOTPJSON:
-            return ["authsia", "list", "otp", "--format", "json", "--chrome-native-host"]
-        case .listPasswordsJSON:
-            return ["authsia", "list", "passwords", "--format", "json", "--chrome-native-host"]
+        case .autofillMatchesJSON(let host, let currentURL, let kind):
+            var arguments = ["authsia", "chrome-autofill", "matches", "--host", host]
+            if let currentURL {
+                arguments.append(contentsOf: ["--url", currentURL])
+            }
+            if let kind {
+                arguments.append(contentsOf: ["--kind", kind.rawValue])
+            }
+            arguments.append("--chrome-native-host")
+            return arguments
         case .getPasswordJSON(let id):
             return ["authsia", "get", "password", id.uuidString, "--format", "json"]
         case .getOTPJSON(let id):
@@ -33,72 +38,34 @@ public enum CLICommand: Equatable {
     }
 }
 
-public struct CLIListAccount: Codable, Equatable {
-    public let id: UUID
-    public let issuer: String
-    public let label: String
-    public let hosts: [String]?
-    public let isFavorite: Bool
-    public let isCliEnabled: Bool
-    public let isScraped: Bool
-    public let createdAt: Date
-    public let updatedAt: Date
-
-    public init(
-        id: UUID,
-        issuer: String,
-        label: String,
-        hosts: [String]? = nil,
-        isFavorite: Bool,
-        isCliEnabled: Bool,
-        isScraped: Bool,
-        createdAt: Date,
-        updatedAt: Date
-    ) {
-        self.id = id
-        self.issuer = issuer
-        self.label = label
-        self.hosts = hosts
-        self.isFavorite = isFavorite
-        self.isCliEnabled = isCliEnabled
-        self.isScraped = isScraped
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-    }
-}
-
-public struct CLIListPassword: Codable, Equatable {
+/// One host match as returned by `authsia chrome-autofill matches`.
+/// Mirrors `ChromeAutofillMatch` in `AuthenticatorBridge`.
+public struct CLIAutofillMatch: Codable, Equatable {
+    public let kind: NativeHostCredentialKind
     public let id: UUID
     public let name: String
-    public let username: String
+    public let username: String?
     public let website: String?
-    public let isFavorite: Bool
-    public let isCliEnabled: Bool
+    public let storedHost: String?
+    public let isExact: Bool
 
     public init(
+        kind: NativeHostCredentialKind,
         id: UUID,
         name: String,
-        username: String,
+        username: String?,
         website: String?,
-        isFavorite: Bool,
-        isCliEnabled: Bool
+        storedHost: String? = nil,
+        isExact: Bool = false
     ) {
+        self.kind = kind
         self.id = id
         self.name = name
         self.username = username
         self.website = website
-        self.isFavorite = isFavorite
-        self.isCliEnabled = isCliEnabled
+        self.storedHost = storedHost
+        self.isExact = isExact
     }
-}
-
-fileprivate struct CLIPasswordItem: Codable {
-    let id: String
-    let name: String
-    let username: String
-    let website: String?
-    let isFavorite: Bool
-    let isCliEnabled: Bool
 }
 
 public struct CLIGetPasswordResult: Codable, Equatable {
@@ -141,33 +108,19 @@ public struct CLIClient {
         self.decoder.dateDecodingStrategy = .iso8601
     }
 
-    public func listPasswords() throws -> [CLIListPassword] {
-        let data = try runner(.listPasswordsJSON)
+    /// Host-scoped matches resolved by the app. The whole vault never crosses
+    /// this boundary, so no approval is needed to answer "does this site have
+    /// anything?".
+    public func autofillMatches(
+        host: String,
+        currentURL: String?,
+        kind: NativeHostCredentialKind?
+    ) throws -> [CLIAutofillMatch] {
+        let data = try runner(.autofillMatchesJSON(host: host, currentURL: currentURL, kind: kind))
         guard !data.isEmpty else {
             throw CLIClientError.emptyOutput
         }
-
-        let response = try decoder.decode([CLIPasswordItem].self, from: data)
-        return response.compactMap { item in
-            guard let uuid = UUID(uuidString: item.id) else { return nil }
-            return CLIListPassword(
-                id: uuid,
-                name: item.name,
-                username: item.username,
-                website: item.website,
-                isFavorite: item.isFavorite,
-                isCliEnabled: item.isCliEnabled
-            )
-        }
-    }
-
-    public func listAccounts() throws -> [CLIListAccount] {
-        let data = try runner(.listOTPJSON)
-        guard !data.isEmpty else {
-            throw CLIClientError.emptyOutput
-        }
-
-        return try decoder.decode([CLIListAccount].self, from: data)
+        return try decoder.decode([CLIAutofillMatch].self, from: data)
     }
 
     public func getPassword(id: UUID) throws -> CLIGetPasswordResult {

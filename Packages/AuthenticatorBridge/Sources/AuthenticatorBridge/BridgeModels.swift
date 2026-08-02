@@ -30,6 +30,7 @@ public enum BridgeRequestType: String, Codable {
     case getSSH
     case list
     case workspaceMetadata
+    case chromeAutofillMatches
     case auditVerify
     case exportAccounts
     case addPassword

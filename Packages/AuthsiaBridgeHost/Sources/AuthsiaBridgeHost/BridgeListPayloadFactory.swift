@@ -21,6 +21,22 @@ public enum BridgeListPayloadFactory {
         }
     }
 
+    /// Non-secret password metadata for Chrome autofill host matching.
+    public nonisolated static func defaultChromeAutofillPasswords() throws -> [ChromeAutofillPasswordMetadata] {
+        let snapshot = try? VaultCLIMetadataSnapshotStore.shared.load()
+        return passwordMetadataForLookup(
+            loaded: try VaultMetadataStore.shared.loadPasswords(),
+            snapshot: snapshot?.passwords
+        ).map {
+            ChromeAutofillPasswordMetadata(
+                id: $0.id,
+                name: $0.name,
+                username: $0.username,
+                website: $0.website
+            )
+        }
+    }
+
     public static func defaultPayload() throws -> BridgeListPayload {
         let snapshot = try? VaultCLIMetadataSnapshotStore.shared.load()
         let accounts = try defaultAccounts()

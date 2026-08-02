@@ -85,6 +85,15 @@ extension XPCRequestHandler {
                 return
             }
 
+            if bridgeRequest.type == .chromeAutofillMatches {
+                self.replyWithChromeAutofillMatches(
+                    bridgeRequest,
+                    callerIdentity: callerIdentity,
+                    reply: reply
+                )
+                return
+            }
+
             guard bridgeRequest.type == .list else {
                 let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                     id: bridgeRequest.id,
@@ -268,6 +277,86 @@ extension XPCRequestHandler {
                 )
                 reply(self.encodeResponse(response), nil)
             }
+        }
+    }
+
+    /// Host-scoped autofill lookup for the Chrome native host.
+    ///
+    /// Deliberately approval-free: the reply is non-secret metadata already
+    /// narrowed to the requested host, so the user is never asked to approve
+    /// access for a site the vault has nothing for. The secret itself still
+    /// goes through the approval-bearing `getPassword` / `getOTP` path.
+    @MainActor
+    private func replyWithChromeAutofillMatches(
+        _ bridgeRequest: BridgeRequest,
+        callerIdentity: CallerIdentity?,
+        reply: XPCReply
+    ) {
+        guard Self.isChromeNativeHostCaller(request: bridgeRequest, callerIdentity: callerIdentity) else {
+            let response: BridgeResponse<String> = BridgeResponseBuilder.error(
+                id: bridgeRequest.id,
+                code: .policyDenied,
+                message: "Chrome autofill matches are reserved for the Authsia Chrome native host."
+            )
+            reply(encodeResponse(response), nil)
+            return
+        }
+
+        guard let body = bridgeRequest.body,
+              let query = try? BridgeCoder.decode(ChromeAutofillMatchQuery.self, from: body),
+              let host = ChromeAutofillMatcher.sanitizeHost(query.host) else {
+            let response: BridgeResponse<String> = BridgeResponseBuilder.error(
+                id: bridgeRequest.id,
+                code: .invalidRequest,
+                message: "Invalid Chrome autofill match query"
+            )
+            reply(encodeResponse(response), nil)
+            return
+        }
+
+        do {
+            let passwords = try chromeAutofillPasswordProvider()
+            let accounts = try accountProvider().map {
+                ChromeAutofillAccountMetadata(
+                    id: $0.id,
+                    issuer: $0.issuer,
+                    label: $0.label,
+                    hosts: $0.hosts
+                )
+            }
+
+            let matches = ChromeAutofillMatcher.matches(
+                query: query,
+                passwords: passwords,
+                accounts: accounts
+            )
+
+            // Host and match count only — never the matched item names.
+            recordAudit(
+                command: .list,
+                itemId: "chrome-autofill",
+                itemName: "\(host) (\(matches.count) match\(matches.count == 1 ? "" : "es"))",
+                approvedBy: "chrome-autofill-match",
+                caller: callerIdentity,
+                requestedCommand: bridgeRequest.context.requestedCommand,
+                fullCommand: bridgeRequest.context.fullCommand,
+                agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                workspaceContext: bridgeRequest.context.workspaceContext
+            )
+
+            let response: BridgeResponse<ChromeAutofillMatchesPayload> = BridgeResponseBuilder.success(
+                id: bridgeRequest.id,
+                payload: ChromeAutofillMatchesPayload(matches: matches)
+            )
+            reply(encodeResponse(response), nil)
+        } catch {
+            let (code, message) = BridgeListFailureMapper.mapping(for: error)
+            let response: BridgeResponse<String> = BridgeResponseBuilder.error(
+                id: bridgeRequest.id,
+                code: code,
+                message: message
+            )
+            reply(encodeResponse(response), nil)
         }
     }
 

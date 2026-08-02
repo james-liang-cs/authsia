@@ -59,7 +59,8 @@ Chrome Extension ←→ Native Host ←→ Authsia CLI ←→ Keychain/App
    - Swift binary that bridges Chrome and the CLI
    - Validates all requests
    - Enforces `isCliEnabled` filtering
-   - Performs host matching on the secure side
+   - Asks the app which vault items match the page host, and receives only
+     that host's non-secret metadata; it never lists the vault
 
 3. **CLI Integration** (`Packages/AuthsiaCLI/`)
    - `authsia` command-line tool
@@ -118,7 +119,7 @@ For a password to be available for autofill:
 
 2. **Native Host (Trusted Boundary)**
    - Validates extension input
-   - Performs host matching
+   - Requests host-scoped matches; never receives the full vault
    - Controls access to CLI
 
 3. **CLI and App (Secure)**
@@ -130,6 +131,9 @@ For a password to be available for autofill:
 - Host sanitization in both extension and native host
 - `isCliEnabled` acts as per-item allowlist
 - Exact host matches preferred over subdomain matches
+- Host matching is answered without approval and only for the requested host, so
+  focusing a field on a site with nothing stored raises no prompt; approval
+  starts when a secret is selected
 - Ambiguous matches rejected (multiple exact matches)
 - No credential logging in extension or native host
 - Minimal response shape (only required fields)
@@ -193,7 +197,9 @@ swift test
 - Penalizes confirmation and new-password fields
 - Site-specific overrides available
 
-**Host Matching Rules** (`host_matching.js`)
+**Host Matching Rules**
+(`ChromeAutofillMatcher` in `Packages/AuthenticatorBridge`; `host_matching.js`
+mirrors the same rules for extension-side sanitization)
 - Exact match: `github.com` ↔ `github.com`
 - Subdomain match: `api.github.com` ↔ `github.com`
 - No match: `evil-github.com` ↔ `github.com`

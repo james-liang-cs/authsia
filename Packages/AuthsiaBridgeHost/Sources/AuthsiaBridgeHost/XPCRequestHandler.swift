@@ -31,6 +31,7 @@ final class XPCReply: @unchecked Sendable {
 public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unchecked Sendable {
     public typealias ListProvider = () throws -> BridgeListPayload
     public typealias AccountProvider = () throws -> [BridgeAccount]
+    public typealias ChromeAutofillPasswordProvider = () throws -> [ChromeAutofillPasswordMetadata]
     public typealias WorkspaceMetadataProvider = () async throws -> Data
     public typealias SecretExistenceProvider = (UUID) -> Bool?
     public typealias AutomationCredentialLookupProvider = (UUID) -> AutomationCredentialLookup.Result
@@ -46,6 +47,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     // MARK: - Dependencies
     let listProvider: ListProvider?
     let accountProvider: AccountProvider
+    let chromeAutofillPasswordProvider: ChromeAutofillPasswordProvider
     let approver: BridgeApprover
     let repository: VaultRepositoryProviding
     let workspaceMetadataProvider: WorkspaceMetadataProvider
@@ -175,6 +177,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     public init(
         listProvider: ListProvider? = nil,
         accountProvider: AccountProvider? = nil,
+        chromeAutofillPasswordProvider: ChromeAutofillPasswordProvider? = nil,
         approver: BridgeApprover,
         repository: VaultRepositoryProviding = VaultRepository.shared,
         workspaceMetadataProvider: @escaping WorkspaceMetadataProvider = {
@@ -214,6 +217,8 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     ) {
         self.listProvider = listProvider
         self.accountProvider = accountProvider ?? BridgeListPayloadFactory.defaultAccounts
+        self.chromeAutofillPasswordProvider = chromeAutofillPasswordProvider
+            ?? BridgeListPayloadFactory.defaultChromeAutofillPasswords
         self.approver = approver
         self.repository = repository
         self.workspaceMetadataProvider = workspaceMetadataProvider

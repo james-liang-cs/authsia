@@ -23,7 +23,7 @@ public enum BridgeRequestPolicy {
 
     private static func requiresCurrentSecurityProtocol(_ type: BridgeRequestType) -> Bool {
         switch type {
-        case .list, .workspaceMetadata,
+        case .list, .workspaceMetadata, .chromeAutofillMatches,
              .getOTP, .getPassword, .getAPIKey, .getCertificate, .getNote, .getSSH,
              .createAccess, .validateAccess, .agentJITPreflight:
             return true

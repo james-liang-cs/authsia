@@ -111,14 +111,14 @@ public struct NativeHostResponse: Codable, Equatable {
     }
 }
 
+/// Resolves browser autofill requests.
+///
+/// Host matching runs in the app, not here: this asks the CLI for the items
+/// that already match the requested host. Pulling the whole vault to match
+/// locally is what used to raise an approval prompt on every credential field,
+/// including on sites the vault has nothing for.
 public struct CredentialResolver {
     private let cliClient: CLIClient
-
-    private struct OTPMatchCandidate {
-        let match: NativeHostMatch
-        let score: Int
-        let originalIndex: Int
-    }
 
     public init(cliClient: CLIClient = CLIClient()) {
         self.cliClient = cliClient
@@ -133,68 +133,18 @@ public struct CredentialResolver {
             return .failure(.invalidHost)
         }
 
-        let passwords: [CLIListPassword]
+        let matches: [CLIAutofillMatch]
         do {
-            passwords = try cliClient.listPasswords()
+            matches = try cliClient.autofillMatches(
+                host: sanitizedHost,
+                currentURL: currentURL,
+                kind: kind
+            )
         } catch {
             return .failure(.cliFailure, detail: String(describing: error))
         }
 
-        let passwordMatches = passwords.compactMap { password -> NativeHostMatch? in
-            guard Self.passwordMatchesHost(password, host: sanitizedHost, currentURL: currentURL) else {
-                return nil
-            }
-            return NativeHostMatch(
-                id: password.id, 
-                name: password.name, 
-                username: password.username, 
-                website: password.website
-            )
-        }
-        let matchedPasswords = passwords.filter {
-            Self.passwordMatchesHost($0, host: sanitizedHost, currentURL: currentURL)
-        }
-        let relatedTokens = Self.relatedTokens(from: matchedPasswords)
-
-        if kind == .password {
-            return .success(credentials: passwordMatches)
-        }
-
-        let accounts: [CLIListAccount]
-        do {
-            accounts = try cliClient.listAccounts()
-        } catch {
-            return .failure(.cliFailure, detail: String(describing: error))
-        }
-
-        let otpMatches = accounts.enumerated().compactMap { index, account -> OTPMatchCandidate? in
-            guard let score = Self.accountMatchScore(
-                    account,
-                    host: sanitizedHost,
-                    currentURL: currentURL,
-                    relatedTokens: relatedTokens
-                  ) else {
-                return nil
-            }
-            return OTPMatchCandidate(
-                match: NativeHostMatch(
-                    kind: "otp",
-                    id: account.id,
-                    name: account.issuer,
-                    username: account.label,
-                    website: nil
-                ),
-                score: score,
-                originalIndex: index
-            )
-        }.sorted {
-            if $0.score == $1.score {
-                return $0.originalIndex < $1.originalIndex
-            }
-            return $0.score > $1.score
-        }.map(\.match)
-        
-        return .success(credentials: (kind == .otp ? [] : passwordMatches) + otpMatches)
+        return .success(credentials: matches.map(Self.nativeHostMatch(from:)))
     }
 
     public func getCredential(
@@ -207,241 +157,85 @@ public struct CredentialResolver {
             return .failure(.invalidHost)
         }
 
-        let passwords: [CLIListPassword]
+        // Auto-selection only ever fills a password, so an OTP-only request
+        // without an explicit ID has nothing to select before any lookup.
+        if credentialId == nil, kind == .otp {
+            return .failure(.noMatch)
+        }
+        let requestedKind = credentialId == nil ? NativeHostCredentialKind.password : kind
+
+        let matches: [CLIAutofillMatch]
         do {
-            passwords = try cliClient.listPasswords()
+            matches = try cliClient.autofillMatches(
+                host: sanitizedHost,
+                currentURL: currentURL,
+                kind: requestedKind
+            )
         } catch {
             return .failure(.cliFailure, detail: String(describing: error))
         }
 
-        let accounts: [CLIListAccount]
-        if kind == .password {
-            accounts = []
-        } else {
-            do {
-                accounts = try cliClient.listAccounts()
-            } catch {
-                return .failure(.cliFailure, detail: String(describing: error))
-            }
-        }
-
-        // Find matching password metadata
         if let targetId = credentialId {
-            // Case 1: Specific ID requested (from menu click)
-            if kind != .otp, let found = passwords.first(where: { $0.id == targetId }) {
-                guard Self.passwordMatchesHost(found, host: sanitizedHost, currentURL: currentURL) else {
-                    return .failure(.accessDenied, detail: "Host mismatch for requested ID")
-                }
-
-                return fetchPassword(found)
+            // Case 1: Specific ID requested (from menu click). An ID outside the
+            // host's match set is refused without revealing whether it exists.
+            guard let found = matches.first(where: { $0.id == targetId }) else {
+                return .failure(.accessDenied, detail: "Requested ID does not match this host")
             }
-
-            if kind != .password, let found = accounts.first(where: { $0.id == targetId }) {
-                let matchedPasswords = passwords.filter {
-                    Self.passwordMatchesHost($0, host: sanitizedHost, currentURL: currentURL)
-                }
-                let relatedTokens = Self.relatedTokens(from: matchedPasswords)
-
-                guard Self.accountMatchesHost(
-                        found,
-                        host: sanitizedHost,
-                        currentURL: currentURL,
-                        relatedTokens: relatedTokens
-                      ) else {
-                    return .failure(.accessDenied)
-                }
-
-                return fetchOTP(found)
-            }
-
-            return .failure(.noMatch)
-        } else {
-            guard kind != .otp else {
-                return .failure(.noMatch)
-            }
-            // Case 2: Auto-selection (legacy single-match behavior)
-            var candidates: [HostMatchCandidate] = []
-            var byId: [UUID: CLIListPassword] = [:]
-
-            for password in passwords {
-                guard Self.passwordMatchesHost(password, host: sanitizedHost, currentURL: currentURL),
-                      let storedHost = parseStoredHost(from: password.website) else {
-                    continue
-                }
-
-                let isExact = sanitizedHost == storedHost
-                candidates.append(HostMatchCandidate(id: password.id, storedHost: storedHost, isExact: isExact))
-                byId[password.id] = password
-            }
-
-            guard let selection = selectBestMatch(from: candidates) else {
-                return candidates.isEmpty ? .failure(.noMatch) : .failure(.multipleMatches)
-            }
-            
-            guard let found = byId[selection.candidate.id] else {
-                return .failure(.decodeFailure)
-            }
-            return fetchPassword(found)
+            return found.kind == .otp ? fetchOTP(found) : fetchPassword(found)
         }
+
+        // Case 2: Auto-selection (legacy single-match behavior)
+        var byId: [UUID: CLIAutofillMatch] = [:]
+        let candidates = matches.compactMap { match -> HostMatchCandidate? in
+            guard match.kind == .password, let storedHost = match.storedHost else {
+                return nil
+            }
+            byId[match.id] = match
+            return HostMatchCandidate(id: match.id, storedHost: storedHost, isExact: match.isExact)
+        }
+
+        guard let selection = selectBestMatch(from: candidates) else {
+            return candidates.isEmpty ? .failure(.noMatch) : .failure(.multipleMatches)
+        }
+
+        guard let found = byId[selection.candidate.id] else {
+            return .failure(.decodeFailure)
+        }
+        return fetchPassword(found)
     }
 
-    private func fetchPassword(_ selectedPassword: CLIListPassword) -> NativeHostResponse {
+    private static func nativeHostMatch(from match: CLIAutofillMatch) -> NativeHostMatch {
+        NativeHostMatch(
+            kind: match.kind.rawValue,
+            id: match.id,
+            name: match.name,
+            username: match.username,
+            website: match.website
+        )
+    }
+
+    private func fetchPassword(_ selected: CLIAutofillMatch) -> NativeHostResponse {
         // Fetch full secret
         let result: CLIGetPasswordResult
         do {
-            result = try cliClient.getPassword(id: selectedPassword.id)
+            result = try cliClient.getPassword(id: selected.id)
         } catch {
             return .failure(.cliFailure, detail: String(describing: error))
         }
 
         let credential = NativeHostCredential(username: result.username, password: result.password)
-        let match = NativeHostMatch(
-            id: selectedPassword.id, 
-            name: selectedPassword.name, 
-            username: selectedPassword.username,
-            website: selectedPassword.website
-        )
-        return .success(credential: credential, match: match)
+        return .success(credential: credential, match: Self.nativeHostMatch(from: selected))
     }
 
-    private func fetchOTP(_ account: CLIListAccount) -> NativeHostResponse {
+    private func fetchOTP(_ selected: CLIAutofillMatch) -> NativeHostResponse {
         let result: CLIGetOTPResult
         do {
-            result = try cliClient.getOTP(id: account.id)
+            result = try cliClient.getOTP(id: selected.id)
         } catch {
             return .failure(.cliFailure, detail: String(describing: error))
         }
 
         let credential = NativeHostCredential(otpCode: result.code, remaining: result.remaining)
-        let match = NativeHostMatch(
-            kind: "otp",
-            id: account.id,
-            name: account.issuer,
-            username: account.label,
-            website: nil
-        )
-        return .success(credential: credential, match: match)
-    }
-
-    private static func passwordMatchesHost(_ password: CLIListPassword, host: String, currentURL: String?) -> Bool {
-        if storedWebsiteHasPath(password.website), currentURL != nil {
-            return storedURLMatches(currentURL: currentURL, storedWebsite: password.website) ||
-                storedAWSSignInWebsiteMatchesHost(currentHost: host, storedWebsite: password.website)
-        }
-
-        if storedAWSSignInWebsiteMatchesHost(currentHost: host, storedWebsite: password.website) {
-            return true
-        }
-
-        guard let storedHost = parseStoredHost(from: password.website) else {
-            return false
-        }
-        return hostMatches(currentHost: host, storedHost: storedHost)
-    }
-
-    private static func accountMatchesHost(
-        _ account: CLIListAccount,
-        host: String,
-        currentURL: String?,
-        relatedTokens: RelatedTokens = RelatedTokens()
-    ) -> Bool {
-        accountMatchScore(account, host: host, currentURL: currentURL, relatedTokens: relatedTokens) != nil
-    }
-
-    private static func accountMatchScore(
-        _ account: CLIListAccount,
-        host: String,
-        currentURL: String?,
-        relatedTokens: RelatedTokens = RelatedTokens()
-    ) -> Int? {
-        var score: Int?
-
-        if account.hosts?.contains(where: { accountHostMatches($0, host: host, currentURL: currentURL) }) == true {
-            score = account.hosts?
-                .compactMap { accountHostMatchScore($0, host: host, currentURL: currentURL) }
-                .max()
-        }
-
-        let issuer = normalizeForHostMatch(account.issuer)
-        let label = normalizeForHostMatch(account.label)
-
-        // Issuer names the service, so a matched password's item name may identify it.
-        // Labels name the *person* (usually an email reused across services), so only
-        // account-scoping aliases may match there — never the password's username.
-        if relatedTokens.service.contains(where: { issuer.contains($0) })
-            || relatedTokens.alias.contains(where: { label.contains($0) }) {
-            score = max(score ?? 0, 0) + 50
-        }
-
-        return score
-    }
-
-    private static func accountHostMatches(_ accountHost: String, host: String, currentURL: String?) -> Bool {
-        accountHostMatchScore(accountHost, host: host, currentURL: currentURL) != nil
-    }
-
-    private static func accountHostMatchScore(_ accountHost: String, host: String, currentURL: String?) -> Int? {
-        if storedWebsiteHasPath(accountHost), currentURL != nil {
-            if storedURLMatches(currentURL: currentURL, storedWebsite: accountHost) {
-                return 100
-            }
-            if storedAWSSignInWebsiteMatchesHost(currentHost: host, storedWebsite: accountHost) {
-                return 120
-            }
-        }
-
-        if storedAWSSignInWebsiteMatchesHost(currentHost: host, storedWebsite: accountHost) {
-            return 120
-        }
-
-        guard let storedHost = parseStoredHost(from: accountHost) else {
-            return nil
-        }
-        guard hostMatches(currentHost: host, storedHost: storedHost) else {
-            return nil
-        }
-        if storedHost == host {
-            return 90
-        }
-        return 30 + min(storedHost.count, 40)
-    }
-
-    /// Tokens derived from host-matched passwords, split by what they may identify.
-    /// `service` may match an OTP issuer; `alias` may additionally match an OTP label.
-    struct RelatedTokens {
-        var service = Set<String>()
-        var alias = Set<String>()
-    }
-
-    private static func relatedTokens(from passwords: [CLIListPassword]) -> RelatedTokens {
-        var tokens = RelatedTokens()
-
-        for password in passwords {
-            addToken(password.name, to: &tokens.service)
-
-            if let host = parseStoredHost(from: password.website) {
-                let awsSuffix = ".signin.aws.amazon.com"
-                if host.hasSuffix(awsSuffix) {
-                    let alias = String(host.dropLast(awsSuffix.count))
-                    addToken(alias, to: &tokens.service)
-                    addToken(alias, to: &tokens.alias)
-                }
-            }
-        }
-
-        return tokens
-    }
-
-    private static func addToken(_ value: String, to tokens: inout Set<String>) {
-        let token = normalizeForHostMatch(value)
-        if token.count >= 3 {
-            tokens.insert(token)
-        }
-    }
-
-    private static func normalizeForHostMatch(_ value: String) -> String {
-        value
-            .lowercased()
-            .filter { $0.isLetter || $0.isNumber }
+        return .success(credential: credential, match: Self.nativeHostMatch(from: selected))
     }
 }

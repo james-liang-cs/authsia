@@ -109,7 +109,7 @@ enum BridgeClientError: LocalizedError {
 extension BridgeRequestType {
     var mayRequireUserApproval: Bool {
         switch self {
-        case .ping, .status, .lock, .workspaceMetadata, .auditVerify, .sshAgentSign,
+        case .ping, .status, .lock, .workspaceMetadata, .chromeAutofillMatches, .auditVerify, .sshAgentSign,
              .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll,
              .listAccess, .revokeAccess, .validateAccess:
             return false
@@ -550,6 +550,38 @@ final class AuthsiaBridgeClient:
                 body: try BridgeCoder.encode(payload)
             )
             let response: BridgeResponse<BridgeListPayload> = try sendRequest(request)
+            if let error = response.error {
+                throw BridgeClientError.bridgeError(
+                    code: error.code.rawValue,
+                    message: error.message,
+                    query: nil
+                )
+            }
+            guard let payload = response.payload else {
+                throw BridgeClientError.invalidResponse
+            }
+            return payload
+        }
+    }
+
+    /// Host-scoped autofill lookup for the Chrome native host. Approval-free by
+    /// design — see `XPCRequestHandler.replyWithChromeAutofillMatches`.
+    func chromeAutofillMatches(
+        _ payload: ChromeAutofillMatchQuery
+    ) throws -> ChromeAutofillMatchesPayload {
+        try withRequestedCommand(
+            BridgeContext.chromeNativeHostRequestedCommand,
+            includeAutomationCredential: false
+        ) {
+            let request = BridgeRequest(
+                id: UUID(),
+                type: .chromeAutofillMatches,
+                query: "",
+                options: BridgeOptions(field: nil, copy: false),
+                context: currentContext(),
+                body: try BridgeCoder.encode(payload)
+            )
+            let response: BridgeResponse<ChromeAutofillMatchesPayload> = try sendRequest(request)
             if let error = response.error {
                 throw BridgeClientError.bridgeError(
                     code: error.code.rawValue,
@@ -1545,7 +1577,7 @@ final class AuthsiaBridgeClient:
                 service.getNote(requestData, replyHandler)
             case .getSSH:
                 service.getSSH(requestData, replyHandler)
-            case .list, .workspaceMetadata:
+            case .list, .workspaceMetadata, .chromeAutofillMatches:
                 service.list(requestData, replyHandler)
             case .auditVerify:
                 service.auditVerify(requestData, replyHandler)

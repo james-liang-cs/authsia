@@ -80,7 +80,7 @@ struct Authsia: AsyncParsableCommand {
               authsia scrape --path .env --replace-all --folder Team/API
             """,
         version: Self.version(),
-        subcommands: [List.self, Code.self, Get.self, Load.self, Exec.self, Env.self, SSH.self, ReadCmd.self, Inject.self, Init.self, Guard.self, Unguard.self, Unlock.self, Lock.self, Status.self, Doctor.self, Setup.self, Access.self, Agent.self, Workspace.self, Add.self, Edit.self, Convert.self, Delete.self, Scrape.self, Audit.self, Completion.self, SSHAutomationGrantCommand.self],
+        subcommands: [List.self, Code.self, Get.self, Load.self, Exec.self, Env.self, SSH.self, ReadCmd.self, Inject.self, Init.self, Guard.self, Unguard.self, Unlock.self, Lock.self, Status.self, Doctor.self, Setup.self, Access.self, Agent.self, Workspace.self, Add.self, Edit.self, Convert.self, Delete.self, Scrape.self, Audit.self, Completion.self, SSHAutomationGrantCommand.self, ChromeAutofill.self],
         defaultSubcommand: List.self
     )
 
