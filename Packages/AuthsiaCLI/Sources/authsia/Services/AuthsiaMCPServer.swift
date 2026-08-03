@@ -8,6 +8,7 @@ actor AuthsiaMCPServer {
 
     private let server: Server
     private let runtimeContext: MCPRuntimeContext
+    private let workspaceInspection: MCPWorkspaceInspectionService
     private let diagnostics: Diagnostics
     private var handlersRegistered = false
 
@@ -19,6 +20,7 @@ actor AuthsiaMCPServer {
                 isDirectory: true
             )
         ),
+        workspaceInspection: MCPWorkspaceInspectionService? = nil,
         diagnostics: @escaping Diagnostics = AuthsiaMCPServer.standardErrorDiagnostic
     ) {
         self.server = Server(
@@ -30,6 +32,9 @@ actor AuthsiaMCPServer {
             configuration: .strict
         )
         self.runtimeContext = runtimeContext
+        self.workspaceInspection = workspaceInspection ?? MCPWorkspaceInspectionService(
+            runtimeContext: runtimeContext
+        )
         self.diagnostics = diagnostics
     }
 
@@ -75,10 +80,34 @@ actor AuthsiaMCPServer {
             ListTools.Result(tools: MCPToolCatalog.tools)
         }
         await server.withMethodHandler(CallTool.self) { parameters in
-            guard AuthsiaMCPToolName(rawValue: parameters.name) != nil else {
+            guard let name = AuthsiaMCPToolName(rawValue: parameters.name) else {
                 return try Self.errorResult(
                     code: .invalidInput,
                     message: "Unknown Authsia MCP tool."
+                )
+            }
+            do {
+                switch name {
+                case .status:
+                    return try Self.successResult(self.workspaceInspection.status())
+                case .workspaceInspect:
+                    let input = try Self.decodeInput(
+                        MCPWorkspaceInspectInput.self,
+                        arguments: parameters.arguments
+                    )
+                    return try Self.successResult(self.workspaceInspection.inspect(input))
+                case .accessStatus, .exec, .accessRevoke:
+                    break
+                }
+            } catch let error as MCPToolInputError {
+                return try Self.errorResult(
+                    code: .invalidInput,
+                    message: error.localizedDescription
+                )
+            } catch {
+                return try Self.errorResult(
+                    code: .internalError,
+                    message: "The requested Authsia operation could not be completed."
                 )
             }
             return try Self.errorResult(
@@ -106,6 +135,24 @@ actor AuthsiaMCPServer {
             structuredContent: output,
             isError: true
         )
+    }
+
+    private static func successResult<Output: Codable>(_ output: Output) throws -> CallTool.Result {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let text = String(decoding: try encoder.encode(output), as: UTF8.self)
+        return try CallTool.Result(
+            content: [.text(text: text, annotations: nil, _meta: nil)],
+            structuredContent: output
+        )
+    }
+
+    private static func decodeInput<Input: MCPClosedToolInput>(
+        _ type: Input.Type,
+        arguments: [String: Value]?
+    ) throws -> Input {
+        let data = try JSONEncoder().encode(arguments ?? [:])
+        return try MCPToolInputDecoder.decode(type, from: data)
     }
 
     private static func standardErrorDiagnostic(_ message: String) {

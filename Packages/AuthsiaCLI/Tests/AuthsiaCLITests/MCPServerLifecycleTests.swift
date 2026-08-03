@@ -33,6 +33,20 @@ struct MCPServerLifecycleTests {
         #expect(listed.tools.map(\.name) == AuthsiaMCPToolName.allCases.map(\.rawValue))
         try await client.ping()
 
+        let statusContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue
+        )
+        let status = try await statusContext.value
+        #expect(status.isError != true)
+        #expect(status.structuredContent?.objectValue?["workspaceName"]?.stringValue == "lifecycle")
+
+        let inspectionContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.workspaceInspect.rawValue
+        )
+        let inspection = try await inspectionContext.value
+        #expect(inspection.isError != true)
+        #expect(inspection.structuredContent?.objectValue?["references"]?.arrayValue?.isEmpty == true)
+
         await client.disconnect()
         await server.waitUntilCompleted()
     }
@@ -86,10 +100,18 @@ struct MCPServerLifecycleTests {
             toWorkspaceRoot: root
         )
         let runtime = MCPRuntimeContext(startingDirectory: root)
+        let inspection = MCPWorkspaceInspectionService(
+            runtimeContext: runtime,
+            bridgeStateProvider: { .ready },
+            selectionStore: WorkspaceEnvironmentSelectionStore(
+                fileURL: root.appendingPathComponent("selection.json")
+            )
+        )
         return (
             AuthsiaMCPServer(
                 version: "test",
                 runtimeContext: runtime,
+                workspaceInspection: inspection,
                 diagnostics: diagnostics
             ),
             root
