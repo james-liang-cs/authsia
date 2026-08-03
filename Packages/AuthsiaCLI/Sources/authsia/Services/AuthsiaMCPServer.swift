@@ -9,8 +9,10 @@ actor AuthsiaMCPServer {
     private let server: Server
     private let runtimeContext: MCPRuntimeContext
     private let workspaceInspection: MCPWorkspaceInspectionService
+    private let childRunner: (any MCPChildRunning)?
     private let diagnostics: Diagnostics
     private var handlersRegistered = false
+    private var executionInProgress = false
 
     init(
         version: String,
@@ -21,6 +23,7 @@ actor AuthsiaMCPServer {
             )
         ),
         workspaceInspection: MCPWorkspaceInspectionService? = nil,
+        childRunner: (any MCPChildRunning)? = nil,
         diagnostics: @escaping Diagnostics = AuthsiaMCPServer.standardErrorDiagnostic
     ) {
         self.server = Server(
@@ -35,6 +38,13 @@ actor AuthsiaMCPServer {
         self.workspaceInspection = workspaceInspection ?? MCPWorkspaceInspectionService(
             runtimeContext: runtimeContext
         )
+        if let childRunner {
+            self.childRunner = childRunner
+        } else if let root = runtimeContext.workspaceRoot {
+            self.childRunner = MCPSameBinaryRunner(workspaceRoot: root)
+        } else {
+            self.childRunner = nil
+        }
         self.diagnostics = diagnostics
     }
 
@@ -96,7 +106,13 @@ actor AuthsiaMCPServer {
                         arguments: parameters.arguments
                     )
                     return try Self.successResult(self.workspaceInspection.inspect(input))
-                case .accessStatus, .exec, .accessRevoke:
+                case .exec:
+                    let input = try Self.decodeInput(
+                        MCPExecInput.self,
+                        arguments: parameters.arguments
+                    ).validated()
+                    return try await self.execute(input)
+                case .accessStatus, .accessRevoke:
                     break
                 }
             } catch let error as MCPToolInputError {
@@ -153,6 +169,67 @@ actor AuthsiaMCPServer {
     ) throws -> Input {
         let data = try JSONEncoder().encode(arguments ?? [:])
         return try MCPToolInputDecoder.decode(type, from: data)
+    }
+
+    static func execArguments(_ input: MCPExecInput) -> [String] {
+        var arguments = ["workspace", "run"]
+        if let environment = input.environment {
+            arguments += ["--environment", environment]
+        } else if input.defaultOnly {
+            arguments.append("--default-only")
+        }
+        for path in input.envFiles {
+            arguments += ["--env-file", path]
+        }
+        arguments.append("--")
+        arguments += input.argv
+        return arguments
+    }
+
+    private func execute(_ input: MCPExecInput) async throws -> CallTool.Result {
+        guard !executionInProgress else {
+            return try Self.errorResult(
+                code: .busy,
+                message: "Another Authsia MCP execution is already active."
+            )
+        }
+        guard let childRunner else {
+            return try Self.errorResult(
+                code: .workspaceUnavailable,
+                message: "The MCP server is not bound to a managed workspace."
+            )
+        }
+
+        executionInProgress = true
+        defer { executionInProgress = false }
+        let invocation = await runtimeContext.makeInvocation()
+        let result = await childRunner.run(
+            arguments: Self.execArguments(input),
+            invocation: invocation,
+            timeoutSeconds: input.timeoutSeconds
+        )
+        let termination: MCPExecutionTermination
+        if result.cancelled {
+            termination = .cancelled
+        } else if result.timedOut {
+            termination = .timedOut
+        } else if result.launchFailed {
+            termination = .launchFailed
+        } else if result.signalled {
+            termination = .signalled
+        } else {
+            termination = .exited
+        }
+        return try Self.successResult(MCPExecOutput(
+            invocationID: result.invocationID.uuidString,
+            termination: termination,
+            exitCode: result.exitCode,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            stdoutTruncated: result.stdoutTruncated,
+            stderrTruncated: result.stderrTruncated,
+            durationMilliseconds: result.durationMilliseconds
+        ))
     }
 
     private static func standardErrorDiagnostic(_ message: String) {

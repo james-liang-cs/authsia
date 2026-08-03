@@ -134,8 +134,21 @@ struct MCPExecInput: Codable, Equatable, Sendable, MCPClosedToolInput {
         guard !(defaultOnly && environment != nil) else {
             throw MCPToolInputError.invalidArgument("environment and defaultOnly cannot be combined.")
         }
+        if let environment {
+            let trimmed = environment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  trimmed.count <= 128,
+                  environment.unicodeScalars.allSatisfy({
+                      !CharacterSet.controlCharacters.contains($0)
+                  }) else {
+                throw MCPToolInputError.invalidArgument("environment must be a safe workspace environment name.")
+            }
+        }
         guard envFiles.count <= 16 else {
             throw MCPToolInputError.invalidArgument("envFiles may contain at most 16 paths.")
+        }
+        guard envFiles.allSatisfy(WorkspaceConfigStore.isCommitSafeRelativePath) else {
+            throw MCPToolInputError.invalidArgument("envFiles must be commit-safe relative workspace paths.")
         }
         return self
     }

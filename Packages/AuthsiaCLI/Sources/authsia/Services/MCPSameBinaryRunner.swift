@@ -11,9 +11,19 @@ struct MCPChildResult: Equatable, Sendable {
     let cancelled: Bool
     let timedOut: Bool
     let durationMilliseconds: Int
+    var launchFailed = false
+    var signalled = false
 }
 
-struct MCPSameBinaryRunner: Sendable {
+protocol MCPChildRunning: Sendable {
+    func run(
+        arguments: [String],
+        invocation: MCPInvocationContext,
+        timeoutSeconds: Int
+    ) async -> MCPChildResult
+}
+
+struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
     typealias ProcessFactory = @Sendable () -> Process
 
     static let outputLimit = 65_536
@@ -80,7 +90,8 @@ struct MCPSameBinaryRunner: Sendable {
                 stderrTruncated: false,
                 cancelled: false,
                 timedOut: false,
-                durationMilliseconds: elapsedMilliseconds(since: startedAt)
+                durationMilliseconds: elapsedMilliseconds(since: startedAt),
+                launchFailed: true
             )
         }
 
@@ -126,7 +137,8 @@ struct MCPSameBinaryRunner: Sendable {
             stderrTruncated: stderr.truncated,
             cancelled: state.cancelled,
             timedOut: state.timedOut,
-            durationMilliseconds: elapsedMilliseconds(since: startedAt)
+            durationMilliseconds: elapsedMilliseconds(since: startedAt),
+            signalled: processTermination.1 == .uncaughtSignal
         )
     }
 
