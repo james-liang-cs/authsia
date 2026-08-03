@@ -90,7 +90,7 @@ struct Authsia: AsyncParsableCommand {
         appBundleVersion(containing: executableURL) ?? fallbackVersion
     }
 
-    private static func currentExecutableURL() -> URL {
+    static func currentExecutableURL() -> URL {
         resolveExecutableURL(
             bundleExecutableURL: Bundle.main.executableURL,
             argv0: CommandLine.arguments.first
