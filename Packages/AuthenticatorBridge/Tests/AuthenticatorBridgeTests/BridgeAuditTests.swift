@@ -142,27 +142,50 @@ final class BridgeAuditTests: XCTestCase {
     }
 
     func testAuditRecordWithAgentRuntimeContextSerialization() throws {
+        let grantID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
         let record = BridgeAuditRecord(
             command: .getPassword,
             itemId: "test-id",
             approvedBy: "jit",
             timestamp: Date(),
+            caller: CallerIdentity(
+                pid: 42,
+                processName: "authsia",
+                bundleIdentifier: "com.authsia.cli",
+                signingTeamId: "TEAM",
+                signingIdentity: "Developer ID"
+            ),
             requestedCommand: "exec",
+            agentJITGrantID: grantID,
             agentRuntimeContext: AgentRuntimeContext(
-                platform: "codex",
-                sessionID: "session-1",
-                turnID: "turn-1",
-                agentID: "agent-1",
-                agentType: "reviewer",
-                toolUseID: "tool-1"
-            )
+                platform: "Codex",
+                sessionID: "mcp:server-1",
+                turnID: "mcp-call:call-1",
+                agentType: "authsia-mcp",
+                toolUseID: "mcp-call:call-1"
+            ),
+            workspaceContext: WorkspaceRuntimeContext(
+                name: "api",
+                rootLabel: "repo",
+                authsiaFolder: "Workspaces/api"
+            ),
+            environmentScope: .named("Development")
         )
 
         let data = try BridgeCoder.encode(record)
         let decoded = try BridgeCoder.decode(BridgeAuditRecord.self, from: data)
 
-        XCTAssertEqual(decoded.agentRuntimeContext?.platform, "codex")
-        XCTAssertEqual(decoded.agentRuntimeContext?.agentType, "reviewer")
+        XCTAssertEqual(decoded.agentRuntimeContext?.platform, "Codex")
+        XCTAssertEqual(decoded.agentRuntimeContext?.sessionID, "mcp:server-1")
+        XCTAssertEqual(decoded.agentRuntimeContext?.turnID, "mcp-call:call-1")
+        XCTAssertEqual(decoded.agentRuntimeContext?.toolUseID, "mcp-call:call-1")
+        XCTAssertEqual(decoded.agentRuntimeContext?.agentType, "authsia-mcp")
+        XCTAssertEqual(decoded.agentJITGrantID, grantID)
+        XCTAssertEqual(decoded.caller?.bundleIdentifier, "com.authsia.cli")
+        XCTAssertEqual(decoded.requestedCommand, "exec")
+        XCTAssertEqual(decoded.workspaceContext?.name, "api")
+        XCTAssertEqual(decoded.environmentScope, .named("Development"))
+        XCTAssertEqual(decoded.approvedBy, "jit")
     }
 
     func testAuditRecordWithWorkspaceContextSerialization() throws {

@@ -1684,8 +1684,27 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             ],
             environmentScope: .named("Production")
         )
+        let runtimeContext = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:server-1",
+            turnID: "mcp-call:call-1",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:call-1"
+        )
+        let workspaceContext = WorkspaceRuntimeContext(
+            name: "api",
+            rootLabel: "repo",
+            authsiaFolder: "Workspaces/api"
+        )
 
-        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: execContext(
+                agentRuntimeContext: runtimeContext,
+                workspaceContext: workspaceContext
+            )
+        )
 
         let grant = try XCTUnwrap(store.grants.first)
         let records = try auditRecords(at: auditURL)
@@ -1697,6 +1716,9 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(records[0].approvedBy, "biometric")
         XCTAssertEqual(records[0].requestedCommand, "exec")
         XCTAssertEqual(records[0].agentJITGrantID, grant.id)
+        XCTAssertEqual(records[0].agentRuntimeContext, runtimeContext)
+        XCTAssertEqual(records[0].workspaceContext, workspaceContext)
+        XCTAssertEqual(records[0].caller?.bundleIdentifier, "com.authsia.cli")
         XCTAssertEqual(records[0].environmentScope, .named("Production"))
         XCTAssertTrue(approver.requests[0].prompt.contains("Environment: Production."))
     }
@@ -3788,7 +3810,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         automationCredentialToken: String? = nil,
         agentRuntimeContext: AgentRuntimeContext? = nil,
         workingDirectory: String = "/repo",
-        workspaceAuthorityPath: String? = nil
+        workspaceAuthorityPath: String? = nil,
+        workspaceContext: WorkspaceRuntimeContext? = nil
     ) -> BridgeContext {
         BridgeContext(
             isTTY: true,
@@ -3802,7 +3825,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             sessionScope: "tty:/dev/ttys001",
             workingDirectory: workingDirectory,
             workspaceAuthorityPath: workspaceAuthorityPath,
-            agentRuntimeContext: agentRuntimeContext
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceContext: workspaceContext
         )
     }
 
