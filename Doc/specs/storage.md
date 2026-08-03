@@ -11,6 +11,7 @@
 - [Import and Export](#import-and-export)
 - [CLI and SSH Access](#cli-and-ssh-access)
 - [Bridge Authority and Session State](#bridge-authority-and-session-state)
+- [Local MCP State](#local-mcp-state)
 - [Audit Logs](#audit-logs)
 - [Operational Rules](#operational-rules)
 
@@ -418,6 +419,19 @@ directory, origin, requested item references, requested capabilities,
 environment scope, and approval attribution. The requested items describe the
 approval prompt; they do not narrow the normal human session authorization.
 Deleting or clearing a scope from that status invalidates matching Bridge use.
+
+## Local MCP State
+
+`authsia mcp serve` creates no dedicated Authsia file, database, socket, bearer,
+grant store, or audit log. Its server-instance and invocation UUIDs exist in
+process memory and are projected into existing Agent JIT grants, Bridge audit,
+and redacted agent activity records through `AgentRuntimeContext`.
+
+Authoritative grants remain in the Bridge-owned authenticated Keychain envelope.
+MCP activity continues to use the existing command, file, network, Process
+Tree, and HMAC-chained audit paths listed above. Client-owned MCP configuration
+is outside Authsia storage; `authsia mcp configure` prints configuration and
+does not write third-party client files.
 
 ## Audit Logs
 

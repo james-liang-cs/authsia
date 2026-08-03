@@ -10,6 +10,7 @@
 - [Caller Classification](#caller-classification)
 - [Human CLI Path](#human-cli-path)
 - [AI Tool And JIT Path](#ai-tool-and-jit-path)
+- [Local MCP Adapter](#local-mcp-adapter)
 - [SSH-Agent Path](#ssh-agent-path)
 - [Automation Credentials](#automation-credentials)
 - [What The Model Does Not Guarantee](#what-the-model-does-not-guarantee)
@@ -71,6 +72,7 @@ For detailed JIT grant behavior, see [`jit-agent-grants.md`](jit-agent-grants.md
 | CLI request policy | `AuthsiaBridgeHost.XPCRequestHandler` | CLI-provided request context and query data | CLI access switch, per-item CLI flag, session, approval, JIT, automation credentials |
 | Human session | Bridge session manager | Repeated CLI invocations | Terminal/session-scoped token and replay checks |
 | JIT grant | Active grant store | Coding agents and IDE helper processes | Caller fingerprint, named-folder subtree or root-only scope, TTL, allowed command |
+| Local MCP adapter | Signed `authsia mcp serve` process and existing Bridge/JIT path | MCP client, model, tool arguments, and client metadata | Closed tool schemas, workspace lock, JIT-only child environment, existing JIT policy, instance-narrowed MCP grant reuse |
 | SSH signing | `Authsia.SSHAgent` headless role | `git`, `ssh`, and their callers | SSH key policy, approval/session, automation SSH grant |
 
 The reusable gates and headless runtime mechanics are owned by
@@ -366,6 +368,32 @@ root-only scope and never means the whole vault. Unrelated folder trees require
 separate approval, and a capability not already present can require another
 approval. These scope rules do not change folder-qualified `get` or `load`
 exact-item selection.
+
+## Local MCP Adapter
+
+The local MCP server is a constrained adapter over the existing AI Tool and JIT
+path. It exposes status, commit-safe workspace reference inspection,
+current-instance grant status/revocation, and mediated execution over local
+`stdio`. It exposes no plaintext-secret, OTP, SSH signing, write, export, or
+global audit tool.
+
+`authsia_exec` launches the same resolved Authsia binary through `workspace run`
+with a server-generated MCP runtime context. It removes automation credentials
+from the child environment, so V1 always reaches Agent JIT when secrets are
+required. Client name/version and MCP runtime labels are not caller attestation.
+OS-observed caller identity, workspace, item scope, environment, capability,
+TTL, approval, and final Bridge revalidation remain mandatory.
+
+An MCP server-instance ID may narrow reuse of an MCP-created grant. It can never
+authorize a grant by itself or broaden ordinary JIT matching. A restarted MCP
+server therefore obtains a new grant instead of silently reusing a prior MCP or
+direct-agent grant.
+
+The MCP client receives only masked, bounded command output. Existing Bridge
+audit and agent activity stores carry the grant, server-instance, and tool-call
+correlation; MCP adds no separate approval authority, bearer, or log. Full tool,
+lifecycle, threat, and compatibility rules are in
+[`authsia-mcp.md`](authsia-mcp.md).
 
 ## SSH-Agent Path
 

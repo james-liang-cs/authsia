@@ -16,6 +16,7 @@
 - [Scope Rules](#scope-rules)
 - [Approval Copy](#approval-copy)
 - [Capabilities](#capabilities)
+- [MCP Instance Narrowing](#mcp-instance-narrowing)
 - [TTL And Revocation](#ttl-and-revocation)
 - [Agent File Activity Evidence](#agent-file-activity-evidence)
 - [Access Insights](#access-insights)
@@ -593,6 +594,29 @@ parent process's environment confidential. The parent app's canonical security
 model documents credential generation, verifier storage, upgrade behavior, and
 the residual same-user boundary in
 [`security-model.md#automation-credentials`](security-model.md#automation-credentials).
+
+## MCP Instance Narrowing
+
+Local MCP execution remains Agent JIT and follows every rule above. The MCP
+server sets `agentType=authsia-mcp` and a random, server-generated `sessionID`
+for its lifetime. These fields are not caller attestation and never grant
+authority.
+
+When either the stored grant or current request is MCP-backed, both must have
+the MCP `agentType` and the same server `sessionID`. This is a narrowing
+condition applied after the existing caller fingerprint, workspace, resource
+scope, capability, environment, TTL, and revocation checks. It cannot make an
+otherwise invalid grant valid. When neither side is MCP-backed, ordinary agent
+matching is unchanged.
+
+This prevents a new MCP process from silently reusing a grant created by a
+previous MCP process or direct agent invocation. It also gives MCP status and
+revocation an unambiguous current-instance boundary. Abruptly orphaned grants
+remain visible to Access Center until revoked, expired, or closed by Bridge
+liveness handling, but cannot authorize a different MCP instance.
+
+The complete MCP tool and lifecycle contract is
+[`authsia-mcp.md`](authsia-mcp.md).
 
 ## TTL And Revocation
 
