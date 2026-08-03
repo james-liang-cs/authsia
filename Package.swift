@@ -18,6 +18,10 @@ let package = Package(
         .package(
             url: "https://github.com/apple/swift-argument-parser",
             exact: "1.7.0"
+        ),
+        .package(
+            url: "https://github.com/modelcontextprotocol/swift-sdk.git",
+            exact: "0.12.1"
         )
     ],
     targets: [
@@ -81,6 +85,10 @@ let package = Package(
                 .product(
                     name: "ArgumentParser",
                     package: "swift-argument-parser"
+                ),
+                .product(
+                    name: "MCP",
+                    package: "swift-sdk"
                 )
             ],
             path: "Packages/AuthsiaCLI/Sources/authsia"
@@ -93,6 +101,10 @@ let package = Package(
                 .product(
                     name: "ArgumentParser",
                     package: "swift-argument-parser"
+                ),
+                .product(
+                    name: "MCP",
+                    package: "swift-sdk"
                 )
             ],
             path: "Packages/AuthsiaCLI/Tests/AuthsiaCLITests"
