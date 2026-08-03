@@ -7,11 +7,18 @@ actor AuthsiaMCPServer {
     typealias Diagnostics = @Sendable (String) -> Void
 
     private let server: Server
+    private let runtimeContext: MCPRuntimeContext
     private let diagnostics: Diagnostics
     private var handlersRegistered = false
 
     init(
         version: String,
+        runtimeContext: MCPRuntimeContext = MCPRuntimeContext(
+            startingDirectory: URL(
+                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                isDirectory: true
+            )
+        ),
         diagnostics: @escaping Diagnostics = AuthsiaMCPServer.standardErrorDiagnostic
     ) {
         self.server = Server(
@@ -22,12 +29,16 @@ actor AuthsiaMCPServer {
             capabilities: .init(tools: .init()),
             configuration: .strict
         )
+        self.runtimeContext = runtimeContext
         self.diagnostics = diagnostics
     }
 
     func start(transport: any Transport) async throws {
+        try runtimeContext.requireWorkspace()
         await registerHandlersIfNeeded()
-        try await server.start(transport: transport)
+        try await server.start(transport: transport) { [runtimeContext] client, _ in
+            await runtimeContext.updateClientInfo(name: client.name, version: client.version)
+        }
         diagnostics("Authsia MCP server started")
     }
 

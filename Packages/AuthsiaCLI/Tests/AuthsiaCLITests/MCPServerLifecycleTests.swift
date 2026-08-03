@@ -15,8 +15,10 @@ struct MCPServerLifecycleTests {
 
     @Test("initialize advertises tools only and supports ping")
     func initializationAndDiscovery() async throws {
+        let fixture = try makeServer()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
         let transports = await InMemoryTransport.createConnectedPair()
-        let server = AuthsiaMCPServer(version: "test")
+        let server = fixture.server
         let client = Client(name: "MCP lifecycle test", version: "1")
 
         try await server.start(transport: transports.server)
@@ -37,8 +39,10 @@ struct MCPServerLifecycleTests {
 
     @Test("unknown calls return a structured tool error")
     func unknownToolCall() async throws {
+        let fixture = try makeServer()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
         let transports = await InMemoryTransport.createConnectedPair()
-        let server = AuthsiaMCPServer(version: "test")
+        let server = fixture.server
         let client = Client(name: "MCP lifecycle test", version: "1")
 
         try await server.start(transport: transports.server)
@@ -54,10 +58,10 @@ struct MCPServerLifecycleTests {
     @Test("diagnostics use the injected sink, never protocol output")
     func diagnosticsAreSeparated() async throws {
         let recorder = DiagnosticRecorder()
+        let fixture = try makeServer { recorder.append($0) }
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
         let transports = await InMemoryTransport.createConnectedPair()
-        let server = AuthsiaMCPServer(version: "test") { message in
-            recorder.append(message)
-        }
+        let server = fixture.server
         let client = Client(name: "MCP lifecycle test", version: "1")
 
         try await server.start(transport: transports.server)
@@ -67,6 +71,29 @@ struct MCPServerLifecycleTests {
 
         #expect(recorder.messages.contains("Authsia MCP server started"))
         #expect(recorder.messages.contains("Authsia MCP server stopped"))
+    }
+
+    private func makeServer(
+        diagnostics: @escaping AuthsiaMCPServer.Diagnostics = { _ in }
+    ) throws -> (server: AuthsiaMCPServer, root: URL) {
+        let root = try makeWorkspaceRoot()
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                workspace: .init(name: "lifecycle", authsiaFolder: "Workspaces/lifecycle"),
+                managedEnvFiles: [],
+                agents: nil
+            ),
+            toWorkspaceRoot: root
+        )
+        let runtime = MCPRuntimeContext(startingDirectory: root)
+        return (
+            AuthsiaMCPServer(
+                version: "test",
+                runtimeContext: runtime,
+                diagnostics: diagnostics
+            ),
+            root
+        )
     }
 }
 
