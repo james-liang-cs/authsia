@@ -46,6 +46,30 @@ public nonisolated protocol AgentJITGrantStoring {
         caller: AgentJITCallerFingerprint,
         now: Date
     ) throws -> AgentJITAuthorityViolation?
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITGrant?
+    func markUsedScopesForRuntime(
+        capability: AgentJITCapability,
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> [AgentJITFolderScope]
+    func revokeOnAuthorityViolationForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation?
 }
 
 public extension AgentJITGrantStoring {
@@ -64,7 +88,8 @@ public extension AgentJITGrantStoring {
         now: Date
     ) throws -> AgentJITAuthorityViolation? {
         let active = try loadAll().filter {
-            $0.status(asOf: now) == .active && $0.capabilities.contains(capability)
+            $0.status(asOf: now) == .active
+                && $0.capabilities.contains(capability)
         }
         let resourceMatches: (AgentJITGrant) -> Bool = {
             $0.resourceScope.matches(itemIdentity: itemIdentity, itemFolderPath: itemFolderPath)
@@ -81,6 +106,69 @@ public extension AgentJITGrantStoring {
             return .outsideApprovedItemScope(try revoke(id: grant.id, revokedAt: now))
         }
         return nil
+    }
+
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITGrant? {
+        let grant = try markUsedIfAllowed(
+            capability: capability,
+            itemIdentity: itemIdentity,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            now: now
+        )
+        return grant?.matchesAgentRuntimeContext(agentRuntimeContext) == true ? grant : nil
+    }
+
+    func markUsedScopesForRuntime(
+        capability: AgentJITCapability,
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> [AgentJITFolderScope] {
+        let grants = try loadAll()
+        if grants.isEmpty {
+            return try markUsedScopes(capability: capability, caller: caller, now: now)
+        }
+        guard grants.contains(where: {
+            $0.status(asOf: now) == .active
+                && $0.capabilities.contains(capability)
+                && $0.callerFingerprint.matches(caller)
+                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+        }) else { return [] }
+        return try markUsedScopes(capability: capability, caller: caller, now: now)
+    }
+
+    func revokeOnAuthorityViolationForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation? {
+        guard try loadAll().contains(where: {
+            $0.status(asOf: now) == .active
+                && $0.capabilities.contains(capability)
+                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+        }) else { return nil }
+        return try revokeOnAuthorityViolation(
+            capability: capability,
+            itemIdentity: itemIdentity,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            now: now
+        )
     }
 }
 
@@ -186,10 +274,32 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
         caller: AgentJITCallerFingerprint,
         now: Date
     ) throws -> AgentJITAuthorityViolation? {
+        try revokeOnAuthorityViolationForRuntime(
+            capability: capability,
+            itemIdentity: itemIdentity,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            agentRuntimeContext: nil,
+            now: now
+        )
+    }
+
+    public func revokeOnAuthorityViolationForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation? {
         try locked {
             let grants = try loadAllUnlocked()
             let active = grants.filter {
-                $0.status(asOf: now) == .active && $0.capabilities.contains(capability)
+                $0.status(asOf: now) == .active
+                    && $0.capabilities.contains(capability)
+                    && $0.matchesAgentRuntimeContext(agentRuntimeContext)
             }
             let resourceMatches: (AgentJITGrant) -> Bool = {
                 $0.resourceScope.matches(itemIdentity: itemIdentity, itemFolderPath: itemFolderPath)
@@ -222,6 +332,26 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
         caller: AgentJITCallerFingerprint,
         now: Date
     ) throws -> AgentJITGrant? {
+        try markUsedIfAllowedForRuntime(
+            capability: capability,
+            itemIdentity: itemIdentity,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            agentRuntimeContext: nil,
+            now: now
+        )
+    }
+
+    public func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITGrant? {
         try locked {
             var grants = try loadAllUnlocked()
             let revoked = try revokeClosedTerminalGrantsUnlocked(&grants, now: now)
@@ -234,6 +364,7 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
                     caller: caller,
                     now: now
                 )
+                    && $0.matchesAgentRuntimeContext(agentRuntimeContext)
             }) else {
                 if !revoked.isEmpty {
                     try persistUnlocked(grants)
@@ -252,6 +383,20 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
         caller: AgentJITCallerFingerprint,
         now: Date
     ) throws -> [AgentJITFolderScope] {
+        try markUsedScopesForRuntime(
+            capability: capability,
+            caller: caller,
+            agentRuntimeContext: nil,
+            now: now
+        )
+    }
+
+    public func markUsedScopesForRuntime(
+        capability: AgentJITCapability,
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> [AgentJITFolderScope] {
         try locked {
             var grants = try loadAllUnlocked()
             let revoked = try revokeClosedTerminalGrantsUnlocked(&grants, now: now)
@@ -259,6 +404,7 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
                 grants[$0].status(asOf: now) == .active
                     && grants[$0].capabilities.contains(capability)
                     && grants[$0].callerFingerprint.matches(caller)
+                    && grants[$0].matchesAgentRuntimeContext(agentRuntimeContext)
             }
             guard !matchingIndices.isEmpty else {
                 if !revoked.isEmpty {

@@ -515,6 +515,18 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         return expiresAt > date ? .active : .expired
     }
 
+    public func matchesAgentRuntimeContext(_ current: AgentRuntimeContext?) -> Bool {
+        let storedIsMCP = agentRuntimeContext?.agentType == "authsia-mcp"
+        let currentIsMCP = current?.agentType == "authsia-mcp"
+        guard storedIsMCP || currentIsMCP else { return true }
+        guard storedIsMCP, currentIsMCP,
+              let storedSession = AgentRuntimeContext.sanitize(agentRuntimeContext?.sessionID),
+              let currentSession = AgentRuntimeContext.sanitize(current?.sessionID) else {
+            return false
+        }
+        return storedSession == currentSession
+    }
+
     /// Returns a copy marked revoked at `date`. Used by Access Center to reflect a
     /// revocation optimistically the moment the Bridge confirms it, before the full
     /// snapshot reload lands. A no-op if the grant is already revoked.

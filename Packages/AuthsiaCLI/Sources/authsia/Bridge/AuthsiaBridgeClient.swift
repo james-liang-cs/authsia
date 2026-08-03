@@ -246,6 +246,52 @@ final class AuthsiaBridgeClient:
         return payload
     }
 
+    func agentJITSnapshot(
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITGrantSnapshotPayload {
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .agentJITSnapshot,
+            query: "",
+            options: BridgeOptions(field: nil, copy: false),
+            context: Self.currentContext(overriding: agentRuntimeContext)
+        )
+        let response: BridgeResponse<AgentJITGrantSnapshotPayload> = try sendRequest(request)
+        if let error = response.error {
+            throw BridgeClientError.bridgeError(
+                code: error.code.rawValue,
+                message: error.message,
+                query: nil
+            )
+        }
+        guard let payload = response.payload else { throw BridgeClientError.invalidResponse }
+        return payload
+    }
+
+    func revokeAgentJITGrant(
+        id: UUID,
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITGrantMutationPayload {
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .agentJITRevoke,
+            query: id.uuidString,
+            options: BridgeOptions(field: nil, copy: false),
+            context: Self.currentContext(overriding: agentRuntimeContext),
+            body: try BridgeCoder.encode(AgentJITGrantRevokePayload(id: id))
+        )
+        let response: BridgeResponse<AgentJITGrantMutationPayload> = try sendRequest(request)
+        if let error = response.error {
+            throw BridgeClientError.bridgeError(
+                code: error.code.rawValue,
+                message: error.message,
+                query: id.uuidString
+            )
+        }
+        guard let payload = response.payload else { throw BridgeClientError.invalidResponse }
+        return payload
+    }
+
     private func executePing() throws -> BridgePingPayload {
         let connection = createConnection()
         defer { connection.invalidate() }
@@ -1398,6 +1444,29 @@ final class AuthsiaBridgeClient:
             workingDirectory: context.workingDirectory,
             workspaceAuthorityPath: context.workspaceAuthorityPath,
             agentRuntimeContext: context.agentRuntimeContext,
+            workspaceContext: context.workspaceContext
+        )
+    }
+
+    private static func currentContext(
+        overriding agentRuntimeContext: AgentRuntimeContext
+    ) -> BridgeContext {
+        let context = currentContext()
+        return BridgeContext(
+            isTTY: context.isTTY,
+            isPiped: context.isPiped,
+            isSSH: context.isSSH,
+            isCI: context.isCI,
+            timestamp: context.timestamp,
+            automationCredentialID: nil,
+            automationCredentialToken: nil,
+            automationScope: nil,
+            requestedCommand: context.requestedCommand,
+            fullCommand: context.fullCommand,
+            sessionScope: context.sessionScope,
+            workingDirectory: context.workingDirectory,
+            workspaceAuthorityPath: context.workspaceAuthorityPath,
+            agentRuntimeContext: agentRuntimeContext,
             workspaceContext: context.workspaceContext
         )
     }

@@ -27,14 +27,16 @@ public final class AgentJITGrantAuthorizer {
         itemFolderPath: String?,
         itemEnvironments: [String] = [],
         caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext? = nil,
         now: Date = Date()
     ) throws -> AgentJITGrant? {
-        try store.markUsedIfAllowed(
+        try store.markUsedIfAllowedForRuntime(
             capability: capability,
             itemIdentity: itemIdentity,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             caller: caller,
+            agentRuntimeContext: agentRuntimeContext,
             now: now
         )
     }
@@ -42,20 +44,28 @@ public final class AgentJITGrantAuthorizer {
     public func activeScopes(
         capability: AgentJITCapability,
         caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext? = nil,
         now: Date = Date()
     ) throws -> [AgentJITFolderScope] {
-        try store.markUsedScopes(capability: capability, caller: caller, now: now)
+        try store.markUsedScopesForRuntime(
+            capability: capability,
+            caller: caller,
+            agentRuntimeContext: agentRuntimeContext,
+            now: now
+        )
     }
 
     public func activeGrants(
         capability: AgentJITCapability,
         caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext? = nil,
         now: Date = Date()
     ) throws -> [AgentJITGrant] {
         try store.loadAll().filter {
             $0.status(asOf: now) == .active
                 && $0.capabilities.contains(capability)
                 && $0.callerFingerprint.matches(caller)
+                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
         }
     }
 
@@ -65,14 +75,16 @@ public final class AgentJITGrantAuthorizer {
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext? = nil,
         now: Date = Date()
     ) throws -> AgentJITAuthorityViolation? {
-        try store.revokeOnAuthorityViolation(
+        try store.revokeOnAuthorityViolationForRuntime(
             capability: capability,
             itemIdentity: itemIdentity,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             caller: caller,
+            agentRuntimeContext: agentRuntimeContext,
             now: now
         )
     }

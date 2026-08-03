@@ -253,7 +253,9 @@ extension XPCRequestHandler {
             return
         }
         let promptGrantSnapshot = promptGrants.filter {
-            $0.status(asOf: timing.issuedAt) == .active && $0.callerFingerprint.matches(caller)
+            $0.status(asOf: timing.issuedAt) == .active
+                && $0.callerFingerprint.matches(caller)
+                && $0.matchesAgentRuntimeContext(bridgeRequest.context.agentRuntimeContext)
         }
         let duration = durationDescription(for: ttl)
         var grantIDs: [UUID] = []
@@ -270,6 +272,7 @@ extension XPCRequestHandler {
                         ? agentJITItemEnvironments(payload.environmentScope)
                         : resolution.itemEnvironments,
                     caller: caller,
+                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                     now: timing.issuedAt
                 ), existing.resourceScope.covers(
                     itemIdentities: requestedIdentities,
@@ -485,6 +488,7 @@ extension XPCRequestHandler {
                             ? agentJITItemEnvironments(payload.environmentScope)
                             : resolution.itemEnvironments,
                         caller: freshCaller,
+                        agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                         now: revalidationDate
                     )
                     if activeGrant?.resourceScope.covers(

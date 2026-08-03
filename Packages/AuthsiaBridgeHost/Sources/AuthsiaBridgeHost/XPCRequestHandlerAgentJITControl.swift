@@ -13,7 +13,7 @@ extension XPCRequestHandler {
             reply(nil, makeNSError(code: .invalidRequest, message: "Invalid JIT snapshot request"))
             return
         }
-        guard isAuthorizedGrantControlCaller else {
+        guard let controlScope = authorizedGrantControlScope(for: bridgeRequest) else {
             replyError(
                 id: bridgeRequest.id,
                 code: .policyDenied,
@@ -26,7 +26,9 @@ extension XPCRequestHandler {
         do {
             let now = agentJITApprovalClock()
             _ = try agentJITGrantStore.revokeClosedTerminalGrants(now: now)
-            let grants = try agentJITGrantStore.loadAll()
+            let grants = try agentJITGrantStore.loadAll().filter {
+                controlScope.allows($0)
+            }
             let payload = AgentJITGrantSnapshotPayload(
                 active: grants.filter { $0.status(asOf: now) == .active },
                 history: grants.filter { $0.status(asOf: now) != .active }
@@ -56,7 +58,7 @@ extension XPCRequestHandler {
             reply(nil, makeNSError(code: .invalidRequest, message: "Invalid JIT revocation request"))
             return
         }
-        guard isAuthorizedGrantControlCaller else {
+        guard let controlScope = authorizedGrantControlScope(for: bridgeRequest) else {
             replyError(
                 id: bridgeRequest.id,
                 code: .policyDenied,
@@ -67,6 +69,25 @@ extension XPCRequestHandler {
         }
 
         do {
+            guard let existing = try agentJITGrantStore.loadAll().first(where: {
+                $0.id == payload.id
+            }), controlScope.allows(existing) else {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .policyDenied,
+                    message: "JIT grant is not owned by this MCP server",
+                    reply: reply
+                )
+                return
+            }
+            if existing.revokedAt != nil {
+                replyMutationSuccess(
+                    id: bridgeRequest.id,
+                    revokedGrantIDs: [existing.id],
+                    reply: reply
+                )
+                return
+            }
             let revoked = try agentJITGrantStore.revoke(
                 id: payload.id,
                 revokedAt: agentJITApprovalClock()
@@ -105,7 +126,7 @@ extension XPCRequestHandler {
             reply(nil, makeNSError(code: .invalidRequest, message: "Invalid revoke-all request"))
             return
         }
-        guard isAuthorizedGrantControlCaller else {
+        guard callerIdentityProvider()?.bundleIdentifier == "app.authsia" else {
             replyError(
                 id: bridgeRequest.id,
                 code: .policyDenied,
@@ -170,8 +191,35 @@ extension XPCRequestHandler {
         )
     }
 
-    private var isAuthorizedGrantControlCaller: Bool {
-        callerIdentityProvider()?.bundleIdentifier == "app.authsia"
+    private enum GrantControlScope {
+        case all
+        case mcp(AgentRuntimeContext)
+
+        func allows(_ grant: AgentJITGrant) -> Bool {
+            switch self {
+            case .all:
+                return true
+            case .mcp(let context):
+                return grant.agentRuntimeContext?.agentType == "authsia-mcp"
+                    && grant.matchesAgentRuntimeContext(context)
+            }
+        }
+    }
+
+    private func authorizedGrantControlScope(for request: BridgeRequest) -> GrantControlScope? {
+        switch callerIdentityProvider()?.bundleIdentifier {
+        case "app.authsia":
+            return .all
+        case "com.authsia.cli":
+            guard let context = request.context.agentRuntimeContext,
+                  context.agentType == "authsia-mcp",
+                  AgentRuntimeContext.sanitize(context.sessionID) != nil else {
+                return nil
+            }
+            return .mcp(context)
+        default:
+            return nil
+        }
     }
 }
 #endif

@@ -9,10 +9,13 @@ actor AuthsiaMCPServer {
     private let server: Server
     private let runtimeContext: MCPRuntimeContext
     private let workspaceInspection: MCPWorkspaceInspectionService
+    private let grantService: MCPGrantService
     private let childRunner: (any MCPChildRunning)?
     private let diagnostics: Diagnostics
     private var handlersRegistered = false
     private var executionInProgress = false
+    private var didRunExecution = false
+    private var didCleanupGrants = false
 
     init(
         version: String,
@@ -23,6 +26,7 @@ actor AuthsiaMCPServer {
             )
         ),
         workspaceInspection: MCPWorkspaceInspectionService? = nil,
+        grantService: MCPGrantService? = nil,
         childRunner: (any MCPChildRunning)? = nil,
         diagnostics: @escaping Diagnostics = AuthsiaMCPServer.standardErrorDiagnostic
     ) {
@@ -37,6 +41,9 @@ actor AuthsiaMCPServer {
         self.runtimeContext = runtimeContext
         self.workspaceInspection = workspaceInspection ?? MCPWorkspaceInspectionService(
             runtimeContext: runtimeContext
+        )
+        self.grantService = grantService ?? MCPGrantService(
+            serverInstanceID: runtimeContext.instanceID
         )
         if let childRunner {
             self.childRunner = childRunner
@@ -74,11 +81,13 @@ actor AuthsiaMCPServer {
     }
 
     func stop() async {
+        cleanupGrantsIfNeeded()
         await server.stop()
     }
 
     func waitUntilCompleted() async {
         await server.waitUntilCompleted()
+        cleanupGrantsIfNeeded()
         diagnostics("Authsia MCP server stopped")
     }
 
@@ -112,25 +121,56 @@ actor AuthsiaMCPServer {
                         arguments: parameters.arguments
                     ).validated()
                     return try await self.execute(input)
-                case .accessStatus, .accessRevoke:
-                    break
+                case .accessStatus:
+                    _ = try Self.decodeInput(
+                        MCPEmptyInput.self,
+                        arguments: parameters.arguments
+                    )
+                    return try Self.successResult(self.grantService.status())
+                case .accessRevoke:
+                    let input = try Self.decodeInput(
+                        MCPAccessRevokeInput.self,
+                        arguments: parameters.arguments
+                    )
+                    return try Self.successResult(self.grantService.revoke(input.grantID))
                 }
             } catch let error as MCPToolInputError {
                 return try Self.errorResult(
                     code: .invalidInput,
                     message: error.localizedDescription
                 )
+            } catch let error as MCPGrantServiceError {
+                switch error {
+                case .invalidGrantID:
+                    return try Self.errorResult(
+                        code: .invalidInput,
+                        message: "grantID must be a valid UUID."
+                    )
+                case .grantNotOwned:
+                    return try Self.errorResult(
+                        code: .grantNotOwned,
+                        message: "The grant does not belong to this MCP server instance."
+                    )
+                case .grantUnavailable:
+                    return try Self.errorResult(
+                        code: .grantUnavailable,
+                        message: "The grant is no longer active."
+                    )
+                }
             } catch {
                 return try Self.errorResult(
                     code: .internalError,
                     message: "The requested Authsia operation could not be completed."
                 )
             }
-            return try Self.errorResult(
-                code: .internalError,
-                message: "The tool runtime is not available yet."
-            )
         }
+    }
+
+    private func cleanupGrantsIfNeeded() {
+        guard !didCleanupGrants else { return }
+        didCleanupGrants = true
+        guard didRunExecution else { return }
+        grantService.revokeActiveOwnedGrants()
     }
 
     private func shutdownSource(signal signalNumber: Int32) -> DispatchSourceSignal {
@@ -202,6 +242,7 @@ actor AuthsiaMCPServer {
 
         executionInProgress = true
         defer { executionInProgress = false }
+        didRunExecution = true
         let invocation = await runtimeContext.makeInvocation()
         let result = await childRunner.run(
             arguments: Self.execArguments(input),

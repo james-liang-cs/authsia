@@ -200,6 +200,57 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(response.error?.code, .policyDenied)
     }
 
+    func testMCPGrantControlFiltersAndRevokesOnlyCurrentInstance() async throws {
+        let currentContext = AgentRuntimeContext(
+            sessionID: "mcp:current",
+            agentType: "authsia-mcp"
+        )
+        let owned = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/One"),
+            capabilities: [.exec],
+            expiresAt: now.addingTimeInterval(300),
+            agentRuntimeContext: currentContext
+        )
+        let foreign = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/Two"),
+            capabilities: [.exec],
+            expiresAt: now.addingTimeInterval(300),
+            agentRuntimeContext: AgentRuntimeContext(
+                sessionID: "mcp:foreign",
+                agentType: "authsia-mcp"
+            )
+        )
+        let store = MemoryAgentJITGrantStore([owned, foreign])
+        let handler = makeHandler(
+            store: store,
+            clock: AgentJITApprovalClockSpy([now, now, now]).callAsFunction
+        )
+
+        let snapshot: BridgeResponse<AgentJITGrantSnapshotPayload> = try await grantSnapshot(
+            handler,
+            agentRuntimeContext: currentContext
+        )
+        let rejected: BridgeResponse<AgentJITGrantMutationPayload> = try await revokeGrant(
+            handler,
+            id: foreign.id,
+            agentRuntimeContext: currentContext
+        )
+        let revoked: BridgeResponse<AgentJITGrantMutationPayload> = try await revokeGrant(
+            handler,
+            id: owned.id,
+            agentRuntimeContext: currentContext
+        )
+
+        XCTAssertEqual(snapshot.payload?.active.map(\.id), [owned.id])
+        XCTAssertEqual(rejected.error?.code, .policyDenied)
+        XCTAssertEqual(revoked.payload?.revokedGrantIDs, [owned.id])
+        XCTAssertNil(store.grants.first(where: { $0.id == foreign.id })?.revokedAt)
+    }
+
     func testRemoteBuilderReceivesExactMappedAuthorityAndFixedTiming() async throws {
         let restoreTTL = setCLIApprovalTTL(15)
         defer { restoreTTL() }
@@ -3590,24 +3641,28 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
     }
 
     private func grantSnapshot(
-        _ handler: XPCRequestHandler
+        _ handler: XPCRequestHandler,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) async throws -> BridgeResponse<AgentJITGrantSnapshotPayload> {
         try await invokeGrantControl(
             handler,
             type: .agentJITSnapshot,
             body: Optional<String>.none,
+            agentRuntimeContext: agentRuntimeContext,
             action: handler.agentJITSnapshot
         )
     }
 
     private func revokeGrant(
         _ handler: XPCRequestHandler,
-        id: UUID
+        id: UUID,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) async throws -> BridgeResponse<AgentJITGrantMutationPayload> {
         try await invokeGrantControl(
             handler,
             type: .agentJITRevoke,
             body: AgentJITGrantRevokePayload(id: id),
+            agentRuntimeContext: agentRuntimeContext,
             action: handler.revokeAgentJITGrant
         )
     }
@@ -3627,6 +3682,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         _ handler: XPCRequestHandler,
         type: BridgeRequestType,
         body: Body?,
+        agentRuntimeContext: AgentRuntimeContext? = nil,
         action: (Data, @escaping (Data?, NSError?) -> Void) -> Void
     ) async throws -> BridgeResponse<Response> {
         let request = BridgeRequest(
@@ -3634,7 +3690,10 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             type: type,
             query: "",
             options: .init(field: nil, copy: false),
-            context: execContext(requestedCommand: type.rawValue),
+            context: execContext(
+                requestedCommand: type.rawValue,
+                agentRuntimeContext: agentRuntimeContext
+            ),
             body: try body.map(BridgeCoder.encode)
         )
         let expectation = XCTestExpectation(description: "\(type.rawValue) reply")
@@ -4371,7 +4430,8 @@ private extension AgentJITGrant {
         expiresAt: Date,
         revokedAt: Date? = nil,
         lastUsedAt: Date? = nil,
-        environmentScope: EnvironmentAccessScope? = nil
+        environmentScope: EnvironmentAccessScope? = nil,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) -> AgentJITGrant {
         AgentJITGrant(
             id: id,
@@ -4384,7 +4444,7 @@ private extension AgentJITGrant {
             revokedAt: revokedAt,
             lastUsedAt: lastUsedAt,
             requestedItems: [],
-            agentRuntimeContext: nil,
+            agentRuntimeContext: agentRuntimeContext,
             approvedBy: "biometric",
             environmentScope: environmentScope
         )

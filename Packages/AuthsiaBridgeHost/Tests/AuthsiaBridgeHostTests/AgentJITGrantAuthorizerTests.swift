@@ -3,6 +3,88 @@ import XCTest
 import AuthenticatorBridge
 
 final class AgentJITGrantAuthorizerTests: XCTestCase {
+    func testMCPGrantRequiresSameMCPServerSession() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let caller = AgentJITCallerFingerprint.fixture()
+        let storedContext = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:server-a",
+            agentType: "authsia-mcp"
+        )
+        let grant = AgentJITGrant.fixture(
+            callerFingerprint: caller,
+            expiresAt: now.addingTimeInterval(60),
+            agentRuntimeContext: storedContext
+        )
+        let authorizer = AgentJITGrantAuthorizer(store: MemoryAgentJITGrantStore([grant]))
+
+        let same = try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: storedContext,
+            now: now
+        )
+        let different = try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: AgentRuntimeContext(
+                platform: "Codex",
+                sessionID: "mcp:server-b",
+                agentType: "authsia-mcp"
+            ),
+            now: now
+        )
+        let direct = try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: AgentRuntimeContext(
+                platform: "Codex",
+                sessionID: "direct-agent",
+                agentType: "codex"
+            ),
+            now: now
+        )
+        let missing = try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: nil,
+            now: now
+        )
+
+        XCTAssertEqual(same?.id, grant.id)
+        XCTAssertNil(different)
+        XCTAssertNil(direct)
+        XCTAssertNil(missing)
+    }
+
+    func testOrdinaryGrantStillMatchesOrdinaryContext() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let caller = AgentJITCallerFingerprint.fixture()
+        let grant = AgentJITGrant.fixture(
+            callerFingerprint: caller,
+            expiresAt: now.addingTimeInterval(60)
+        )
+        let authorizer = AgentJITGrantAuthorizer(store: MemoryAgentJITGrantStore([grant]))
+
+        let result = try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: AgentRuntimeContext(
+                platform: "Codex",
+                sessionID: "direct-agent",
+                agentType: "codex"
+            ),
+            now: now
+        )
+
+        XCTAssertEqual(result?.id, grant.id)
+    }
+
     func testActiveNamedFolderGrantFindsMatchingFolderAndMarksUsed() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let caller = AgentJITCallerFingerprint.fixture(parentProcessName: "Claude")
@@ -628,7 +710,8 @@ private extension AgentJITGrant {
         expiresAt: Date = Date(timeIntervalSince1970: 1_700_000_300),
         revokedAt: Date? = nil,
         lastUsedAt: Date? = nil,
-        environmentScope: EnvironmentAccessScope? = nil
+        environmentScope: EnvironmentAccessScope? = nil,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) -> AgentJITGrant {
         AgentJITGrant(
             id: id,
@@ -641,7 +724,7 @@ private extension AgentJITGrant {
             revokedAt: revokedAt,
             lastUsedAt: lastUsedAt,
             requestedItems: [],
-            agentRuntimeContext: nil,
+            agentRuntimeContext: agentRuntimeContext,
             approvedBy: "user",
             environmentScope: environmentScope
         )

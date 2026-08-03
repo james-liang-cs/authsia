@@ -323,7 +323,8 @@ extension XPCRequestHandler {
                     itemIdentity: itemIdentity,
                     itemFolderPath: itemFolderPath,
                     itemEnvironments: itemEnvironments,
-                    caller: caller
+                    caller: caller,
+                    agentRuntimeContext: request.context.agentRuntimeContext
                 ) {
                     let evidence: AgentLeakEvidence
                     switch violation {
@@ -397,7 +398,8 @@ extension XPCRequestHandler {
             itemIdentity: itemIdentity,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
-            caller: caller
+            caller: caller,
+            agentRuntimeContext: request.context.agentRuntimeContext
         )
     }
 
@@ -410,7 +412,11 @@ extension XPCRequestHandler {
               let caller = AgentJITCallerContext.fingerprint(for: request, caller: callerIdentity) else {
             return []
         }
-        return try agentJITGrantAuthorizer.activeScopes(capability: capability, caller: caller)
+        return try agentJITGrantAuthorizer.activeScopes(
+            capability: capability,
+            caller: caller,
+            agentRuntimeContext: request.context.agentRuntimeContext
+        )
     }
 
     private func requestedCommandAllowsJITCapability(_ capability: AgentJITCapability, request: BridgeRequest) -> Bool {
@@ -466,7 +472,11 @@ extension XPCRequestHandler {
         let jitGrants = activeJITGrants ?? {
             guard callerUsesAgentJIT,
                   let caller = AgentJITCallerContext.fingerprint(for: request, caller: callerIdentity) else { return [] }
-            return (try? agentJITGrantAuthorizer.activeGrants(capability: .list, caller: caller)) ?? []
+            return (try? agentJITGrantAuthorizer.activeGrants(
+                capability: .list,
+                caller: caller,
+                agentRuntimeContext: request.context.agentRuntimeContext
+            )) ?? []
         }()
         return BridgeListPayloadFilter.filteredPayload(
             payload,

@@ -138,7 +138,8 @@ extension XPCRequestHandler {
                     }
                     jitListGrants = try self.agentJITGrantAuthorizer.activeGrants(
                         capability: .list,
-                        caller: caller
+                        caller: caller,
+                        agentRuntimeContext: bridgeRequest.context.agentRuntimeContext
                     )
                 } catch {
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
