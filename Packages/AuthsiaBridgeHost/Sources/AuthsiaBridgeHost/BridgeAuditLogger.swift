@@ -8,6 +8,9 @@ public final class BridgeAuditLogger {
     private let fileURL: URL
     private let hmacKeyProvider: () throws -> SymmetricKey
     private let queue = DispatchQueue(label: "com.authsia.bridge.audit")
+    /// In-memory tip of the hash chain. Avoids re-reading the whole audit log on
+    /// every append (the log is multi-megabyte in active installs).
+    private var cachedLastEntryHash: String?
     /// Current audit entry schema version.
     /// - v1: Plain SHA256, non-deterministic key order (cannot be re-verified).
     /// - v2: HMAC-SHA256 but non-deterministic key order (cannot be re-verified).
@@ -72,6 +75,7 @@ public final class BridgeAuditLogger {
             var lineData = data
             lineData.append(0x0A)
             try appendLineData(lineData)
+            cachedLastEntryHash = entryHash
         }
         AccessCenterActivityNotifier.post()
     }
@@ -128,6 +132,23 @@ public final class BridgeAuditLogger {
 
             return true
         }
+    }
+
+    /// Returns the last non-empty line from `data`, scanning from the end.
+    /// Used to recover the hash-chain tip without decoding the whole log.
+    public static func trailingLine(in data: Data) -> Data? {
+        guard !data.isEmpty else { return nil }
+        var end = data.count
+        // Trim trailing newlines.
+        while end > 0, data[end - 1] == 0x0A {
+            end -= 1
+        }
+        guard end > 0 else { return nil }
+        var start = end
+        while start > 0, data[start - 1] != 0x0A {
+            start -= 1
+        }
+        return Data(data[start..<end])
     }
 
     public func loadRecords(limit: Int? = nil, since: Date? = nil) throws -> [BridgeAuditRecord] {
@@ -280,6 +301,7 @@ public final class BridgeAuditLogger {
         }
 
         try migrated.write(to: fileURL, options: .atomic)
+        cachedLastEntryHash = previousHash
     }
 
     // MARK: - File Helpers
@@ -298,11 +320,30 @@ public final class BridgeAuditLogger {
     }
 
     private func lastEntryHash() throws -> String? {
+        if let cachedLastEntryHash {
+            return cachedLastEntryHash
+        }
+        let hash = try readLastEntryHashFromFile()
+        cachedLastEntryHash = hash
+        return hash
+    }
+
+    private func readLastEntryHashFromFile() throws -> String? {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-        let data = try Data(contentsOf: fileURL)
-        let lines = data.split(separator: 0x0A)
-        guard let lastLine = lines.last else { return nil }
-        let entry = try JSONDecoder.bridge.decode(AuditEntry.self, from: Data(lastLine))
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        let size = try handle.seekToEnd()
+        guard size > 0 else { return nil }
+
+        // Audit entries are a few KB; 64KB covers the last line with room to spare.
+        let chunkSize = min(size, 65_536)
+        try handle.seek(toOffset: size - chunkSize)
+        guard let chunk = try handle.readToEnd(),
+              let line = Self.trailingLine(in: chunk) else {
+            return nil
+        }
+        let entry = try JSONDecoder.bridge.decode(AuditEntry.self, from: line)
         return entry.entryHash
     }
 

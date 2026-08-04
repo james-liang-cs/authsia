@@ -197,6 +197,9 @@ final class AuthsiaBridgeClient:
     /// Session token for anti-replay protection (obtained from unlock or cache)
     private var sessionToken: String?
 
+    /// Cached after the first successful security-protocol ping in this process.
+    private var hasVerifiedSecurityProtocol = false
+
     typealias XPCReplyHandler = (Data?, NSError?) -> Void
     typealias XPCProxyErrorHandler = (Error) -> Void
 
@@ -1531,12 +1534,16 @@ final class AuthsiaBridgeClient:
     // MARK: - XPC Request Handling
 
     func sendRequest<T: Codable>(_ request: BridgeRequest) throws -> T {
-        if request.type.requiresCurrentSecurityProtocol {
+        if Self.needsSecurityProtocolCheck(
+            alreadyVerified: hasVerifiedSecurityProtocol,
+            requestRequiresCheck: request.type.requiresCurrentSecurityProtocol
+        ) {
             let expected = String(BridgeContext.securityProtocolVersion)
             let actual = try ping().protocolVersion
             guard actual == expected else {
                 throw BridgeClientError.incompatibleSecurityProtocol(expected: expected, actual: actual)
             }
+            hasVerifiedSecurityProtocol = true
         }
         return try Self.withBridgeRecovery(
             retryDelays: retryDelays,
@@ -1549,6 +1556,13 @@ final class AuthsiaBridgeClient:
                 )
             }
         )
+    }
+
+    static func needsSecurityProtocolCheck(
+        alreadyVerified: Bool,
+        requestRequiresCheck: Bool
+    ) -> Bool {
+        requestRequiresCheck && !alreadyVerified
     }
     
     private func executeXPCRequest<T: Codable>(_ request: BridgeRequest) throws -> T {

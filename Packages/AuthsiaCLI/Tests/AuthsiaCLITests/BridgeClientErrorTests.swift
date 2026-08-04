@@ -123,6 +123,28 @@ struct BridgeClientErrorTests {
         #expect(recoveries == 1)
     }
 
+    @Test("security protocol checks run once after a successful verification")
+    func securityProtocolChecksRunOnceAfterSuccessfulVerification() {
+        #expect(
+            AuthsiaBridgeClient.needsSecurityProtocolCheck(
+                alreadyVerified: false,
+                requestRequiresCheck: true
+            )
+        )
+        #expect(
+            !AuthsiaBridgeClient.needsSecurityProtocolCheck(
+                alreadyVerified: true,
+                requestRequiresCheck: true
+            )
+        )
+        #expect(
+            !AuthsiaBridgeClient.needsSecurityProtocolCheck(
+                alreadyVerified: false,
+                requestRequiresCheck: false
+            )
+        )
+    }
+
     @Test("normal requests preserve the configured XPC timeout")
     func normalRequestsPreserveConfiguredXPCTimeout() {
         let baseTimeout: TimeInterval = 12.5
