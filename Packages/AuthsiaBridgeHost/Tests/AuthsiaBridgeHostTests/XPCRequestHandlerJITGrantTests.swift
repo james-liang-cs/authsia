@@ -4324,6 +4324,30 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
         return try markUsed(id: grant.id, at: now)
     }
 
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITGrant? {
+        guard let grant = grants.first(where: {
+            $0.allows(
+                capability: capability,
+                itemIdentity: itemIdentity,
+                itemFolderPath: itemFolderPath,
+                itemEnvironments: itemEnvironments,
+                caller: caller,
+                now: now
+            ) && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+        }) else {
+            return nil
+        }
+        return try markUsed(id: grant.id, at: now)
+    }
+
     func markUsedScopes(
         capability: AgentJITCapability,
         caller: AgentJITCallerFingerprint,
@@ -4343,6 +4367,63 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
         }
 
         return grants.filter { matchingIDs.contains($0.id) }.map(\.folderScope)
+    }
+
+    func markUsedScopesForRuntime(
+        capability: AgentJITCapability,
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> [AgentJITFolderScope] {
+        if let markUsedScopesError {
+            throw markUsedScopesError
+        }
+        let matchingIDs = grants.filter {
+            $0.status(asOf: now) == .active
+                && $0.capabilities.contains(capability)
+                && $0.callerFingerprint.matches(caller)
+                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+        }.map(\.id)
+
+        for id in matchingIDs {
+            _ = try markUsed(id: id, at: now)
+        }
+
+        return grants.filter { matchingIDs.contains($0.id) }.compactMap {
+            guard case .folder(let scope) = $0.resourceScope else { return nil }
+            return scope
+        }
+    }
+
+    func revokeOnAuthorityViolationForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation? {
+        let active = grants.filter {
+            $0.status(asOf: now) == .active
+                && $0.capabilities.contains(capability)
+                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+        }
+        let resourceMatches: (AgentJITGrant) -> Bool = {
+            $0.resourceScope.matches(itemIdentity: itemIdentity, itemFolderPath: itemFolderPath)
+                && ($0.environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
+        }
+        if let grant = active.first(where: {
+            resourceMatches($0) && !$0.callerFingerprint.matches(caller)
+        }) {
+            return .callerBindingMismatch(try revoke(id: grant.id, revokedAt: now))
+        }
+        if let grant = active.first(where: {
+            $0.callerFingerprint.matches(caller) && !resourceMatches($0)
+        }) {
+            return .outsideApprovedItemScope(try revoke(id: grant.id, revokedAt: now))
+        }
+        return nil
     }
 }
 

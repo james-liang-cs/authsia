@@ -52,7 +52,7 @@ struct MCPServerLifecycleTests {
         await server.waitUntilCompleted()
     }
 
-    @Test("unknown calls return a structured tool error")
+    @Test("unknown tools return a protocol error")
     func unknownToolCall() async throws {
         let fixture = try makeServer()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -62,9 +62,17 @@ struct MCPServerLifecycleTests {
 
         try await server.start(transport: transports.server)
         _ = try await client.connect(transport: transports.client)
-        let result = try await client.callTool(name: "not_an_authsia_tool")
-
-        #expect(result.isError == true)
+        let context: RequestContext<CallTool.Result> = try await client.callTool(
+            name: "not_an_authsia_tool"
+        )
+        do {
+            _ = try await context.value
+            Issue.record("Expected invalidParams protocol error")
+        } catch MCPError.invalidParams {
+            // Expected.
+        } catch {
+            Issue.record("Expected invalidParams protocol error, got \(error)")
+        }
 
         await client.disconnect()
         await server.waitUntilCompleted()
@@ -229,9 +237,41 @@ struct MCPServerLifecycleTests {
         #expect(await runner.finished)
     }
 
+    @Test("shutdown cancels and awaits an active JIT list")
+    func shutdownCancelsActiveList() async throws {
+        let serverID = UUID()
+        let owned = mcpGrant(sessionID: "mcp:\(serverID.uuidString)")
+        let grantClient = LifecycleGrantClient(
+            snapshot: .init(active: [owned], history: [])
+        )
+        let provider = CancellableLifecycleListProvider()
+        let fixture = try makeServer(
+            instanceID: serverID,
+            grantClient: grantClient,
+            listService: provider
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "MCP lifecycle test", version: "1")
+
+        try await fixture.server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        let _: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.list.rawValue,
+            arguments: ["type": "password"]
+        )
+        await provider.waitUntilStarted()
+
+        await fixture.server.stop()
+        #expect(await provider.cancelled)
+        #expect(await provider.finished)
+        #expect(grantClient.revokedIDs == [owned.id])
+    }
+
     private func makeServer(
         instanceID: UUID = UUID(),
         grantClient: (any MCPGrantClient)? = nil,
+        listService: (any MCPListProviding)? = nil,
         childRunner: (any MCPChildRunning)? = nil,
         diagnostics: @escaping AuthsiaMCPServer.Diagnostics = { _ in }
     ) throws -> (server: AuthsiaMCPServer, root: URL) {
@@ -260,6 +300,7 @@ struct MCPServerLifecycleTests {
                 grantService: grantClient.map {
                     MCPGrantService(serverInstanceID: instanceID, client: $0)
                 },
+                listService: listService,
                 childRunner: childRunner,
                 diagnostics: diagnostics
             ),
@@ -374,6 +415,52 @@ private actor CancellableLifecycleRunner: MCPChildRunning {
     private func cancelExecution() {
         cancelled = true
         finish()
+    }
+}
+
+private actor CancellableLifecycleListProvider: MCPListProviding {
+    private var started = false
+    private(set) var cancelled = false
+    private(set) var finished = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var completion: CheckedContinuation<Void, Never>?
+
+    func list(
+        _ input: MCPListInput,
+        invocation: MCPInvocationContext
+    ) async throws -> MCPListOutput {
+        started = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { completion = $0 }
+        } onCancel: {
+            Task { await self.cancelList() }
+        }
+        finished = true
+        return MCPListOutput(
+            invocationID: invocation.id.uuidString,
+            type: input.type,
+            folder: "Workspaces/lifecycle",
+            environment: input.environment,
+            items: [],
+            totalCount: 0,
+            count: 0,
+            offset: input.offset,
+            hasMore: false,
+            nextOffset: nil
+        )
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    private func cancelList() {
+        cancelled = true
+        completion?.resume()
+        completion = nil
     }
 }
 

@@ -43,8 +43,7 @@ secret in an issue or reproduction.
 
 ## Local MCP server
 
-From an initialized Authsia workspace, print a workspace-bound configuration
-for a supported local MCP client:
+Print a user-global local MCP configuration for a supported client:
 
 ```bash
 authsia mcp configure --client codex
@@ -53,10 +52,11 @@ authsia mcp configure --client cursor
 authsia mcp configure --client vscode
 ```
 
-The command prints configuration for the exact Authsia binary and workspace;
-it does not edit client files. The local `stdio` server exposes five constrained
-tools for status, workspace inspection, mediated execution, grant status, and
-grant revocation. It never exposes a raw-secret or global-audit tool. See the
+The command prints configuration for the exact Authsia binary; it does not edit
+client files. Each server inherits and validates the active client workspace at
+startup. The local `stdio` server exposes six constrained tools for status,
+workspace inspection, scoped metadata listing, mediated execution, grant status,
+and grant revocation. It never exposes a raw-secret or global-audit tool. See the
 [Local Authsia MCP Server specification](Doc/specs/authsia-mcp.md) for the tool,
 JIT authorization, audit-correlation, and Access Center contracts.
 

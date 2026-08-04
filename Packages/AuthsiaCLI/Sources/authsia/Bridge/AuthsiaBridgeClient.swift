@@ -589,6 +589,28 @@ final class AuthsiaBridgeClient:
         return payload
     }
 
+    func list(agentRuntimeContext: AgentRuntimeContext) throws -> BridgeListPayload {
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .list,
+            query: "",
+            options: BridgeOptions(field: nil, copy: false),
+            context: Self.currentContext(overriding: agentRuntimeContext)
+        )
+        let response: BridgeResponse<BridgeListPayload> = try sendRequest(request)
+        if let error = response.error {
+            throw BridgeClientError.bridgeError(
+                code: error.code.rawValue,
+                message: error.message,
+                query: nil
+            )
+        }
+        guard let payload = response.payload else {
+            throw BridgeClientError.invalidResponse
+        }
+        return payload
+    }
+
     func workspaceMetadata(
         _ payload: WorkspaceMetadataRequestPayload,
         requestedCommand: String
@@ -663,6 +685,17 @@ final class AuthsiaBridgeClient:
         try approvalPreflight(payload, requestType: .agentJITPreflight)
     }
 
+    func agentJITPreflight(
+        _ payload: AgentJITPreflightPayload,
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITPreflightResultPayload {
+        try approvalPreflight(
+            payload,
+            requestType: .agentJITPreflight,
+            agentRuntimeContext: agentRuntimeContext
+        )
+    }
+
     func directCLIApprovalPreflight(
         _ payload: AgentJITPreflightPayload
     ) throws -> AgentJITPreflightResultPayload {
@@ -671,19 +704,22 @@ final class AuthsiaBridgeClient:
 
     private func approvalPreflight(
         _ payload: AgentJITPreflightPayload,
-        requestType: BridgeRequestType
+        requestType: BridgeRequestType,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) throws -> AgentJITPreflightResultPayload {
         let request = BridgeRequest(
             id: UUID(),
             type: requestType,
             query: "",
             options: BridgeOptions(field: nil, copy: false),
-            context: currentContext(),
+            context: agentRuntimeContext.map(Self.currentContext(overriding:)) ?? currentContext(),
             body: try BridgeCoder.encode(payload),
-            sessionToken: sessionToken
+            sessionToken: agentRuntimeContext == nil ? sessionToken : nil
         )
         let response: BridgeResponse<AgentJITPreflightResultPayload> = try sendRequest(request)
-        cacheSessionToken(from: response)
+        if agentRuntimeContext == nil {
+            cacheSessionToken(from: response)
+        }
 
         if let error = response.error {
             throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: nil)
@@ -1432,44 +1468,40 @@ final class AuthsiaBridgeClient:
             includeAutomationCredential: includeAutomationCredential ?? true
         )
         guard let sessionScope else { return context }
-        return BridgeContext(
-            isTTY: context.isTTY,
-            isPiped: context.isPiped,
-            isSSH: context.isSSH,
-            isCI: context.isCI,
-            timestamp: context.timestamp,
-            automationCredentialID: context.automationCredentialID,
-            automationCredentialToken: context.automationCredentialToken,
-            automationScope: context.automationScope,
-            requestedCommand: context.requestedCommand,
-            fullCommand: context.fullCommand,
-            sessionScope: sessionScope,
-            workingDirectory: context.workingDirectory,
-            workspaceAuthorityPath: context.workspaceAuthorityPath,
-            agentRuntimeContext: context.agentRuntimeContext,
-            workspaceContext: context.workspaceContext
-        )
+        return replacing(context, sessionScope: sessionScope)
     }
 
     private static func currentContext(
         overriding agentRuntimeContext: AgentRuntimeContext
     ) -> BridgeContext {
-        let context = currentContext()
+        replacing(
+            currentContext(),
+            agentRuntimeContext: agentRuntimeContext,
+            clearAutomationCredential: true
+        )
+    }
+
+    private static func replacing(
+        _ context: BridgeContext,
+        sessionScope: String? = nil,
+        agentRuntimeContext: AgentRuntimeContext? = nil,
+        clearAutomationCredential: Bool = false
+    ) -> BridgeContext {
         return BridgeContext(
             isTTY: context.isTTY,
             isPiped: context.isPiped,
             isSSH: context.isSSH,
             isCI: context.isCI,
             timestamp: context.timestamp,
-            automationCredentialID: nil,
-            automationCredentialToken: nil,
-            automationScope: nil,
+            automationCredentialID: clearAutomationCredential ? nil : context.automationCredentialID,
+            automationCredentialToken: clearAutomationCredential ? nil : context.automationCredentialToken,
+            automationScope: clearAutomationCredential ? nil : context.automationScope,
             requestedCommand: context.requestedCommand,
             fullCommand: context.fullCommand,
-            sessionScope: context.sessionScope,
+            sessionScope: sessionScope ?? context.sessionScope,
             workingDirectory: context.workingDirectory,
             workspaceAuthorityPath: context.workspaceAuthorityPath,
-            agentRuntimeContext: agentRuntimeContext,
+            agentRuntimeContext: agentRuntimeContext ?? context.agentRuntimeContext,
             workspaceContext: context.workspaceContext
         )
     }

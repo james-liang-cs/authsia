@@ -108,68 +108,6 @@ public extension AgentJITGrantStoring {
         return nil
     }
 
-    func markUsedIfAllowedForRuntime(
-        capability: AgentJITCapability,
-        itemIdentity: AgentJITItemIdentity?,
-        itemFolderPath: String?,
-        itemEnvironments: [String],
-        caller: AgentJITCallerFingerprint,
-        agentRuntimeContext: AgentRuntimeContext?,
-        now: Date
-    ) throws -> AgentJITGrant? {
-        let grant = try markUsedIfAllowed(
-            capability: capability,
-            itemIdentity: itemIdentity,
-            itemFolderPath: itemFolderPath,
-            itemEnvironments: itemEnvironments,
-            caller: caller,
-            now: now
-        )
-        return grant?.matchesAgentRuntimeContext(agentRuntimeContext) == true ? grant : nil
-    }
-
-    func markUsedScopesForRuntime(
-        capability: AgentJITCapability,
-        caller: AgentJITCallerFingerprint,
-        agentRuntimeContext: AgentRuntimeContext?,
-        now: Date
-    ) throws -> [AgentJITFolderScope] {
-        let grants = try loadAll()
-        if grants.isEmpty {
-            return try markUsedScopes(capability: capability, caller: caller, now: now)
-        }
-        guard grants.contains(where: {
-            $0.status(asOf: now) == .active
-                && $0.capabilities.contains(capability)
-                && $0.callerFingerprint.matches(caller)
-                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
-        }) else { return [] }
-        return try markUsedScopes(capability: capability, caller: caller, now: now)
-    }
-
-    func revokeOnAuthorityViolationForRuntime(
-        capability: AgentJITCapability,
-        itemIdentity: AgentJITItemIdentity?,
-        itemFolderPath: String?,
-        itemEnvironments: [String],
-        caller: AgentJITCallerFingerprint,
-        agentRuntimeContext: AgentRuntimeContext?,
-        now: Date
-    ) throws -> AgentJITAuthorityViolation? {
-        guard try loadAll().contains(where: {
-            $0.status(asOf: now) == .active
-                && $0.capabilities.contains(capability)
-                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
-        }) else { return nil }
-        return try revokeOnAuthorityViolation(
-            capability: capability,
-            itemIdentity: itemIdentity,
-            itemFolderPath: itemFolderPath,
-            itemEnvironments: itemEnvironments,
-            caller: caller,
-            now: now
-        )
-    }
 }
 
 /// Bridge-owned JIT authority. The former JSON path is retained only so an

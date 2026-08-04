@@ -3,6 +3,7 @@ import Foundation
 enum AuthsiaMCPToolName: String, CaseIterable, Codable, Sendable {
     case status = "authsia_status"
     case workspaceInspect = "authsia_workspace_inspect"
+    case list = "authsia_list"
     case accessStatus = "authsia_access_status"
     case exec = "authsia_exec"
     case accessRevoke = "authsia_access_revoke"
@@ -57,6 +58,98 @@ struct MCPWorkspaceInspectInput: Codable, Equatable, Sendable, MCPClosedToolInpu
 
     init(environment: String? = nil) {
         self.environment = environment
+    }
+}
+
+enum MCPListItemType: String, CaseIterable, Codable, Equatable, Sendable {
+    case password
+    case apiKey = "api-key"
+    case certificate
+    case note
+    case ssh
+
+    var preflightType: String {
+        switch self {
+        case .certificate: "cert"
+        default: rawValue
+        }
+    }
+}
+
+struct MCPListInput: Codable, Equatable, Sendable, MCPClosedToolInput {
+    static let allowedKeys: Set<String> = ["type", "folder", "environment", "limit", "offset"]
+
+    let type: MCPListItemType
+    let folder: String?
+    let environment: String?
+    let limit: Int
+    let offset: Int
+
+    init(
+        type: MCPListItemType,
+        folder: String? = nil,
+        environment: String? = nil,
+        limit: Int = 50,
+        offset: Int = 0
+    ) {
+        self.type = type
+        self.folder = folder
+        self.environment = environment
+        self.limit = limit
+        self.offset = offset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case folder
+        case environment
+        case limit
+        case offset
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            type: try container.decode(MCPListItemType.self, forKey: .type),
+            folder: try container.decodeIfPresent(String.self, forKey: .folder),
+            environment: try container.decodeIfPresent(String.self, forKey: .environment),
+            limit: try container.decodeIfPresent(Int.self, forKey: .limit) ?? 50,
+            offset: try container.decodeIfPresent(Int.self, forKey: .offset) ?? 0
+        )
+    }
+
+    func validated() throws -> MCPListInput {
+        if let folder {
+            let trimmed = folder.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  trimmed.utf8.count <= 512,
+                  folder.unicodeScalars.allSatisfy({
+                      !CharacterSet.controlCharacters.contains($0)
+                  }) else {
+                throw MCPToolInputError.invalidArgument(
+                    "folder must be a safe path within the configured Authsia workspace folder."
+                )
+            }
+        }
+        if let environment {
+            let trimmed = environment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  trimmed.utf8.count <= 128,
+                  environment.unicodeScalars.allSatisfy({
+                      !CharacterSet.controlCharacters.contains($0)
+                  }) else {
+                throw MCPToolInputError.invalidArgument(
+                    "environment must be a safe workspace environment name."
+                )
+            }
+        }
+        guard (1...100).contains(limit) else {
+            throw MCPToolInputError.invalidArgument("limit must be between 1 and 100.")
+        }
+        guard (0...100_000).contains(offset) else {
+            throw MCPToolInputError.invalidArgument("offset must be between 0 and 100000.")
+        }
+        return self
     }
 }
 
@@ -122,10 +215,7 @@ struct MCPExecInput: Codable, Equatable, Sendable, MCPClosedToolInput {
         }) else {
             throw MCPToolInputError.invalidArgument("argv must not contain control characters.")
         }
-        if argv.count >= 2,
-           ["sh", "bash", "zsh", "fish", "dash", "/bin/sh", "/bin/bash", "/bin/zsh"]
-            .contains(argv[0]),
-           ["-c", "--command"].contains(argv[1]) {
+        if Self.containsShellCommandString(argv) {
             throw MCPToolInputError.invalidArgument("Shell command strings are not supported; pass argv directly.")
         }
         guard (1...1_800).contains(timeoutSeconds) else {
@@ -152,6 +242,45 @@ struct MCPExecInput: Codable, Equatable, Sendable, MCPClosedToolInput {
         }
         return self
     }
+
+    private static func containsShellCommandString(_ argv: [String]) -> Bool {
+        let executable = URL(fileURLWithPath: argv[0]).lastPathComponent.lowercased()
+        if shellExecutableNames.contains(executable) {
+            return containsCommandStringOption(argv.dropFirst())
+        }
+        guard executable == "env" else { return false }
+        if argv.dropFirst().contains(where: {
+            $0 == "-S" || $0 == "--split-string" || $0.hasPrefix("--split-string=")
+        }) {
+            return true
+        }
+        guard let shellIndex = argv.indices.dropFirst().first(where: {
+            shellExecutableNames.contains(
+                URL(fileURLWithPath: argv[$0]).lastPathComponent.lowercased()
+            )
+        }) else {
+            return false
+        }
+        return containsCommandStringOption(argv[argv.index(after: shellIndex)...])
+    }
+
+    private static func containsCommandStringOption<S: Sequence>(_ arguments: S) -> Bool
+    where S.Element == String {
+        for argument in arguments {
+            if argument == "--" { return false }
+            if argument == "-c" || argument == "--command" { return true }
+            if argument.hasPrefix("-"),
+               !argument.hasPrefix("--"),
+               argument.dropFirst().contains("c") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static let shellExecutableNames: Set<String> = [
+        "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "sh", "tcsh", "zsh",
+    ]
 }
 
 struct MCPAccessRevokeInput: Codable, Equatable, Sendable, MCPClosedToolInput {
@@ -193,6 +322,28 @@ struct MCPWorkspaceInspectOutput: Codable, Equatable, Sendable {
     let diagnostics: [MCPDiagnostic]
 }
 
+struct MCPListItem: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let folderPath: String?
+    let isFavorite: Bool
+    let isCliEnabled: Bool
+    let environments: [String]
+}
+
+struct MCPListOutput: Codable, Equatable, Sendable {
+    let invocationID: String
+    let type: MCPListItemType
+    let folder: String
+    let environment: String?
+    let items: [MCPListItem]
+    let totalCount: Int
+    let count: Int
+    let offset: Int
+    let hasMore: Bool
+    let nextOffset: Int?
+}
+
 struct MCPGrantSummary: Codable, Equatable, Sendable {
     let grantID: String
     let status: String
@@ -214,7 +365,7 @@ struct MCPAccessStatusOutput: Codable, Equatable, Sendable {
     let grants: [MCPGrantSummary]
 }
 
-enum MCPExecutionTermination: String, Codable, Equatable, Sendable {
+enum MCPExecutionTermination: String, CaseIterable, Codable, Equatable, Sendable {
     case exited
     case signalled
     case timedOut

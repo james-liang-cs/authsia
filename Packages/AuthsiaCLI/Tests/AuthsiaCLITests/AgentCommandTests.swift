@@ -1092,8 +1092,13 @@ struct AgentCommandTests {
         let agents = try read("AGENTS.md", in: root)
         #expect(agents.contains("`authsia_status`"))
         #expect(agents.contains("`authsia_workspace_inspect`"))
+        #expect(agents.contains("`authsia_list` for scoped CLI-enabled Vault item metadata"))
         #expect(agents.contains("`authsia_exec`"))
         #expect(agents.contains("`authsia workspace run -- <command> <args>`"))
+        #expect(!agents.contains("`authsia exec <type> <query> [options] -- <command> <args>`"))
+        #expect(agents.contains("In CLI fallback mode, use attributed `authsia list ...` only for non-secret metadata discovery"))
+        #expect(agents.contains("check the complete subcommand's `--help`"))
+        #expect(agents.contains("Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code`"))
         #expect(!agents.contains("Authsia Workspace Handling"))
         #expect(!agents.contains("Implicit guarded-terminal shims"))
     }
@@ -1212,7 +1217,7 @@ struct AgentCommandTests {
         let instructions = try read("AGENTS.md", in: root)
         #expect(instructions.contains("GitHub Copilot may use the CLI fallback"))
         #expect(instructions.contains("env AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1"))
-        #expect(instructions.contains("Never use bare secret-reading commands"))
+        #expect(instructions.contains("Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code`"))
         #expect(instructions.contains("`authsia_exec`"))
         #expect(instructions.contains("direct argument array"))
     }

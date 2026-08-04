@@ -61,6 +61,135 @@ final class AgentJITGrantAuthorizerTests: XCTestCase {
         XCTAssertNil(missing)
     }
 
+    func testMCPGrantSelectionDoesNotMarkAnotherServerSessionUsed() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let caller = AgentJITCallerFingerprint.fixture()
+        let serverA = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:server-a",
+            agentType: "authsia-mcp"
+        )
+        let serverB = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:server-b",
+            agentType: "authsia-mcp"
+        )
+        let foreign = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            callerFingerprint: caller,
+            expiresAt: now.addingTimeInterval(60),
+            agentRuntimeContext: serverA
+        )
+        let owned = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            callerFingerprint: caller,
+            expiresAt: now.addingTimeInterval(60),
+            agentRuntimeContext: serverB
+        )
+        let store = MemoryAgentJITGrantStore([foreign, owned])
+        let authorizer = AgentJITGrantAuthorizer(store: store)
+
+        let result = try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: serverB,
+            now: now
+        )
+
+        XCTAssertEqual(result?.id, owned.id)
+        XCTAssertNil(store.grants.first(where: { $0.id == foreign.id })?.lastUsedAt)
+        XCTAssertEqual(store.grants.first(where: { $0.id == owned.id })?.lastUsedAt, now)
+    }
+
+    func testMCPActiveScopesDoNotReturnOrMarkAnotherServerSession() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let caller = AgentJITCallerFingerprint.fixture()
+        let serverA = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:server-a",
+            agentType: "authsia-mcp"
+        )
+        let serverB = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:server-b",
+            agentType: "authsia-mcp"
+        )
+        let foreign = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            callerFingerprint: caller,
+            folderScope: .folder("Team/Foreign"),
+            capabilities: [.list],
+            expiresAt: now.addingTimeInterval(60),
+            agentRuntimeContext: serverA
+        )
+        let owned = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            callerFingerprint: caller,
+            folderScope: .folder("Team/Owned"),
+            capabilities: [.list],
+            expiresAt: now.addingTimeInterval(60),
+            agentRuntimeContext: serverB
+        )
+        let store = MemoryAgentJITGrantStore([foreign, owned])
+        let authorizer = AgentJITGrantAuthorizer(store: store)
+
+        let scopes = try authorizer.activeScopes(
+            capability: .list,
+            caller: caller,
+            agentRuntimeContext: serverB,
+            now: now
+        )
+
+        XCTAssertEqual(scopes, [.folder("Team/Owned")])
+        XCTAssertNil(store.grants.first(where: { $0.id == foreign.id })?.lastUsedAt)
+        XCTAssertEqual(store.grants.first(where: { $0.id == owned.id })?.lastUsedAt, now)
+    }
+
+    func testMCPAuthorityCheckDoesNotRevokeAnotherServerSession() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let currentCaller = AgentJITCallerFingerprint.fixture(parentProcessName: "Codex")
+        let foreignCaller = AgentJITCallerFingerprint.fixture(parentProcessName: "Claude")
+        let serverA = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:server-a",
+            agentType: "authsia-mcp"
+        )
+        let serverB = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:server-b",
+            agentType: "authsia-mcp"
+        )
+        let foreign = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            callerFingerprint: foreignCaller,
+            expiresAt: now.addingTimeInterval(60),
+            agentRuntimeContext: serverA
+        )
+        let owned = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            callerFingerprint: currentCaller,
+            expiresAt: now.addingTimeInterval(60),
+            agentRuntimeContext: serverB
+        )
+        let store = MemoryAgentJITGrantStore([foreign, owned])
+        let authorizer = AgentJITGrantAuthorizer(store: store)
+
+        let violation = try authorizer.revokeOnAuthorityViolation(
+            capability: .exec,
+            itemIdentity: nil,
+            itemFolderPath: "Team/API",
+            itemEnvironments: [],
+            caller: currentCaller,
+            agentRuntimeContext: serverB,
+            now: now
+        )
+
+        XCTAssertNil(violation)
+        XCTAssertNil(store.grants.first(where: { $0.id == foreign.id })?.revokedAt)
+        XCTAssertNil(store.grants.first(where: { $0.id == owned.id })?.revokedAt)
+    }
+
     func testOrdinaryGrantStillMatchesOrdinaryContext() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let caller = AgentJITCallerFingerprint.fixture()
@@ -574,6 +703,30 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
         return try markUsed(id: grant.id, at: now)
     }
 
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITGrant? {
+        guard let grant = grants.first(where: {
+            $0.allows(
+                capability: capability,
+                itemIdentity: itemIdentity,
+                itemFolderPath: itemFolderPath,
+                itemEnvironments: itemEnvironments,
+                caller: caller,
+                now: now
+            ) && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+        }) else {
+            return nil
+        }
+        return try markUsed(id: grant.id, at: now)
+    }
+
     func markUsedScopes(
         capability: AgentJITCapability,
         caller: AgentJITCallerFingerprint,
@@ -590,6 +743,60 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
         }
 
         return grants.filter { matchingIDs.contains($0.id) }.map(\.folderScope)
+    }
+
+    func markUsedScopesForRuntime(
+        capability: AgentJITCapability,
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> [AgentJITFolderScope] {
+        let matchingIDs = grants.filter {
+            $0.status(asOf: now) == .active
+                && $0.capabilities.contains(capability)
+                && $0.callerFingerprint.matches(caller)
+                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+        }.map(\.id)
+
+        for id in matchingIDs {
+            _ = try markUsed(id: id, at: now)
+        }
+
+        return grants.filter { matchingIDs.contains($0.id) }.compactMap {
+            guard case .folder(let scope) = $0.resourceScope else { return nil }
+            return scope
+        }
+    }
+
+    func revokeOnAuthorityViolationForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation? {
+        let active = grants.filter {
+            $0.status(asOf: now) == .active
+                && $0.capabilities.contains(capability)
+                && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+        }
+        let resourceMatches: (AgentJITGrant) -> Bool = {
+            $0.resourceScope.matches(itemIdentity: itemIdentity, itemFolderPath: itemFolderPath)
+                && ($0.environmentScope?.allows(itemEnvironments: itemEnvironments) ?? true)
+        }
+        if let grant = active.first(where: {
+            resourceMatches($0) && !$0.callerFingerprint.matches(caller)
+        }) {
+            return .callerBindingMismatch(try revoke(id: grant.id, revokedAt: now))
+        }
+        if let grant = active.first(where: {
+            $0.callerFingerprint.matches(caller) && !resourceMatches($0)
+        }) {
+            return .outsideApprovedItemScope(try revoke(id: grant.id, revokedAt: now))
+        }
+        return nil
     }
 }
 
@@ -642,12 +849,53 @@ private final class RevokingAtomicGrantStore: AgentJITGrantStoring {
         return revoked.copy(lastUsedAt: now)
     }
 
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITGrant? {
+        guard grant.matchesAgentRuntimeContext(agentRuntimeContext) else { return nil }
+        return try markUsedIfAllowed(
+            capability: capability,
+            itemIdentity: itemIdentity,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            now: now
+        )
+    }
+
     func markUsedScopes(
         capability: AgentJITCapability,
         caller: AgentJITCallerFingerprint,
         now: Date
     ) throws -> [AgentJITFolderScope] {
         []
+    }
+
+    func markUsedScopesForRuntime(
+        capability: AgentJITCapability,
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> [AgentJITFolderScope] {
+        []
+    }
+
+    func revokeOnAuthorityViolationForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation? {
+        nil
     }
 }
 
@@ -690,6 +938,18 @@ private final class BatchOnlyScopeStore: AgentJITGrantStoring {
         nil
     }
 
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITGrant? {
+        nil
+    }
+
     func markUsedScopes(
         capability: AgentJITCapability,
         caller: AgentJITCallerFingerprint,
@@ -697,6 +957,27 @@ private final class BatchOnlyScopeStore: AgentJITGrantStoring {
     ) throws -> [AgentJITFolderScope] {
         batchCallCount += 1
         return scopes
+    }
+
+    func markUsedScopesForRuntime(
+        capability: AgentJITCapability,
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> [AgentJITFolderScope] {
+        try markUsedScopes(capability: capability, caller: caller, now: now)
+    }
+
+    func revokeOnAuthorityViolationForRuntime(
+        capability: AgentJITCapability,
+        itemIdentity: AgentJITItemIdentity?,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITAuthorityViolation? {
+        nil
     }
 }
 

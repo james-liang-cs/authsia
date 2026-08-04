@@ -372,10 +372,10 @@ exact-item selection.
 ## Local MCP Adapter
 
 The local MCP server is a constrained adapter over the existing AI Tool and JIT
-path. It exposes status, commit-safe workspace reference inspection,
-current-instance grant status/revocation, and mediated execution over local
-`stdio`. It exposes no plaintext-secret, OTP, SSH signing, write, export, or
-global audit tool.
+path. It exposes status, commit-safe workspace reference inspection, scoped
+CLI-enabled Vault metadata listing, current-instance grant status/revocation,
+and mediated execution over local `stdio`. It exposes no plaintext-secret, OTP,
+SSH signing, write, export, or global audit tool.
 
 `authsia_exec` launches the same resolved Authsia binary through `workspace run`
 with a server-generated MCP runtime context. It removes automation credentials

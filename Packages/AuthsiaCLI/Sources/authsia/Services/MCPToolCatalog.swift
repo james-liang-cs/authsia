@@ -13,6 +13,12 @@ struct MCPToolAnnotations: Equatable, Sendable {
         idempotentHint: true,
         openWorldHint: false
     )
+    static let mediatedRead = MCPToolAnnotations(
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+    )
     static let execution = MCPToolAnnotations(
         readOnlyHint: false,
         destructiveHint: true,
@@ -63,6 +69,18 @@ enum MCPToolCatalog {
                 "workspaceName", "workspaceRoot", "schemaVersion", "selectedEnvironment",
                 "availableEnvironments", "managedFiles", "references", "referencesTruncated",
                 "diagnostics",
+            ],
+            acceptsAdditionalInputProperties: false
+        ),
+        MCPToolDescriptor(
+            name: .list,
+            description: "List scoped CLI-enabled Vault item metadata through list-only Agent JIT." + noPlaintext,
+            annotations: .mediatedRead,
+            inputPropertyNames: ["type", "folder", "environment", "limit", "offset"],
+            requiredInputPropertyNames: ["type"],
+            outputPropertyNames: [
+                "invocationID", "type", "folder", "environment", "items", "totalCount",
+                "count", "offset", "hasMore", "nextOffset",
             ],
             acceptsAdditionalInputProperties: false
         ),
@@ -128,6 +146,25 @@ enum MCPToolCatalog {
             return [:]
         case .workspaceInspect:
             return ["environment": stringSchema]
+        case .list:
+            return [
+                "type": .object([
+                    "type": "string",
+                    "enum": .array(MCPListItemType.allCases.map { .string($0.rawValue) }),
+                ]),
+                "folder": stringSchema,
+                "environment": stringSchema,
+                "limit": .object([
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                ]),
+                "offset": .object([
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100_000,
+                ]),
+            ]
         case .exec:
             return [
                 "argv": .object([
@@ -156,11 +193,8 @@ enum MCPToolCatalog {
     private static func outputSchema(for descriptor: MCPToolDescriptor) -> Value {
         let successSchema = Value.object([
             "type": "object",
-            "properties": .object(
-                Dictionary(uniqueKeysWithValues: descriptor.outputPropertyNames.map {
-                    ($0, Value.object([:]))
-                })
-            ),
+            "properties": .object(successProperties(for: descriptor)),
+            "required": .array(requiredSuccessPropertyNames(for: descriptor).map(Value.string)),
             "additionalProperties": false,
         ])
         let errorSchema = Value.object([
@@ -183,5 +217,182 @@ enum MCPToolCatalog {
         ])
     }
 
+    private static func successProperties(
+        for descriptor: MCPToolDescriptor
+    ) -> [String: Value] {
+        let nullableString = Value.object(["type": .array(["string", "null"])])
+        let nullableInteger = Value.object(["type": .array(["integer", "null"])])
+        let nullableNumber = Value.object(["type": .array(["number", "null"])])
+        switch descriptor.name {
+        case .status:
+            return [
+                "serverInstanceID": stringSchema,
+                "protocolRevision": stringSchema,
+                "workspaceName": stringSchema,
+                "workspaceRoot": stringSchema,
+                "bridgeState": .object([
+                    "type": "string",
+                    "enum": .array(["ready", "unavailable", "cliAccessDisabled"]),
+                ]),
+                "ready": booleanSchema,
+                "diagnostics": diagnosticsSchema,
+            ]
+        case .workspaceInspect:
+            return [
+                "workspaceName": stringSchema,
+                "workspaceRoot": stringSchema,
+                "schemaVersion": integerSchema,
+                "selectedEnvironment": nullableString,
+                "availableEnvironments": stringArraySchema,
+                "managedFiles": stringArraySchema,
+                "references": .object([
+                    "type": "array",
+                    "items": .object([
+                        "type": "object",
+                        "properties": .object([
+                            "uri": stringSchema,
+                            "environmentVariable": nullableString,
+                            "sourcePath": stringSchema,
+                            "selectedEnvironment": booleanSchema,
+                        ]),
+                        "required": .array(["uri", "sourcePath", "selectedEnvironment"]),
+                        "additionalProperties": false,
+                    ]),
+                    "maxItems": 1_000,
+                ]),
+                "referencesTruncated": booleanSchema,
+                "diagnostics": diagnosticsSchema,
+            ]
+        case .list:
+            return [
+                "invocationID": stringSchema,
+                "type": .object([
+                    "type": "string",
+                    "enum": .array(MCPListItemType.allCases.map { .string($0.rawValue) }),
+                ]),
+                "folder": stringSchema,
+                "environment": nullableString,
+                "items": .object([
+                    "type": "array",
+                    "items": .object([
+                        "type": "object",
+                        "properties": .object([
+                            "id": stringSchema,
+                            "name": stringSchema,
+                            "folderPath": nullableString,
+                            "isFavorite": booleanSchema,
+                            "isCliEnabled": booleanSchema,
+                            "environments": stringArraySchema,
+                        ]),
+                        "required": .array([
+                            "id", "name", "isFavorite", "isCliEnabled", "environments",
+                        ]),
+                        "additionalProperties": false,
+                    ]),
+                    "maxItems": 100,
+                ]),
+                "totalCount": nonnegativeIntegerSchema,
+                "count": .object(["type": "integer", "minimum": 0, "maximum": 100]),
+                "offset": nonnegativeIntegerSchema,
+                "hasMore": booleanSchema,
+                "nextOffset": nullableInteger,
+            ]
+        case .accessStatus:
+            return [
+                "grants": .object([
+                    "type": "array",
+                    "items": .object([
+                        "type": "object",
+                        "properties": .object([
+                            "grantID": stringSchema,
+                            "status": .object([
+                                "type": "string",
+                                "enum": .array(["active", "expired", "revoked"]),
+                            ]),
+                            "sourceLabel": stringSchema,
+                            "scopeSummary": stringSchema,
+                            "itemCount": nonnegativeIntegerSchema,
+                            "capabilities": stringArraySchema,
+                            "environment": nullableString,
+                            "createdAt": numberSchema,
+                            "expiresAt": numberSchema,
+                            "lastUsedAt": nullableNumber,
+                            "revokedAt": nullableNumber,
+                            "approvedBy": stringSchema,
+                            "serverInstanceID": stringSchema,
+                            "invocationID": nullableString,
+                        ]),
+                        "required": .array([
+                            "grantID", "status", "sourceLabel", "scopeSummary", "itemCount",
+                            "capabilities", "createdAt", "expiresAt", "approvedBy",
+                            "serverInstanceID",
+                        ]),
+                        "additionalProperties": false,
+                    ]),
+                ]),
+            ]
+        case .exec:
+            return [
+                "invocationID": stringSchema,
+                "termination": .object([
+                    "type": "string",
+                    "enum": .array(MCPExecutionTermination.allCases.map { .string($0.rawValue) }),
+                ]),
+                "exitCode": nullableInteger,
+                "stdout": stringSchema,
+                "stderr": stringSchema,
+                "stdoutTruncated": booleanSchema,
+                "stderrTruncated": booleanSchema,
+                "durationMilliseconds": nonnegativeIntegerSchema,
+            ]
+        case .accessRevoke:
+            return [
+                "grantID": stringSchema,
+                "status": .object(["type": "string", "enum": .array(["revoked"])]),
+                "revokedAt": nullableNumber,
+            ]
+        }
+    }
+
+    private static func requiredSuccessPropertyNames(
+        for descriptor: MCPToolDescriptor
+    ) -> [String] {
+        switch descriptor.name {
+        case .status:
+            descriptor.outputPropertyNames
+        case .workspaceInspect:
+            descriptor.outputPropertyNames.filter { $0 != "selectedEnvironment" }
+        case .list:
+            descriptor.outputPropertyNames.filter { $0 != "environment" && $0 != "nextOffset" }
+        case .accessStatus:
+            descriptor.outputPropertyNames
+        case .exec:
+            descriptor.outputPropertyNames.filter { $0 != "exitCode" }
+        case .accessRevoke:
+            descriptor.outputPropertyNames.filter { $0 != "revokedAt" }
+        }
+    }
+
     private static let stringSchema = Value.object(["type": "string"])
+    private static let booleanSchema = Value.object(["type": "boolean"])
+    private static let integerSchema = Value.object(["type": "integer"])
+    private static let numberSchema = Value.object(["type": "number"])
+    private static let nonnegativeIntegerSchema = Value.object(["type": "integer", "minimum": 0])
+    private static let stringArraySchema = Value.object([
+        "type": "array",
+        "items": stringSchema,
+    ])
+    private static let diagnosticsSchema = Value.object([
+        "type": "array",
+        "items": .object([
+            "type": "object",
+            "properties": .object([
+                "code": stringSchema,
+                "message": stringSchema,
+            ]),
+            "required": .array(["code", "message"]),
+            "additionalProperties": false,
+        ]),
+        "maxItems": 100,
+    ])
 }

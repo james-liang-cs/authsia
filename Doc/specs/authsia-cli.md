@@ -1081,9 +1081,10 @@ Creates local project rule files that teach coding agents to use Authsia safely.
 rules only; it does not create automation credentials, JIT grants, or new secret access.
 
 Generated rules tell agents to prefer the Authsia MCP tools for managed-secret
-work, construct tool input from natural-language requests, pass `authsia_exec`
-arguments directly without a shell command string, and use the normal terminal
-for commands that need no managed values. They retain a compact, attributed CLI
+work, construct tool input from natural-language requests, use `authsia_list`
+for scoped CLI-enabled Vault metadata, pass `authsia_exec` arguments directly
+without a shell command string, and use the normal terminal for commands that
+need no managed values. They retain a compact, attributed CLI
 fallback using `env AUTHSIA_AGENT_PLATFORM=<platform>
 AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...` and prohibit bare secret reads.
 The generated marker lines match the selected tool: `--agent codex` writes only
@@ -1146,9 +1147,12 @@ authsia agent init --all
 ```
 
 Generated rules stay intentionally compact whether or not workspace metadata is
-already present. MCP status and inspection replace mandatory CLI preflight; the
-attributed `authsia workspace run -- <command> <args>` path remains a fallback
-when MCP tools are unavailable.
+already present. MCP status, inspection, and scoped list replace mandatory CLI preflight; the
+attributed CLI fallback uses `authsia workspace run -- <command> <args>` in an
+Authsia workspace and `authsia exec <type> <query> [options] -- <command> <args>`
+outside one. Rules use `authsia_list` first and permit attributed
+`authsia list ...` only as non-secret metadata fallback, direct agents to the
+complete subcommand's `--help`, and forbid bare secret-reading commands.
 
 ### `authsia workspace` — Repo-local secure workspace
 
@@ -1602,9 +1606,12 @@ client.
 The generated client starts the hidden `authsia mcp serve` stdio process from
 the client's active working directory. The server starts only when that
 directory belongs to an initialized Authsia workspace, then remains bound to
-that validated workspace for its lifetime. The server exposes only `authsia_status`,
-`authsia_workspace_inspect`, `authsia_exec`, `authsia_access_status`, and
-`authsia_access_revoke`. Secret-bearing work remains a Bridge-mediated Agent JIT
+that validated workspace for its lifetime. The server exposes only
+`authsia_status`, `authsia_workspace_inspect`, `authsia_list`, `authsia_exec`,
+`authsia_access_status`, and `authsia_access_revoke`. `authsia_list` returns
+paginated common metadata only, stays inside the configured workspace Vault
+folder, and reuses list-only Agent JIT with the same Mac or paired-iPhone
+approval path. Secret-bearing work remains a Bridge-mediated Agent JIT
 execution; the MCP client cannot request raw secret values, select automation
 credentials, read global audit history, or reuse a grant from another MCP
 server instance. Access Center remains the global operator surface for review,

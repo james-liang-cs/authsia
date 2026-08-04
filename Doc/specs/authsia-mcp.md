@@ -7,6 +7,7 @@ Status: release-candidate implementation contract for M14; signed installed-prod
 - [Purpose](#purpose)
 - [Protocol And Process Boundary](#protocol-and-process-boundary)
 - [Trust And Authorization Model](#trust-and-authorization-model)
+- [Agent JIT And MCP Capability Comparison](#agent-jit-and-mcp-capability-comparison)
 - [Workspace Binding](#workspace-binding)
 - [Tool Contract](#tool-contract)
 - [Execution Lifecycle](#execution-lifecycle)
@@ -30,11 +31,14 @@ The server is launched as:
 authsia mcp serve
 ```
 
-It exposes five tools over local standard input/output. Read-only tools report
-non-secret runtime or commit-safe workspace metadata. The execution tool starts
-the same installed `authsia` binary with `workspace run`, so Keychain reads,
-approval, grant checks, output masking, file cleanup, Process Tree evidence,
-network evidence, and Bridge audit remain on their existing paths.
+It exposes six tools over local standard input/output. Side-effect-free read-only
+tools report non-secret runtime or commit-safe workspace metadata.
+`authsia_list` returns scoped CLI-enabled Vault item metadata through the
+existing list-only Agent JIT preflight and Bridge list filter. The execution
+tool starts the same installed `authsia` binary with `workspace run`, so
+Keychain reads, approval, grant checks, output masking, file cleanup, Process
+Tree evidence, network evidence, and Bridge audit remain on their existing
+paths.
 
 The intended security property is:
 
@@ -76,7 +80,8 @@ The MCP client and model are untrusted. Tool arguments, initialization
 metadata, cancellation reasons, and client-side confirmation state are all
 untrusted input.
 
-For every secret-bearing execution, all existing conditions still apply:
+For every JIT-mediated list or secret-bearing execution, all existing
+conditions still apply:
 
 - the Bridge verifies the connecting Authsia code and OS-observed caller;
 - CLI access and per-item CLI access are enabled;
@@ -114,6 +119,40 @@ server-generated MCP `agentType` plus `sessionID` may only prevent reuse of an
 MCP grant from another server instance. They are never sufficient to match a
 grant and never weaken caller, workspace, scope, capability, environment, TTL,
 or revocation checks. Non-MCP JIT behavior remains unchanged.
+
+## Agent JIT And MCP Capability Comparison
+
+“Direct Agent JIT” below means the agent-classified Authsia CLI path described
+in [`jit-agent-grants.md`](jit-agent-grants.md), not the broader human CLI or
+automation-credential surfaces. Agent JIT stores only `list` and `exec`
+capabilities. Of the six MCP tools, only `authsia_list` and `authsia_exec` enter
+JIT; status, workspace inspection, owned-grant status, and owned-grant
+revocation are bounded non-secret control tools.
+
+| Capability | Direct Agent JIT | Local Authsia MCP V1 |
+| --- | --- | --- |
+| Bridge readiness and commit-safe workspace inspection | **Outside JIT.** Normal non-secret CLI and Workspace paths provide this context. | **Supported without JIT.** `authsia_status` and `authsia_workspace_inspect` expose bounded non-secret state. |
+| Scoped Vault metadata list | **Supported.** `authsia list` can request CLI-enabled Password, API Key, Certificate, Secure Note, or SSH Key metadata under the approved item/folder scopes. | **Supported with tighter input scope.** `authsia_list` requests one supported type per call, stays inside the configured workspace Vault folder, reapplies environment scope, and paginates 1–100 common-metadata rows. |
+| Secret-bearing command execution | **Supported.** `authsia exec` and secret-bearing `authsia workspace run` can inject approved Password, API Key, Certificate, and Secure Note values into the launched child. | **Supported only through the bound workspace.** `authsia_exec` delegates to secret-bearing `authsia workspace run` for the same four secret-bearing item types. |
+| Raw secret-return commands | **Not supported.** JIT denies `get`, `read`, `load`, and `inject` even when a human session exists. | **Not supported.** No raw-secret tool exists, and tool output must never contain plaintext secret values. |
+| SSH capability | **Metadata list only.** `authsia list ssh` is supported; SSH private-key reads, loading, agent operations, and signing are outside Agent JIT. | **Metadata list only.** `authsia_list` can return common SSH Key metadata; private/public key material, loading, agent operations, and signing are absent. |
+| OTP capability | **Not supported.** OTP metadata and values are excluded from Agent JIT. | **Not supported.** No OTP list, value, or execution input exists. |
+| Local Mac and paired-iPhone approval | **Supported.** Both approve the same canonical Agent JIT descriptor; the Bridge remains grant authority. | **Supported by reuse.** MCP list and exec use that same local or remote approval flow and do not create a second approval type. |
+| Grant capabilities | **Supported as `list` and `exec` only.** A direct list creates list-only authority; exec approval creates the authority needed for final exec reads and scoped metadata resolution. | **Same capabilities.** MCP cannot request any additional JIT capability. |
+| Grant reuse and isolation | **Ordinary JIT matching.** Caller fingerprint, workspace or exact working directory, item/folder scope, environment, capability, TTL, and revocation must match. | **More narrowly isolated.** Every ordinary JIT check must match, and MCP-backed grants must also belong to the same server-instance ID. |
+| Grant inspection and revocation | **Operator path.** Access Center and Bridge-owned controls review or revoke JIT grants; this is not a JIT grant capability. | **Supported for owned active grants.** `authsia_access_status` and `authsia_access_revoke` can affect only the current MCP server instance; Access Center handles global, historical, or orphaned review. |
+| Human CLI sessions | **Separate from JIT.** Trusted human-terminal approval can create a terminal-scoped reusable session, but an agent cannot inherit it as JIT authority. | **Not supported.** MCP neither accepts nor creates a human session token and never falls back to the human approval path. |
+| Automation credentials and unattended access | **Separate from JIT.** An explicit automation credential follows its own policy and may authorize capabilities that JIT does not. | **Not supported.** The server strips ambient automation authority, exposes no credential input, and requires interactive JIT for mediated list or exec. |
+| Workspace reach | **Workspace or exact directory.** Inside a managed workspace, canonical workspace authority applies; outside one, exact working-directory matching remains available. | **Managed workspace only.** Startup fails closed outside an initialized safe workspace, and no tool can select another root or working directory. |
+| Vault administration | **Not supported.** JIT cannot unlock Authsia, create access, export, add, edit, delete, or otherwise mutate Vault items. | **Not supported.** No unlock, access creation, import/export, clipboard, or Vault mutation tool exists. |
+| Command shape | **Normal CLI argv.** Direct Agent JIT follows the `authsia exec` CLI contract and generated agent guidance favors explicit argv or reviewed scripts. | **Direct argv only.** `authsia_exec` rejects shell command strings and control characters; it does not interpret pipe, redirect, or compound-command syntax. Reviewed workspace scripts may be executed directly. |
+| Output, cleanup, and activity evidence | **Supported on secret-bearing exec.** Existing masking, observed-file cleanup, Process Tree, network evidence, and Bridge audit apply. | **Same runtime protections plus MCP bounds.** Output is structured and capped at 65,536 bytes per stream, with invocation correlation and managed process-group cancellation. |
+| Audit and Access Center | **Supported.** Existing grant, command, file, Process Tree, network, and HMAC audit records remain canonical. | **Supported by reuse.** The same records add MCP source, server-instance, invocation, and revocation correlation; MCP cannot read global audit history. |
+| MCP resources, prompts, sampling, elicitation, Apps, tasks, or remote transport | **Not applicable to Agent JIT.** | **Not supported in V1.** The server advertises only six tools over local `stdio`. |
+
+MCP therefore adds a standard client interface, safe context queries, and
+current-instance grant controls around Agent JIT. It does not add a new secret
+delivery mode, item type, approval authority, or grant capability.
 
 ## Workspace Binding
 
@@ -162,12 +201,15 @@ never returned.
 | --- | --- | --- | --- | --- |
 | `authsia_status` | true | false | true | false |
 | `authsia_workspace_inspect` | true | false | true | false |
+| `authsia_list` | false | false | false | false |
 | `authsia_access_status` | true | false | true | false |
 | `authsia_exec` | false | true | false | true |
 | `authsia_access_revoke` | false | true | true | false |
 
 Annotations are conservative risk hints for the client. They do not change
-Bridge authorization.
+Bridge authorization. `authsia_list` is non-destructive but not marked
+read-only or idempotent because it can create or reuse a temporary JIT grant
+and append approval/audit activity.
 
 ### `authsia_status`
 
@@ -210,9 +252,43 @@ The result contains at most 1,000 reference descriptors and reports
 pagination cursor; users must narrow the managed workspace configuration rather
 than use MCP to enumerate unbounded repository content.
 
-This tool does not validate a reference against live vault metadata. Existence,
-CLI enablement, item identity, scope, and authorization are resolved during the
+This tool does not validate a reference against live vault metadata. Use
+`authsia_list` for approved scoped discovery. Existence, CLI enablement, item
+identity, scope, and authorization for execution are resolved during the
 existing JIT preflight started by `authsia_exec`.
+
+### `authsia_list`
+
+Input fields:
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `type` | enum string | Required: `password`, `api-key`, `certificate`, `note`, or `ssh`. OTP is intentionally unsupported by Agent JIT. |
+| `folder` | string or null | Optional workspace-folder subtree. Defaults to the configured Authsia workspace folder and cannot name an ancestor, sibling, root, or unrelated tree. |
+| `environment` | string or null | Optional named environment; 1–128 UTF-8 bytes with no control characters. |
+| `limit` | integer | Defaults to 50; allowed range 1–100. |
+| `offset` | integer | Defaults to 0; allowed range 0–100,000. |
+
+The tool allocates a fresh MCP invocation context, submits the ordinary
+`agentJITPreflight` request with `requestedCommand=list`, and then performs the
+ordinary Bridge list request with the same context. Approval may therefore use
+the existing local Mac or paired-iPhone remote Agent JIT decision path. Any
+created grant has only the `list` capability and remains narrowed to the current
+MCP server instance, caller, workspace, folder/resource scope, environment,
+TTL, and revocation state.
+
+Output contains the invocation ID, effective type/folder/environment, page
+items, `totalCount`, `count`, `offset`, `hasMore`, and `nextOffset`. Each item
+contains only ID, display name, folder path, favorite state, CLI-enabled state,
+and environment tags. Passwords, API-key values, note content, certificate
+material, SSH public/private key material, usernames, websites, comments, and
+other type-specific fields are not part of the MCP schema.
+
+Bridge policy first limits results to CLI-enabled metadata covered by active
+list grants. The MCP adapter then reapplies type, workspace-folder containment,
+and environment filtering before deterministic sorting and pagination. It never
+falls back to a human CLI session, automation credential, unscoped list, or
+whole-vault enumeration.
 
 ### `authsia_access_status`
 
@@ -250,6 +326,12 @@ secret, raw environment map, approval bypass, or arbitrary executable-path
 field. `argv` is passed as an argument vector to the exact resolved Authsia
 binary; the MCP server never invokes a shell.
 
+Agents must not add the CLI `--shell` option to an MCP call; it is not an
+`authsia_exec` field. A program that reads an injected variable directly can be
+launched as ordinary `argv`. If the requested behavior inherently needs shell
+expansion, substitution, pipes, or redirects, the agent must create or use a
+reviewed workspace script and pass that script as direct `argv` instead.
+
 Output fields:
 
 | Field | Contract |
@@ -284,9 +366,18 @@ reviewing and revoking historical or orphaned MCP grants.
 
 ## Execution Lifecycle
 
+`authsia_list` validates and bounds its input, allocates a fresh invocation,
+and performs the existing list-only JIT preflight and Bridge list request
+without a shell or child command. It returns only the normalized paginated
+metadata described above. A pending local or remote approval uses the existing
+bounded Bridge wait; status and owned-grant revocation remain separate tools.
+
+`authsia_exec` follows this execution lifecycle:
+
 1. Validate the tool request and allocate a random invocation UUID.
-2. Reject the call with `busy` when another `authsia_exec` is active in this
-   server. Read-only status calls and revocation may continue.
+2. Reject the call with `busy` when another JIT-mediated `authsia_list` or
+   `authsia_exec` operation is active in this server. Read-only status calls and
+   revocation may continue.
 3. Resolve the exact running Authsia binary; reject symlinks or substitutions
    that do not satisfy the installed-product resolution rules.
 4. Construct `authsia workspace run` arguments without a shell.
@@ -301,21 +392,24 @@ reviewing and revoking historical or orphaned MCP grants.
 8. Return the bounded structured result after the child and existing cleanup
    work complete.
 
-Only one `authsia_exec` may run per server in V1. This prevents overlapping
-approval prompts and ambiguous output/cancellation attribution without adding a
-new scheduler. Separate workspace-scoped MCP server processes remain isolated.
+Only one JIT-mediated list or execution operation may run per server in V1.
+This prevents overlapping approval prompts and ambiguous attribution without
+adding a new scheduler. Separate workspace-scoped MCP server processes remain
+isolated.
 
-MCP cancellation, timeout, EOF, SIGINT, and SIGTERM cancel the active execution
-and wait for its managed wrapper process group. The runner sends `SIGTERM` to
-the group, escalates to `SIGKILL` after the bounded grace period, drains the
-captured streams, and observes termination before server grant cleanup and
-shutdown finish. If the wrapper exits while descendants remain in its group,
-the runner applies the same bounded cleanup before returning an otherwise normal
-result. Cancellation and timeout are stable tool errors rather than
-success merely because a signal was sent. MCP V1 does not use the experimental
-Tasks extension. This lifecycle controls the Authsia-created process group; it
-does not claim OS-wide containment of a process that independently escapes that
-group.
+For `authsia_list`, cancellation or server shutdown stops accepting mediated
+work and waits for the existing bounded Bridge approval/list request before
+grant cleanup. For `authsia_exec`, cancellation, timeout, EOF, SIGINT, and
+SIGTERM cancel the active execution and wait for its managed wrapper process
+group. The runner sends `SIGTERM` to the group, escalates to `SIGKILL` after the
+bounded grace period, drains the captured streams, and observes termination
+before server grant cleanup and shutdown finish. If the wrapper exits while
+descendants remain in its group, the runner applies the same bounded cleanup
+before returning an otherwise normal result. Cancellation and timeout are
+stable tool errors rather than success merely because a signal was sent. MCP V1
+does not use the experimental Tasks extension. This lifecycle controls the
+Authsia-created process group; it does not claim OS-wide containment of a
+process that independently escapes that group.
 
 Graceful server shutdown attempts to revoke active grants owned by that server
 instance. Abrupt termination may leave them visible until Bridge liveness,
@@ -404,7 +498,7 @@ stable structured error:
 | `approvalDenied` | The user denied or cancelled Authsia approval. |
 | `grantUnavailable` | Required grant is absent, expired, revoked, or no longer matches. |
 | `grantNotOwned` | Status/revoke target is not owned by this MCP instance. |
-| `busy` | This server already has an active execution. |
+| `busy` | This server already has an active JIT-mediated list or execution operation. |
 | `timedOut` | Execution exceeded the requested timeout. |
 | `cancelled` | MCP cancellation terminated or abandoned the call. |
 | `executionFailed` | Launch or mediated execution failed. |
@@ -429,7 +523,7 @@ payloads.
 | MCP client views or revokes global access | Status/revoke output is limited to the current server instance; global review stays in Access Center. |
 | Secret leaks through tool output | Reuse continuous strict masking, bound both streams, and test raw and transformed synthetic values. |
 | Secret leaks through error/audit | Redact errors; store no JSON-RPC payload or output; preserve existing audit redaction and HMAC chain. |
-| Concurrent calls confuse approval or attribution | Permit one active exec per server and generate one invocation ID per call. |
+| Concurrent calls confuse approval or attribution | Permit one active JIT-mediated list or execution operation per server and generate one invocation ID per call. |
 | Cancellation leaves execution or descendants running | Put the wrapper and descendants in a dedicated process group, terminate then force-kill the group, and await observed exit before cleanup. |
 | Abrupt server death leaves a reusable grant | Instance-narrowed matching prevents reuse; Bridge liveness, TTL, or Access Center revokes the orphan. |
 | Client-side auto-approval is mistaken for authority | Authsia approval remains independent and mandatory when no matching grant exists. |
@@ -476,7 +570,7 @@ Before changing the SDK or protocol revision:
 1. review the upstream changelog and protocol security changes;
 2. rerun tool-schema, initialization, cancellation, stdout-framing, and client
    compatibility tests;
-3. confirm the static five-tool surface did not expand;
+3. confirm the static six-tool surface did not expand;
 4. update this specification before changing behavior.
 
 Pre-1.0 Swift SDK minor releases may contain breaking changes, so the package
@@ -492,8 +586,12 @@ Primary upstream references:
 
 Implementation is not complete until automated tests prove:
 
-- exactly five tools are advertised with the specified closed schemas and
+- exactly six tools are advertised with the specified closed schemas and
   annotations;
+- list requests stay inside the configured workspace folder, create only
+  list-capability JIT grants, preserve MCP instance/invocation context through
+  the existing local or remote approval path, and return paginated common
+  metadata without type-specific values;
 - standard output contains valid MCP traffic only;
 - initialization metadata cannot change authorization;
 - workspace and managed-file symlink escapes fail closed;

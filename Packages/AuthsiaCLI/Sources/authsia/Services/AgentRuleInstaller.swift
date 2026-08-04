@@ -901,7 +901,7 @@ enum AgentRuleInstaller {
 
     private static func agentRuleBlock(
         for agents: [AgentTool],
-        includeWorkspaceGuidance _: Bool = false
+        includeWorkspaceGuidance: Bool = false
     ) -> String {
         let selectedAgents = unique(agents)
         let platformLines = selectedAgents
@@ -910,13 +910,19 @@ enum AgentRuleInstaller {
         let markerIntro = selectedAgents.count == 1
             ? "- If the Authsia MCP tools are unavailable, \(selectedAgents[0].title) may use the CLI fallback; every Authsia CLI command must start with:"
             : "- If the Authsia MCP tools are unavailable, use the matching CLI fallback marker:"
+        let executionFallback = includeWorkspaceGuidance
+            ? "- This project is an Authsia workspace. In CLI fallback mode, run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox."
+            : "- Outside an Authsia workspace, run secret-dependent commands in CLI fallback mode with `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
+        let mcpSelection = includeWorkspaceGuidance
+            ? "- When a task needs secrets managed by this workspace and Authsia MCP tools are available, use the Authsia MCP tools. The user may ask in natural language; construct the tool input yourself."
+            : "- When a task needs secrets managed by Authsia and Authsia MCP tools are available for the active workspace, use the Authsia MCP tools. The user may ask in natural language; construct the tool input yourself."
         return """
     ## Authsia Secret Handling
 
     - Never ask the user for plaintext secrets.
     - Never write resolved secret values to source, logs, chat, issues, or generated documents.
-    - When a task needs secrets managed by this workspace and Authsia MCP tools are available, use the Authsia MCP tools. The user may ask in natural language; construct the tool input yourself.
-    - Use `authsia_status` when server readiness is unknown and `authsia_workspace_inspect` for non-secret workspace metadata.
+    \(mcpSelection)
+    - Use `authsia_status` when server readiness is unknown, `authsia_workspace_inspect` for commit-safe workspace metadata, and `authsia_list` for scoped CLI-enabled Vault item metadata.
     - Use `authsia_exec` only when a command needs Authsia-managed values. Pass `argv` as a direct argument array.
     - Do not use `sh -c`, `bash -c`, other shell command strings, pipes, redirects, compound commands, or control characters with `authsia_exec`.
     - If shell behavior is required, create or use a reviewed workspace script and execute that script directly with `authsia_exec`.
@@ -925,7 +931,10 @@ enum AgentRuleInstaller {
     - If access is denied, ask the user to approve Authsia access; never request the secret itself.
     \(markerIntro)
     \(platformLines)
-    - In CLI fallback mode, run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox. Never use bare secret-reading commands.
+    \(executionFallback)
+    - In CLI fallback mode, use attributed `authsia list ...` only for non-secret metadata discovery.
+    - Before composing an unfamiliar CLI fallback, check the complete subcommand's `--help`.
+    - Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code` from an agent.
     """
     }
 

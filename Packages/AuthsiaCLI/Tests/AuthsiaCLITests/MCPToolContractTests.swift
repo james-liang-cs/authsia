@@ -5,11 +5,12 @@ import Testing
 
 @Suite("Local MCP tool contract")
 struct MCPToolContractTests {
-    @Test("catalog exposes exactly the five frozen tools")
-    func catalogExposesExactlyFiveTools() {
+    @Test("catalog exposes exactly the six frozen tools")
+    func catalogExposesExactlySixTools() {
         #expect(AuthsiaMCPToolName.allCases.map(\.rawValue) == [
             "authsia_status",
             "authsia_workspace_inspect",
+            "authsia_list",
             "authsia_access_status",
             "authsia_exec",
             "authsia_access_revoke",
@@ -24,9 +25,43 @@ struct MCPToolContractTests {
 
         #expect(try #require(byName[.status]).annotations == .readOnly)
         #expect(try #require(byName[.workspaceInspect]).annotations == .readOnly)
+        let listAnnotations = try #require(byName[.list]).annotations
+        #expect(!listAnnotations.readOnlyHint)
+        #expect(!listAnnotations.destructiveHint)
+        #expect(!listAnnotations.idempotentHint)
+        #expect(!listAnnotations.openWorldHint)
         #expect(try #require(byName[.accessStatus]).annotations == .readOnly)
         #expect(try #require(byName[.exec]).annotations == .execution)
         #expect(try #require(byName[.accessRevoke]).annotations == .revocation)
+    }
+
+    @Test("list accepts bounded metadata queries only")
+    func listValidation() throws {
+        let input = try MCPListInput(
+            type: .password,
+            folder: "Workspaces/api/Production",
+            environment: "Production",
+            limit: 25,
+            offset: 50
+        ).validated()
+        #expect(input.limit == 25)
+        #expect(input.offset == 50)
+
+        #expect(throws: MCPToolInputError.self) {
+            try MCPListInput(type: .password, folder: "bad\nfolder").validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPListInput(type: .password, environment: "bad\0environment").validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPListInput(type: .password, limit: 0).validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPListInput(type: .password, limit: 101).validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPListInput(type: .password, offset: -1).validated()
+        }
     }
 
     @Test("exec rejects empty oversized and shell-shaped input")
@@ -42,6 +77,15 @@ struct MCPToolContractTests {
         }
         #expect(throws: MCPToolInputError.self) {
             try MCPExecInput(argv: ["/bin/sh", "-c", "printenv"]).validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPExecInput(argv: ["/usr/bin/bash", "--noprofile", "-lc", "printenv"]).validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPExecInput(argv: ["/usr/bin/env", "bash", "-c", "printenv"]).validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPExecInput(argv: ["/usr/bin/env", "-S", "bash -c printenv"]).validated()
         }
         #expect(throws: MCPToolInputError.self) {
             try MCPExecInput(argv: ["tool\0name"]).validated()
@@ -72,6 +116,11 @@ struct MCPToolContractTests {
         #expect(throws: MCPToolInputError.self) {
             let _: MCPExecInput = try MCPToolInputDecoder.decode(MCPExecInput.self, from: unknown)
         }
+
+        let listUnknown = Data(#"{"type":"password","includeSecrets":true}"#.utf8)
+        #expect(throws: MCPToolInputError.self) {
+            let _: MCPListInput = try MCPToolInputDecoder.decode(MCPListInput.self, from: listUnknown)
+        }
     }
 
     @Test("schemas never expose raw-secret shaped output fields")
@@ -94,6 +143,28 @@ struct MCPToolContractTests {
             #expect(errorProperties?["code"] != nil)
             #expect(errorProperties?["message"] != nil)
             #expect(errorProperties?["invocationID"] != nil)
+
+            let success = variants?.first?.objectValue
+            let successProperties = success?["properties"]?.objectValue
+            let required = Set(success?["required"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+            #expect(successProperties?.isEmpty == false)
+            #expect(required.isEmpty == false)
+            if let successProperties {
+                for schema in successProperties.values {
+                    #expect(schema.objectValue?.isEmpty == false)
+                }
+            }
         }
+
+        let listTool = MCPToolCatalog.tools.first { $0.name == "authsia_list" }
+        let listSuccess = listTool?.outputSchema?.objectValue?["oneOf"]?.arrayValue?.first
+        let itemProperties = listSuccess?.objectValue?["properties"]?.objectValue?["items"]?
+            .objectValue?["items"]?.objectValue?["properties"]?.objectValue
+        #expect(itemProperties != nil)
+        #expect(forbidden.isDisjoint(with: Set(itemProperties?.keys.map { $0 } ?? [])))
+        #expect(itemProperties?["username"] == nil)
+        #expect(itemProperties?["website"] == nil)
+        #expect(itemProperties?["content"] == nil)
+        #expect(itemProperties?["privateKey"] == nil)
     }
 }

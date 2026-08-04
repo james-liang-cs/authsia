@@ -10,13 +10,15 @@ actor AuthsiaMCPServer {
     private let runtimeContext: MCPRuntimeContext
     private let workspaceInspection: MCPWorkspaceInspectionService
     private let grantService: MCPGrantService
+    private let listService: any MCPListProviding
     private let childRunner: (any MCPChildRunning)?
     private let diagnostics: Diagnostics
     private var handlersRegistered = false
-    private var executionInProgress = false
+    private var mediatedOperationInProgress = false
     private var activeExecution: ActiveExecution?
+    private var activeList: ActiveListOperation?
     private var isStopping = false
-    private var didRunExecution = false
+    private var didUseMediatedTool = false
     private var didCleanupGrants = false
 
     init(
@@ -29,6 +31,7 @@ actor AuthsiaMCPServer {
         ),
         workspaceInspection: MCPWorkspaceInspectionService? = nil,
         grantService: MCPGrantService? = nil,
+        listService: (any MCPListProviding)? = nil,
         childRunner: (any MCPChildRunning)? = nil,
         diagnostics: @escaping Diagnostics = AuthsiaMCPServer.standardErrorDiagnostic
     ) {
@@ -47,6 +50,7 @@ actor AuthsiaMCPServer {
         self.grantService = grantService ?? MCPGrantService(
             serverInstanceID: runtimeContext.instanceID
         )
+        self.listService = listService ?? MCPListService(runtimeContext: runtimeContext)
         if let childRunner {
             self.childRunner = childRunner
         } else if let root = runtimeContext.workspaceRoot {
@@ -84,6 +88,7 @@ actor AuthsiaMCPServer {
 
     func stop() async {
         isStopping = true
+        await cancelActiveListAndWait()
         await cancelActiveExecutionAndWait()
         cleanupGrantsIfNeeded()
         await server.stop()
@@ -92,6 +97,7 @@ actor AuthsiaMCPServer {
     func waitUntilCompleted() async {
         await server.waitUntilCompleted()
         isStopping = true
+        await cancelActiveListAndWait()
         await cancelActiveExecutionAndWait()
         cleanupGrantsIfNeeded()
         diagnostics("Authsia MCP server stopped")
@@ -106,10 +112,7 @@ actor AuthsiaMCPServer {
         }
         await server.withMethodHandler(CallTool.self) { parameters in
             guard let name = AuthsiaMCPToolName(rawValue: parameters.name) else {
-                return try Self.errorResult(
-                    code: .invalidInput,
-                    message: "Unknown Authsia MCP tool."
-                )
+                throw MCPError.invalidParams("Unknown Authsia MCP tool: \(parameters.name)")
             }
             var invocationID: UUID?
             do {
@@ -126,6 +129,12 @@ actor AuthsiaMCPServer {
                         arguments: parameters.arguments
                     )
                     return try Self.successResult(self.workspaceInspection.inspect(input))
+                case .list:
+                    let input = try Self.decodeInput(
+                        MCPListInput.self,
+                        arguments: parameters.arguments
+                    ).validated()
+                    return try await self.listMetadata(input)
                 case .exec:
                     let input = try Self.decodeInput(
                         MCPExecInput.self,
@@ -211,7 +220,7 @@ actor AuthsiaMCPServer {
     private func cleanupGrantsIfNeeded() {
         guard !didCleanupGrants else { return }
         didCleanupGrants = true
-        guard didRunExecution else { return }
+        guard didUseMediatedTool else { return }
         grantService.revokeActiveOwnedGrants()
     }
 
@@ -221,7 +230,17 @@ actor AuthsiaMCPServer {
         _ = await activeExecution.task.value
         if self.activeExecution?.invocationID == activeExecution.invocationID {
             self.activeExecution = nil
-            executionInProgress = false
+            mediatedOperationInProgress = false
+        }
+    }
+
+    private func cancelActiveListAndWait() async {
+        guard let activeList else { return }
+        activeList.task.cancel()
+        _ = try? await activeList.task.value
+        if self.activeList?.invocationID == activeList.invocationID {
+            self.activeList = nil
+            mediatedOperationInProgress = false
         }
     }
 
@@ -283,6 +302,81 @@ actor AuthsiaMCPServer {
         return arguments
     }
 
+    private func listMetadata(_ input: MCPListInput) async throws -> CallTool.Result {
+        guard !isStopping else {
+            return try Self.errorResult(
+                code: .cancelled,
+                message: "The Authsia MCP server is stopping."
+            )
+        }
+        guard !mediatedOperationInProgress else {
+            return try Self.errorResult(
+                code: .busy,
+                message: "Another Authsia MCP mediated operation is already active."
+            )
+        }
+        mediatedOperationInProgress = true
+        defer { mediatedOperationInProgress = false }
+        didUseMediatedTool = true
+        let invocation = await runtimeContext.makeInvocation()
+        let task = Task {
+            try await listService.list(input, invocation: invocation)
+        }
+        activeList = ActiveListOperation(invocationID: invocation.id, task: task)
+        defer {
+            if activeList?.invocationID == invocation.id {
+                activeList = nil
+            }
+        }
+        let output: MCPListOutput
+        do {
+            output = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch is CancellationError {
+            return try Self.errorResult(
+                code: .cancelled,
+                message: "The Authsia MCP list operation was cancelled.",
+                invocationID: invocation.id
+            )
+        } catch let error as MCPToolInputError {
+            return try Self.errorResult(
+                code: .invalidInput,
+                message: error.localizedDescription,
+                invocationID: invocation.id
+            )
+        } catch is MCPRuntimeContextError {
+            return try Self.errorResult(
+                code: .workspaceUnavailable,
+                message: "The MCP server is not bound to a valid managed workspace.",
+                invocationID: invocation.id
+            )
+        } catch let error as BridgeClientError {
+            let code = MCPChildFailureReporter.code(for: error)
+            return try Self.errorResult(
+                code: code,
+                message: Self.toolErrorMessage(for: code),
+                invocationID: invocation.id
+            )
+        } catch {
+            return try Self.errorResult(
+                code: .internalError,
+                message: "The requested Authsia operation could not be completed.",
+                invocationID: invocation.id
+            )
+        }
+        guard !task.isCancelled, !Task.isCancelled else {
+            return try Self.errorResult(
+                code: .cancelled,
+                message: "The Authsia MCP list operation was cancelled.",
+                invocationID: invocation.id
+            )
+        }
+        return try Self.successResult(output)
+    }
+
     private func execute(_ input: MCPExecInput) async throws -> CallTool.Result {
         guard !isStopping else {
             return try Self.errorResult(
@@ -290,7 +384,7 @@ actor AuthsiaMCPServer {
                 message: "The Authsia MCP server is stopping."
             )
         }
-        guard !executionInProgress else {
+        guard !mediatedOperationInProgress else {
             return try Self.errorResult(
                 code: .busy,
                 message: "Another Authsia MCP execution is already active."
@@ -303,9 +397,9 @@ actor AuthsiaMCPServer {
             )
         }
 
-        executionInProgress = true
-        defer { executionInProgress = false }
-        didRunExecution = true
+        mediatedOperationInProgress = true
+        defer { mediatedOperationInProgress = false }
+        didUseMediatedTool = true
         let invocation = await runtimeContext.makeInvocation()
         guard !isStopping else {
             return try Self.errorResult(
@@ -397,4 +491,9 @@ actor AuthsiaMCPServer {
 private struct ActiveExecution: Sendable {
     let invocationID: UUID
     let task: Task<MCPChildResult, Never>
+}
+
+private struct ActiveListOperation: Sendable {
+    let invocationID: UUID
+    let task: Task<MCPListOutput, Error>
 }
