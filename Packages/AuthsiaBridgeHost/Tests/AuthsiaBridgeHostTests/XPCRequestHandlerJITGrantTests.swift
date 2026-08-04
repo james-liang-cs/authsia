@@ -1311,6 +1311,149 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
     }
 
+    func testDirectCLIPreflightReusesSessionBeforeResolvingReferences() async throws {
+        let listProvider = ListProviderSequence([
+            .success(listPayload()),
+            .failure(AgentJITGrantStoreError.corruptedStore),
+        ])
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            callerIdentity: humanCallerIdentity,
+            listProvider: listProvider.callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "RootOne", folderPath: nil),
+            ]
+        )
+
+        let firstResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            type: .directCLIPreflight
+        )
+        let sessionToken = try XCTUnwrap(firstResponse.sessionToken)
+
+        let reusedResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            type: .directCLIPreflight,
+            sessionToken: sessionToken
+        )
+
+        XCTAssertNil(reusedResponse.error)
+        XCTAssertEqual(approver.requests.map(\.command), [.directCLIPreflight])
+    }
+
+    func testDirectCLIPreflightResolvesFromWorkspaceMetadataWithoutLoadingVault() async throws {
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        let repository = EmptyVaultRepository(loadError: AgentJITGrantStoreError.corruptedStore)
+        repository.hasLoadedVaultState = true
+        let handler = XPCRequestHandler(
+            approver: approver,
+            repository: repository,
+            workspaceMetadataProvider: { try BridgeCoder.encode(self.listPayload()) },
+            agentJITGrantStore: store,
+            callerIdentityProvider: { self.humanCallerIdentity },
+            callerIdentityRevalidationProvider: { _ in self.humanCallerIdentity },
+            auditLogger: makeIsolatedAuditLogger()
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "RootOne", folderPath: nil),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            type: .directCLIPreflight
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(repository.loadCallCount, 0)
+        XCTAssertEqual(approver.requests.map(\.command), [.directCLIPreflight])
+    }
+
+    func testDirectCLIPreflightApprovesITermServerAncestryInOneHumanSession() async throws {
+        let context = CallerIdentityExtractor.parentProcessContext(from: [
+            ParentProcessInfo(pid: 41, processName: "zsh", bundleIdentifier: nil),
+            ParentProcessInfo(pid: 40, processName: "login", bundleIdentifier: nil),
+            ParentProcessInfo(
+                pid: 39,
+                processName: "iTermServer-3.6.11",
+                bundleIdentifier: "iTermServer",
+                signingTeamId: "H7V7XYVQ7D",
+                signingIdentity: "Developer ID Application"
+            ),
+            ParentProcessInfo(
+                pid: 38,
+                processName: "iTerm2",
+                bundleIdentifier: "com.googlecode.iterm2",
+                signingTeamId: "H7V7XYVQ7D",
+                signingIdentity: "Developer ID Application"
+            ),
+        ])
+        let callerIdentity = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: context.parent,
+            hostProcess: context.host
+        )
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            callerIdentity: callerIdentity
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "RootOne", folderPath: nil),
+                AgentJITPreflightReference(type: "note", query: "RootNote", folderPath: nil),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            type: .directCLIPreflight
+        )
+
+        XCTAssertNil(response.error)
+        let sessionToken = try XCTUnwrap(response.sessionToken)
+        XCTAssertTrue(response.payload?.grantIDs.isEmpty == true)
+        XCTAssertTrue(store.grants.isEmpty)
+        XCTAssertEqual(approver.requests.map(\.command), [.directCLIPreflight])
+
+        for type in [BridgeRequestType.getPassword, .getNote] {
+            let request = makeRequest(
+                type: type,
+                requestedCommand: "exec",
+                sessionToken: sessionToken
+            )
+            XCTAssertEqual(
+                handler.secretReadApprovalDecision(
+                    itemFolderPath: nil,
+                    request: request,
+                    bypassApproval: false
+                ),
+                .allowed(approvedBy: "session", needsApproval: false, agentJITGrantID: nil)
+            )
+        }
+        XCTAssertEqual(approver.requests.map(\.command), [.directCLIPreflight])
+    }
+
     func testListPreflightCreatesListOnlyGrant() async throws {
         let store = MemoryAgentJITGrantStore()
         let approver = JITApprovalTracker(result: true)
@@ -3420,7 +3563,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         body: T,
         type: BridgeRequestType = .agentJITPreflight,
         requestedCommand: String = "exec",
-        context: BridgeContext? = nil
+        context: BridgeContext? = nil,
+        sessionToken: String? = nil
     ) async throws -> BridgeResponse<AgentJITPreflightResultPayload> {
         let request = BridgeRequest(
             id: UUID(),
@@ -3428,7 +3572,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             query: "",
             options: .init(field: nil, copy: false),
             context: context ?? execContext(requestedCommand: requestedCommand),
-            body: try BridgeCoder.encode(body)
+            body: try BridgeCoder.encode(body),
+            sessionToken: sessionToken
         )
         let requestData = try BridgeCoder.encode(request)
         let expectation = XCTestExpectation(description: "preflight reply")
@@ -4177,12 +4322,20 @@ private final class EmptyVaultRepository: VaultRepositoryProviding {
     var notes: [SecureNoteMetadata] { [] }
     var sshKeys: [SSHKeyMetadata] { [] }
     var hasLoadedVaultState = false
+    private let loadError: Error?
+    private(set) var loadCallCount = 0
 
-    init(passwords: [PasswordMetadata] = []) {
+    init(passwords: [PasswordMetadata] = [], loadError: Error? = nil) {
         self.passwords = passwords
+        self.loadError = loadError
     }
 
-    func load() throws {}
+    func load() throws {
+        loadCallCount += 1
+        if let loadError {
+            throw loadError
+        }
+    }
     func addPassword(_ item: PasswordItem) throws {}
     func updatePassword(_ item: PasswordItem) throws {}
     func deletePassword(id: UUID) throws {}

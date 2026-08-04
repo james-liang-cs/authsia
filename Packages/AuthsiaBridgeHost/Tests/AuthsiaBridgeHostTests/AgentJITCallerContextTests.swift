@@ -105,6 +105,30 @@ final class AgentJITCallerContextTests: XCTestCase {
         }
     }
 
+    func testDoesNotPromoteImitatedITermServerAndHostSignedByAnotherTeam() {
+        let context = CallerIdentityExtractor.parentProcessContext(from: [
+            ParentProcessInfo(pid: 41, processName: "zsh", bundleIdentifier: nil),
+            ParentProcessInfo(pid: 40, processName: "login", bundleIdentifier: nil),
+            ParentProcessInfo(
+                pid: 39,
+                processName: "iTermServer-3.6.11",
+                bundleIdentifier: "iTermServer",
+                signingTeamId: "ATTACKER",
+                signingIdentity: "Developer ID Application"
+            ),
+            ParentProcessInfo(
+                pid: 38,
+                processName: "iTerm2",
+                bundleIdentifier: "com.googlecode.iterm2",
+                signingTeamId: "ATTACKER",
+                signingIdentity: "Developer ID Application"
+            ),
+        ])
+
+        XCTAssertEqual(context.parent?.bundleIdentifier, "iTermServer")
+        XCTAssertNil(context.host)
+    }
+
     func testIDEHostsDefaultToAutomationSuspect() {
         for (name, bundleIdentifier) in [
             ("Code Helper", "com.microsoft.VSCode"),

@@ -143,6 +143,18 @@ extension XPCRequestHandler {
                 )
                 return
             }
+            if validateSessionAndRequest(
+                bridgeRequest,
+                sessionToken: bridgeRequest.sessionToken,
+                callerIdentity: callerIdentity
+            ) {
+                let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
+                    id: bridgeRequest.id,
+                    payload: AgentJITPreflightResultPayload(grantIDs: [])
+                )
+                reply(encodeResponse(response), nil)
+                return
+            }
         }
         let capability: AgentJITCapability = requestedCommand == "list" ? .list : .exec
 
@@ -157,7 +169,13 @@ extension XPCRequestHandler {
 
         let scopes: [AgentJITScopeResolution]
         do {
-            scopes = try AgentJITPreflightResolver().resolvedScopes(from: payload, list: currentListPayload())
+            let list: BridgeListPayload
+            if bridgeRequest.type == .directCLIPreflight {
+                list = try await currentWorkspaceMetadataPayload(for: bridgeRequest)
+            } else {
+                list = try currentListPayload()
+            }
+            scopes = try AgentJITPreflightResolver().resolvedScopes(from: payload, list: list)
         } catch let failure as AgentJITPreflightFailure {
             replyError(id: bridgeRequest.id, code: failure.code, message: failure.message, reply: reply)
             return
@@ -171,19 +189,6 @@ extension XPCRequestHandler {
             return
         }
         if bridgeRequest.type == .directCLIPreflight {
-            if validateSessionAndRequest(
-                bridgeRequest,
-                sessionToken: bridgeRequest.sessionToken,
-                callerIdentity: callerIdentity
-            ) {
-                let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
-                    id: bridgeRequest.id,
-                    payload: AgentJITPreflightResultPayload(grantIDs: [])
-                )
-                reply(encodeResponse(response), nil)
-                return
-            }
-
             let descriptors = agentJITApprovalDescriptors(
                 timing: timing,
                 caller: caller,

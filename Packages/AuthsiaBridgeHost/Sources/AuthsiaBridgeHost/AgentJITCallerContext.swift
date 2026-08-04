@@ -103,9 +103,9 @@ public enum AgentJITCallerContext {
             guard isTrustedTerminalHost(host) else {
                 return false
             }
-            return callerIdentity.parentProcess.map {
-                trustedShellProcessNames.contains($0.processName.lowercased())
-            } ?? false
+            guard let parent = callerIdentity.parentProcess else { return false }
+            return trustedShellProcessNames.contains(parent.processName.lowercased())
+                || isTrustedITermServer(parent, hostedBy: host)
         }
 
         guard let parent = callerIdentity.parentProcess else { return false }
@@ -123,6 +123,20 @@ public enum AgentJITCallerContext {
         return process.signingTeamId?.isEmpty == false
             && process.signingIdentity?.isEmpty == false
     }
+
+    static func isTrustedITermServer(
+        _ process: ParentProcessInfo,
+        hostedBy host: ParentProcessInfo
+    ) -> Bool {
+        process.bundleIdentifier == "iTermServer"
+            && process.signingTeamId == trustedITermTeamIdentifier
+            && process.signingIdentity?.isEmpty == false
+            && host.bundleIdentifier == "com.googlecode.iterm2"
+            && host.signingTeamId == trustedITermTeamIdentifier
+            && host.signingIdentity?.isEmpty == false
+    }
+
+    private static let trustedITermTeamIdentifier = "H7V7XYVQ7D"
 
     private static let trustedTerminalBundleIdentifiers: Set<String> = [
         "com.apple.Terminal",

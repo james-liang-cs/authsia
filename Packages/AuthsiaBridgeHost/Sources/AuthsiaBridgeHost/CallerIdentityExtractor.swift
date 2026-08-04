@@ -168,7 +168,19 @@ public enum CallerIdentityExtractor {
 
     static func parentProcessContext(from ancestry: [ParentProcessInfo]) -> ParentProcessContext {
         let context = AgenticProcessDetector.parentProcessContext(from: ancestry)
-        return ParentProcessContext(parent: context.parent, host: context.host)
+        guard context.host == nil,
+              let parent = context.parent,
+              let parentIndex = ancestry.firstIndex(where: { $0.pid == parent.pid }),
+              ancestry.indices.contains(parentIndex + 1) else {
+            return ParentProcessContext(parent: context.parent, host: context.host)
+        }
+        let host = ancestry[parentIndex + 1]
+        guard AgentJITCallerContext.isTrustedITermServer(parent, hostedBy: host) else {
+            return ParentProcessContext(parent: context.parent, host: context.host)
+        }
+        // iTerm inserts its signed server between login and the app. Preserve the
+        // helper as parent evidence while restoring the signed app as its host.
+        return ParentProcessContext(parent: parent, host: host)
     }
 
     /// Walks up the process tree so bridge caller identity uses the same ancestry

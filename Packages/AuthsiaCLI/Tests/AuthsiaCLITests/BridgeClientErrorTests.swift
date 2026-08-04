@@ -161,6 +161,20 @@ struct BridgeClientErrorTests {
         #expect(timeout == baseTimeout)
     }
 
+    @Test("direct CLI preflight covers the approval lifetime and reply buffer")
+    func directCLIPreflightCoversApprovalLifetimeAndReplyBuffer() {
+        let approvalLifetime = TimeInterval(
+            RemoteJITApprovalDescriptor.requestLifetimeMilliseconds
+        ) / 1_000
+
+        let timeout = AuthsiaBridgeClient.xpcWaitTimeout(
+            for: .directCLIPreflight,
+            baseTimeout: 30
+        )
+
+        #expect(timeout == approvalLifetime + 5)
+    }
+
     @Test("approval prompt is shown for direct CLI secret requests")
     func approvalPromptShownForDirectCLISecretRequests() {
         let message = AuthsiaBridgeClient.approvalPromptMessage(

@@ -161,7 +161,8 @@ struct Workspace: AsyncParsableCommand {
                 try await Self.apply(
                     plan: plan,
                     selectedEnvFiles: resolved.envFiles,
-                    selectedSecrets: resolved.secrets
+                    selectedSecrets: resolved.secrets,
+                    knownRootsStore: .shared
                 )
                 return
             }
@@ -225,7 +226,12 @@ struct Workspace: AsyncParsableCommand {
                 }
             }
 
-            try await Self.apply(plan: plan, selectedEnvFiles: selectedEnvPlans, selectedSecrets: selectedSecrets)
+            try await Self.apply(
+                plan: plan,
+                selectedEnvFiles: selectedEnvPlans,
+                selectedSecrets: selectedSecrets,
+                knownRootsStore: .shared
+            )
         }
 
         static func selectedAgents(
@@ -475,7 +481,8 @@ struct Workspace: AsyncParsableCommand {
             selectedSecrets: [WorkspaceSecretSelection],
             removedAgents: [AgentTool] = [],
             backupService: BackupService = BackupService(),
-            vaultClient: WorkspaceSetupVaultClient = AuthsiaBridgeClient.shared
+            vaultClient: WorkspaceSetupVaultClient = AuthsiaBridgeClient.shared,
+            knownRootsStore: WorkspaceKnownRootsStore
         ) async throws {
             try validateNoMissingReferences(plan: plan, selectedEnvFiles: selectedEnvFiles)
             let vaultSecretSelections = selectedSecrets.filter { isWorkspaceMigratableSecret($0.secret) }
@@ -531,7 +538,7 @@ struct Workspace: AsyncParsableCommand {
                 envBindings: plan.config.envBindings
             )
             try WorkspaceConfigStore.write(config, toWorkspaceRoot: plan.workspaceRoot)
-            Workspace.recordKnownWorkspaceRoot(plan.workspaceRoot)
+            Workspace.recordKnownWorkspaceRoot(plan.workspaceRoot, store: knownRootsStore)
             if !removedAgents.isEmpty {
                 let result = try AgentRuleInstaller.uninstall(projectRoot: plan.workspaceRoot, agents: removedAgents)
                 print(AgentRuleInstaller.renderRemovalResult(result))
@@ -794,7 +801,8 @@ struct Workspace: AsyncParsableCommand {
                     plan: plan,
                     selectedEnvFiles: resolved.envFiles,
                     selectedSecrets: resolved.secrets,
-                    removedAgents: removedAgents
+                    removedAgents: removedAgents,
+                    knownRootsStore: .shared
                 )
                 return
             }
@@ -853,7 +861,12 @@ struct Workspace: AsyncParsableCommand {
                 }
             }
 
-            try await Init.apply(plan: plan, selectedEnvFiles: selectedEnvPlans, selectedSecrets: selectedSecrets)
+            try await Init.apply(
+                plan: plan,
+                selectedEnvFiles: selectedEnvPlans,
+                selectedSecrets: selectedSecrets,
+                knownRootsStore: .shared
+            )
         }
     }
 
@@ -902,7 +915,7 @@ struct Workspace: AsyncParsableCommand {
             }
 
             let result = try await WorkspaceResetPlanner.apply(plan, backupService: backupService)
-            Workspace.recordKnownWorkspaceRoot(root)
+            Workspace.recordKnownWorkspaceRoot(root, store: .shared)
             print(WorkspaceResetPlanner.renderApplyResult(result))
             print("Authsia workspace reset complete.")
         }
@@ -1686,7 +1699,12 @@ struct Workspace: AsyncParsableCommand {
             var reference: String
 
             func run() throws {
-                let binding = try Env.addBinding(name: name, reference: reference, workspaceRoot: Env.workspaceRoot())
+                let binding = try Env.addBinding(
+                    name: name,
+                    reference: reference,
+                    workspaceRoot: Env.workspaceRoot(),
+                    knownRootsStore: .shared
+                )
                 print("Added workspace env binding \(binding.name).")
             }
         }
@@ -1709,7 +1727,12 @@ struct Workspace: AsyncParsableCommand {
             var reference: String?
 
             func run() throws {
-                print(try Env.removeBinding(name: name, reference: reference, workspaceRoot: Env.workspaceRoot()))
+                print(try Env.removeBinding(
+                    name: name,
+                    reference: reference,
+                    workspaceRoot: Env.workspaceRoot(),
+                    knownRootsStore: .shared
+                ))
             }
         }
 
@@ -1763,7 +1786,7 @@ struct Workspace: AsyncParsableCommand {
             reference: String,
             workspaceRoot: URL,
             fileManager: FileManager = .default,
-            knownRootsStore: WorkspaceKnownRootsStore = .shared
+            knownRootsStore: WorkspaceKnownRootsStore
         ) throws -> WorkspaceConfig.EnvBinding {
             var config = try WorkspaceConfigStore.read(fromWorkspaceRoot: workspaceRoot, fileManager: fileManager)
             let binding = WorkspaceConfig.EnvBinding(
@@ -1799,7 +1822,7 @@ struct Workspace: AsyncParsableCommand {
             reference: String? = nil,
             workspaceRoot: URL,
             fileManager: FileManager = .default,
-            knownRootsStore: WorkspaceKnownRootsStore = .shared
+            knownRootsStore: WorkspaceKnownRootsStore
         ) throws -> String {
             let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
             var config = try WorkspaceConfigStore.read(fromWorkspaceRoot: workspaceRoot, fileManager: fileManager)
@@ -2063,7 +2086,7 @@ struct Workspace: AsyncParsableCommand {
             } else {
                 status = initialContext.status
             }
-            Workspace.recordKnownWorkspaceRoot(root)
+            Workspace.recordKnownWorkspaceRoot(root, store: .shared)
             switch format {
             case .table:
                 print(WorkspaceStatusReporter.renderTable(status))
@@ -2139,7 +2162,7 @@ struct Workspace: AsyncParsableCommand {
             if let applyJson {
                 let selection = try WorkspaceSetupExchange.readSyncSelection(from: applyJson)
                 print(try Self.apply(selection, toWorkspaceRoot: root, currentPlan: plan))
-                Workspace.recordKnownWorkspaceRoot(root)
+                Workspace.recordKnownWorkspaceRoot(root, store: .shared)
                 return
             }
             if planJson {
@@ -2147,7 +2170,7 @@ struct Workspace: AsyncParsableCommand {
             } else {
                 print(Self.renderDryRun(plan))
             }
-            Workspace.recordKnownWorkspaceRoot(root)
+            Workspace.recordKnownWorkspaceRoot(root, store: .shared)
         }
 
         static func plan(workspaceRoot: URL, vaultPayload: BridgeListPayload?) throws -> WorkspaceSyncPlan {
@@ -2359,7 +2382,7 @@ struct Workspace: AsyncParsableCommand {
 
     fileprivate static func recordKnownWorkspaceRoot(
         _ root: URL,
-        store: WorkspaceKnownRootsStore = .shared
+        store: WorkspaceKnownRootsStore
     ) {
         try? store.record(root.standardizedFileURL.path)
     }

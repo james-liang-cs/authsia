@@ -1631,7 +1631,7 @@ final class AuthsiaBridgeClient:
         for requestType: BridgeRequestType,
         baseTimeout: TimeInterval
     ) -> TimeInterval {
-        guard requestType == .agentJITPreflight else {
+        guard requestType == .agentJITPreflight || requestType == .directCLIPreflight else {
             return baseTimeout
         }
         let remoteApprovalLifetime = TimeInterval(
