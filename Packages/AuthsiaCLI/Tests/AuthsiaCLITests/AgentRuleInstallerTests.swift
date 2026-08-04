@@ -8,8 +8,8 @@ import AuthenticatorData
 
 @Suite("Agent rule installer")
 struct AgentRuleInstallerTests {
-    @Test("agent rules describe only selected agent platforms")
-    func agentRulesDescribeOnlySelectedAgentPlatforms() throws {
+    @Test("agent rules prefer MCP and keep only a selected-platform CLI fallback")
+    func agentRulesPreferMCPWithSelectedFallback() throws {
         let root = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -18,11 +18,19 @@ struct AgentRuleInstallerTests {
         let agentsRules = try read("AGENTS.md", in: root)
         let sharedRules = try read(".authsia/agent-rules.md", in: root)
         for rules in [agentsRules, sharedRules] {
+            #expect(rules.contains("use the Authsia MCP tools"))
+            #expect(rules.contains("construct the tool input yourself"))
+            #expect(rules.contains("`authsia_status`"))
+            #expect(rules.contains("`authsia_workspace_inspect`"))
+            #expect(rules.contains("`authsia_exec`"))
+            #expect(rules.contains("`authsia_access_status`"))
+            #expect(rules.contains("`authsia_access_revoke`"))
+            #expect(rules.contains("direct argument array"))
+            #expect(rules.contains("Do not use `sh -c`"))
             #expect(rules.contains("AUTHSIA_AGENT_PLATFORM=codex"))
-            #expect(rules.contains(
-                "Before running an Authsia command, use the full command's `-h` help " +
-                    "to confirm its arguments and options."
-            ))
+            #expect(!rules.contains("use the full command's `-h` help"))
+            #expect(!rules.contains("Authsia Command History"))
+            #expect(!rules.contains("Authsia Sandbox Handling"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=<claude-code|codex|cursor|windsurf|copilot>"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=claude-code"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=cursor"))

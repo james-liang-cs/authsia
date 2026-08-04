@@ -19,8 +19,9 @@ struct AgentCommandTests {
 
         try expectClaudeSettings(settings)
         #expect(shared.contains("Never ask the user for plaintext secrets."))
-        #expect(shared.contains("authsia exec"))
-        #expect(shared.contains("Always run every `authsia ...` CLI command outside the sandbox."))
+        #expect(shared.contains("`authsia_exec`"))
+        #expect(shared.contains("outside the sandbox"))
+        #expect(!shared.contains("Authsia Command History"))
         #expect(!shared.contains("also run Git network/authentication commands"))
         #expect(!shared.contains("Keep local-only Git commands"))
         #expect(claudeRules.contains(AgentRuleInstaller.managedStartMarker))
@@ -1071,16 +1072,17 @@ struct AgentCommandTests {
 
         let agents = try read("AGENTS.md", in: root)
 
-        #expect(agents.contains("Always run every `authsia ...` CLI command outside the sandbox."))
-        #expect(agents.contains("If the agent session is sandboxed, request permission to run Authsia CLI commands outside the sandbox before trying them."))
-        #expect(agents.contains("Authsia records Codex command history from explicit Authsia markers and macOS process monitoring fallback."))
-        #expect(!agents.contains("If sandboxed, request access to `Authsia.Bridge`"))
+        #expect(agents.contains("use the Authsia MCP tools"))
+        #expect(agents.contains("construct the tool input yourself"))
+        #expect(agents.contains("AUTHSIA_AGENT_PLATFORM=codex"))
+        #expect(!agents.contains("Authsia Command History"))
+        #expect(!agents.contains("Authsia Sandbox Handling"))
         #expect(!fileExists(".codex/rules/authsia.rules", in: root))
         #expect(result.manualSteps.isEmpty)
     }
 
-    @Test("workspace config adds workspace run guidance to agent rules")
-    func workspaceConfigAddsWorkspaceRunGuidanceToAgentRules() throws {
+    @Test("workspace config receives compact MCP-first agent rules")
+    func workspaceConfigReceivesCompactMCPFirstAgentRules() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try write("{}", to: ".authsia/workspace.json", in: root)
@@ -1088,35 +1090,28 @@ struct AgentCommandTests {
         _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
 
         let agents = try read("AGENTS.md", in: root)
-        #expect(agents.contains("Authsia Workspace Handling"))
-        #expect(agents.contains("If `.authsia/workspace.json` exists"))
-        #expect(agents.contains("`authsia workspace status`"))
-        #expect(agents.contains("selected Authsia agent marker on workspace commands"))
-        #expect(agents.contains("`authsia workspace run -- <command>`"))
-        #expect(agents.contains("Implicit guarded-terminal shims under agents do not resolve `authsia://` refs"))
-        #expect(agents.contains("Always run every `authsia ...` CLI command outside the sandbox."))
+        #expect(agents.contains("`authsia_status`"))
+        #expect(agents.contains("`authsia_workspace_inspect`"))
+        #expect(agents.contains("`authsia_exec`"))
+        #expect(agents.contains("`authsia workspace run -- <command> <args>`"))
+        #expect(!agents.contains("Authsia Workspace Handling"))
+        #expect(!agents.contains("Implicit guarded-terminal shims"))
     }
 
-    @Test("legacy workspace shared rules without guarded shim guidance are still recognized")
-    func legacyWorkspaceSharedRulesWithoutGuardedShimGuidanceAreStillRecognized() throws {
+    @Test("legacy workspace shared rules are still recognized")
+    func legacyWorkspaceSharedRulesAreStillRecognized() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         try write("{}", to: ".authsia/workspace.json", in: root)
-
         _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
-        let currentShared = try read(".authsia/agent-rules.md", in: root)
-        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
-        let guardedShimGuidance = """
-        - Implicit guarded-terminal shims under agents do not resolve `authsia://` refs; use explicit `authsia workspace run -- <command>` or `authsia exec` for any command that needs workspace secrets.
-        """
-        let legacyShared = currentShared.replacingOccurrences(
-            of: "\(guardedShimGuidance)\n",
-            with: ""
-        ).trimmingCharacters(in: .newlines)
-        try write(legacyShared, to: ".authsia/agent-rules.md", in: root)
+
+        let currentShared = AgentRuleInstaller.legacyV1SharedRulesMarkdown(
+            for: [.codex],
+            includeWorkspaceGuidance: true
+        )
+        try write(currentShared, to: ".authsia/agent-rules.md", in: root)
 
         #expect(currentShared.contains("Implicit guarded-terminal shims under agents do not resolve `authsia://` refs"))
-        #expect(!legacyShared.contains("Implicit guarded-terminal shims under agents"))
         #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
     }
 
@@ -1215,11 +1210,11 @@ struct AgentCommandTests {
         _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
 
         let instructions = try read("AGENTS.md", in: root)
-        #expect(instructions.contains("When GitHub Copilot runs Authsia"))
+        #expect(instructions.contains("GitHub Copilot may use the CLI fallback"))
         #expect(instructions.contains("env AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1"))
-        #expect(instructions.contains("Never run bare `authsia get`"))
-        #expect(instructions.contains("`authsia inject`"))
-        #expect(instructions.contains("Unprefixed Authsia commands are treated as direct human CLI"))
+        #expect(instructions.contains("Never use bare secret-reading commands"))
+        #expect(instructions.contains("`authsia_exec`"))
+        #expect(instructions.contains("direct argument array"))
     }
 
     @Test("Copilot init appends Authsia guidance to existing AGENTS file")
@@ -1234,7 +1229,7 @@ struct AgentCommandTests {
         #expect(agents.contains("# Existing Agent Rules"))
         #expect(agents.contains("Keep these project rules."))
         #expect(agents.contains(AgentRuleInstaller.managedStartMarker))
-        #expect(agents.contains("When GitHub Copilot runs Authsia"))
+        #expect(agents.contains("GitHub Copilot may use the CLI fallback"))
         #expect(!fileExists(".github/copilot-instructions.md", in: root))
         #expect(result.updated.contains("AGENTS.md"))
     }

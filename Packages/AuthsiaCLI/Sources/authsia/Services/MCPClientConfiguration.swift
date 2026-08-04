@@ -5,22 +5,20 @@ enum MCPClient: String, CaseIterable, ExpressibleByArgument, Sendable {
     case codex
     case claude
     case cursor
+    case windsurf
     case vscode
 }
 
 enum MCPClientConfigurationError: LocalizedError, Equatable {
     case unsupportedClient
     case unsafeValue
-    case workspaceUnavailable
 
     var errorDescription: String? {
         switch self {
         case .unsupportedClient:
-            return "Supported MCP clients are codex, claude, cursor, and vscode."
+            return "Supported MCP clients are codex, claude, cursor, windsurf, and vscode."
         case .unsafeValue:
             return "MCP configuration values must be absolute paths without control characters."
-        case .workspaceUnavailable:
-            return "Run this command from an initialized Authsia workspace."
         }
     }
 }
@@ -28,9 +26,7 @@ enum MCPClientConfigurationError: LocalizedError, Equatable {
 enum MCPClientConfiguration {
     static func render(
         clientName: String,
-        executableURL: URL,
-        startingDirectory: URL,
-        fileManager: FileManager = .default
+        executableURL: URL
     ) throws -> String {
         guard isSafe(clientName), let client = MCPClient(rawValue: clientName) else {
             throw isSafe(clientName)
@@ -39,67 +35,60 @@ enum MCPClientConfiguration {
         }
         return try render(
             client: client,
-            executableURL: executableURL,
-            startingDirectory: startingDirectory,
-            fileManager: fileManager
+            executableURL: executableURL
         )
     }
 
     static func render(
         client: MCPClient,
-        executableURL: URL,
-        startingDirectory: URL,
-        fileManager: FileManager = .default
+        executableURL: URL
     ) throws -> String {
-        guard let discoveredRoot = WorkspaceRootResolver.findWorkspaceRoot(
-            startingAt: startingDirectory,
-            fileManager: fileManager
-        ) else {
-            throw MCPClientConfigurationError.workspaceUnavailable
-        }
         let binaryPath = executableURL.resolvingSymlinksInPath().path
-        let workspacePath = discoveredRoot.resolvingSymlinksInPath().path
-        guard binaryPath.hasPrefix("/"), workspacePath.hasPrefix("/"),
-              isSafe(binaryPath), isSafe(workspacePath) else {
+        guard binaryPath.hasPrefix("/"), isSafe(binaryPath) else {
             throw MCPClientConfigurationError.unsafeValue
         }
 
-        let warning = "Machine-specific absolute path: review before sharing or committing this configuration."
+        let warning = "Machine-specific absolute path for user-global configuration; do not commit or share it. " +
+            "The server starts only from an initialized Authsia workspace."
         switch client {
         case .codex:
             return """
-            Add to Codex config.toml:
+            Add to user-global ~/.codex/config.toml:
             [mcp_servers.authsia]
             command = "\(tomlEscaped(binaryPath))"
             args = ["mcp", "serve"]
-            cwd = "\(tomlEscaped(workspacePath))"
 
             \(warning)
             """
         case .claude:
             return try jsonConfiguration(
-                heading: "Place in \(workspacePath)/.mcp.json:",
+                heading: "Merge into user-global ~/.claude.json:",
                 rootKey: "mcpServers",
                 binaryPath: binaryPath,
-                workspacePath: nil,
                 includeType: false,
                 warning: warning
             )
         case .cursor:
             return try jsonConfiguration(
-                heading: "Place in \(workspacePath)/.cursor/mcp.json:",
+                heading: "Place in user-global ~/.cursor/mcp.json:",
                 rootKey: "mcpServers",
                 binaryPath: binaryPath,
-                workspacePath: nil,
+                includeType: false,
+                warning: warning
+            )
+        case .windsurf:
+            return try jsonConfiguration(
+                heading: "Place in user-global ~/.codeium/windsurf/mcp_config.json:",
+                rootKey: "mcpServers",
+                binaryPath: binaryPath,
                 includeType: false,
                 warning: warning
             )
         case .vscode:
             return try jsonConfiguration(
-                heading: "Place in \(workspacePath)/.vscode/mcp.json:",
+                heading: "In VS Code, run `MCP: Open User Configuration` and merge:",
                 rootKey: "servers",
                 binaryPath: binaryPath,
-                workspacePath: workspacePath,
                 includeType: true,
                 warning: warning
             )
@@ -110,7 +99,6 @@ enum MCPClientConfiguration {
         heading: String,
         rootKey: String,
         binaryPath: String,
-        workspacePath: String?,
         includeType: Bool,
         warning: String
     ) throws -> String {
@@ -119,7 +107,6 @@ enum MCPClientConfiguration {
             "command": binaryPath,
         ]
         if includeType { server["type"] = "stdio" }
-        if let workspacePath { server["cwd"] = workspacePath }
         let object: [String: Any] = [rootKey: ["authsia": server]]
         let data = try JSONSerialization.data(
             withJSONObject: object,

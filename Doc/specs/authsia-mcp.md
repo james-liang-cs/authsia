@@ -442,29 +442,28 @@ operating-system-wide DLP.
 
 ## Client Configuration
 
-`authsia mcp configure --client <codex|claude|cursor|vscode>` prints a
-deterministic local-stdio configuration for the exact installed Authsia binary
-and current workspace. V1 does not edit third-party configuration, launch the
-client, add credentials, or use a shell wrapper.
+`authsia mcp configure --client <codex|claude|cursor|windsurf|vscode>` prints a
+deterministic user-global local-stdio configuration for the exact installed
+Authsia binary. V1 does not edit third-party configuration, launch the client,
+add credentials, or use a shell wrapper.
 
 Generated configuration must:
 
 - pass `mcp serve` as an argv array;
-- set the workspace root through the client's documented working-directory
-  mechanism when supported, otherwise print an explicit command to run from
-  that root;
+- omit fixed repository paths so the client launches the server from its active
+  working directory;
 - contain no secret, bearer token, automation credential, or private endpoint;
 - reject control characters and unsupported clients;
-- warn that checked-in client configuration containing a machine-specific
-  absolute binary path may not be portable.
+- warn that the user-global configuration contains a machine-specific absolute
+  binary path and must not be committed or shared.
 
-The delivered output uses Codex `config.toml`, Claude Code project `.mcp.json`,
-Cursor project `.cursor/mcp.json`, and VS Code workspace `.vscode/mcp.json`
-shapes verified against each client's primary documentation. Codex and VS Code
-receive an explicit working directory. Claude Code and Cursor configuration is
-placed under the managed workspace root so the spawned server inherits that
-root. Configuration formats remain client-owned compatibility surfaces, not
-part of Authsia authorization.
+The delivered output uses user-global Codex `~/.codex/config.toml`, Claude Code
+`~/.claude.json`, Cursor `~/.cursor/mcp.json`, Windsurf
+`~/.codeium/windsurf/mcp_config.json`, and the VS Code user-profile `mcp.json`
+shapes verified against each client's primary documentation. The spawned server
+inherits the active client workspace; server startup validates that workspace
+and fails closed outside initialized Authsia workspaces. Configuration formats
+remain client-owned compatibility surfaces, not part of Authsia authorization.
 
 ## Compatibility And Upgrade Policy
 

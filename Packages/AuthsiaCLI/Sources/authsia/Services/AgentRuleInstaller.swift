@@ -890,6 +890,47 @@ enum AgentRuleInstaller {
 
     private static func sharedRulesMarkdown(
         for agents: [AgentTool],
+        includeWorkspaceGuidance: Bool = false
+    ) -> String {
+        """
+    # Authsia Agent Rules
+
+    \(agentRuleBlock(for: agents, includeWorkspaceGuidance: includeWorkspaceGuidance))
+    """
+    }
+
+    private static func agentRuleBlock(
+        for agents: [AgentTool],
+        includeWorkspaceGuidance _: Bool = false
+    ) -> String {
+        let selectedAgents = unique(agents)
+        let platformLines = selectedAgents
+            .map { "  `env AUTHSIA_AGENT_PLATFORM=\($0.platformName) AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`" }
+            .joined(separator: "\n")
+        let markerIntro = selectedAgents.count == 1
+            ? "- If the Authsia MCP tools are unavailable, \(selectedAgents[0].title) may use the CLI fallback; every Authsia CLI command must start with:"
+            : "- If the Authsia MCP tools are unavailable, use the matching CLI fallback marker:"
+        return """
+    ## Authsia Secret Handling
+
+    - Never ask the user for plaintext secrets.
+    - Never write resolved secret values to source, logs, chat, issues, or generated documents.
+    - When a task needs secrets managed by this workspace and Authsia MCP tools are available, use the Authsia MCP tools. The user may ask in natural language; construct the tool input yourself.
+    - Use `authsia_status` when server readiness is unknown and `authsia_workspace_inspect` for non-secret workspace metadata.
+    - Use `authsia_exec` only when a command needs Authsia-managed values. Pass `argv` as a direct argument array.
+    - Do not use `sh -c`, `bash -c`, other shell command strings, pipes, redirects, compound commands, or control characters with `authsia_exec`.
+    - If shell behavior is required, create or use a reviewed workspace script and execute that script directly with `authsia_exec`.
+    - Use the normal terminal for commands that do not need Authsia-managed values.
+    - Use `authsia_access_status` to inspect grants for the current MCP server. Use `authsia_access_revoke` only when the user asks to revoke one of those grants.
+    - If access is denied, ask the user to approve Authsia access; never request the secret itself.
+    \(markerIntro)
+    \(platformLines)
+    - In CLI fallback mode, run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox. Never use bare secret-reading commands.
+    """
+    }
+
+    static func legacyV1SharedRulesMarkdown(
+        for agents: [AgentTool],
         includeWorkspaceGuidance: Bool = false,
         includeOutsideSandboxRule: Bool = true,
         includeCommandHistoryGuidance: Bool = true,
@@ -898,7 +939,7 @@ enum AgentRuleInstaller {
         """
     # Authsia Agent Rules
 
-    \(agentRuleBlock(
+    \(legacyV1AgentRuleBlock(
         for: agents,
         includeWorkspaceGuidance: includeWorkspaceGuidance,
         includeOutsideSandboxRule: includeOutsideSandboxRule,
@@ -908,7 +949,7 @@ enum AgentRuleInstaller {
     """
     }
 
-    private static func agentRuleBlock(
+    private static func legacyV1AgentRuleBlock(
         for agents: [AgentTool],
         includeWorkspaceGuidance: Bool = false,
         includeOutsideSandboxRule: Bool = true,
@@ -1541,24 +1582,26 @@ enum AgentRuleInstaller {
         var variants = [
             sharedRulesMarkdown(for: agents),
             sharedRulesMarkdown(for: agents, includeWorkspaceGuidance: true),
-            sharedRulesMarkdown(for: agents, includeOutsideSandboxRule: false),
-            sharedRulesMarkdown(
+            legacyV1SharedRulesMarkdown(for: agents),
+            legacyV1SharedRulesMarkdown(for: agents, includeWorkspaceGuidance: true),
+            legacyV1SharedRulesMarkdown(for: agents, includeOutsideSandboxRule: false),
+            legacyV1SharedRulesMarkdown(
                 for: agents,
                 includeWorkspaceGuidance: true,
                 includeOutsideSandboxRule: false
             ),
-            sharedRulesMarkdown(for: agents, includeCommandHistoryGuidance: false),
-            sharedRulesMarkdown(
+            legacyV1SharedRulesMarkdown(for: agents, includeCommandHistoryGuidance: false),
+            legacyV1SharedRulesMarkdown(
                 for: agents,
                 includeWorkspaceGuidance: true,
                 includeCommandHistoryGuidance: false
             ),
-            sharedRulesMarkdown(
+            legacyV1SharedRulesMarkdown(
                 for: agents,
                 includeOutsideSandboxRule: false,
                 includeCommandHistoryGuidance: false
             ),
-            sharedRulesMarkdown(
+            legacyV1SharedRulesMarkdown(
                 for: agents,
                 includeWorkspaceGuidance: true,
                 includeOutsideSandboxRule: false,
@@ -1567,18 +1610,18 @@ enum AgentRuleInstaller {
         ]
         if agents.contains(.copilot) {
             variants.append(contentsOf: [
-                sharedRulesMarkdown(for: agents, includeCopilotCommandHistoryGuidance: false),
-                sharedRulesMarkdown(
+                legacyV1SharedRulesMarkdown(for: agents, includeCopilotCommandHistoryGuidance: false),
+                legacyV1SharedRulesMarkdown(
                     for: agents,
                     includeWorkspaceGuidance: true,
                     includeCopilotCommandHistoryGuidance: false
                 ),
-                sharedRulesMarkdown(
+                legacyV1SharedRulesMarkdown(
                     for: agents,
                     includeOutsideSandboxRule: false,
                     includeCopilotCommandHistoryGuidance: false
                 ),
-                sharedRulesMarkdown(
+                legacyV1SharedRulesMarkdown(
                     for: agents,
                     includeWorkspaceGuidance: true,
                     includeOutsideSandboxRule: false,

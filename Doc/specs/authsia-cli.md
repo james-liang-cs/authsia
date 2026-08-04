@@ -135,7 +135,7 @@ Key properties:
 | `authsia workspace status` | Show non-secret workspace health, env references, rule state, and recovery guidance | `authsia workspace status --format json` |
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
-| `authsia mcp configure` | Print workspace-bound local MCP configuration without editing client files | `authsia mcp configure --client codex` |
+| `authsia mcp configure` | Print user-global local MCP configuration without editing client files | `authsia mcp configure --client codex` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
@@ -1080,20 +1080,21 @@ authsia completion fish | source
 Creates local project rule files that teach coding agents to use Authsia safely. This command writes
 rules only; it does not create automation credentials, JIT grants, or new secret access.
 
-Generated rules tell agents to avoid plaintext secrets, use `authsia://` references for placeholders,
-use `authsia exec ... -- <command>` for secret-bearing commands, mark every agent-run Authsia terminal
-command with `env AUTHSIA_AGENT_PLATFORM=<platform> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`,
-avoid bare `authsia get/read/load/code/inject` secret reads, and require outside-sandbox execution for
-every `authsia` CLI command.
+Generated rules tell agents to prefer the Authsia MCP tools for managed-secret
+work, construct tool input from natural-language requests, pass `authsia_exec`
+arguments directly without a shell command string, and use the normal terminal
+for commands that need no managed values. They retain a compact, attributed CLI
+fallback using `env AUTHSIA_AGENT_PLATFORM=<platform>
+AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...` and prohibit bare secret reads.
 The generated marker lines match the selected tool: `--agent codex` writes only
 `AUTHSIA_AGENT_PLATFORM=codex`, while `--all` writes one marker per supported tool.
 For Claude Code, generated local settings also install Bash `PreToolUse` and
 `PostToolUse` hooks that call Authsia's hidden command recorder. For GitHub
 Copilot, generated local settings install a Copilot CLI `PreToolUse` hook for
-Bash tool calls. Codex rules include command-history guidance; where tool hooks
-are unavailable, including local VS Code Copilot sessions, Access Center falls
-back to macOS process monitoring for processes tied to active Authsia-managed
-agent terminal scopes.
+Bash tool calls. Hook and process-monitor implementation details remain outside
+the generated model instructions; where hooks are unavailable, Access Center
+continues to use macOS process monitoring for processes tied to active
+Authsia-managed agent terminal scopes.
 
 Claude settings installation is structural and idempotent. If
 `.claude/settings.local.json` is absent, Authsia creates it. If an existing file
@@ -1130,10 +1131,10 @@ Created files depend on the selected agent:
 | Agent | Rule files | Local sandbox helper |
 |-------|------------|----------------------|
 | Claude Code | `.authsia/agent-rules.md`, `CLAUDE.md` | Creates or safely merges `.claude/settings.local.json` with outside-sandbox Authsia/Git/SSH command exclusions and Bash command-history hooks, while removing obsolete Authsia socket and Mach lookup values; incompatible shapes remain unchanged with manual guidance. |
-| Codex | `.authsia/agent-rules.md`, `AGENTS.md` | Existing `AGENTS.md` content is preserved and Authsia's managed block is appended or replaced; command history uses explicit Authsia markers plus process-monitor fallback. |
+| Codex | `.authsia/agent-rules.md`, `AGENTS.md` | Existing `AGENTS.md` content is preserved and Authsia's compact MCP-first managed block is appended or replaced. |
 | Cursor | `.authsia/agent-rules.md`, `.cursor/rules/authsia.mdc` | Rule text only. |
 | Windsurf | `.authsia/agent-rules.md`, `.windsurf/rules/authsia.md` | Rule text only. |
-| GitHub Copilot | `.authsia/agent-rules.md`, `AGENTS.md` | Creates `.github/copilot/settings.local.json` with a Copilot CLI `PreToolUse` Bash command-history hook if absent; if present, prints a manual merge block. Rule text requires `env AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`; existing `AGENTS.md` content is preserved and Authsia's managed block is appended or replaced. Unprefixed commands are direct human CLI. Cloud-hosted agents must leave `authsia://` placeholders for local execution. |
+| GitHub Copilot | `.authsia/agent-rules.md`, `AGENTS.md` | Creates `.github/copilot/settings.local.json` with a Copilot CLI `PreToolUse` Bash command-history hook if absent; if present, prints a manual merge block. Existing `AGENTS.md` content is preserved and receives the same MCP-first rule with an attributed CLI fallback. Cloud-hosted agents must leave `authsia://` placeholders for local execution. |
 
 Examples:
 
@@ -1144,11 +1145,10 @@ authsia agent init --agent codex --dry-run
 authsia agent init --all
 ```
 
-When `.authsia/workspace.json` exists, generated agent rules also add workspace
-guidance: run `authsia workspace status` first, keep the same agent attribution
-marker on workspace commands, and use `authsia workspace run -- <command>` or
-`authsia workspace run --shell -- '<command>'` instead of fetching plaintext
-secrets.
+Generated rules stay intentionally compact whether or not workspace metadata is
+already present. MCP status and inspection replace mandatory CLI preflight; the
+attributed `authsia workspace run -- <command> <args>` path remains a fallback
+when MCP tools are unavailable.
 
 ### `authsia workspace` — Repo-local secure workspace
 
@@ -1592,15 +1592,17 @@ from the parent process; follow-up secret access still goes through `authsia wor
 
 ### `authsia mcp` — Local MCP server
 
-`authsia mcp configure --client <codex|claude|cursor|vscode>` prints a
-deterministic configuration for the exact installed Authsia binary and nearest
-managed workspace. It rejects unsupported clients, unsafe path values, and
-directories outside an initialized workspace. The output contains no secret,
-bearer, or automation credential and warns that its absolute paths are
-machine-specific. It never edits or launches a third-party client.
+`authsia mcp configure --client <codex|claude|cursor|windsurf|vscode>` prints a
+deterministic user-global configuration for the exact installed Authsia binary.
+It rejects unsupported clients and unsafe path values. The output contains no
+secret, bearer, automation credential, or fixed repository path and warns that
+the binary path is machine-specific. It never edits or launches a third-party
+client.
 
 The generated client starts the hidden `authsia mcp serve` stdio process from
-that workspace. The server exposes only `authsia_status`,
+the client's active working directory. The server starts only when that
+directory belongs to an initialized Authsia workspace, then remains bound to
+that validated workspace for its lifetime. The server exposes only `authsia_status`,
 `authsia_workspace_inspect`, `authsia_exec`, `authsia_access_status`, and
 `authsia_access_revoke`. Secret-bearing work remains a Bridge-mediated Agent JIT
 execution; the MCP client cannot request raw secret values, select automation
@@ -1612,6 +1614,7 @@ export, and revocation.
 authsia mcp configure --client codex
 authsia mcp configure --client claude
 authsia mcp configure --client cursor
+authsia mcp configure --client windsurf
 authsia mcp configure --client vscode
 ```
 

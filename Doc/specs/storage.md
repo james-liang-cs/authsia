@@ -430,8 +430,8 @@ and redacted agent activity records through `AgentRuntimeContext`.
 Authoritative grants remain in the Bridge-owned authenticated Keychain envelope.
 MCP activity continues to use the existing command, file, network, Process
 Tree, and HMAC-chained audit paths listed above. Client-owned MCP configuration
-is outside Authsia storage; `authsia mcp configure` prints configuration and
-does not write third-party client files.
+is outside Authsia storage; `authsia mcp configure` prints user-global
+configuration and does not write third-party client files.
 
 ## Audit Logs
 
