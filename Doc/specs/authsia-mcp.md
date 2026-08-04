@@ -429,10 +429,13 @@ Generated configuration must:
 - warn that checked-in client configuration containing a machine-specific
   absolute binary path may not be portable.
 
-Codex and Claude Code CLI installation commands and Cursor/VS Code JSON shapes
-must be verified against their primary documentation when implementation starts.
-Configuration formats are client-owned compatibility surfaces, not part of
-Authsia authorization.
+The delivered output uses Codex `config.toml`, Claude Code project `.mcp.json`,
+Cursor project `.cursor/mcp.json`, and VS Code workspace `.vscode/mcp.json`
+shapes verified against each client's primary documentation. Codex and VS Code
+receive an explicit working directory. Claude Code and Cursor configuration is
+placed under the managed workspace root so the spawned server inherits that
+root. Configuration formats remain client-owned compatibility surfaces, not
+part of Authsia authorization.
 
 ## Compatibility And Upgrade Policy
 

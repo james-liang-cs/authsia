@@ -21,6 +21,7 @@
   - [authsia completion &lt;shell&gt; — Shell completions](#authsia-completion-shell-shell-completions)
   - [authsia agent init — AI-agent rule setup](#authsia-agent-init-ai-agent-rule-setup)
   - [authsia workspace — Repo-local secure workspace](#authsia-workspace--repo-local-secure-workspace)
+  - [authsia mcp — Local MCP server](#authsia-mcp-local-mcp-server)
   - [authsia access — Automation credentials](#authsia-access-automation-credentials)
   - [authsia env — Environment profiles](#authsia-env-environment-profiles)
   - [authsia ssh — SSH tooling](#authsia-ssh-ssh-tooling)
@@ -134,6 +135,7 @@ Key properties:
 | `authsia workspace status` | Show non-secret workspace health, env references, rule state, and recovery guidance | `authsia workspace status --format json` |
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
+| `authsia mcp configure` | Print workspace-bound local MCP configuration without editing client files | `authsia mcp configure --client codex` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
@@ -1587,6 +1589,34 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace agent --tool <tool> --goal <text>` | Print a paste-ready agent goal handoff without opening the tool, storing the goal, or accepting obvious pasted secrets | `authsia workspace agent --tool codex --goal "Fix checkout"` |
 | `workspace agent --tool <tool> --goal-file <path>` | Read a UTF-8 goal file and print the same validated goal handoff without storing the goal | `authsia workspace agent --tool codex --goal-file agent-goal.txt` |
 | `workspace agent --tool <tool> --goal-file -` | Read UTF-8 goal text from stdin and print the same validated goal handoff | `pbpaste \| authsia workspace agent --tool codex --goal-file -` |
+
+### `authsia mcp` — Local MCP server
+
+`authsia mcp configure --client <codex|claude|cursor|vscode>` prints a
+deterministic configuration for the exact installed Authsia binary and nearest
+managed workspace. It rejects unsupported clients, unsafe path values, and
+directories outside an initialized workspace. The output contains no secret,
+bearer, or automation credential and warns that its absolute paths are
+machine-specific. It never edits or launches a third-party client.
+
+The generated client starts the hidden `authsia mcp serve` stdio process from
+that workspace. The server exposes only `authsia_status`,
+`authsia_workspace_inspect`, `authsia_exec`, `authsia_access_status`, and
+`authsia_access_revoke`. Secret-bearing work remains a Bridge-mediated Agent JIT
+execution; the MCP client cannot request raw secret values, select automation
+credentials, read global audit history, or reuse a grant from another MCP
+server instance. Access Center remains the global operator surface for review,
+export, and revocation.
+
+```bash
+authsia mcp configure --client codex
+authsia mcp configure --client claude
+authsia mcp configure --client cursor
+authsia mcp configure --client vscode
+```
+
+See [`authsia-mcp.md`](authsia-mcp.md) for the closed tool schemas, lifecycle,
+JIT ownership, audit correlation, and compatibility policy.
 
 ### `authsia access` — Automation credentials
 

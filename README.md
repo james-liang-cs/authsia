@@ -41,6 +41,25 @@ These source builds do not install or sign the private Authsia app. For
 security reports, follow [SECURITY.md](SECURITY.md) and never include a real
 secret in an issue or reproduction.
 
+## Local MCP server
+
+From an initialized Authsia workspace, print a workspace-bound configuration
+for a supported local MCP client:
+
+```bash
+authsia mcp configure --client codex
+authsia mcp configure --client claude
+authsia mcp configure --client cursor
+authsia mcp configure --client vscode
+```
+
+The command prints configuration for the exact Authsia binary and workspace;
+it does not edit client files. The local `stdio` server exposes five constrained
+tools for status, workspace inspection, mediated execution, grant status, and
+grant revocation. It never exposes a raw-secret or global-audit tool. See the
+[Local Authsia MCP Server specification](Doc/specs/authsia-mcp.md) for the tool,
+JIT authorization, audit-correlation, and Access Center contracts.
+
 ## Release artifacts and verification
 
 Each `v<app-version>` source tag publishes a source archive, public macOS CLI,
