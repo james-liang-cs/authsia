@@ -141,14 +141,20 @@ struct WorkspaceEnvBindingTests {
             ]
         )
         try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        let knownRootsStore = makeIsolatedKnownRootsStore(in: root)
 
         #expect(throws: ValidationError.self) {
-            try Workspace.Env.removeBinding(name: "API_KEY", workspaceRoot: root)
+            try Workspace.Env.removeBinding(
+                name: "API_KEY",
+                workspaceRoot: root,
+                knownRootsStore: knownRootsStore
+            )
         }
         let removed = try Workspace.Env.removeBinding(
             name: "API_KEY",
             reference: development,
-            workspaceRoot: root
+            workspaceRoot: root,
+            knownRootsStore: knownRootsStore
         )
 
         #expect(removed == "Removed workspace env binding API_KEY.")
@@ -231,7 +237,8 @@ struct WorkspaceEnvBindingTests {
         )
         let removed = try Workspace.Env.removeBinding(
             name: "API_KEY",
-            workspaceRoot: root
+            workspaceRoot: root,
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         #expect(listed.contains("No workspace env bindings configured."))

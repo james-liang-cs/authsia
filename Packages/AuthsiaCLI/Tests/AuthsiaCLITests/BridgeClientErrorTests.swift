@@ -123,6 +123,28 @@ struct BridgeClientErrorTests {
         #expect(recoveries == 1)
     }
 
+    @Test("security protocol checks run once after a successful verification")
+    func securityProtocolChecksRunOnceAfterSuccessfulVerification() {
+        #expect(
+            AuthsiaBridgeClient.needsSecurityProtocolCheck(
+                alreadyVerified: false,
+                requestRequiresCheck: true
+            )
+        )
+        #expect(
+            !AuthsiaBridgeClient.needsSecurityProtocolCheck(
+                alreadyVerified: true,
+                requestRequiresCheck: true
+            )
+        )
+        #expect(
+            !AuthsiaBridgeClient.needsSecurityProtocolCheck(
+                alreadyVerified: false,
+                requestRequiresCheck: false
+            )
+        )
+    }
+
     @Test("normal requests preserve the configured XPC timeout")
     func normalRequestsPreserveConfiguredXPCTimeout() {
         let baseTimeout: TimeInterval = 12.5
@@ -159,6 +181,20 @@ struct BridgeClientErrorTests {
         )
 
         #expect(timeout == baseTimeout)
+    }
+
+    @Test("direct CLI preflight covers the approval lifetime and reply buffer")
+    func directCLIPreflightCoversApprovalLifetimeAndReplyBuffer() {
+        let approvalLifetime = TimeInterval(
+            RemoteJITApprovalDescriptor.requestLifetimeMilliseconds
+        ) / 1_000
+
+        let timeout = AuthsiaBridgeClient.xpcWaitTimeout(
+            for: .directCLIPreflight,
+            baseTimeout: 30
+        )
+
+        #expect(timeout == approvalLifetime + 5)
     }
 
     @Test("approval prompt is shown for direct CLI secret requests")

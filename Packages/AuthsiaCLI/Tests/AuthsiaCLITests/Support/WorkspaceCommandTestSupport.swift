@@ -303,6 +303,15 @@ func makeWorkspaceRoot() throws -> URL {
     return root
 }
 
+func makeIsolatedKnownRootsStore(in workspaceRoot: URL) -> WorkspaceKnownRootsStore {
+    WorkspaceKnownRootsStore(
+        applicationSupportDirectory: workspaceRoot.appendingPathComponent(
+            ".test-application-support",
+            isDirectory: true
+        )
+    )
+}
+
 func read(_ path: String, in root: URL) throws -> String {
     try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
 }

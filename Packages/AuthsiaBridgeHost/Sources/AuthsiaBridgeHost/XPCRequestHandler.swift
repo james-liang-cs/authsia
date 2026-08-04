@@ -270,7 +270,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
             return try listProvider()
         }
 
-        let requiresPersistedMetadata = [
+        let requiresPersistedMetadata = request.type == .directCLIPreflight || [
             BridgeContext.workspaceSyncPreviewRequestedCommand,
             BridgeContext.workspaceEnvValidateRequestedCommand,
             BridgeContext.workspaceEnvUseRequestedCommand,

@@ -10,6 +10,20 @@ enum AgentRuntimeContextResolver {
     static let environmentAgentTypeKey = "AUTHSIA_AGENT_TYPE"
     static let environmentToolUseIDKey = "AUTHSIA_AGENT_TOOL_USE_ID"
 
+    private struct RecordsCache {
+        let path: String
+        let modificationEpochSecond: Int?
+        let fileSize: Int
+        let records: [AgentRuntimeContextRecord]
+    }
+
+    private final class RecordsCacheBox: @unchecked Sendable {
+        let lock = NSLock()
+        var caches: [String: RecordsCache] = [:]
+    }
+
+    private static let recordsCacheBox = RecordsCacheBox()
+
     static var defaultEventsURL: URL {
         AgentCommandHistoryStore.defaultFileURL
     }
@@ -95,22 +109,61 @@ enum AgentRuntimeContextResolver {
         }
     }
 
-    private static func loadRecords(from url: URL) -> [AgentRuntimeContextRecord] {
-        guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8) else {
+    static func loadRecords(from url: URL) -> [AgentRuntimeContextRecord] {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        // Second granularity avoids false misses from filesystem timestamp rounding
+        // after attribute round-trips, while still invalidating across real writes.
+        let modificationEpochSecond = (attributes?[.modificationDate] as? Date)
+            .map { Int($0.timeIntervalSince1970) }
+        let fileSize = attributes?[.size] as? Int ?? -1
+        let path = url.path
+
+        recordsCacheBox.lock.lock()
+        if let cache = recordsCacheBox.caches[path],
+           cache.modificationEpochSecond == modificationEpochSecond,
+           cache.fileSize == fileSize {
+            let cached = cache.records
+            recordsCacheBox.lock.unlock()
+            return cached
+        }
+        recordsCacheBox.lock.unlock()
+
+        let records = loadRecordsFromDisk(url: url)
+        recordsCacheBox.lock.lock()
+        recordsCacheBox.caches[path] = RecordsCache(
+            path: path,
+            modificationEpochSecond: modificationEpochSecond,
+            fileSize: fileSize,
+            records: records
+        )
+        // Bound process memory if many distinct temp paths appear in tests.
+        if recordsCacheBox.caches.count > 32 {
+            let overflow = recordsCacheBox.caches.count - 16
+            for key in recordsCacheBox.caches.keys.prefix(overflow) {
+                recordsCacheBox.caches.removeValue(forKey: key)
+            }
+        }
+        recordsCacheBox.lock.unlock()
+        return records
+    }
+
+    private static func loadRecordsFromDisk(url: URL) -> [AgentRuntimeContextRecord] {
+        guard let data = try? Data(contentsOf: url) else {
             return []
         }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return text
-            .split(whereSeparator: \.isNewline)
+        // Byte-split: String.split(whereSeparator:) is grapheme-aware and dominates
+        // latency on multi-megabyte history files (~300ms for 24MB).
+        return data
+            .split(separator: 0x0A, omittingEmptySubsequences: true)
             .compactMap { line in
-                let data = Data(String(line).utf8)
-                if let record = try? decoder.decode(AgentRuntimeContextRecord.self, from: data) {
+                let lineData = Data(line)
+                if let record = try? decoder.decode(AgentRuntimeContextRecord.self, from: lineData) {
                     return record
                 }
-                guard let event = try? decoder.decode(AgentCommandEvent.self, from: data) else {
+                guard let event = try? decoder.decode(AgentCommandEvent.self, from: lineData) else {
                     return nil
                 }
                 return AgentRuntimeContextRecord(event: event)

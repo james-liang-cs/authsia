@@ -108,6 +108,63 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(decoded.map(\.command), ["swift test", "npm test"])
     }
 
+    func testRecordPrunesEventsOutsideRetentionWindow() throws {
+        let fileURL = try makeTempURL()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = AgentCommandHistoryStore(
+            fileURL: fileURL,
+            retentionInterval: 30 * 24 * 60 * 60
+        )
+        let stale = AgentCommandEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            recordedAt: now.addingTimeInterval(-40 * 24 * 60 * 60),
+            agentPlatform: "codex",
+            captureSource: .hook,
+            command: "authsia list"
+        )
+        let recent = AgentCommandEvent(
+            id: UUID(uuidString: "22222222-3333-4444-5555-666666666666")!,
+            recordedAt: now.addingTimeInterval(-2 * 24 * 60 * 60),
+            agentPlatform: "codex",
+            captureSource: .hook,
+            command: "authsia exec -- echo ok"
+        )
+
+        try store.record(stale)
+        try store.record(recent)
+
+        let loaded = try store.loadAll()
+        XCTAssertEqual(loaded.map(\.id), [recent.id])
+    }
+
+    func testRecordCapsHistoryAtConfiguredMaximumEventCount() throws {
+        let fileURL = try makeTempURL()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = AgentCommandHistoryStore(
+            fileURL: fileURL,
+            retentionInterval: 30 * 24 * 60 * 60,
+            maximumEventCount: 3
+        )
+
+        for index in 0..<5 {
+            try store.record(AgentCommandEvent(
+                id: UUID(),
+                recordedAt: now.addingTimeInterval(TimeInterval(index)),
+                agentPlatform: "codex",
+                captureSource: .hook,
+                command: "authsia list \(index)"
+            ))
+        }
+
+        let loaded = try store.loadAll()
+        XCTAssertEqual(loaded.count, 3)
+        XCTAssertEqual(loaded.map(\.command), [
+            "authsia list 2",
+            "authsia list 3",
+            "authsia list 4",
+        ])
+    }
+
     func testRecordingSameHookToolUseMergesExitStatusInsteadOfDuplicating() throws {
         let fileURL = try makeTempURL()
         let store = AgentCommandHistoryStore(fileURL: fileURL)

@@ -189,6 +189,10 @@ public final class AgentCommandHistoryStore {
     private static let directoryPermissions: NSNumber = 0o700
     private static let filePermissions: NSNumber = 0o600
     private static let mutationLock = NSLock()
+    /// Aligns with Access Center's 30-day audit window.
+    public static let defaultRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
+    /// Hard cap so a busy machine cannot grow the history without bound.
+    public static let defaultMaximumEventCount = 5_000
 
     public static var defaultFileURL: URL {
         let base = FileManager.default
@@ -201,10 +205,19 @@ public final class AgentCommandHistoryStore {
 
     private let fileURL: URL
     private let fileManager: FileManager
+    private let retentionInterval: TimeInterval
+    private let maximumEventCount: Int
 
-    public init(fileURL: URL = AgentCommandHistoryStore.defaultFileURL, fileManager: FileManager = .default) {
+    public init(
+        fileURL: URL = AgentCommandHistoryStore.defaultFileURL,
+        fileManager: FileManager = .default,
+        retentionInterval: TimeInterval = AgentCommandHistoryStore.defaultRetentionInterval,
+        maximumEventCount: Int = AgentCommandHistoryStore.defaultMaximumEventCount
+    ) {
         self.fileURL = fileURL
         self.fileManager = fileManager
+        self.retentionInterval = retentionInterval
+        self.maximumEventCount = max(1, maximumEventCount)
     }
 
     public func record(_ event: AgentCommandEvent) throws {
@@ -215,7 +228,12 @@ public final class AgentCommandHistoryStore {
             } else {
                 events.append(event)
             }
-            try writeUnlocked(events.sorted { $0.recordedAt < $1.recordedAt })
+            events = Self.pruned(
+                events.sorted { $0.recordedAt < $1.recordedAt },
+                retentionInterval: retentionInterval,
+                maximumEventCount: maximumEventCount
+            )
+            try writeUnlocked(events)
         }
         #if os(macOS)
         AccessCenterActivityNotifier.post()
@@ -242,11 +260,28 @@ public final class AgentCommandHistoryStore {
         )
     }
 
+    /// Drops events older than `retentionInterval` before the newest retained event,
+    /// then caps at `maximumEventCount` (keeping the newest). Relative cutoff keeps
+    /// fixture timestamps in tests stable while still bounding production history.
+    static func pruned(
+        _ events: [AgentCommandEvent],
+        retentionInterval: TimeInterval,
+        maximumEventCount: Int
+    ) -> [AgentCommandEvent] {
+        guard let newest = events.map(\.recordedAt).max() else { return events }
+        let cutoff = newest.addingTimeInterval(-retentionInterval)
+        var retained = events.filter { $0.recordedAt >= cutoff }
+        if retained.count > maximumEventCount {
+            retained = Array(retained.suffix(maximumEventCount))
+        }
+        return retained
+    }
+
     private func loadAllUnlocked() throws -> [AgentCommandEvent] {
         guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
         try enforceFilePermissions()
         let data = try Data(contentsOf: fileURL)
-        return try data.split(separator: 0x0A)
+        return try data.split(separator: 0x0A, omittingEmptySubsequences: true)
             .map { try JSONDecoder.agentCommandHistory.decode(AgentCommandEvent.self, from: Data($0)) }
             .sorted { $0.recordedAt < $1.recordedAt }
     }

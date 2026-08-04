@@ -5,6 +5,117 @@ import Testing
 
 @Suite("AgentRuntimeContextResolver")
 struct AgentRuntimeContextResolverTests {
+    @Test("loadRecords reuses cached records while file attributes are unchanged")
+    func loadRecordsReusesCachedRecordsWhileAttributesUnchanged() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([
+            record(
+                id: "11111111-1111-1111-1111-111111111111",
+                platform: "codex",
+                agentType: "cached",
+                workingDirectory: "/repo",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-2),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+        ])
+        let attributes = try FileManager.default.attributesOfItem(atPath: eventsURL.path)
+        let modificationDate = try #require(attributes[.modificationDate] as? Date)
+        let originalData = try Data(contentsOf: eventsURL)
+
+        let first = AgentRuntimeContextResolver.loadRecords(from: eventsURL)
+        #expect(first.first?.agentType == "cached")
+
+        // Overwrite with undecodable bytes of the same length and restore mtime.
+        // A cache miss would re-read and return [], so equal non-empty results prove a hit.
+        try Data(repeating: UInt8(ascii: "a"), count: originalData.count).write(to: eventsURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: modificationDate],
+            ofItemAtPath: eventsURL.path
+        )
+
+        let second = AgentRuntimeContextResolver.loadRecords(from: eventsURL)
+        #expect(second.first?.agentType == "cached")
+        #expect(second == first)
+    }
+
+    @Test("loadRecords invalidates cache when the event file changes")
+    func loadRecordsInvalidatesCacheWhenFileChanges() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([
+            record(
+                id: "11111111-1111-1111-1111-111111111111",
+                platform: "codex",
+                agentType: "older",
+                workingDirectory: "/repo",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-10),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+        ])
+
+        #expect(AgentRuntimeContextResolver.loadRecords(from: eventsURL).count == 1)
+
+        try writeEvents(
+            [
+                record(
+                    id: "11111111-1111-1111-1111-111111111111",
+                    platform: "codex",
+                    agentType: "older",
+                    workingDirectory: "/repo",
+                    command: "authsia list",
+                    recordedAt: now.addingTimeInterval(-10),
+                    expiresAt: now.addingTimeInterval(20)
+                ),
+                record(
+                    id: "22222222-2222-2222-2222-222222222222",
+                    platform: "codex",
+                    agentType: "newer",
+                    workingDirectory: "/repo",
+                    command: "authsia list",
+                    recordedAt: now.addingTimeInterval(-1),
+                    expiresAt: now.addingTimeInterval(20)
+                ),
+            ],
+            to: eventsURL
+        )
+        // Ensure mtime advances on fast filesystems.
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 2_000)],
+            ofItemAtPath: eventsURL.path
+        )
+
+        let reloaded = AgentRuntimeContextResolver.loadRecords(from: eventsURL)
+        #expect(reloaded.count == 2)
+        #expect(reloaded.map(\.agentType) == ["older", "newer"])
+    }
+
+    @Test("loadRecords parses byte newlines without requiring String splits")
+    func loadRecordsParsesByteNewlines() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let line = record(
+            id: "11111111-1111-1111-1111-111111111111",
+            platform: "codex",
+            agentType: "reviewer",
+            workingDirectory: "/repo",
+            command: "authsia list",
+            recordedAt: now.addingTimeInterval(-1),
+            expiresAt: now.addingTimeInterval(20)
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-agent-context-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("events.jsonl")
+        var data = Data(line.utf8)
+        data.append(0x0A)
+        data.append(contentsOf: line.utf8)
+        data.append(0x0A)
+        try data.write(to: url)
+
+        let records = AgentRuntimeContextResolver.loadRecords(from: url)
+        #expect(records.count == 2)
+    }
+
     @Test("resolver returns newest unexpired cwd-matching authsia hook record")
     func resolverReturnsNewestMatchingRecord() throws {
         let now = Date(timeIntervalSince1970: 1_000)
@@ -410,8 +521,12 @@ struct AgentRuntimeContextResolverTests {
             .appendingPathComponent("authsia-agent-context-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("events.jsonl")
-        try events.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        try writeEvents(events, to: url)
         return url
+    }
+
+    private func writeEvents(_ events: [String], to url: URL) throws {
+        try events.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
     }
 
     private func record(

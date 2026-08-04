@@ -33,6 +33,32 @@ final class BridgeAuditLoggerTests: XCTestCase {
         wait(for: [expected], timeout: 1)
     }
 
+    func testTrailingLineExtractorReturnsLastCompleteJSONLine() throws {
+        let first = Data(#"{"version":10,"entryHash":"aaa"}"#.utf8)
+        let second = Data(#"{"version":10,"entryHash":"bbb"}"#.utf8)
+        var payload = first
+        payload.append(0x0A)
+        payload.append(second)
+        payload.append(0x0A)
+        payload.append(contentsOf: Data(#"{"version":10,"entryHash":"ccc"}"#.utf8))
+
+        let trailing = BridgeAuditLogger.trailingLine(in: payload)
+        XCTAssertEqual(String(decoding: trailing ?? Data(), as: UTF8.self), #"{"version":10,"entryHash":"ccc"}"#)
+    }
+
+    func testTrailingLineExtractorReadsLastLineFromOversizedPrefix() throws {
+        var payload = Data(repeating: UInt8(ascii: "x"), count: 8_192)
+        payload.append(0x0A)
+        let last = Data(#"{"version":10,"entryHash":"tail"}"#.utf8)
+        payload.append(last)
+        payload.append(0x0A)
+
+        // Simulate reading only the final chunk that still contains the last line.
+        let chunk = Data(payload.suffix(256))
+        let trailing = BridgeAuditLogger.trailingLine(in: chunk)
+        XCTAssertEqual(String(decoding: trailing ?? Data(), as: UTF8.self), #"{"version":10,"entryHash":"tail"}"#)
+    }
+
     func testWritesChainedTamperEvidentAuditEntries() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)

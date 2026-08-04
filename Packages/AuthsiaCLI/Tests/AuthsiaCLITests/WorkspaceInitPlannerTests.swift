@@ -359,6 +359,7 @@ struct WorkspaceInitPlannerTests {
             encoding: .utf8
         )
         let vaultClient = RecordingWorkspaceSetupVaultClient()
+        let knownRootsStore = makeIsolatedKnownRootsStore(in: root)
 
         let plan = try await WorkspaceInitPlanner.plan(
             workspaceRoot: root,
@@ -370,10 +371,12 @@ struct WorkspaceInitPlannerTests {
             plan: plan,
             selectedEnvFiles: plan.envFiles,
             selectedSecrets: [],
-            vaultClient: vaultClient
+            vaultClient: vaultClient,
+            knownRootsStore: knownRootsStore
         )
 
         #expect(vaultClient.ensuredFolders.isEmpty)
+        #expect(try knownRootsStore.load() == [root.standardizedFileURL.path])
         let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
         #expect(config.workspace.authsiaFolder == plan.config.workspace.authsiaFolder)
     }
@@ -407,7 +410,8 @@ struct WorkspaceInitPlannerTests {
             selectedSecrets: [
                 WorkspaceSecretSelection(secret: certificate, action: .create),
             ],
-            vaultClient: vaultClient
+            vaultClient: vaultClient,
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         #expect(vaultClient.addedPasswords.isEmpty)
@@ -440,7 +444,8 @@ struct WorkspaceInitPlannerTests {
             selectedEnvFiles: plan.envFiles,
             selectedSecrets: [WorkspaceSecretSelection(secret: secret.secret, action: .create)],
             backupService: BackupService(bridgeClient: WorkspaceResetBackupVaultClient()),
-            vaultClient: vaultClient
+            vaultClient: vaultClient,
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         #expect(vaultClient.ensuredFolders.isEmpty)
@@ -472,7 +477,8 @@ struct WorkspaceInitPlannerTests {
             selectedEnvFiles: plan.envFiles,
             selectedSecrets: [WorkspaceSecretSelection(secret: secret.secret, action: .create)],
             backupService: BackupService(bridgeClient: WorkspaceResetBackupVaultClient()),
-            vaultClient: vaultClient
+            vaultClient: vaultClient,
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         #expect(secret.secret.type == .apiKey)
@@ -508,7 +514,8 @@ struct WorkspaceInitPlannerTests {
                 selectedEnvFiles: plan.envFiles,
                 selectedSecrets: [WorkspaceSecretSelection(secret: secret.secret, action: .create)],
                 backupService: BackupService(bridgeClient: WorkspaceResetBackupVaultClient()),
-                vaultClient: vaultClient
+                vaultClient: vaultClient,
+                knownRootsStore: makeIsolatedKnownRootsStore(in: root)
             )
             Issue.record("Expected workspace setup to fail when the stored password is not visible in the vault")
         } catch {
@@ -551,7 +558,8 @@ struct WorkspaceInitPlannerTests {
             selectedEnvFiles: plan.envFiles,
             selectedSecrets: [WorkspaceSecretSelection(secret: secret.secret, action: .create)],
             backupService: BackupService(bridgeClient: WorkspaceResetBackupVaultClient()),
-            vaultClient: vaultClient
+            vaultClient: vaultClient,
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         #expect(vaultClient.ensuredFolders.isEmpty)
@@ -594,7 +602,8 @@ struct WorkspaceInitPlannerTests {
                 plan: plan,
                 selectedEnvFiles: plan.envFiles,
                 selectedSecrets: [],
-                vaultClient: vaultClient
+                vaultClient: vaultClient,
+                knownRootsStore: makeIsolatedKnownRootsStore(in: root)
             )
             Issue.record("Expected workspace setup to fail for missing Authsia references")
         } catch {
@@ -645,7 +654,8 @@ struct WorkspaceInitPlannerTests {
             selectedEnvFiles: selectedEnvFiles,
             selectedSecrets: [WorkspaceSecretSelection(secret: secret.secret, action: .create)],
             backupService: BackupService(bridgeClient: WorkspaceResetBackupVaultClient()),
-            vaultClient: vaultClient
+            vaultClient: vaultClient,
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         #expect(vaultClient.addedPasswords == ["DB_PASSWORD"])
@@ -699,7 +709,8 @@ struct WorkspaceInitPlannerTests {
             selectedEnvFiles: [],
             selectedSecrets: [],
             removedAgents: removedAgents,
-            vaultClient: RecordingWorkspaceSetupVaultClient()
+            vaultClient: RecordingWorkspaceSetupVaultClient(),
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         // The deselected rule's file is gone; the kept rule's file remains.
@@ -748,7 +759,8 @@ struct WorkspaceInitPlannerTests {
             selectedEnvFiles: [],
             selectedSecrets: [],
             removedAgents: removedAgents,
-            vaultClient: RecordingWorkspaceSetupVaultClient()
+            vaultClient: RecordingWorkspaceSetupVaultClient(),
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("AGENTS.md").path))
@@ -792,7 +804,8 @@ struct WorkspaceInitPlannerTests {
             plan: plan,
             selectedEnvFiles: [],
             selectedSecrets: [],
-            vaultClient: RecordingWorkspaceSetupVaultClient()
+            vaultClient: RecordingWorkspaceSetupVaultClient(),
+            knownRootsStore: makeIsolatedKnownRootsStore(in: root)
         )
 
         #expect(try read("AGENTS.md", in: root) == currentRules)
