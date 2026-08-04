@@ -230,7 +230,7 @@ struct MCPServerLifecycleTests {
             folderScope: .folder("Team/API"),
             capabilities: [.exec],
             createdAt: Date().addingTimeInterval(-10),
-            expiresAt: Date().addingTimeInterval(60),
+            expiresAt: Date().addingTimeInterval(3_600),
             revokedAt: nil,
             lastUsedAt: nil,
             requestedItems: [],

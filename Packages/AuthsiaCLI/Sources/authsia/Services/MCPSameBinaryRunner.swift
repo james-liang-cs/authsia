@@ -95,37 +95,37 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
             )
         }
 
-        let stdoutTask = Task.detached {
+        let stdoutReader = MCPBlockingOperation {
             Self.readBounded(stdoutPipe.fileHandleForReading)
         }
-        let stderrTask = Task.detached {
+        let stderrReader = MCPBlockingOperation {
             Self.readBounded(stderrPipe.fileHandleForReading)
         }
+        stdoutReader.start()
+        stderrReader.start()
         let termination = MCPChildTerminationState()
-        let waitTask = Task.detached { () -> (Int32, Process.TerminationReason) in
+        let processWaiter = MCPBlockingOperation { () -> (Int32, Process.TerminationReason) in
             process.waitUntilExit()
             return (process.terminationStatus, process.terminationReason)
         }
-        let timeoutTask = Task {
-            do {
-                try await Task.sleep(for: .seconds(timeoutSeconds))
-                termination.markTimedOut()
-                Self.terminate(process, killGraceSeconds: killGraceSeconds)
-            } catch {
-                return
-            }
+        processWaiter.start()
+        let timeout = MCPChildTimeout(seconds: timeoutSeconds) {
+            guard process.isRunning else { return }
+            termination.markTimedOut()
+            Self.terminate(process, killGraceSeconds: killGraceSeconds)
         }
+        timeout.start()
 
         let processTermination = await withTaskCancellationHandler {
-            await waitTask.value
+            await processWaiter.value()
         } onCancel: {
             termination.markCancelled()
             Self.terminate(process, killGraceSeconds: killGraceSeconds)
         }
-        timeoutTask.cancel()
+        timeout.cancel()
 
-        let stdout = await stdoutTask.value
-        let stderr = await stderrTask.value
+        let stdout = await stdoutReader.value()
+        let stderr = await stderrReader.value()
         let state = termination.snapshot()
         let exitCode = processTermination.1 == .exit ? processTermination.0 : nil
         return MCPChildResult(
@@ -192,5 +192,82 @@ private final class MCPChildTerminationState: @unchecked Sendable {
 
     func snapshot() -> (cancelled: Bool, timedOut: Bool) {
         lock.withLock { (cancelled, timedOut) }
+    }
+}
+
+private final class MCPChildTimeout: @unchecked Sendable {
+    private let condition = NSCondition()
+    private let deadline: Date
+    private let action: @Sendable () -> Void
+    private var cancelled = false
+
+    init(seconds: Int, action: @escaping @Sendable () -> Void) {
+        deadline = Date().addingTimeInterval(TimeInterval(seconds))
+        self.action = action
+    }
+
+    func start() {
+        Thread.detachNewThread { [self] in
+            condition.lock()
+            let reachedDeadline = !condition.wait(until: deadline)
+            let shouldRun = reachedDeadline && !cancelled
+            condition.unlock()
+            if shouldRun { action() }
+        }
+    }
+
+    func cancel() {
+        condition.lock()
+        cancelled = true
+        condition.signal()
+        condition.unlock()
+    }
+}
+
+private final class MCPBlockingOperation<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private let operation: @Sendable () -> Value
+    private var result: Value?
+    private var continuation: CheckedContinuation<Value, Never>?
+    private var started = false
+
+    init(_ operation: @escaping @Sendable () -> Value) {
+        self.operation = operation
+    }
+
+    func start() {
+        lock.lock()
+        guard !started else {
+            lock.unlock()
+            return
+        }
+        started = true
+        lock.unlock()
+
+        Thread.detachNewThread { [self] in
+            complete(operation())
+        }
+    }
+
+    func value() async -> Value {
+        await withCheckedContinuation { pending in
+            lock.lock()
+            if let result {
+                lock.unlock()
+                pending.resume(returning: result)
+            } else {
+                continuation = pending
+                lock.unlock()
+            }
+        }
+    }
+
+    private func complete(_ value: Value) {
+        lock.lock()
+        result = value
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
     }
 }
