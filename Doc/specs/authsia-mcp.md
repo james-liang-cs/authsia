@@ -1,6 +1,6 @@
 # Local Authsia MCP Server
 
-Status: implementation contract for M14
+Status: release-candidate implementation contract for M14; signed installed-product validation pending
 
 ## Table Of Contents
 
@@ -86,9 +86,15 @@ For every secret-bearing execution, all existing conditions still apply:
 - an active, unexpired, unrevoked JIT grant exists after approval;
 - final secret reads revalidate policy immediately before release.
 
-MCP V1 is JIT-only. Before launching the child, the server removes all Authsia
-automation-credential variables from its child environment. An MCP client
-cannot select the automation-credential path. Unattended MCP automation needs a
+MCP V1 is JIT-only. Before launching the wrapper, the server constructs a new
+environment from a fixed set of basic process variables (`HOME`, `LANG`,
+`LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `USER`,
+`__CF_USER_TEXT_ENCODING`, and `LC_*`) plus server-generated MCP runtime
+context. It does not copy the rest of the MCP server environment, including
+cloud credentials, access tokens, stale Authsia runtime context, or Authsia
+automation credentials. The internal process-control and error-status markers
+are removed before the requested payload process launches. An MCP client cannot
+select the automation-credential path. Unattended MCP automation needs a
 separate future design and is not implied by this contract.
 
 MCP client confirmation is additive usability only. It is not Authsia
@@ -132,16 +138,23 @@ The server may inspect only these workspace sources:
 - `authsia://` reference tokens and their variable names in those files.
 
 Inspection must not return other environment-file values, comments, complete
-lines, file contents, Keychain values, or live vault metadata. Reads use the
-existing bounded workspace scanning limits. Missing or unsafe managed files are
-reported as redacted diagnostics rather than followed outside the workspace.
+lines, file contents, Keychain values, or live vault metadata. It inspects at
+most 128 configured files, rejects a file larger than 1 MiB before parsing,
+reads at most 4 MiB in aggregate, returns at most 1,000 references and 100
+diagnostics, and reports truncation where the response contract provides it.
+Returned references are reconstructed as canonical `authsia://` URIs; unknown
+query fields and their values are discarded. Missing, oversized, unreadable, or
+unsafe managed files produce fixed redacted diagnostics rather than raw errors
+or reads outside the workspace.
 
 ## Tool Contract
 
 All input schemas are JSON objects with `additionalProperties: false`. All
-tools declare an `outputSchema` and return matching `structuredContent`, plus a
-compact JSON text block for compatible clients. Tool and output descriptions
-must state that plaintext secrets are never returned.
+tools declare a closed `outputSchema` whose `oneOf` branches describe either
+that tool's success object or the common stable error object. Results return
+matching `structuredContent`, plus a compact JSON text block for compatible
+clients. Tool and output descriptions must state that plaintext secrets are
+never returned.
 
 ### Catalog And Annotations
 
@@ -172,7 +185,11 @@ Output fields:
 | `ready` | True only when workspace and Bridge checks permit an execution attempt. |
 | `diagnostics` | Bounded code/message pairs with no raw errors or secret material. |
 
-The status check performs no approval, vault listing, or secret read.
+The status check performs a live Bridge ping, including the Bridge's CLI-access
+flag, but performs no approval, vault listing, or secret read. A Bridge that is
+reachable while CLI access is disabled reports `cliAccessDisabled`, not
+`ready`. Older compatible ping payloads that omit the optional flag continue to
+decode as reachable.
 
 ### `authsia_workspace_inspect`
 
@@ -273,9 +290,11 @@ reviewing and revoking historical or orphaned MCP grants.
 3. Resolve the exact running Authsia binary; reject symlinks or substitutions
    that do not satisfy the installed-product resolution rules.
 4. Construct `authsia workspace run` arguments without a shell.
-5. Build a minimal inherited environment, remove every Authsia automation
-   credential variable, and add the server-generated MCP runtime context.
-6. Start the child with captured standard output/error and no interactive TTY.
+5. Build the allowlisted environment described above and add the
+   server-generated MCP runtime context.
+6. Start the wrapper in a dedicated process group with captured standard
+   output/error and no interactive TTY; do not pass internal MCP control markers
+   to the requested payload.
 7. The child runs existing reference discovery, JIT preflight, approval, live
    policy checks, secret injection, output masking, activity capture, cleanup,
    and audit behavior.
@@ -286,12 +305,17 @@ Only one `authsia_exec` may run per server in V1. This prevents overlapping
 approval prompts and ambiguous output/cancellation attribution without adding a
 new scheduler. Separate workspace-scoped MCP server processes remain isolated.
 
-MCP cancellation requests best-effort termination of the Authsia child through
-the existing signal-forwarding behavior. Timeout uses the same termination
-path. Cancellation and timeout must not report success merely because a signal
-was sent; the result state reflects observed child termination when a result is
-still allowed by the protocol. MCP V1 does not use the experimental Tasks
-extension.
+MCP cancellation, timeout, EOF, SIGINT, and SIGTERM cancel the active execution
+and wait for its managed wrapper process group. The runner sends `SIGTERM` to
+the group, escalates to `SIGKILL` after the bounded grace period, drains the
+captured streams, and observes termination before server grant cleanup and
+shutdown finish. If the wrapper exits while descendants remain in its group,
+the runner applies the same bounded cleanup before returning an otherwise normal
+result. Cancellation and timeout are stable tool errors rather than
+success merely because a signal was sent. MCP V1 does not use the experimental
+Tasks extension. This lifecycle controls the Authsia-created process group; it
+does not claim OS-wide containment of a process that independently escapes that
+group.
 
 Graceful server shutdown attempts to revoke active grants owned by that server
 instance. Abrupt termination may leave them visible until Bridge liveness,
@@ -355,6 +379,11 @@ MCP call through preflight, grant, final secret read, command event, and
 available file/network/Process Tree evidence. Correlation IDs are metadata, not
 credentials.
 
+An MCP access-revocation call receives its own fresh invocation ID. The Bridge
+revocation audit record preserves that invocation context, grant ID, workspace,
+environment, and requested operation so Access Center can correlate the
+terminal event rather than showing an unattributed revoke.
+
 Audit and activity must never store raw JSON-RPC requests/responses, MCP client
 conversation content, command output, stdin, environment values, secret values,
 or cancellation text. Existing HMAC verification and export redaction apply.
@@ -395,13 +424,13 @@ payloads.
 | Client broadens workspace | Root is fixed at startup; canonical containment is checked; no root/cwd tool field exists. |
 | Managed file is a symlink escape | Canonicalize and reject sources outside the workspace before reading. |
 | Shell or argument injection | Accept a bounded argv array and self-execute without a shell. |
-| Inherited automation credential bypasses JIT | Remove all automation credential variables before child launch and test the effective environment. |
+| Ambient server credential or stale authority reaches the child | Construct the child environment from the fixed basic-variable allowlist, add only fresh MCP context, remove internal markers before payload launch, and test the effective environment. |
 | Another MCP instance reuses a grant | MCP session ID narrows matching in addition to all existing JIT checks. |
 | MCP client views or revokes global access | Status/revoke output is limited to the current server instance; global review stays in Access Center. |
 | Secret leaks through tool output | Reuse continuous strict masking, bound both streams, and test raw and transformed synthetic values. |
 | Secret leaks through error/audit | Redact errors; store no JSON-RPC payload or output; preserve existing audit redaction and HMAC chain. |
 | Concurrent calls confuse approval or attribution | Permit one active exec per server and generate one invocation ID per call. |
-| Cancellation leaves execution running | Forward termination through existing child signal handling and report observed state; document that grant revocation is not a process kill. |
+| Cancellation leaves execution or descendants running | Put the wrapper and descendants in a dedicated process group, terminate then force-kill the group, and await observed exit before cleanup. |
 | Abrupt server death leaves a reusable grant | Instance-narrowed matching prevents reuse; Bridge liveness, TTL, or Access Center revokes the orphan. |
 | Client-side auto-approval is mistaken for authority | Authsia approval remains independent and mandatory when no matching grant exists. |
 | New MCP protocol feature expands capability | Advertise only the frozen V1 capability set; require explicit spec and security review for additions. |
@@ -469,10 +498,13 @@ Implementation is not complete until automated tests prove:
 - standard output contains valid MCP traffic only;
 - initialization metadata cannot change authorization;
 - workspace and managed-file symlink escapes fail closed;
-- automation credentials are absent from the child environment;
+- ambient credentials, stale Authsia context, automation authority, and internal
+  MCP markers are absent from the requested payload environment;
 - direct agent and different-instance grants cannot authorize MCP calls;
 - the same-instance grant can be inspected and revoked only by that instance;
-- execution uses argv without a shell and preserves current CLI signal behavior;
+- execution uses argv without a shell, owns a process group, and leaves no
+  managed descendants after normal wrapper exit, cancellation, timeout, or
+  server shutdown;
 - stdout/stderr are masked before bounded truncation;
 - cancellation, timeout, nonzero exit, and Bridge failure are distinguishable;
 - audit correlation preserves MCP instance, invocation, grant, workspace,

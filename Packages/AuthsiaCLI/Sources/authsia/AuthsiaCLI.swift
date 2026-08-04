@@ -133,6 +133,7 @@ struct Authsia: AsyncParsableCommand {
     // ArgumentParser sends all errors to stderr by default; bridge errors are
     // user-facing (not found, CLI disabled, etc.) and belong on stdout.
     static func exit(withError error: Error) -> Never {
+        MCPChildFailureReporter.report(error)
         if let bridgeError = error as? BridgeClientError,
            let message = bridgeError.errorDescription {
             print("Error: \(message)")

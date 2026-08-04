@@ -39,11 +39,23 @@ struct MCPGrantServiceTests {
         )
         let client = GrantClient(snapshot: .init(active: [other, direct], history: [expired]))
         let service = MCPGrantService(serverInstanceID: serverID, client: client)
+        let context = AgentRuntimeContext(
+            sessionID: "mcp:\(serverID.uuidString)",
+            agentType: "authsia-mcp"
+        )
 
-        #expect(throws: MCPGrantServiceError.self) { try service.revoke("not-a-uuid", now: now) }
-        #expect(throws: MCPGrantServiceError.self) { try service.revoke(other.id.uuidString, now: now) }
-        #expect(throws: MCPGrantServiceError.self) { try service.revoke(direct.id.uuidString, now: now) }
-        #expect(throws: MCPGrantServiceError.self) { try service.revoke(expired.id.uuidString, now: now) }
+        #expect(throws: MCPGrantServiceError.self) {
+            try service.revoke("not-a-uuid", agentRuntimeContext: context, now: now)
+        }
+        #expect(throws: MCPGrantServiceError.self) {
+            try service.revoke(other.id.uuidString, agentRuntimeContext: context, now: now)
+        }
+        #expect(throws: MCPGrantServiceError.self) {
+            try service.revoke(direct.id.uuidString, agentRuntimeContext: context, now: now)
+        }
+        #expect(throws: MCPGrantServiceError.self) {
+            try service.revoke(expired.id.uuidString, agentRuntimeContext: context, now: now)
+        }
         #expect(client.revokedIDs.isEmpty)
     }
 
@@ -52,21 +64,46 @@ struct MCPGrantServiceTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
         let active = grant(sessionID: "mcp:\(serverID.uuidString)", expiresAt: now.addingTimeInterval(60))
+        let cleanupOnly = grant(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            sessionID: "mcp:\(serverID.uuidString)",
+            expiresAt: now.addingTimeInterval(60)
+        )
         let alreadyRevoked = grant(
             id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
             sessionID: "mcp:\(serverID.uuidString)",
             expiresAt: now.addingTimeInterval(60),
             revokedAt: now.addingTimeInterval(-1)
         )
-        let client = GrantClient(snapshot: .init(active: [active], history: [alreadyRevoked]))
+        let client = GrantClient(snapshot: .init(active: [active, cleanupOnly], history: [alreadyRevoked]))
         let service = MCPGrantService(serverInstanceID: serverID, client: client)
+        let revocationContext = AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:\(serverID.uuidString)",
+            turnID: "mcp-call:44444444-4444-4444-4444-444444444444",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:44444444-4444-4444-4444-444444444444"
+        )
 
-        let repeated = try service.revoke(alreadyRevoked.id.uuidString, now: now)
+        let repeated = try service.revoke(
+            alreadyRevoked.id.uuidString,
+            agentRuntimeContext: revocationContext,
+            now: now
+        )
         #expect(repeated.status == "revoked")
         #expect(client.revokedIDs.isEmpty)
 
+        _ = try service.revoke(
+            active.id.uuidString,
+            agentRuntimeContext: revocationContext,
+            now: now
+        )
+        #expect(client.revocationContexts == [revocationContext])
+
         service.revokeActiveOwnedGrants(now: now)
-        #expect(client.revokedIDs == [active.id])
+        #expect(client.revokedIDs == [active.id, active.id, cleanupOnly.id])
+        #expect(client.revocationContexts.last?.sessionID == revocationContext.sessionID)
+        #expect(client.revocationContexts.last?.toolUseID == nil)
     }
 
     private func grant(
@@ -112,6 +149,7 @@ struct MCPGrantServiceTests {
 private final class GrantClient: MCPGrantClient, @unchecked Sendable {
     var snapshot: AgentJITGrantSnapshotPayload
     private(set) var revokedIDs: [UUID] = []
+    private(set) var revocationContexts: [AgentRuntimeContext] = []
 
     init(snapshot: AgentJITGrantSnapshotPayload) {
         self.snapshot = snapshot
@@ -126,6 +164,7 @@ private final class GrantClient: MCPGrantClient, @unchecked Sendable {
         agentRuntimeContext: AgentRuntimeContext
     ) throws -> AgentJITGrantMutationPayload {
         revokedIDs.append(id)
+        revocationContexts.append(agentRuntimeContext)
         return AgentJITGrantMutationPayload(revokedGrantIDs: [id])
     }
 }

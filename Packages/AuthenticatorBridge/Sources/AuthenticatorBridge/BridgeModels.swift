@@ -311,19 +311,23 @@ public struct BridgePingPayload: Codable, Equatable, Sendable {
     public let sessionActive: Bool?
     /// Expiry for the current bridge-owned CLI session when one is active.
     public let sessionExpiresAt: Date?
+    /// Live CLI access setting. Nil means the bridge predates this field.
+    public let cliAccessEnabled: Bool?
 
     public init(
         protocolVersion: String,
         appVersion: String? = nil,
         bundledCLIPath: String? = nil,
         sessionActive: Bool? = nil,
-        sessionExpiresAt: Date? = nil
+        sessionExpiresAt: Date? = nil,
+        cliAccessEnabled: Bool? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.appVersion = appVersion
         self.bundledCLIPath = bundledCLIPath
         self.sessionActive = sessionActive
         self.sessionExpiresAt = sessionExpiresAt
+        self.cliAccessEnabled = cliAccessEnabled
     }
 }
 

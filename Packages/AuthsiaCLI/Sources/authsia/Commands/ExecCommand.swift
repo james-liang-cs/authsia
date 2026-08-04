@@ -764,6 +764,8 @@ struct Exec: ParsableCommand {
         }
         removeAutomationCredentials(from: &environment)
         removeGuardedTerminalShim(from: &environment)
+        environment.removeValue(forKey: MCPChildProcessGroup.environmentKey)
+        environment.removeValue(forKey: MCPChildFailureReporter.environmentKey)
         if sshAutomationCredential?.allowedCommands == [.ssh],
            let token = sshAutomationCredential?.bearerToken {
             environment[AutomationAccessResolver.sshEnvironmentKey] = token

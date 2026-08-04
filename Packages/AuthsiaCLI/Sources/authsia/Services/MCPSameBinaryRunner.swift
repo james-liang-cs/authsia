@@ -13,6 +13,7 @@ struct MCPChildResult: Equatable, Sendable {
     let durationMilliseconds: Int
     var launchFailed = false
     var signalled = false
+    var failureCode: MCPToolErrorCode? = nil
 }
 
 protocol MCPChildRunning: Sendable {
@@ -27,6 +28,18 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
     typealias ProcessFactory = @Sendable () -> Process
 
     static let outputLimit = 65_536
+
+    private static let inheritedEnvironmentNames: Set<String> = [
+        "HOME",
+        "LANG",
+        "LOGNAME",
+        "PATH",
+        "SHELL",
+        "TERM",
+        "TMPDIR",
+        "USER",
+        "__CF_USER_TEXT_ENCODING",
+    ]
 
     let executableURL: URL
     let workspaceRoot: URL
@@ -50,17 +63,23 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
 
     func makeProcess(
         arguments: [String],
-        invocation: MCPInvocationContext
+        invocation: MCPInvocationContext,
+        failureReportURL: URL? = nil
     ) -> Process {
         let process = processFactory()
         process.executableURL = executableURL
         process.currentDirectoryURL = workspaceRoot
         process.arguments = arguments
 
-        var environment = parentEnvironment
-        Exec.removeAutomationCredentials(from: &environment)
+        var environment = parentEnvironment.filter { key, _ in
+            Self.inheritedEnvironmentNames.contains(key) || key.hasPrefix("LC_")
+        }
         for (key, value) in invocation.environment {
             environment[key] = value
+        }
+        environment[MCPChildProcessGroup.environmentKey] = "1"
+        if let failureReportURL {
+            environment[MCPChildFailureReporter.environmentKey] = failureReportURL.path
         }
         process.environment = environment
         return process
@@ -72,7 +91,13 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
         timeoutSeconds: Int
     ) async -> MCPChildResult {
         let startedAt = ContinuousClock.now
-        let process = makeProcess(arguments: arguments, invocation: invocation)
+        let failureReport = MCPChildFailureFile()
+        defer { failureReport?.remove() }
+        let process = makeProcess(
+            arguments: arguments,
+            invocation: invocation,
+            failureReportURL: failureReport?.url
+        )
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
@@ -104,28 +129,38 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
         stdoutReader.start()
         stderrReader.start()
         let termination = MCPChildTerminationState()
+        let processTerminator = MCPProcessTerminator(
+            process: process,
+            killGraceSeconds: killGraceSeconds
+        )
         let processWaiter = MCPBlockingOperation { () -> (Int32, Process.TerminationReason) in
             process.waitUntilExit()
+            processTerminator.start()
             return (process.terminationStatus, process.terminationReason)
         }
         processWaiter.start()
         let timeout = MCPChildTimeout(seconds: timeoutSeconds) {
-            guard process.isRunning else { return }
-            termination.markTimedOut()
-            Self.terminate(process, killGraceSeconds: killGraceSeconds)
+            if processTerminator.start() {
+                termination.markTimedOut()
+            }
         }
         timeout.start()
 
-        let processTermination = await withTaskCancellationHandler {
-            await processWaiter.value()
+        let processOutput = await withTaskCancellationHandler {
+            let processTermination = await processWaiter.value()
+            await processTerminator.waitUntilFinished()
+            let stdout = await stdoutReader.value()
+            let stderr = await stderrReader.value()
+            return (processTermination, stdout, stderr)
         } onCancel: {
             termination.markCancelled()
-            Self.terminate(process, killGraceSeconds: killGraceSeconds)
+            processTerminator.start()
         }
         timeout.cancel()
 
-        let stdout = await stdoutReader.value()
-        let stderr = await stderrReader.value()
+        let processTermination = processOutput.0
+        let stdout = processOutput.1
+        let stderr = processOutput.2
         let state = termination.snapshot()
         let exitCode = processTermination.1 == .exit ? processTermination.0 : nil
         return MCPChildResult(
@@ -138,7 +173,8 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
             cancelled: state.cancelled,
             timedOut: state.timedOut,
             durationMilliseconds: elapsedMilliseconds(since: startedAt),
-            signalled: processTermination.1 == .uncaughtSignal
+            signalled: processTermination.1 == .uncaughtSignal,
+            failureCode: failureReport?.readCode()
         )
     }
 
@@ -159,22 +195,45 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
         return (retained, truncated)
     }
 
-    private static func terminate(_ process: Process, killGraceSeconds: Double) {
-        guard process.isRunning else { return }
-        process.terminate()
-        Task.detached {
-            try? await Task.sleep(for: .seconds(killGraceSeconds))
-            if process.isRunning {
-                Darwin.kill(process.processIdentifier, SIGKILL)
-            }
-        }
-    }
-
     private func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
         let elapsed = start.duration(to: .now)
         return Int(elapsed.components.seconds * 1_000) +
             Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
     }
+}
+
+private struct MCPChildFailureFile {
+    let url: URL
+
+    init?() {
+        let candidate = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-mcp-failure-\(UUID().uuidString)")
+        guard FileManager.default.createFile(
+            atPath: candidate.path,
+            contents: Data(),
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            return nil
+        }
+        url = candidate
+    }
+
+    func readCode() -> MCPToolErrorCode? {
+        guard let data = try? Data(contentsOf: url),
+              data.count <= 64,
+              let rawValue = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return MCPToolErrorCode(rawValue: rawValue)
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
+enum MCPChildProcessGroup {
+    static let environmentKey = "AUTHSIA_MCP_PROCESS_GROUP"
 }
 
 private final class MCPChildTerminationState: @unchecked Sendable {
@@ -221,6 +280,93 @@ private final class MCPChildTimeout: @unchecked Sendable {
         cancelled = true
         condition.signal()
         condition.unlock()
+    }
+}
+
+private final class MCPProcessTerminator: @unchecked Sendable {
+    private let lock = NSLock()
+    private let process: Process
+    private let killGraceSeconds: Double
+    private var operation: MCPBlockingOperation<Void>?
+
+    init(process: Process, killGraceSeconds: Double) {
+        self.process = process
+        self.killGraceSeconds = max(0, killGraceSeconds)
+    }
+
+    @discardableResult
+    func start() -> Bool {
+        let result: (operation: MCPBlockingOperation<Void>?, hasTarget: Bool) = lock.withLock {
+            let processID = process.processIdentifier
+            let processGroupID = Self.managedProcessGroupID(processID)
+            if self.operation != nil {
+                return (nil, process.isRunning || processGroupID != nil)
+            }
+            guard process.isRunning || processGroupID != nil else { return (nil, false) }
+            let operation = MCPBlockingOperation<Void> { [process, killGraceSeconds] in
+                Self.terminateAndWait(
+                    process: process,
+                    processID: processID,
+                    processGroupID: processGroupID,
+                    killGraceSeconds: killGraceSeconds
+                )
+            }
+            self.operation = operation
+            return (operation, true)
+        }
+        result.operation?.start()
+        return result.hasTarget
+    }
+
+    func waitUntilFinished() async {
+        let operation = lock.withLock { self.operation }
+        if let operation {
+            await operation.value()
+        }
+    }
+
+    private static func terminateAndWait(
+        process: Process,
+        processID: Int32,
+        processGroupID: Int32?,
+        killGraceSeconds: Double
+    ) {
+        if let processGroupID {
+            Darwin.kill(-processGroupID, SIGTERM)
+        } else {
+            process.terminate()
+        }
+
+        let gracefulDeadline = Date().addingTimeInterval(killGraceSeconds)
+        while targetExists(process: process, processGroupID: processGroupID),
+              Date() < gracefulDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        guard targetExists(process: process, processGroupID: processGroupID) else { return }
+
+        if let processGroupID {
+            Darwin.kill(-processGroupID, SIGKILL)
+        } else {
+            Darwin.kill(processID, SIGKILL)
+        }
+
+        let forcedDeadline = Date().addingTimeInterval(1)
+        while targetExists(process: process, processGroupID: processGroupID),
+              Date() < forcedDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+    }
+
+    private static func targetExists(process: Process, processGroupID: Int32?) -> Bool {
+        guard let processGroupID else { return process.isRunning }
+        return Darwin.kill(-processGroupID, 0) == 0 || errno == EPERM
+    }
+
+    private static func managedProcessGroupID(_ processID: Int32) -> Int32? {
+        if Darwin.getpgid(processID) == processID {
+            return processID
+        }
+        return Darwin.kill(-processID, 0) == 0 || errno == EPERM ? processID : nil
     }
 }
 

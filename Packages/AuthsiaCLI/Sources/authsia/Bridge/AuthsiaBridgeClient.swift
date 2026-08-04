@@ -272,12 +272,15 @@ final class AuthsiaBridgeClient:
         id: UUID,
         agentRuntimeContext: AgentRuntimeContext
     ) throws -> AgentJITGrantMutationPayload {
+        let context = Self.$requestedCommand.withValue("mcp-access-revoke") {
+            Self.currentContext(overriding: agentRuntimeContext)
+        }
         let request = BridgeRequest(
             id: UUID(),
             type: .agentJITRevoke,
             query: id.uuidString,
             options: BridgeOptions(field: nil, copy: false),
-            context: Self.currentContext(overriding: agentRuntimeContext),
+            context: context,
             body: try BridgeCoder.encode(AgentJITGrantRevokePayload(id: id))
         )
         let response: BridgeResponse<AgentJITGrantMutationPayload> = try sendRequest(request)

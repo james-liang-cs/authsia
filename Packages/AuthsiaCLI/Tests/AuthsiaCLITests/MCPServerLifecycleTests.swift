@@ -70,6 +70,28 @@ struct MCPServerLifecycleTests {
         await server.waitUntilCompleted()
     }
 
+    @Test("status rejects fields outside its closed input schema")
+    func statusRejectsUnknownInput() async throws {
+        let fixture = try makeServer()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "MCP lifecycle test", version: "1")
+
+        try await fixture.server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        let context: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue,
+            arguments: ["unexpected": true]
+        )
+        let result = try await context.value
+
+        #expect(result.isError == true)
+        #expect(result.structuredContent?.objectValue?["code"]?.stringValue == "invalidInput")
+
+        await client.disconnect()
+        await fixture.server.waitUntilCompleted()
+    }
+
     @Test("access tools expose and revoke only the current MCP instance grant")
     func accessTools() async throws {
         let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
@@ -108,6 +130,10 @@ struct MCPServerLifecycleTests {
         #expect(
             foreignRevoke.structuredContent?.objectValue?["code"]?.stringValue
                 == MCPToolErrorCode.grantNotOwned.rawValue
+        )
+        #expect(
+            foreignRevoke.structuredContent?.objectValue?["invocationID"]?.stringValue?.isEmpty
+                == false
         )
 
         let ownedRevokeContext: RequestContext<CallTool.Result> = try await client.callTool(
@@ -171,6 +197,36 @@ struct MCPServerLifecycleTests {
         await fixture.server.waitUntilCompleted()
 
         #expect(grantClient.revokedIDs == [owned.id])
+    }
+
+    @Test("shutdown cancels and awaits the active execution")
+    func shutdownCancelsActiveExecution() async throws {
+        let runner = CancellableLifecycleRunner()
+        let fixture = try makeServer(
+            grantClient: LifecycleGrantClient(snapshot: .init(active: [], history: [])),
+            childRunner: runner
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "MCP lifecycle test", version: "1")
+
+        try await fixture.server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        let _: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.exec.rawValue,
+            arguments: ["argv": ["synthetic-long-running-command"]]
+        )
+        await runner.waitUntilStarted()
+
+        await fixture.server.stop()
+        let observedCancellation = await runner.cancelled
+        if !observedCancellation {
+            await runner.finish()
+        }
+        await runner.waitUntilFinished()
+
+        #expect(observedCancellation)
+        #expect(await runner.finished)
     }
 
     private func makeServer(
@@ -260,6 +316,64 @@ private struct LifecycleRunner: MCPChildRunning {
             timedOut: false,
             durationMilliseconds: 1
         )
+    }
+}
+
+private actor CancellableLifecycleRunner: MCPChildRunning {
+    private var started = false
+    private(set) var cancelled = false
+    private(set) var finished = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var finishWaiters: [CheckedContinuation<Void, Never>] = []
+    private var completion: CheckedContinuation<Void, Never>?
+
+    func run(
+        arguments: [String],
+        invocation: MCPInvocationContext,
+        timeoutSeconds: Int
+    ) async -> MCPChildResult {
+        started = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { completion = $0 }
+        } onCancel: {
+            Task { await self.cancelExecution() }
+        }
+        finished = true
+        finishWaiters.forEach { $0.resume() }
+        finishWaiters.removeAll()
+        return MCPChildResult(
+            invocationID: invocation.id,
+            exitCode: nil,
+            stdout: "",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            cancelled: cancelled,
+            timedOut: false,
+            durationMilliseconds: 1
+        )
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func finish() {
+        completion?.resume()
+        completion = nil
+    }
+
+    func waitUntilFinished() async {
+        guard !finished else { return }
+        await withCheckedContinuation { finishWaiters.append($0) }
+    }
+
+    private func cancelExecution() {
+        cancelled = true
+        finish()
     }
 }
 

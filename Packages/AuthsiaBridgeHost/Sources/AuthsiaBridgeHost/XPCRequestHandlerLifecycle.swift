@@ -16,7 +16,8 @@ extension XPCRequestHandler {
             appVersion: runningAppVersion(),
             bundledCLIPath: bundledCLIHelperPath(),
             sessionActive: currentSession != nil,
-            sessionExpiresAt: currentSession?.expiresAt
+            sessionExpiresAt: currentSession?.expiresAt,
+            cliAccessEnabled: BridgeSettings.isCliAccessEnabled()
         )
         let requestId = UUID()
         let response: BridgeResponse<BridgePingPayload> = BridgeResponseBuilder.success(id: requestId, payload: payload)
@@ -42,7 +43,8 @@ extension XPCRequestHandler {
             appVersion: runningAppVersion(),
             bundledCLIPath: bundledCLIHelperPath(),
             sessionActive: currentSession != nil,
-            sessionExpiresAt: currentSession?.expiresAt
+            sessionExpiresAt: currentSession?.expiresAt,
+            cliAccessEnabled: BridgeSettings.isCliAccessEnabled()
         )
         let response: BridgeResponse<BridgePingPayload> = BridgeResponseBuilder.success(
             id: bridgeRequest.id,

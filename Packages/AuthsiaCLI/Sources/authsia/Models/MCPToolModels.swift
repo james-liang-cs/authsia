@@ -239,7 +239,7 @@ struct MCPAccessRevokeOutput: Codable, Equatable, Sendable {
     let revokedAt: Date?
 }
 
-enum MCPToolErrorCode: String, Codable, Sendable {
+enum MCPToolErrorCode: String, CaseIterable, Codable, Equatable, Sendable {
     case invalidInput
     case workspaceUnavailable
     case bridgeUnavailable

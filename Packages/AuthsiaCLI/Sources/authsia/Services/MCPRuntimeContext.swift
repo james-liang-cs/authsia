@@ -8,6 +8,17 @@ enum MCPRuntimeContextError: Error, Equatable {
 struct MCPInvocationContext: Equatable, Sendable {
     let id: UUID
     let environment: [String: String]
+    let agentRuntimeContext: AgentRuntimeContext?
+
+    init(
+        id: UUID,
+        environment: [String: String],
+        agentRuntimeContext: AgentRuntimeContext? = nil
+    ) {
+        self.id = id
+        self.environment = environment
+        self.agentRuntimeContext = agentRuntimeContext
+    }
 }
 
 actor MCPRuntimeContext {
@@ -59,6 +70,13 @@ actor MCPRuntimeContext {
 
     func makeInvocation(id: UUID = UUID()) -> MCPInvocationContext {
         let invocation = "mcp-call:\(id.uuidString)"
+        let agentRuntimeContext = AgentRuntimeContext(
+            platform: clientPlatform,
+            sessionID: "mcp:\(instanceID.uuidString)",
+            turnID: invocation,
+            agentType: "authsia-mcp",
+            toolUseID: invocation
+        )
         return MCPInvocationContext(
             id: id,
             environment: [
@@ -68,7 +86,8 @@ actor MCPRuntimeContext {
                 AgentRuntimeContextResolver.environmentTurnIDKey: invocation,
                 AgentRuntimeContextResolver.environmentAgentTypeKey: "authsia-mcp",
                 AgentRuntimeContextResolver.environmentToolUseIDKey: invocation,
-            ]
+            ],
+            agentRuntimeContext: agentRuntimeContext
         )
     }
 }

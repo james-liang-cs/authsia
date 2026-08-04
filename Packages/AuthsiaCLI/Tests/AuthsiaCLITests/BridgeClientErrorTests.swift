@@ -96,6 +96,21 @@ struct BridgeClientErrorTests {
         #expect(!BridgeClientError.isApprovalDenied(BridgeClientError.appUnavailable))
     }
 
+    @Test("MCP child failure classification is stable and secret-free")
+    func mcpChildFailureClassification() {
+        #expect(MCPChildFailureReporter.code(for: BridgeClientError.connectionFailed) == .bridgeUnavailable)
+        #expect(MCPChildFailureReporter.code(for: BridgeClientError.bridgeError(
+            code: "policyDenied",
+            message: "CLI access is disabled",
+            query: nil
+        )) == .cliAccessDisabled)
+        #expect(MCPChildFailureReporter.code(for: BridgeClientError.bridgeError(
+            code: "notAuthorized",
+            message: "Synthetic denial detail must not be reported",
+            query: nil
+        )) == .approvalDenied)
+    }
+
     @Test("bridge recovery retries a recoverable first failure")
     func bridgeRecoveryRetriesRecoverableFirstFailure() throws {
         var attempts = 0

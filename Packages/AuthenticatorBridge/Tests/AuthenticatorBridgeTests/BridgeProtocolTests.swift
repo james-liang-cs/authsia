@@ -18,4 +18,17 @@ final class BridgeProtocolTests: XCTestCase {
         _ = #selector(AuthsiaBridgeXPCProtocol.revokeAccessCredential(_:_:))
         _ = #selector(AuthsiaBridgeXPCProtocol.validateAccessCredential(_:_:))
     }
+
+    func testPingPayloadKeepsLegacyDecodingAndAddsCLIAccessState() throws {
+        let legacy = Data(#"{"protocolVersion":"10"}"#.utf8)
+        let decodedLegacy = try JSONDecoder().decode(BridgePingPayload.self, from: legacy)
+        XCTAssertNil(decodedLegacy.cliAccessEnabled)
+
+        let current = BridgePingPayload(protocolVersion: "10", cliAccessEnabled: false)
+        let roundTripped = try JSONDecoder().decode(
+            BridgePingPayload.self,
+            from: JSONEncoder().encode(current)
+        )
+        XCTAssertEqual(roundTripped.cliAccessEnabled, false)
+    }
 }

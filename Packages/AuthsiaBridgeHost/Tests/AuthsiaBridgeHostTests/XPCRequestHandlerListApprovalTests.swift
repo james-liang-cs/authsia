@@ -40,6 +40,25 @@ final class XPCRequestHandlerListApprovalTests: XCTestCase {
         super.tearDown()
     }
 
+    func testPingReportsDisabledCLIAccess() async throws {
+        BridgeSettings.appDefaults.set(false, forKey: cliAccessEnabledKey)
+        let handler = XPCRequestHandler(approver: ApprovalTracker(result: true))
+        let reply = XCTestExpectation(description: "ping reply")
+        var responseData: Data?
+
+        handler.ping { data, _ in
+            responseData = data
+            reply.fulfill()
+        }
+        await fulfillment(of: [reply], timeout: 1)
+
+        let response = try BridgeCoder.decode(
+            BridgeResponse<BridgePingPayload>.self,
+            from: try XCTUnwrap(responseData)
+        )
+        XCTAssertEqual(response.payload?.cliAccessEnabled, false)
+    }
+
     func testListCreatesSessionAfterApproval() async {
         let approver = ApprovalTracker(result: true)
         let listProvider = ListProvider()

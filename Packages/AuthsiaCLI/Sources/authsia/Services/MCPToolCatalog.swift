@@ -154,7 +154,7 @@ enum MCPToolCatalog {
     }
 
     private static func outputSchema(for descriptor: MCPToolDescriptor) -> Value {
-        .object([
+        let successSchema = Value.object([
             "type": "object",
             "properties": .object(
                 Dictionary(uniqueKeysWithValues: descriptor.outputPropertyNames.map {
@@ -162,6 +162,24 @@ enum MCPToolCatalog {
                 })
             ),
             "additionalProperties": false,
+        ])
+        let errorSchema = Value.object([
+            "type": "object",
+            "properties": .object([
+                "code": .object([
+                    "type": "string",
+                    "enum": .array(MCPToolErrorCode.allCases.map { .string($0.rawValue) }),
+                ]),
+                "message": stringSchema,
+                "invocationID": .object([
+                    "type": .array(["string", "null"]),
+                ]),
+            ]),
+            "required": .array(["code", "message"]),
+            "additionalProperties": false,
+        ])
+        return .object([
+            "oneOf": .array([successSchema, errorSchema]),
         ])
     }
 

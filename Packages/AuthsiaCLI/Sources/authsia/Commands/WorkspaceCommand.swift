@@ -1095,7 +1095,13 @@ struct Workspace: AsyncParsableCommand {
                 fileURLWithPath: FileManager.default.currentDirectoryPath,
                 isDirectory: true
             )
-            let parentEnvironment = ProcessInfo.processInfo.environment
+            var parentEnvironment = ProcessInfo.processInfo.environment
+            if parentEnvironment.removeValue(forKey: MCPChildProcessGroup.environmentKey) == "1" {
+                guard Darwin.setpgid(0, 0) == 0 else {
+                    throw ValidationError("Could not isolate the MCP child process group.")
+                }
+            }
+            parentEnvironment.removeValue(forKey: MCPChildFailureReporter.environmentKey)
             if shellCommandParts.isEmpty,
                parentEnvironment[WorkspaceGuardedTerminal.shimInvocationEnvironmentName] == "1",
                WorkspaceRootResolver.findWorkspaceRoot(startingAt: startingURL) == nil {
@@ -1154,7 +1160,7 @@ struct Workspace: AsyncParsableCommand {
                 plan = builtPlan
             }
             if dryRun {
-                print(Self.renderDryRun(plan, parentEnvironment: ProcessInfo.processInfo.environment))
+                print(Self.renderDryRun(plan, parentEnvironment: parentEnvironment))
                 return
             }
 

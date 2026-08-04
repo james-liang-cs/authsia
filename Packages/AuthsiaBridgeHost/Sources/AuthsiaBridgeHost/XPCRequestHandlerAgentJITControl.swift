@@ -92,7 +92,7 @@ extension XPCRequestHandler {
                 id: payload.id,
                 revokedAt: agentJITApprovalClock()
             )
-            recordGrantRevocation(revoked)
+            recordGrantRevocation(revoked, requestContext: bridgeRequest.context)
             postAgentJITGrantDidChange()
             replyMutationSuccess(
                 id: bridgeRequest.id,
@@ -138,7 +138,9 @@ extension XPCRequestHandler {
 
         do {
             let revoked = try agentJITGrantStore.revokeAll(revokedAt: agentJITApprovalClock())
-            revoked.forEach(recordGrantRevocation)
+            revoked.forEach {
+                recordGrantRevocation($0, requestContext: bridgeRequest.context)
+            }
             if !revoked.isEmpty {
                 postAgentJITGrantDidChange()
             }
@@ -178,7 +180,10 @@ extension XPCRequestHandler {
         )
     }
 
-    private func recordGrantRevocation(_ grant: AgentJITGrant) {
+    private func recordGrantRevocation(
+        _ grant: AgentJITGrant,
+        requestContext: BridgeContext
+    ) {
         try? auditLogger.record(
             BridgeAuditRecord(
                 command: .agentJITPreflight,
@@ -186,7 +191,12 @@ extension XPCRequestHandler {
                 itemName: grant.folderScope.displayName,
                 approvedBy: "revoked",
                 timestamp: grant.revokedAt ?? agentJITApprovalClock(),
-                agentJITGrantID: grant.id
+                requestedCommand: requestContext.requestedCommand,
+                fullCommand: requestContext.fullCommand,
+                agentJITGrantID: grant.id,
+                agentRuntimeContext: requestContext.agentRuntimeContext,
+                workspaceContext: requestContext.workspaceContext,
+                environmentScope: grant.environmentScope
             )
         )
     }

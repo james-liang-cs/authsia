@@ -202,8 +202,11 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
 
     func testMCPGrantControlFiltersAndRevokesOnlyCurrentInstance() async throws {
         let currentContext = AgentRuntimeContext(
+            platform: "Codex",
             sessionID: "mcp:current",
-            agentType: "authsia-mcp"
+            turnID: "mcp-call:44444444-4444-4444-4444-444444444444",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:44444444-4444-4444-4444-444444444444"
         )
         let owned = AgentJITGrant.fixture(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
@@ -225,8 +228,11 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             )
         )
         let store = MemoryAgentJITGrantStore([owned, foreign])
+        let (auditLogger, auditURL, tempDir) = try makeAuditLogger()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
         let handler = makeHandler(
             store: store,
+            auditLogger: auditLogger,
             clock: AgentJITApprovalClockSpy([now, now, now]).callAsFunction
         )
 
@@ -249,6 +255,10 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(rejected.error?.code, .policyDenied)
         XCTAssertEqual(revoked.payload?.revokedGrantIDs, [owned.id])
         XCTAssertNil(store.grants.first(where: { $0.id == foreign.id })?.revokedAt)
+        let revocationAudit = try XCTUnwrap(auditRecords(at: auditURL).last)
+        XCTAssertEqual(revocationAudit.agentJITGrantID, owned.id)
+        XCTAssertEqual(revocationAudit.agentRuntimeContext, currentContext)
+        XCTAssertEqual(revocationAudit.requestedCommand, BridgeRequestType.agentJITRevoke.rawValue)
     }
 
     func testRemoteBuilderReceivesExactMappedAuthorityAndFixedTiming() async throws {

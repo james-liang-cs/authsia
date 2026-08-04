@@ -88,6 +88,12 @@ struct MCPToolContractTests {
         for tool in MCPToolCatalog.tools {
             #expect(tool.outputSchema != nil)
             #expect(tool.inputSchema.objectValue?["additionalProperties"] == false)
+            let variants = tool.outputSchema?.objectValue?["oneOf"]?.arrayValue
+            #expect(variants?.count == 2)
+            let errorProperties = variants?.last?.objectValue?["properties"]?.objectValue
+            #expect(errorProperties?["code"] != nil)
+            #expect(errorProperties?["message"] != nil)
+            #expect(errorProperties?["invocationID"] != nil)
         }
     }
 }

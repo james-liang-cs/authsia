@@ -1,4 +1,5 @@
 import AuthenticatorCore
+import AuthenticatorBridge
 import Foundation
 import MCP
 
@@ -12,6 +13,10 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
     typealias BridgeStateProvider = @Sendable () -> MCPBridgeState
 
     private static let referenceLimit = 1_000
+    private static let managedFileLimit = 128
+    private static let managedFileByteLimit = 1_048_576
+    private static let aggregateManagedFileByteLimit = 4_194_304
+    private static let diagnosticLimit = 100
 
     let runtimeContext: MCPRuntimeContext
     let bridgeStateProvider: BridgeStateProvider
@@ -74,6 +79,14 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
         var diagnostics: [MCPDiagnostic] = []
         var references = Set<MCPWorkspaceReference>()
         var truncated = false
+        var inspectedByteCount = 0
+        let managedFiles = Array(config.managedEnvFiles.prefix(Self.managedFileLimit))
+        if config.managedEnvFiles.count > managedFiles.count {
+            diagnostics.append(MCPDiagnostic(
+                code: "managedFileLimitReached",
+                message: "Only the first configured managed files were inspected."
+            ))
+        }
 
         for binding in config.envBindings {
             appendReference(
@@ -84,9 +97,10 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
                 references: &references,
                 truncated: &truncated
             )
+            if truncated { break }
         }
 
-        for relativePath in config.managedEnvFiles {
+        for relativePath in managedFiles where !truncated {
             guard let fileURL = containedManagedFile(relativePath, root: root) else {
                 let candidate = root.appendingPathComponent(relativePath)
                 let exists = fileManager.fileExists(atPath: candidate.path)
@@ -98,9 +112,39 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
                 ))
                 continue
             }
+            let fileData: Data
+            do {
+                let handle = try FileHandle(forReadingFrom: fileURL)
+                defer { try? handle.close() }
+                fileData = try handle.read(upToCount: Self.managedFileByteLimit + 1) ?? Data()
+            } catch {
+                diagnostics.append(MCPDiagnostic(
+                    code: "managedFileUnreadable",
+                    message: "A configured managed file could not be inspected."
+                ))
+                continue
+            }
+            guard fileData.count <= Self.managedFileByteLimit else {
+                diagnostics.append(MCPDiagnostic(
+                    code: "managedFileTooLarge",
+                    message: "A configured managed file exceeds the inspection size limit."
+                ))
+                continue
+            }
+            guard inspectedByteCount <= Self.aggregateManagedFileByteLimit - fileData.count else {
+                diagnostics.append(MCPDiagnostic(
+                    code: "managedFileByteLimitReached",
+                    message: "The aggregate managed-file inspection size limit was reached."
+                ))
+                break
+            }
+            inspectedByteCount += fileData.count
             let entries: [(key: String, value: String)]
             do {
-                entries = try EnvFileParser.parse(contentsOf: fileURL.path)
+                guard let content = String(data: fileData, encoding: .utf8) else {
+                    throw CocoaError(.fileReadInapplicableStringEncoding)
+                }
+                entries = try EnvFileParser.parse(content: content)
             } catch {
                 diagnostics.append(MCPDiagnostic(
                     code: "managedFileUnreadable",
@@ -119,6 +163,7 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
                     references: &references,
                     truncated: &truncated
                 )
+                if truncated { break }
             }
         }
 
@@ -128,7 +173,7 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
             schemaVersion: config.schemaVersion,
             selectedEnvironment: selectedEnvironment,
             availableEnvironments: availableEnvironments,
-            managedFiles: config.managedEnvFiles,
+            managedFiles: managedFiles,
             references: references.sorted {
                 if $0.sourcePath == $1.sourcePath {
                     return ($0.environmentVariable ?? "") < ($1.environmentVariable ?? "")
@@ -136,7 +181,7 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
                 return $0.sourcePath < $1.sourcePath
             },
             referencesTruncated: truncated,
-            diagnostics: Array(diagnostics.prefix(100))
+            diagnostics: Array(diagnostics.prefix(Self.diagnosticLimit))
         )
     }
 
@@ -191,7 +236,7 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
             return
         }
         let candidate = MCPWorkspaceReference(
-            uri: normalizedURI,
+            uri: reference.canonicalURI,
             environmentVariable: environmentVariable,
             sourcePath: sourcePath,
             selectedEnvironment: selectedEnvironment
@@ -206,12 +251,40 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
 
     private static func liveBridgeState() -> MCPBridgeState {
         do {
-            _ = try AuthsiaBridgeClient.shared.ping()
-            return .ready
+            return bridgeState(for: try AuthsiaBridgeClient.shared.ping())
         } catch {
             return error.localizedDescription.localizedCaseInsensitiveContains("CLI access is disabled")
                 ? .cliAccessDisabled
                 : .unavailable
         }
+    }
+
+    static func bridgeState(for payload: BridgePingPayload) -> MCPBridgeState {
+        payload.cliAccessEnabled == false ? .cliAccessDisabled : .ready
+    }
+}
+
+private extension SecretReference {
+    var canonicalURI: String {
+        var uri = "authsia://\(type.rawValue)/\(Self.percentEncodePathSegment(item))"
+        if let field {
+            uri += "/\(Self.percentEncodePathSegment(field))"
+        }
+        if isFolderScoped {
+            uri += "?folder=\(Self.percentEncodeQueryValue(folder ?? ""))"
+        }
+        return uri
+    }
+
+    static func percentEncodePathSegment(_ value: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+    }
+
+    static func percentEncodeQueryValue(_ value: String) -> String {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=+#?/")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
     }
 }

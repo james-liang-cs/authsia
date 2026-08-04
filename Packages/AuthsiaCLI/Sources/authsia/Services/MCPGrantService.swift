@@ -40,11 +40,15 @@ struct MCPGrantService: @unchecked Sendable {
         return MCPAccessStatusOutput(grants: grants)
     }
 
-    func revoke(_ rawID: String, now: Date = Date()) throws -> MCPAccessRevokeOutput {
+    func revoke(
+        _ rawID: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        now: Date = Date()
+    ) throws -> MCPAccessRevokeOutput {
         guard let id = UUID(uuidString: rawID) else {
             throw MCPGrantServiceError.invalidGrantID
         }
-        let snapshot = try client.agentJITSnapshot(agentRuntimeContext: runtimeContext)
+        let snapshot = try client.agentJITSnapshot(agentRuntimeContext: agentRuntimeContext)
         guard let grant = (snapshot.active + snapshot.history).first(where: { $0.id == id }),
               isOwned(grant) else {
             throw MCPGrantServiceError.grantNotOwned
@@ -59,7 +63,10 @@ struct MCPGrantService: @unchecked Sendable {
                 revokedAt: grant.revokedAt
             )
         case .active:
-            _ = try client.revokeAgentJITGrant(id: id, agentRuntimeContext: runtimeContext)
+            _ = try client.revokeAgentJITGrant(
+                id: id,
+                agentRuntimeContext: agentRuntimeContext
+            )
             return MCPAccessRevokeOutput(
                 grantID: id.uuidString,
                 status: "revoked",

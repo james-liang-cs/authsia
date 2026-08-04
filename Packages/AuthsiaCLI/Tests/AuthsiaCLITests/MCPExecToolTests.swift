@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticatorBridge
 import MCP
 import Testing
 @testable import authsia
@@ -110,6 +111,94 @@ struct MCPExecToolTests {
         await fixture.server.waitUntilCompleted()
     }
 
+    @Test("adapter timeout cancellation and launch failures are tool errors")
+    func adapterFailuresAreToolErrors() async throws {
+        let cases: [(MCPChildResult, String)] = [
+            (
+                MCPChildResult(
+                    invocationID: UUID(),
+                    exitCode: nil,
+                    stdout: "",
+                    stderr: "",
+                    stdoutTruncated: false,
+                    stderrTruncated: false,
+                    cancelled: false,
+                    timedOut: true,
+                    durationMilliseconds: 1
+                ),
+                "timedOut"
+            ),
+            (
+                MCPChildResult(
+                    invocationID: UUID(),
+                    exitCode: nil,
+                    stdout: "",
+                    stderr: "",
+                    stdoutTruncated: false,
+                    stderrTruncated: false,
+                    cancelled: true,
+                    timedOut: false,
+                    durationMilliseconds: 1
+                ),
+                "cancelled"
+            ),
+            (
+                MCPChildResult(
+                    invocationID: UUID(),
+                    exitCode: nil,
+                    stdout: "",
+                    stderr: "",
+                    stdoutTruncated: false,
+                    stderrTruncated: false,
+                    cancelled: false,
+                    timedOut: false,
+                    durationMilliseconds: 1,
+                    launchFailed: true
+                ),
+                "executionFailed"
+            ),
+            (
+                MCPChildResult(
+                    invocationID: UUID(),
+                    exitCode: 1,
+                    stdout: "",
+                    stderr: "",
+                    stdoutTruncated: false,
+                    stderrTruncated: false,
+                    cancelled: false,
+                    timedOut: false,
+                    durationMilliseconds: 1,
+                    failureCode: .approvalDenied
+                ),
+                "approvalDenied"
+            ),
+        ]
+
+        for (childResult, expectedCode) in cases {
+            let fixture = try makeServer(runner: ImmediateRunner(result: childResult))
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let transports = await InMemoryTransport.createConnectedPair()
+            let client = Client(name: "exec test", version: "1")
+            try await fixture.server.start(transport: transports.server)
+            _ = try await client.connect(transport: transports.client)
+
+            let context: RequestContext<CallTool.Result> = try await client.callTool(
+                name: AuthsiaMCPToolName.exec.rawValue,
+                arguments: ["argv": ["synthetic-command"]]
+            )
+            let response = try await context.value
+
+            #expect(response.isError == true)
+            #expect(response.structuredContent?.objectValue?["code"]?.stringValue == expectedCode)
+            #expect(
+                response.structuredContent?.objectValue?["invocationID"]?.stringValue?.isEmpty == false
+            )
+
+            await client.disconnect()
+            await fixture.server.waitUntilCompleted()
+        }
+    }
+
     private func makeServer(
         runner: any MCPChildRunning
     ) throws -> (server: AuthsiaMCPServer, root: URL) {
@@ -135,6 +224,10 @@ struct MCPExecToolTests {
                 version: "test",
                 runtimeContext: runtime,
                 workspaceInspection: inspection,
+                grantService: MCPGrantService(
+                    serverInstanceID: runtime.instanceID,
+                    client: ExecToolGrantClient()
+                ),
                 childRunner: runner,
                 diagnostics: { _ in }
             ),
@@ -160,8 +253,26 @@ private struct ImmediateRunner: MCPChildRunning {
             stderrTruncated: result.stderrTruncated,
             cancelled: result.cancelled,
             timedOut: result.timedOut,
-            durationMilliseconds: result.durationMilliseconds
+            durationMilliseconds: result.durationMilliseconds,
+            launchFailed: result.launchFailed,
+            signalled: result.signalled,
+            failureCode: result.failureCode
         )
+    }
+}
+
+private final class ExecToolGrantClient: MCPGrantClient, @unchecked Sendable {
+    func agentJITSnapshot(
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITGrantSnapshotPayload {
+        .init(active: [], history: [])
+    }
+
+    func revokeAgentJITGrant(
+        id: UUID,
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITGrantMutationPayload {
+        .init(revokedGrantIDs: [id])
     }
 }
 
