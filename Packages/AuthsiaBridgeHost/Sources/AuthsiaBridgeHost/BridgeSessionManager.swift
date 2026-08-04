@@ -5,20 +5,35 @@ import AuthenticatorBridge
 
 public nonisolated struct BridgeActiveSession: Equatable, Identifiable, Sendable {
     public let scope: String?
+    public let createdAt: Date?
     public let expiresAt: Date
     public let workingDirectory: String?
     public let origin: BridgeSessionOrigin?
+    public let requestedItems: [AgentJITGrantItemReference]
+    public let capabilities: [AgentJITCapability]
+    public let environmentScope: EnvironmentAccessScope?
+    public let approvedBy: String?
 
     public init(
         scope: String?,
         expiresAt: Date,
         workingDirectory: String?,
-        origin: BridgeSessionOrigin? = nil
+        origin: BridgeSessionOrigin? = nil,
+        createdAt: Date? = nil,
+        requestedItems: [AgentJITGrantItemReference] = [],
+        capabilities: [AgentJITCapability] = [],
+        environmentScope: EnvironmentAccessScope? = nil,
+        approvedBy: String? = nil
     ) {
         self.scope = scope
+        self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.workingDirectory = workingDirectory
         self.origin = origin
+        self.requestedItems = requestedItems
+        self.capabilities = capabilities
+        self.environmentScope = environmentScope
+        self.approvedBy = approvedBy
     }
 
     public var id: String {
@@ -118,7 +133,12 @@ public final class BridgeSessionManager: @unchecked Sendable {
                     scope: sessionScope(forStatusScope: record.scope),
                     expiresAt: record.expiresAt,
                     workingDirectory: record.workingDirectory,
-                    origin: record.origin
+                    origin: record.origin,
+                    createdAt: record.createdAt,
+                    requestedItems: record.requestedItems ?? [],
+                    capabilities: record.capabilities ?? [],
+                    environmentScope: record.environmentScope,
+                    approvedBy: record.approvedBy
                 )
             }
             .sorted {
@@ -140,7 +160,11 @@ public final class BridgeSessionManager: @unchecked Sendable {
         ttlSeconds: TimeInterval = BridgeSessionManager.configuredTTL,
         scope: String? = nil,
         workingDirectory: String? = nil,
-        origin: BridgeSessionOrigin? = nil
+        origin: BridgeSessionOrigin? = nil,
+        requestedItems: [AgentJITGrantItemReference]? = nil,
+        capabilities: [AgentJITCapability]? = nil,
+        environmentScope: EnvironmentAccessScope? = nil,
+        approvedBy: String? = nil
     ) throws -> BridgeSession {
         lock.lock()
         defer { lock.unlock() }
@@ -154,7 +178,11 @@ public final class BridgeSessionManager: @unchecked Sendable {
             fileURL: sessionStatusFileURL,
             now: now,
             workingDirectory: workingDirectory,
-            origin: origin
+            origin: origin,
+            requestedItems: requestedItems,
+            capabilities: capabilities,
+            environmentScope: environmentScope,
+            approvedBy: approvedBy
         )
         sessionsByScope[key] = StoredSession(session: newSession, createdAt: now, origin: origin)
         return newSession
@@ -166,13 +194,21 @@ public final class BridgeSessionManager: @unchecked Sendable {
         ttlSeconds: TimeInterval = BridgeSessionManager.configuredTTL,
         scope: String? = nil,
         workingDirectory: String? = nil,
-        origin: BridgeSessionOrigin? = nil
+        origin: BridgeSessionOrigin? = nil,
+        requestedItems: [AgentJITGrantItemReference]? = nil,
+        capabilities: [AgentJITCapability]? = nil,
+        environmentScope: EnvironmentAccessScope? = nil,
+        approvedBy: String? = nil
     ) -> BridgeSession? {
         try? createSession(
             ttlSeconds: ttlSeconds,
             scope: scope,
             workingDirectory: workingDirectory,
-            origin: origin
+            origin: origin,
+            requestedItems: requestedItems,
+            capabilities: capabilities,
+            environmentScope: environmentScope,
+            approvedBy: approvedBy
         )
     }
 

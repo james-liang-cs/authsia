@@ -4,6 +4,35 @@ import AuthenticatorBridge
 import CryptoKit
 
 final class BridgeAuditLoggerTests: XCTestCase {
+    func testRecordingAuditEventBroadcastsAccessCenterActivityChange() throws {
+        let expected = expectation(description: "Access Center activity change was broadcast")
+        let center = DistributedNotificationCenter.default()
+        let observer = center.addObserver(
+            forName: .accessCenterActivityDidChange,
+            object: AccessCenterActivityNotifier.objectName,
+            queue: .main
+        ) { notification in
+            if let sourcePID = notification.userInfo?["pid"] as? Int,
+               sourcePID == ProcessInfo.processInfo.processIdentifier {
+                expected.fulfill()
+            }
+        }
+        defer { center.removeObserver(observer) }
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let logger = makeLogger(fileURL: tempDir.appendingPathComponent("bridge_audit.log"))
+
+        try logger.record(BridgeAuditRecord(
+            command: .getPassword,
+            itemId: "item-1",
+            approvedBy: "session",
+            timestamp: Date()
+        ))
+
+        wait(for: [expected], timeout: 1)
+    }
+
     func testWritesChainedTamperEvidentAuditEntries() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)

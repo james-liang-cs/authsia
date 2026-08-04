@@ -1715,6 +1715,13 @@ private final class RecordingExecJITPreflightClient: ExecJITPreflightClient {
         payloads.append(payload)
         return AgentJITPreflightResultPayload(grantIDs: grantIDs)
     }
+
+    func directCLIApprovalPreflight(
+        _ payload: AgentJITPreflightPayload
+    ) throws -> AgentJITPreflightResultPayload {
+        payloads.append(payload)
+        return AgentJITPreflightResultPayload(grantIDs: [])
+    }
 }
 
 private final class RecordingSSHAutomationExecutionLeaseIssuer:

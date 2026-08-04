@@ -116,6 +116,7 @@ extension BridgeRequestType {
         case .unlock,
              .list,
              .createAccess,
+             .directCLIPreflight,
              .agentJITPreflight,
              .getOTP,
              .getPassword,
@@ -150,7 +151,7 @@ extension BridgeRequestType {
         switch self {
         case .list, .workspaceMetadata,
              .getOTP, .getPassword, .getAPIKey, .getCertificate, .getNote, .getSSH,
-             .createAccess, .validateAccess, .agentJITPreflight:
+             .createAccess, .validateAccess, .directCLIPreflight, .agentJITPreflight:
             return true
         default:
             return false
@@ -607,9 +608,22 @@ final class AuthsiaBridgeClient:
     }
 
     func agentJITPreflight(_ payload: AgentJITPreflightPayload) throws -> AgentJITPreflightResultPayload {
+        try approvalPreflight(payload, requestType: .agentJITPreflight)
+    }
+
+    func directCLIApprovalPreflight(
+        _ payload: AgentJITPreflightPayload
+    ) throws -> AgentJITPreflightResultPayload {
+        try approvalPreflight(payload, requestType: .directCLIPreflight)
+    }
+
+    private func approvalPreflight(
+        _ payload: AgentJITPreflightPayload,
+        requestType: BridgeRequestType
+    ) throws -> AgentJITPreflightResultPayload {
         let request = BridgeRequest(
             id: UUID(),
-            type: .agentJITPreflight,
+            type: requestType,
             query: "",
             options: BridgeOptions(field: nil, copy: false),
             context: currentContext(),
@@ -1583,7 +1597,7 @@ final class AuthsiaBridgeClient:
                 service.auditVerify(requestData, replyHandler)
             case .exportAccounts:
                 service.exportAccounts(requestData, replyHandler)
-            case .addPassword, .addAPIKey, .addCertificate, .addNote, .addSSH, .ensureVaultFolder, .createAccess, .agentJITPreflight:
+            case .addPassword, .addAPIKey, .addCertificate, .addNote, .addSSH, .ensureVaultFolder, .createAccess, .directCLIPreflight, .agentJITPreflight:
                 service.addItem(requestData, replyHandler)
             case .updatePassword, .convertPasswordToAPIKey, .updateAPIKey, .updateCertificate, .updateNote, .updateSSH:
                 service.updateItem(requestData, replyHandler)

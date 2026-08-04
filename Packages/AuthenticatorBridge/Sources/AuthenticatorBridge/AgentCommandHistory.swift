@@ -217,6 +217,9 @@ public final class AgentCommandHistoryStore {
             }
             try writeUnlocked(events.sorted { $0.recordedAt < $1.recordedAt })
         }
+        #if os(macOS)
+        AccessCenterActivityNotifier.post()
+        #endif
     }
 
     public func loadAll() throws -> [AgentCommandEvent] {

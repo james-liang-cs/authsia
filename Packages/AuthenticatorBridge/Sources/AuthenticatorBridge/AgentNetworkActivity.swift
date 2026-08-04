@@ -510,6 +510,9 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
             active.append(snapshot)
             try write(active, to: activeFileURL)
         }
+        #if os(macOS)
+        AccessCenterActivityNotifier.post()
+        #endif
     }
 
     public func finalize(
@@ -546,6 +549,9 @@ public final class AgentNetworkActivityStore: @unchecked Sendable {
                 snapshots: retained
             )
         }
+        #if os(macOS)
+        AccessCenterActivityNotifier.post()
+        #endif
     }
 
     public func loadAll(now: Date = Date()) throws -> [AgentNetworkActivityRunSnapshot] {

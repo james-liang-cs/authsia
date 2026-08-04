@@ -42,7 +42,7 @@ extension XPCRequestHandler {
                 return
             }
 
-            if bridgeRequest.type == .agentJITPreflight {
+            if bridgeRequest.type == .agentJITPreflight || bridgeRequest.type == .directCLIPreflight {
                 await self.handleAgentJITPreflight(
                     bridgeRequest,
                     body: body,

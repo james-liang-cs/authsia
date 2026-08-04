@@ -25,7 +25,7 @@ public enum BridgeRequestPolicy {
         switch type {
         case .list, .workspaceMetadata, .chromeAutofillMatches,
              .getOTP, .getPassword, .getAPIKey, .getCertificate, .getNote, .getSSH,
-             .createAccess, .validateAccess, .agentJITPreflight:
+             .createAccess, .validateAccess, .directCLIPreflight, .agentJITPreflight:
             return true
         default:
             return false

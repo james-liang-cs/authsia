@@ -143,6 +143,33 @@ final class BridgeSessionManagerTests: XCTestCase {
         XCTAssertEqual(snapshot.sessions.first?.origin, origin)
     }
 
+    func testCreateSessionPersistsDirectCLIRequestDetailsForAccessCenter() throws {
+        let item = AgentJITGrantItemReference(
+            type: "api-key",
+            id: UUID().uuidString,
+            name: "AWS_REGION",
+            folderPath: "Workspaces/api"
+        )
+        let manager = makeManager()
+        _ = try manager.createSession(
+            ttlSeconds: 60,
+            scope: "tty:/dev/ttys001:sid:123",
+            workingDirectory: "/synthetic/project",
+            requestedItems: [item],
+            capabilities: [.exec, .list],
+            environmentScope: .named("Production"),
+            approvedBy: "biometric"
+        )
+
+        let session = try XCTUnwrap(manager.activeSessions().first)
+
+        XCTAssertNotNil(session.createdAt)
+        XCTAssertEqual(session.requestedItems, [item])
+        XCTAssertEqual(session.capabilities, [.exec, .list])
+        XCTAssertEqual(session.environmentScope, .named("Production"))
+        XCTAssertEqual(session.approvedBy, "biometric")
+    }
+
     func testClearingSharedStatusRevokesInMemorySession() throws {
         let scope = "tty:/dev/ttys001:sid:123"
         let manager = makeManager()

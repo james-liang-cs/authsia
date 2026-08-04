@@ -131,6 +131,19 @@ extension XPCRequestHandler {
             )
             return
         }
+
+        if bridgeRequest.type == .directCLIPreflight {
+            guard requestedCommand == "exec",
+                  AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity) else {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .policyDenied,
+                    message: "Direct CLI preflight requires a trusted human terminal",
+                    reply: reply
+                )
+                return
+            }
+        }
         let capability: AgentJITCapability = requestedCommand == "list" ? .list : .exec
 
         let ttl = Self.configuredSessionTTL
@@ -155,6 +168,70 @@ extension XPCRequestHandler {
                 message: "Failed to resolve JIT preflight references: \(error.localizedDescription)",
                 reply: reply
             )
+            return
+        }
+        if bridgeRequest.type == .directCLIPreflight {
+            if validateSessionAndRequest(
+                bridgeRequest,
+                sessionToken: bridgeRequest.sessionToken,
+                callerIdentity: callerIdentity
+            ) {
+                let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
+                    id: bridgeRequest.id,
+                    payload: AgentJITPreflightResultPayload(grantIDs: [])
+                )
+                reply(encodeResponse(response), nil)
+                return
+            }
+
+            let descriptors = agentJITApprovalDescriptors(
+                timing: timing,
+                caller: caller,
+                capabilities: [.exec, .list],
+                environmentScope: payload.environmentScope,
+                resolutions: scopes
+            )
+            let itemCount = descriptors.flatMap(\.requestedItems).count
+            let prompt = "Allow direct CLI access to \(itemCount) requested "
+                + (itemCount == 1 ? "item" : "items")
+                + " for \(durationDescription(for: ttl))."
+            let outcome = await requestAgentJITApproval(
+                prompt: prompt,
+                command: .directCLIPreflight,
+                itemLabel: itemCount == 1 ? descriptors.first?.requestedItems.first?.name : "\(itemCount) items",
+                field: nil,
+                callback: callback,
+                approvalDescriptors: descriptors,
+                remoteRequests: []
+            )
+            let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
+                outcome: outcome,
+                command: .directCLIPreflight,
+                remoteRequests: []
+            )
+            guard case .allowed(_, let approvalAttribution) = authorization else {
+                replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
+                return
+            }
+            let session = issueReusableHumanSession(
+                for: bridgeRequest,
+                callerIdentity: callerIdentity,
+                requestedItems: scopes.flatMap(\.requestedItems),
+                capabilities: [.exec, .list],
+                environmentScope: payload.environmentScope,
+                approvedBy: approvalAttribution
+            )
+            guard !session.failed else {
+                replyError(id: bridgeRequest.id, code: .appUnavailable, message: "Failed to create CLI session", reply: reply)
+                return
+            }
+            let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
+                id: bridgeRequest.id,
+                payload: AgentJITPreflightResultPayload(grantIDs: []),
+                sessionToken: session.token,
+                sessionExpiresAt: session.expiresAt
+            )
+            reply(encodeResponse(response), nil)
             return
         }
 

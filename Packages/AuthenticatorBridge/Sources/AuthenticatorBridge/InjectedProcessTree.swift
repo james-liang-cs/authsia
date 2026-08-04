@@ -550,6 +550,9 @@ public final class InjectedProcessTreeStore: @unchecked Sendable {
             }
             try writeUnlocked(runs.sorted { $0.startedAt < $1.startedAt })
         }
+        #if os(macOS)
+        AccessCenterActivityNotifier.post()
+        #endif
     }
 
     public func loadAll() throws -> [InjectedProcessTreeRun] {

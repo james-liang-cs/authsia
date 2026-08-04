@@ -79,7 +79,7 @@ Application Support unless noted otherwise.
 | Path | Owner | Contents |
 |---|---|---|
 | `~/.authsia/agent.sock` | SSH-agent LaunchAgent | Unix-domain socket used by `git`, `ssh`, and shell integration via `SSH_AUTH_SOCK`. |
-| `~/.authsia/cli-session-status.json` | Bridge | Current bridge session status for `authsia status` and Developer Control Center display. |
+| `~/.authsia/cli-session-status.json` | Bridge | Token-free bridge session status for `authsia status` and Access Center display, including origin and approval-request metadata when available. |
 | `~/.authsia/ssh-agent-session.json` | SSH agent | Current SSH approval-session status. |
 | `~/.authsia/ssh-automation-grants.json` | CLI / app display | Token-free SSH execution-lease IDs and process/session binding hints. The authoritative lease and credential records remain in Keychain. |
 | `~/.authsia/ssh-automation-grants.json.lock` | CLI / SSH agent | Empty advisory-lock sidecar that serializes concurrent runtime-hint updates. |
@@ -413,9 +413,11 @@ synchronizable: false
 The CLI item contains only its session token and expiry. The Bridge keeps the
 server-side session and replay state in memory. The
 `~/.authsia/cli-session-status.json` file mirrors only token-free display and
-liveness fields such as Bridge PID, scope, expiry, working directory, and
-origin; deleting or clearing a scope from that status invalidates matching
-Bridge use.
+liveness fields such as Bridge PID, scope, creation and expiry times, working
+directory, origin, requested item references, requested capabilities,
+environment scope, and approval attribution. The requested items describe the
+approval prompt; they do not narrow the normal human session authorization.
+Deleting or clearing a scope from that status invalidates matching Bridge use.
 
 ## Audit Logs
 

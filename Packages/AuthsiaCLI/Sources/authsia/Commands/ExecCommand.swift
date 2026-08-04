@@ -7,6 +7,7 @@ import AuthenticatorCore
 
 protocol ExecJITPreflightClient {
     func agentJITPreflight(_ payload: AgentJITPreflightPayload) throws -> AgentJITPreflightResultPayload
+    func directCLIApprovalPreflight(_ payload: AgentJITPreflightPayload) throws -> AgentJITPreflightResultPayload
 }
 
 extension AuthsiaBridgeClient: ExecJITPreflightClient {}
@@ -641,8 +642,19 @@ struct Exec: ParsableCommand {
         terminalSessionScope: String? = TerminalSessionScope.currentAncestralScope(),
         commandLine: [String] = CommandLine.arguments
     ) throws -> [UUID] {
-        guard shouldRunJITPreflight(environment: parentEnvironment, processAncestry: processAncestry),
-              !references.isEmpty else { return [] }
+        guard !references.isEmpty,
+              parentEnvironment[AutomationAccessResolver.environmentKey] == nil else { return [] }
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: references,
+            environmentScope: environmentScope
+        )
+        guard shouldRunJITPreflight(
+            environment: parentEnvironment,
+            processAncestry: processAncestry
+        ) else {
+            return try client.directCLIApprovalPreflight(payload).grantIDs
+        }
         var grantIDs: [UUID] = []
         defer {
             recordAgentCommandHistory(
@@ -656,13 +668,7 @@ struct Exec: ParsableCommand {
                 grantIDs: grantIDs
             )
         }
-        grantIDs = try client.agentJITPreflight(
-            AgentJITPreflightPayload(
-                requestedCommand: "exec",
-                references: references,
-                environmentScope: environmentScope
-            )
-        ).grantIDs
+        grantIDs = try client.agentJITPreflight(payload).grantIDs
         return grantIDs
     }
 

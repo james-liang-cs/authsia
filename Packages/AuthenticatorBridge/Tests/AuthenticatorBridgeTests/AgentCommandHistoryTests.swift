@@ -2,6 +2,40 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class AgentCommandHistoryTests: XCTestCase {
+    #if os(macOS)
+    func testRecordingCommandBroadcastsAccessCenterActivityChange() throws {
+        let expected = expectation(description: "Access Center activity change was broadcast")
+        let center = DistributedNotificationCenter.default()
+        let notificationName = Notification.Name("com.authsia.accessCenter.activityDidChange")
+        let observer = center.addObserver(
+            forName: notificationName,
+            object: "app.authsia.access-center",
+            queue: .main
+        ) { notification in
+            if let sourcePID = notification.userInfo?["pid"] as? Int,
+               sourcePID == ProcessInfo.processInfo.processIdentifier {
+                expected.fulfill()
+            }
+        }
+        defer { center.removeObserver(observer) }
+
+        let fileURL = try makeTempURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let store = AgentCommandHistoryStore(fileURL: fileURL)
+
+        try store.record(AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 10),
+            agentPlatform: "codex",
+            captureSource: .hook,
+            executable: "swift",
+            arguments: ["swift", "test"],
+            command: "swift test"
+        ))
+
+        wait(for: [expected], timeout: 1)
+    }
+    #endif
+
     func testCommandEventRedactsSensitiveFlagsAndEnvironmentAssignments() throws {
         let event = AgentCommandEvent(
             recordedAt: Date(timeIntervalSince1970: 10),

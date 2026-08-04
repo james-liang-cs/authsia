@@ -14,20 +14,35 @@ public struct BridgeSessionOrigin: Codable, Equatable, Sendable {
 
 public struct BridgeSessionStatusRecord: Codable, Equatable, Sendable {
     public let scope: String
+    public let createdAt: Date?
     public let expiresAt: Date
     public let workingDirectory: String?
     public let origin: BridgeSessionOrigin?
+    public let requestedItems: [AgentJITGrantItemReference]?
+    public let capabilities: [AgentJITCapability]?
+    public let environmentScope: EnvironmentAccessScope?
+    public let approvedBy: String?
 
     public init(
         scope: String,
         expiresAt: Date,
+        createdAt: Date? = nil,
         workingDirectory: String? = nil,
-        origin: BridgeSessionOrigin? = nil
+        origin: BridgeSessionOrigin? = nil,
+        requestedItems: [AgentJITGrantItemReference]? = nil,
+        capabilities: [AgentJITCapability]? = nil,
+        environmentScope: EnvironmentAccessScope? = nil,
+        approvedBy: String? = nil
     ) {
         self.scope = scope
+        self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.workingDirectory = workingDirectory
         self.origin = origin
+        self.requestedItems = requestedItems
+        self.capabilities = capabilities
+        self.environmentScope = environmentScope
+        self.approvedBy = approvedBy
     }
 }
 
@@ -102,10 +117,20 @@ public enum BridgeSessionStatusStore {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(snapshot)
         try data.write(to: fileURL, options: .atomic)
+        #if os(macOS)
+        AccessCenterActivityNotifier.post()
+        #endif
     }
 
     public static func clear(fileURL: URL = defaultFileURL) {
-        try? FileManager.default.removeItem(at: fileURL)
+        do {
+            try FileManager.default.removeItem(at: fileURL)
+            #if os(macOS)
+            AccessCenterActivityNotifier.post()
+            #endif
+        } catch {
+            // Clearing absent or inaccessible display state remains best-effort.
+        }
     }
 
     public static func activeSessions(
@@ -149,7 +174,11 @@ public enum BridgeSessionStatusStore {
         fileURL: URL = defaultFileURL,
         now: Date = Date(),
         workingDirectory: String? = nil,
-        origin: BridgeSessionOrigin? = nil
+        origin: BridgeSessionOrigin? = nil,
+        requestedItems: [AgentJITGrantItemReference]? = nil,
+        capabilities: [AgentJITCapability]? = nil,
+        environmentScope: EnvironmentAccessScope? = nil,
+        approvedBy: String? = nil
     ) throws {
         let existing = load(fileURL: fileURL)
         let existingSessions = existing?.bridgePID == bridgePID ? existing?.sessions ?? [] : []
@@ -160,8 +189,13 @@ public enum BridgeSessionStatusStore {
                 BridgeSessionStatusRecord(
                     scope: scope,
                     expiresAt: expiresAt,
+                    createdAt: now,
                     workingDirectory: workingDirectory,
-                    origin: origin
+                    origin: origin,
+                    requestedItems: requestedItems,
+                    capabilities: capabilities,
+                    environmentScope: environmentScope,
+                    approvedBy: approvedBy
                 ),
             ],
             updatedAt: now

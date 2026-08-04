@@ -615,7 +615,11 @@ extension XPCRequestHandler {
 
     func issueReusableHumanSession(
         for request: BridgeRequest,
-        callerIdentity: CallerIdentity?
+        callerIdentity: CallerIdentity?,
+        requestedItems: [AgentJITGrantItemReference]? = nil,
+        capabilities: [AgentJITCapability]? = nil,
+        environmentScope: EnvironmentAccessScope? = nil,
+        approvedBy: String? = nil
     ) -> (token: String?, expiresAt: Date?, failed: Bool) {
         let mayIssueReusableSession =
             AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
@@ -627,7 +631,11 @@ extension XPCRequestHandler {
             ttlSeconds: Self.configuredSessionTTL,
             scope: request.context.sessionScope,
             workingDirectory: request.context.workingDirectory,
-            origin: Self.sessionOrigin(from: callerIdentity, request: request)
+            origin: Self.sessionOrigin(from: callerIdentity, request: request),
+            requestedItems: requestedItems,
+            capabilities: capabilities,
+            environmentScope: environmentScope,
+            approvedBy: approvedBy
         ) else {
             return (nil, nil, true)
         }

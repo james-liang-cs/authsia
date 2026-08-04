@@ -429,6 +429,20 @@ stdin-TTY routing rule and is not an authorization signal.
 The detector only decides whether JIT is required. The actual authorization is
 the stored grant plus caller fingerprint comparison.
 
+## Human Direct CLI Preflight
+
+A trusted human-terminal `authsia exec` uses the same exact-reference resolution
+boundary to batch supported password, API key, certificate, and note requests,
+but sends `directCLIPreflight` rather than creating an Agent JIT grant. The app
+shows the complete requested-item list once, then the Bridge creates the normal
+terminal-scoped reusable human session. Direct CLI preflight is local-only and
+is rejected for agentic, automation-suspect, SSH, or CI callers.
+
+The requested items, environment, approval source, working directory, and
+caller are mirrored as token-free display metadata. They describe what caused
+the approval; they do not narrow or otherwise change normal human-session
+authorization.
+
 ## Grant Flow
 
 1. `authsia exec` discovers the requested secret references.
@@ -742,8 +756,10 @@ array with evidence event IDs, and summary counts. Agent activity export also
 includes matching `processTrees` when present.
 
 Access Center has an opt-in `Include human sessions` toggle for showing normal
-interactive CLI sessions in a right-side column beside agent grants. These rows
-expose only terminal scope and expiry, not session tokens. Revoking a human
+interactive CLI sessions in a right-side column beside agent grants. Batched
+direct-CLI rows use the same scope/facts/“Wants” shape as agent grants and show
+requested items, environment, source, path, terminal scope, and expiry, but
+never session tokens. Revoking a human
 session from Access Center invalidates the bridge session for that terminal
 scope, matching the authorization effect of `authsia lock`, and also clears SSH
 approval-session status for that scope. The terminal's local cached token is not
@@ -759,11 +775,21 @@ can display sessions created by the bridge/headless process:
 ~/.authsia/cli-session-status.json
 ```
 
-The file stores only the bridge PID, terminal/session scope, expiry, and update
-time. The actual session token remains in the bridge process and the
+The file stores only token-free display metadata: bridge PID, terminal/session
+scope, creation and expiry times, caller origin, working directory, requested
+items, capabilities, environment, approval source, and update time. The actual
+session token remains in the bridge process and the
 terminal-scoped Keychain item used by the CLI. If Access Center clears a scope
 from the status file, the bridge treats the matching in-memory session as
 revoked on the next request.
+
+Grant changes use the existing distributed grant-change signal. Successful
+human-session, audit, command, file, process-tree, and network evidence
+mutations broadcast a separate Access Center activity signal. The activity
+signal contains only the source process identifier, carries no authority or
+activity payload, and exists solely to trigger a coalesced UI snapshot refresh.
+Access Center ignores its own process activity signal and retains a 30-second
+safety poll for missed delivery.
 
 The `Revoke all` action revokes every active JIT grant and every active human
 CLI session known to the app. It is disabled when there is no active access to

@@ -330,7 +330,7 @@ struct AgentJITPreflightTests {
         ])
     }
 
-    @Test("preflight helper calls client for agent exec and skips human empty or automation")
+    @Test("preflight helper batches references for agent and direct CLI exec")
     func preflightHelperCallsClientForAgentExecAndSkipsWhenNotNeeded() throws {
         let references = [
             AgentJITPreflightReference(type: "note", query: "note-id", folderPath: "Team/Ops"),
@@ -343,7 +343,10 @@ struct AgentJITPreflightTests {
             processAncestry: Self.humanTerminalAncestry,
             client: client
         )
-        #expect(client.payloads == [])
+        #expect(client.payloads == [
+            AgentJITPreflightPayload(requestedCommand: "exec", references: references),
+        ])
+        #expect(client.requestTypes == [.directCLIPreflight])
 
         try Exec.runJITPreflight(
             references: references,
@@ -354,7 +357,9 @@ struct AgentJITPreflightTests {
 
         #expect(client.payloads == [
             AgentJITPreflightPayload(requestedCommand: "exec", references: references),
+            AgentJITPreflightPayload(requestedCommand: "exec", references: references),
         ])
+        #expect(client.requestTypes == [.directCLIPreflight, .agentJITPreflight])
 
         try Exec.runJITPreflight(
             references: [],
@@ -369,7 +374,7 @@ struct AgentJITPreflightTests {
             client: client
         )
 
-        #expect(client.payloads.count == 1)
+        #expect(client.payloads.count == 2)
     }
 
     @Test("list preflight helper calls client for agent list and skips human or automation")
@@ -486,9 +491,19 @@ struct AgentJITPreflightTests {
 
 private final class RecordingJITPreflightClient: ExecJITPreflightClient {
     private(set) var payloads: [AgentJITPreflightPayload] = []
+    private(set) var requestTypes: [BridgeRequestType] = []
 
     func agentJITPreflight(_ payload: AgentJITPreflightPayload) throws -> AgentJITPreflightResultPayload {
         payloads.append(payload)
+        requestTypes.append(.agentJITPreflight)
+        return AgentJITPreflightResultPayload(grantIDs: [])
+    }
+
+    func directCLIApprovalPreflight(
+        _ payload: AgentJITPreflightPayload
+    ) throws -> AgentJITPreflightResultPayload {
+        payloads.append(payload)
+        requestTypes.append(.directCLIPreflight)
         return AgentJITPreflightResultPayload(grantIDs: [])
     }
 }

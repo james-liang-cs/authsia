@@ -56,6 +56,7 @@ public enum BridgeRequestType: String, Codable {
     case listAccess
     case revokeAccess
     case validateAccess
+    case directCLIPreflight
     case agentJITPreflight
     case agentJITSnapshot
     case agentJITRevoke

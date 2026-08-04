@@ -1278,6 +1278,39 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(approver.requests.first?.prompt.contains("all folders"), false)
     }
 
+    func testDirectCLIPreflightApprovesEveryRequestedItemInOneHumanSession() async throws {
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            callerIdentity: humanCallerIdentity
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "RootOne", folderPath: nil),
+                AgentJITPreflightReference(type: "note", query: "RootNote", folderPath: nil),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            type: .directCLIPreflight
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertNotNil(response.sessionToken)
+        XCTAssertTrue(response.payload?.grantIDs.isEmpty == true)
+        XCTAssertTrue(store.grants.isEmpty)
+        XCTAssertEqual(approver.requests.map(\.command), [.directCLIPreflight])
+        XCTAssertEqual(
+            approver.requests.first?.approvalDescriptors.flatMap(\.requestedItems).map(\.name).sorted(),
+            ["RootNote", "RootOne"]
+        )
+    }
+
     func testListPreflightCreatesListOnlyGrant() async throws {
         let store = MemoryAgentJITGrantStore()
         let approver = JITApprovalTracker(result: true)
@@ -3385,12 +3418,13 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
     private func addItem<T: Codable & Equatable>(
         _ handler: XPCRequestHandler,
         body: T,
+        type: BridgeRequestType = .agentJITPreflight,
         requestedCommand: String = "exec",
         context: BridgeContext? = nil
     ) async throws -> BridgeResponse<AgentJITPreflightResultPayload> {
         let request = BridgeRequest(
             id: UUID(),
-            type: .agentJITPreflight,
+            type: type,
             query: "",
             options: .init(field: nil, copy: false),
             context: context ?? execContext(requestedCommand: requestedCommand),

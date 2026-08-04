@@ -73,6 +73,7 @@ public final class BridgeAuditLogger {
             lineData.append(0x0A)
             try appendLineData(lineData)
         }
+        AccessCenterActivityNotifier.post()
     }
 
     public func verifyIntegrity() throws -> Bool {

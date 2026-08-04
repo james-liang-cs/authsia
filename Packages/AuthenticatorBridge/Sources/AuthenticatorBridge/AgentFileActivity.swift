@@ -246,6 +246,9 @@ public final class AgentFileActivityStore {
                 try appendLineUnlocked(line)
             }
         }
+        #if os(macOS)
+        AccessCenterActivityNotifier.post()
+        #endif
     }
 
     public func loadAll() throws -> [AgentFileActivityEvent] {
