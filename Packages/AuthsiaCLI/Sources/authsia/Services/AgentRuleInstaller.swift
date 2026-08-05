@@ -890,18 +890,24 @@ enum AgentRuleInstaller {
 
     private static func sharedRulesMarkdown(
         for agents: [AgentTool],
-        includeWorkspaceGuidance: Bool = false
+        includeWorkspaceGuidance: Bool = false,
+        includeMCPWorkspaceInputs: Bool = true
     ) -> String {
         """
     # Authsia Agent Rules
 
-    \(agentRuleBlock(for: agents, includeWorkspaceGuidance: includeWorkspaceGuidance))
+    \(agentRuleBlock(
+        for: agents,
+        includeWorkspaceGuidance: includeWorkspaceGuidance,
+        includeMCPWorkspaceInputs: includeMCPWorkspaceInputs
+    ))
     """
     }
 
     private static func agentRuleBlock(
         for agents: [AgentTool],
-        includeWorkspaceGuidance: Bool = false
+        includeWorkspaceGuidance: Bool = false,
+        includeMCPWorkspaceInputs: Bool = true
     ) -> String {
         let selectedAgents = unique(agents)
         let platformLines = selectedAgents
@@ -916,12 +922,25 @@ enum AgentRuleInstaller {
         let mcpSelection = includeWorkspaceGuidance
             ? "- When a task needs secrets managed by this workspace and Authsia MCP tools are available, use the Authsia MCP tools. The user may ask in natural language; construct the tool input yourself."
             : "- When a task needs secrets managed by Authsia and Authsia MCP tools are available for the active workspace, use the Authsia MCP tools. The user may ask in natural language; construct the tool input yourself."
+        let mcpGuidance: String
+        if includeMCPWorkspaceInputs {
+            let workspaceInput = includeWorkspaceGuidance
+                ? "- For `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, and `authsia_exec`, pass this repository's absolute path as `workspaceRoot`."
+                : "- In an IDE-hosted session, pass the active repository's absolute path as `workspaceRoot` to `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, and `authsia_exec`."
+            mcpGuidance = """
+            \(mcpSelection)
+            \(workspaceInput)
+            - When the user requests a named workspace environment, pass its name as `environment` to `authsia_workspace_inspect`, `authsia_list`, or `authsia_exec`. For list and execution, exact-tagged and `All` items remain eligible. Use `defaultOnly` on `authsia_exec` for the Default scope, and never combine it with `environment`.
+            """
+        } else {
+            mcpGuidance = mcpSelection
+        }
         return """
     ## Authsia Secret Handling
 
     - Never ask the user for plaintext secrets.
     - Never write resolved secret values to source, logs, chat, issues, or generated documents.
-    \(mcpSelection)
+    \(mcpGuidance)
     - The client-managed Authsia MCP server must run outside the agent command sandbox so it can reach the local Authsia Bridge and launch mediated child processes.
     - Do not start `authsia mcp serve` from a sandboxed shell. If the MCP tools are missing or disconnected, treat the client MCP runtime boundary as the first diagnostic.
     - Use `authsia_status` when server readiness is unknown, `authsia_workspace_inspect` for commit-safe workspace metadata, and `authsia_list` for scoped CLI-enabled Vault item metadata.
@@ -1593,6 +1612,12 @@ enum AgentRuleInstaller {
         var variants = [
             sharedRulesMarkdown(for: agents),
             sharedRulesMarkdown(for: agents, includeWorkspaceGuidance: true),
+            sharedRulesMarkdown(for: agents, includeMCPWorkspaceInputs: false),
+            sharedRulesMarkdown(
+                for: agents,
+                includeWorkspaceGuidance: true,
+                includeMCPWorkspaceInputs: false
+            ),
             legacyV1SharedRulesMarkdown(for: agents),
             legacyV1SharedRulesMarkdown(for: agents, includeWorkspaceGuidance: true),
             legacyV1SharedRulesMarkdown(for: agents, includeOutsideSandboxRule: false),

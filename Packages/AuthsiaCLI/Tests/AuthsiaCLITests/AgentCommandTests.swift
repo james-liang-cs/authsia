@@ -1103,6 +1103,46 @@ struct AgentCommandTests {
         #expect(!agents.contains("Implicit guarded-terminal shims"))
     }
 
+    @Test("all agent rules receive MCP workspace and environment guidance")
+    func allAgentRulesReceiveMCPWorkspaceAndEnvironmentGuidance() throws {
+        for agent in AgentTool.allCases {
+            let root = try makeProjectRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            try write("{}", to: ".authsia/workspace.json", in: root)
+
+            _ = try AgentRuleInstaller.install(projectRoot: root, agents: [agent])
+
+            let rules = try read(agent.rulePath, in: root)
+            #expect(rules.contains("pass this repository's absolute path as `workspaceRoot`"))
+            #expect(rules.contains("pass its name as `environment`"))
+            #expect(rules.contains("exact-tagged and `All` items"))
+            #expect(rules.contains("`defaultOnly`"))
+        }
+    }
+
+    @Test("previous MCP-first shared rules remain recognized")
+    func previousMCPFirstSharedRulesRemainRecognized() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("{}", to: ".authsia/workspace.json", in: root)
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        let current = try read(".authsia/agent-rules.md", in: root)
+        let previous = current
+            .replacingOccurrences(
+                of: "- For `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, and `authsia_exec`, pass this repository's absolute path as `workspaceRoot`.\n",
+                with: ""
+            )
+            .replacingOccurrences(
+                of: "- When the user requests a named workspace environment, pass its name as `environment` to `authsia_workspace_inspect`, `authsia_list`, or `authsia_exec`. For list and execution, exact-tagged and `All` items remain eligible. Use `defaultOnly` on `authsia_exec` for the Default scope, and never combine it with `environment`.\n",
+                with: ""
+            )
+
+        #expect(previous != current)
+        #expect(!previous.contains("workspaceRoot"))
+        try write(previous, to: ".authsia/agent-rules.md", in: root)
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+    }
+
     @Test("legacy workspace shared rules are still recognized")
     func legacyWorkspaceSharedRulesAreStillRecognized() throws {
         let root = try makeProjectRoot()

@@ -1082,10 +1082,15 @@ Creates local project rule files that teach coding agents to use Authsia safely.
 rules only; it does not create automation credentials, JIT grants, or new secret access.
 
 Generated rules tell agents to prefer the Authsia MCP tools for managed-secret
-work, construct tool input from natural-language requests, use `authsia_list`
-for scoped CLI-enabled Vault metadata, pass `authsia_exec` arguments directly
-without a shell command string, and use the normal terminal for commands that
-need no managed values. They retain a compact, attributed CLI
+work and construct tool input from natural-language requests. For
+`authsia_status`, `authsia_workspace_inspect`, `authsia_list`, and
+`authsia_exec`, IDE-hosted agents pass the active repository's absolute path as
+`workspaceRoot`. Named workspace requests pass `environment` to inspection,
+list, or execution. List and execution preserve exact-tagged plus `All`
+eligibility; `authsia_exec` uses `defaultOnly` for the Default scope. Rules also pass
+`authsia_exec` arguments directly without a shell command string and use the
+normal terminal for commands that need no managed values. They retain a
+compact, attributed CLI
 fallback using `env AUTHSIA_AGENT_PLATFORM=<platform>
 AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...` and prohibit bare secret reads.
 The generated marker lines match the selected tool: `--agent codex` writes only
