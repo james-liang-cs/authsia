@@ -7,11 +7,21 @@ import Testing
 
 @Suite("Local MCP server lifecycle")
 struct MCPServerLifecycleTests {
-    @Test("hidden serve command is registered at the root")
+    @Test("serve command is visible and registered at the root")
     func commandRegistration() throws {
-        #expect(MCPCommand.Serve.configuration.shouldDisplay == false)
+        #expect(MCPCommand.Serve.configuration.shouldDisplay)
         #expect(Authsia.configuration.subcommands.contains { $0 == MCPCommand.self })
         _ = try Authsia.parseAsRoot(["mcp", "serve"])
+    }
+
+    @Test("command help describes setup and direct server usage")
+    func commandHelpDescribesMCPWorkflow() {
+        let help = MCPCommand.helpMessage(columns: 160)
+
+        #expect(help.contains("configure"))
+        #expect(help.contains("serve"))
+        #expect(help.contains("authsia mcp configure --client codex"))
+        #expect(help.contains("authsia mcp serve"))
     }
 
     @Test("initialize advertises tools only and supports ping")

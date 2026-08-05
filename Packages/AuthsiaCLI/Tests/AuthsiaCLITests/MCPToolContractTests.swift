@@ -167,4 +167,14 @@ struct MCPToolContractTests {
         #expect(itemProperties?["content"] == nil)
         #expect(itemProperties?["privateKey"] == nil)
     }
+
+    @Test("output schemas declare a top-level object type for strict MCP clients")
+    func outputSchemasDeclareTopLevelObjectType() throws {
+        for tool in MCPToolCatalog.tools {
+            let outputSchema = try #require(tool.outputSchema?.objectValue)
+
+            #expect(outputSchema["type"]?.stringValue == "object", "Tool: \(tool.name)")
+            #expect(outputSchema["oneOf"]?.arrayValue?.count == 2, "Tool: \(tool.name)")
+        }
+    }
 }

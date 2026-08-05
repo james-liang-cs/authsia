@@ -42,6 +42,7 @@ struct Authsia: AsyncParsableCommand {
               delete      Delete vault items
               scrape      Scan files and migrate secrets
               completion  Generate shell completion script
+              mcp         Configure or run the local MCP server
 
             Examples:
               authsia list passwords --format table
@@ -78,6 +79,7 @@ struct Authsia: AsyncParsableCommand {
               authsia convert password Stripe --to api-key
               authsia delete ssh deploy-key --force
               authsia scrape --path .env --replace-all --folder Team/API
+              authsia mcp configure --client codex
             """,
         version: Self.version(),
         subcommands: [List.self, Code.self, Get.self, Load.self, Exec.self, Env.self, SSH.self, ReadCmd.self, Inject.self, Init.self, Guard.self, Unguard.self, Unlock.self, Lock.self, Status.self, Doctor.self, Setup.self, Access.self, Agent.self, Workspace.self, Add.self, Edit.self, Convert.self, Delete.self, Scrape.self, Audit.self, Completion.self, SSHAutomationGrantCommand.self, ChromeAutofill.self, MCPCommand.self],

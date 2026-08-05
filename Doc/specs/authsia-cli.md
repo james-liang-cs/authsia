@@ -136,6 +136,7 @@ Key properties:
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
 | `authsia mcp configure` | Print user-global local MCP configuration without editing client files | `authsia mcp configure --client codex` |
+| `authsia mcp serve` | Run the local stdio MCP server with optional explicit workspace binding | `authsia mcp serve --workspace /path/to/repo` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
@@ -1601,11 +1602,17 @@ deterministic user-global configuration for the exact installed Authsia binary.
 It rejects unsupported clients and unsafe path values. The output contains no
 secret, bearer, automation credential, or fixed repository path and warns that
 the binary path is machine-specific. It never edits or launches a third-party
-client.
+client. For Codex, Claude Code, and VS Code, the output first provides a
+shell-safe direct command that uses the client's supported MCP installer; the
+manual configuration remains available as a fallback. Cursor and Windsurf
+receive only their manual configuration because they do not expose a documented
+equivalent command.
 
-The generated client starts the hidden `authsia mcp serve` stdio process from
-the client's active working directory. The server can initialize in any
-directory. When that directory belongs to an initialized Authsia workspace, the
+The generated client starts the `authsia mcp serve` stdio process from
+the client's active working directory. Cursor additionally passes its
+`${workspaceFolder}` as `--workspace` because a user-global server process may
+start elsewhere. The server can initialize in any directory. When the selected
+directory belongs to an initialized Authsia workspace, the
 server remains bound to the validated workspace for its lifetime; otherwise
 status reports the unbound state and workspace-dependent tools fail closed. The
 server exposes only

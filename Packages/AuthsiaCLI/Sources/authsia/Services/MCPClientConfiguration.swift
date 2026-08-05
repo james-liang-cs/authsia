@@ -54,7 +54,10 @@ enum MCPClientConfiguration {
         switch client {
         case .codex:
             return """
-            Add to user-global ~/.codex/config.toml:
+            Configure directly:
+            codex mcp add authsia -- \(shellQuoted(binaryPath)) mcp serve
+
+            Or add to user-global ~/.codex/config.toml:
             [mcp_servers.authsia]
             command = "\(tomlEscaped(binaryPath))"
             args = ["mcp", "serve"]
@@ -62,19 +65,26 @@ enum MCPClientConfiguration {
             \(warning)
             """
         case .claude:
-            return try jsonConfiguration(
-                heading: "Merge into user-global ~/.claude.json:",
+            let configuration = try jsonConfiguration(
+                heading: "Or merge into user-global ~/.claude.json:",
                 rootKey: "mcpServers",
                 binaryPath: binaryPath,
                 includeType: false,
                 warning: warning
             )
+            return """
+            Configure directly:
+            claude mcp add --scope user authsia -- \(shellQuoted(binaryPath)) mcp serve
+
+            \(configuration)
+            """
         case .cursor:
             return try jsonConfiguration(
                 heading: "Place in user-global ~/.cursor/mcp.json:",
                 rootKey: "mcpServers",
                 binaryPath: binaryPath,
                 includeType: false,
+                arguments: ["mcp", "serve", "--workspace", "${workspaceFolder}"],
                 warning: warning
             )
         case .windsurf:
@@ -86,13 +96,28 @@ enum MCPClientConfiguration {
                 warning: warning
             )
         case .vscode:
-            return try jsonConfiguration(
-                heading: "In VS Code, run `MCP: Open User Configuration` and merge:",
+            let configuration = try jsonConfiguration(
+                heading: "Or in VS Code, run `MCP: Open User Configuration` and merge:",
                 rootKey: "servers",
                 binaryPath: binaryPath,
                 includeType: true,
                 warning: warning
             )
+            let directConfiguration: [String: Any] = [
+                "args": ["mcp", "serve"],
+                "command": binaryPath,
+                "name": "authsia",
+            ]
+            let directData = try JSONSerialization.data(
+                withJSONObject: directConfiguration,
+                options: [.sortedKeys, .withoutEscapingSlashes]
+            )
+            return """
+            Configure directly:
+            code --add-mcp \(shellQuoted(String(decoding: directData, as: UTF8.self)))
+
+            \(configuration)
+            """
         }
     }
 
@@ -101,10 +126,11 @@ enum MCPClientConfiguration {
         rootKey: String,
         binaryPath: String,
         includeType: Bool,
+        arguments: [String] = ["mcp", "serve"],
         warning: String
     ) throws -> String {
         var server: [String: Any] = [
-            "args": ["mcp", "serve"],
+            "args": arguments,
             "command": binaryPath,
         ]
         if includeType { server["type"] = "stdio" }
@@ -120,6 +146,10 @@ enum MCPClientConfiguration {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private static func isSafe(_ value: String) -> Bool {

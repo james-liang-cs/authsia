@@ -41,28 +41,46 @@ struct MCPClientConfigurationTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         let codex = try render(.codex, fixture: fixture)
+        #expect(codex.contains("codex mcp add authsia --"))
         #expect(codex.contains("~/.codex/config.toml"))
         #expect(codex.contains("[mcp_servers.authsia]"))
         #expect(codex.contains("args = [\"mcp\", \"serve\"]"))
         #expect(!codex.contains("cwd ="))
 
         let claude = try render(.claude, fixture: fixture)
+        #expect(claude.contains("claude mcp add --scope user authsia --"))
         #expect(claude.contains("~/.claude.json"))
         #expect(claude.contains("\"mcpServers\""))
 
         let cursor = try render(.cursor, fixture: fixture)
+        #expect(!cursor.contains("Configure directly:"))
         #expect(cursor.contains("~/.cursor/mcp.json"))
         #expect(cursor.contains("\"mcpServers\""))
+        #expect(cursor.contains("\"--workspace\""))
+        #expect(cursor.contains("${workspaceFolder}"))
 
         let windsurf = try render(.windsurf, fixture: fixture)
+        #expect(!windsurf.contains("Configure directly:"))
         #expect(windsurf.contains("~/.codeium/windsurf/mcp_config.json"))
         #expect(windsurf.contains("\"mcpServers\""))
 
         let vscode = try render(.vscode, fixture: fixture)
+        #expect(vscode.contains("code --add-mcp"))
         #expect(vscode.contains("MCP: Open User Configuration"))
         #expect(vscode.contains("\"servers\""))
         #expect(vscode.contains("\"type" + "\" : \"stdio\""))
         #expect(!vscode.contains("\"cwd\""))
+    }
+
+    @Test("direct commands shell-quote machine-specific paths")
+    func directCommandEscaping() throws {
+        let binary = URL(fileURLWithPath: "/Applications/Authsia's App/authsia")
+
+        let codex = try MCPClientConfiguration.render(client: .codex, executableURL: binary)
+        #expect(codex.contains("'/Applications/Authsia'\\''s App/authsia'"))
+
+        let vscode = try MCPClientConfiguration.render(client: .vscode, executableURL: binary)
+        #expect(vscode.contains("Authsia'\\''s App"))
     }
 
     @Test("global configuration needs no workspace and unsafe values fail closed")
@@ -88,12 +106,13 @@ struct MCPClientConfigurationTests {
         }
     }
 
-    @Test("configure command is visible and serve remains hidden")
+    @Test("configure and serve commands are visible")
     func commandRegistration() throws {
         #expect(MCPCommand.Configure.configuration.shouldDisplay)
-        #expect(!MCPCommand.Serve.configuration.shouldDisplay)
+        #expect(MCPCommand.Serve.configuration.shouldDisplay)
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "codex"])
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "windsurf"])
+        _ = try Authsia.parseAsRoot(["mcp", "serve", "--workspace", "/tmp/project"])
     }
 
     private func render(

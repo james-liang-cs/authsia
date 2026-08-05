@@ -213,6 +213,7 @@ enum MCPToolCatalog {
             "additionalProperties": false,
         ])
         return .object([
+            "type": "object",
             "oneOf": .array([successSchema, errorSchema]),
         ])
     }

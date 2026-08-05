@@ -54,6 +54,10 @@ paths by [`storage.md`](storage.md).
 
 - Transport is local `stdio` only. V1 opens no HTTP listener, Unix socket, or
   network port.
+- The client launches `authsia mcp serve` outside its agent command sandbox so
+  the server can reach the local Authsia Bridge and launch mediated child
+  processes. Agents use the client-managed tool connection and must not start
+  another server from a sandboxed shell.
 - The implementation uses the official Swift MCP SDK pinned to `0.12.1` and
   the MCP `2025-11-25` protocol revision supported by that release.
 - V1 advertises only the `tools` capability with a static tool list.
@@ -191,8 +195,9 @@ or reads outside the workspace.
 ## Tool Contract
 
 All input schemas are JSON objects with `additionalProperties: false`. All
-tools declare a closed `outputSchema` whose `oneOf` branches describe either
-that tool's success object or the common stable error object. Results return
+tools declare a closed `outputSchema` with top-level `type: "object"` for strict
+client compatibility; its `oneOf` branches describe either that tool's success
+object or the common stable error object. Results return
 matching `structuredContent`, plus a compact JSON text block for compatible
 clients. Tool and output descriptions must state that plaintext secrets are
 never returned.
@@ -543,9 +548,15 @@ deterministic user-global local-stdio configuration for the exact installed
 Authsia binary. V1 does not edit third-party configuration, launch the client,
 add credentials, or use a shell wrapper.
 
+For Codex, Claude Code, and VS Code, the output includes a shell-safe direct
+command using the client's supported user-global MCP installation surface, plus
+the manual configuration fallback. Cursor and Windsurf receive only the manual
+configuration because they do not expose a documented equivalent command.
+
 Generated configuration must:
 
-- pass `mcp serve` as an argv array;
+- pass `mcp serve` as an argv array, with Cursor additionally passing its
+  `${workspaceFolder}` through `--workspace`;
 - omit fixed repository paths so the client launches the server from its active
   working directory;
 - contain no secret, bearer token, automation credential, or private endpoint;
@@ -556,8 +567,10 @@ Generated configuration must:
 The delivered output uses user-global Codex `~/.codex/config.toml`, Claude Code
 `~/.claude.json`, Cursor `~/.cursor/mcp.json`, Windsurf
 `~/.codeium/windsurf/mcp_config.json`, and the VS Code user-profile `mcp.json`
-shapes verified against each client's primary documentation. The spawned server
-attempts to bind the active client workspace at startup. Outside an initialized
+shapes verified against each client's primary documentation. Cursor's
+workspace placeholder avoids relying on the user-global server process working
+directory. The spawned server attempts to bind the active client workspace at
+startup. Outside an initialized
 Authsia workspace it remains available but unbound, and workspace-dependent
 tools fail closed. Configuration formats remain client-owned compatibility
 surfaces, not part of Authsia authorization.

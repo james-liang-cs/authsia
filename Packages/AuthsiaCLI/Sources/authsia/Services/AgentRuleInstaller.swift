@@ -922,6 +922,8 @@ enum AgentRuleInstaller {
     - Never ask the user for plaintext secrets.
     - Never write resolved secret values to source, logs, chat, issues, or generated documents.
     \(mcpSelection)
+    - The client-managed Authsia MCP server must run outside the agent command sandbox so it can reach the local Authsia Bridge and launch mediated child processes.
+    - Do not start `authsia mcp serve` from a sandboxed shell. If the MCP tools are missing or disconnected, treat the client MCP runtime boundary as the first diagnostic.
     - Use `authsia_status` when server readiness is unknown, `authsia_workspace_inspect` for commit-safe workspace metadata, and `authsia_list` for scoped CLI-enabled Vault item metadata.
     - Use `authsia_exec` only when a command needs Authsia-managed values. Pass `argv` as a direct argument array.
     - Do not use `sh -c`, `bash -c`, other shell command strings, pipes, redirects, compound commands, or control characters with `authsia_exec`.

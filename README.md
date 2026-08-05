@@ -53,9 +53,15 @@ authsia mcp configure --client vscode
 ```
 
 The command prints configuration for the exact Authsia binary; it does not edit
-client files. The server can start from any client directory and binds to the
-active workspace when it is valid; otherwise status remains available while
-workspace-dependent tools fail closed. The local `stdio` server exposes six
+client files. For Codex, Claude Code, and VS Code, it also prints a direct MCP
+installation command; other clients retain manual configuration guidance.
+`authsia mcp serve` runs the same local stdio server directly and
+is included in CLI help and shell completion. The server can start from any
+client directory and binds to the active workspace when it is valid. The Cursor
+configuration passes `${workspaceFolder}` explicitly because user-global Cursor
+servers are not guaranteed to inherit the open workspace as their working
+directory. Otherwise status remains available while workspace-dependent tools
+fail closed. The local `stdio` server exposes six
 constrained tools for status, workspace inspection, scoped metadata listing,
 mediated execution, grant status, and grant revocation. It never exposes a
 raw-secret or global-audit tool. See the

@@ -21,6 +21,8 @@ struct AgentRuleInstallerTests {
             #expect(rules.contains("use the Authsia MCP tools"))
             #expect(rules.contains("construct the tool input yourself"))
             #expect(rules.contains("Authsia MCP tools are available for the active workspace"))
+            #expect(rules.contains("Authsia MCP server must run outside the agent command sandbox"))
+            #expect(rules.contains("Do not start `authsia mcp serve` from a sandboxed shell"))
             #expect(rules.contains("`authsia_status`"))
             #expect(rules.contains("`authsia_workspace_inspect`"))
             #expect(rules.contains("`authsia_list` for scoped CLI-enabled Vault item metadata"))
