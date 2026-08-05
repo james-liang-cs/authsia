@@ -8,6 +8,7 @@ actor AuthsiaMCPServer {
 
     private let server: Server
     private let runtimeContext: MCPRuntimeContext
+    private let acceptsClientRoots: Bool
     private let workspaceInspection: MCPWorkspaceInspectionService
     private let grantService: MCPGrantService
     private let listService: any MCPListProviding
@@ -20,6 +21,9 @@ actor AuthsiaMCPServer {
     private var isStopping = false
     private var didUseMediatedTool = false
     private var didCleanupGrants = false
+    private var clientSupportsRoots = false
+    private var clientRootsNeedRefresh = true
+    private var clientRootsRefreshTask: Task<Bool, Never>?
 
     init(
         version: String,
@@ -29,6 +33,7 @@ actor AuthsiaMCPServer {
                 isDirectory: true
             )
         ),
+        acceptsClientRoots: Bool = true,
         workspaceInspection: MCPWorkspaceInspectionService? = nil,
         grantService: MCPGrantService? = nil,
         listService: (any MCPListProviding)? = nil,
@@ -44,6 +49,7 @@ actor AuthsiaMCPServer {
             configuration: .strict
         )
         self.runtimeContext = runtimeContext
+        self.acceptsClientRoots = acceptsClientRoots
         self.workspaceInspection = workspaceInspection ?? MCPWorkspaceInspectionService(
             runtimeContext: runtimeContext
         )
@@ -51,20 +57,15 @@ actor AuthsiaMCPServer {
             serverInstanceID: runtimeContext.instanceID
         )
         self.listService = listService ?? MCPListService(runtimeContext: runtimeContext)
-        if let childRunner {
-            self.childRunner = childRunner
-        } else if let root = runtimeContext.workspaceRoot {
-            self.childRunner = MCPSameBinaryRunner(workspaceRoot: root)
-        } else {
-            self.childRunner = nil
-        }
+        self.childRunner = childRunner
         self.diagnostics = diagnostics
     }
 
     func start(transport: any Transport) async throws {
         await registerHandlersIfNeeded()
-        try await server.start(transport: transport) { [runtimeContext] client, _ in
+        try await server.start(transport: transport) { [weak self, runtimeContext] client, capabilities in
             await runtimeContext.updateClientInfo(name: client.name, version: client.version)
+            await self?.updateClientRootsCapability(capabilities.roots != nil)
         }
         diagnostics("Authsia MCP server started")
     }
@@ -112,6 +113,12 @@ actor AuthsiaMCPServer {
         await server.withMethodHandler(CallTool.self) { parameters in
             guard let name = AuthsiaMCPToolName(rawValue: parameters.name) else {
                 throw MCPError.invalidParams("Unknown Authsia MCP tool: \(parameters.name)")
+            }
+            switch name {
+            case .status, .workspaceInspect, .list, .exec:
+                await self.refreshClientRootsIfNeeded()
+            case .accessStatus, .accessRevoke:
+                break
             }
             var invocationID: UUID?
             do {
@@ -213,6 +220,73 @@ actor AuthsiaMCPServer {
                     invocationID: invocationID
                 )
             }
+        }
+        await server.onNotification(RootsListChangedNotification.self) { [weak self] _ in
+            await self?.markClientRootsChanged()
+        }
+    }
+
+    private func updateClientRootsCapability(_ supported: Bool) {
+        clientSupportsRoots = supported
+        clientRootsNeedRefresh = supported
+    }
+
+    private func markClientRootsChanged() {
+        guard acceptsClientRoots, clientSupportsRoots else { return }
+        clientRootsNeedRefresh = true
+    }
+
+    private func refreshClientRootsIfNeeded() async {
+        if let clientRootsRefreshTask {
+            _ = await clientRootsRefreshTask.value
+            return
+        }
+        guard acceptsClientRoots,
+              clientSupportsRoots,
+              clientRootsNeedRefresh,
+              !mediatedOperationInProgress else {
+            return
+        }
+        clientRootsNeedRefresh = false
+        let previousRoot = runtimeContext.workspaceRoot
+        let shouldRevokeGrants = didUseMediatedTool
+        let task = Task { [server, runtimeContext, grantService] in
+            do {
+                let roots = try await server.listRoots()
+                await runtimeContext.bindToClientRoots(Self.fileRootURLs(from: roots))
+                if shouldRevokeGrants,
+                   runtimeContext.workspaceRoot?.path != previousRoot?.path {
+                    grantService.revokeActiveOwnedGrants()
+                }
+                return true
+            } catch {
+                return false
+            }
+        }
+        clientRootsRefreshTask = task
+        let didResolveRoots = await task.value
+        clientRootsRefreshTask = nil
+        if !didResolveRoots {
+            diagnostics("Authsia MCP client roots unavailable; using launch workspace context")
+        } else if runtimeContext.workspaceRoot == nil {
+            diagnostics("Authsia MCP client roots are ambiguous or unavailable; workspace tools are closed")
+        }
+    }
+
+    private static func fileRootURLs(from roots: [Root]) -> [URL] {
+        roots.compactMap { root in
+            guard root.uri.unicodeScalars.allSatisfy({
+                !CharacterSet.controlCharacters.contains($0)
+            }),
+            let url = URL(string: root.uri),
+            url.isFileURL,
+            url.query == nil,
+            url.fragment == nil,
+            url.path.hasPrefix("/"),
+            url.host == nil || url.host == "" || url.host == "localhost" else {
+                return nil
+            }
+            return url
         }
     }
 
@@ -389,7 +463,10 @@ actor AuthsiaMCPServer {
                 message: "Another Authsia MCP execution is already active."
             )
         }
-        guard let childRunner else {
+        let activeChildRunner = childRunner ?? runtimeContext.workspaceRoot.map {
+            MCPSameBinaryRunner(workspaceRoot: $0)
+        }
+        guard let activeChildRunner else {
             return try Self.errorResult(
                 code: .workspaceUnavailable,
                 message: "The MCP server is not bound to a managed workspace."
@@ -408,7 +485,7 @@ actor AuthsiaMCPServer {
             )
         }
         let task = Task {
-            await childRunner.run(
+            await activeChildRunner.run(
                 arguments: Self.execArguments(input),
                 invocation: invocation,
                 timeoutSeconds: input.timeoutSeconds

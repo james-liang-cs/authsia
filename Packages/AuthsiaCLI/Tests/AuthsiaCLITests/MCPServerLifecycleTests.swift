@@ -123,6 +123,199 @@ struct MCPServerLifecycleTests {
         await server.waitUntilCompleted()
     }
 
+    @Test("IDE client roots bind a server launched outside the workspace")
+    func clientRootsBindWorkspace() async throws {
+        let launchDirectory = try makeWorkspaceRoot()
+        let workspace = try makeWorkspaceRoot()
+        defer {
+            try? FileManager.default.removeItem(at: launchDirectory)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                workspace: .init(name: "ide-hosted", authsiaFolder: "Workspaces/ide-hosted"),
+                managedEnvFiles: [],
+                agents: nil
+            ),
+            toWorkspaceRoot: workspace
+        )
+        let runtime = MCPRuntimeContext(startingDirectory: launchDirectory)
+        let server = AuthsiaMCPServer(
+            version: "test",
+            runtimeContext: runtime,
+            workspaceInspection: MCPWorkspaceInspectionService(
+                runtimeContext: runtime,
+                bridgeStateProvider: { .ready }
+            ),
+            diagnostics: { _ in }
+        )
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(
+            name: "IDE MCP lifecycle test",
+            version: "1",
+            capabilities: .init(roots: .init(listChanged: true))
+        )
+        await client.withRootsHandler {
+            [
+                Root(uri: "https://example.invalid/workspace", name: "Not a file root"),
+                Root(uri: "file://remote.invalid/workspace", name: "Non-local file root"),
+                Root(uri: workspace.absoluteString, name: "Active workspace"),
+            ]
+        }
+
+        try await server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        let statusContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue
+        )
+        let status = try await statusContext.value
+
+        #expect(status.isError != true)
+        #expect(status.structuredContent?.objectValue?["ready"]?.boolValue == true)
+        #expect(status.structuredContent?.objectValue?["workspaceName"]?.stringValue == "ide-hosted")
+        #expect(
+            status.structuredContent?.objectValue?["workspaceRoot"]?.stringValue
+                == workspace.resolvingSymlinksInPath().path
+        )
+
+        await client.disconnect()
+        await server.waitUntilCompleted()
+    }
+
+    @Test("explicit workspace binding takes precedence over client roots")
+    func explicitWorkspacePrecedesClientRoots() async throws {
+        let explicitWorkspace = try makeWorkspaceRoot()
+        let clientWorkspace = try makeWorkspaceRoot()
+        defer {
+            try? FileManager.default.removeItem(at: explicitWorkspace)
+            try? FileManager.default.removeItem(at: clientWorkspace)
+        }
+        for (root, name) in [(explicitWorkspace, "explicit"), (clientWorkspace, "client")] {
+            try WorkspaceConfigStore.write(
+                WorkspaceConfig(
+                    workspace: .init(name: name, authsiaFolder: "Workspaces/\(name)"),
+                    managedEnvFiles: [],
+                    agents: nil
+                ),
+                toWorkspaceRoot: root
+            )
+        }
+        let runtime = MCPRuntimeContext(startingDirectory: explicitWorkspace)
+        let server = AuthsiaMCPServer(
+            version: "test",
+            runtimeContext: runtime,
+            acceptsClientRoots: false,
+            workspaceInspection: MCPWorkspaceInspectionService(
+                runtimeContext: runtime,
+                bridgeStateProvider: { .ready }
+            ),
+            diagnostics: { _ in }
+        )
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(
+            name: "IDE MCP lifecycle test",
+            version: "1",
+            capabilities: .init(roots: .init())
+        )
+        await client.withRootsHandler {
+            [Root(uri: clientWorkspace.absoluteString, name: "Client workspace")]
+        }
+
+        try await server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        let statusContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue
+        )
+        let status = try await statusContext.value
+
+        #expect(status.structuredContent?.objectValue?["workspaceName"]?.stringValue == "explicit")
+
+        await client.disconnect()
+        await server.waitUntilCompleted()
+    }
+
+    @Test("client root changes rebind the same IDE server instance")
+    func clientRootChangesRebindWorkspace() async throws {
+        let launchDirectory = try makeWorkspaceRoot()
+        let firstWorkspace = try makeWorkspaceRoot()
+        let secondWorkspace = try makeWorkspaceRoot()
+        defer {
+            try? FileManager.default.removeItem(at: launchDirectory)
+            try? FileManager.default.removeItem(at: firstWorkspace)
+            try? FileManager.default.removeItem(at: secondWorkspace)
+        }
+        for (root, name) in [(firstWorkspace, "first"), (secondWorkspace, "second")] {
+            try WorkspaceConfigStore.write(
+                WorkspaceConfig(
+                    workspace: .init(name: name, authsiaFolder: "Workspaces/\(name)"),
+                    managedEnvFiles: [],
+                    agents: nil
+                ),
+                toWorkspaceRoot: root
+            )
+        }
+        let serverID = UUID()
+        let ownedGrant = mcpGrant(sessionID: "mcp:\(serverID.uuidString)")
+        let grantClient = LifecycleGrantClient(
+            snapshot: .init(active: [ownedGrant], history: [])
+        )
+        let runtime = MCPRuntimeContext(
+            startingDirectory: launchDirectory,
+            instanceID: serverID
+        )
+        let server = AuthsiaMCPServer(
+            version: "test",
+            runtimeContext: runtime,
+            workspaceInspection: MCPWorkspaceInspectionService(
+                runtimeContext: runtime,
+                bridgeStateProvider: { .ready }
+            ),
+            grantService: MCPGrantService(
+                serverInstanceID: serverID,
+                client: grantClient
+            ),
+            childRunner: LifecycleRunner(),
+            diagnostics: { _ in }
+        )
+        let roots = LifecycleRootsProvider([
+            Root(uri: firstWorkspace.absoluteString, name: "First workspace")
+        ])
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(
+            name: "IDE MCP lifecycle test",
+            version: "1",
+            capabilities: .init(roots: .init(listChanged: true))
+        )
+        await client.withRootsHandler { await roots.current() }
+
+        try await server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        let firstStatusContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue
+        )
+        let firstStatus = try await firstStatusContext.value
+        #expect(firstStatus.structuredContent?.objectValue?["workspaceName"]?.stringValue == "first")
+        let executionContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.exec.rawValue,
+            arguments: ["argv": ["true"]]
+        )
+        #expect(try await executionContext.value.isError != true)
+
+        await roots.replace(with: [
+            Root(uri: secondWorkspace.absoluteString, name: "Second workspace")
+        ])
+        try await client.notifyRootsChanged()
+        let secondStatusContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue
+        )
+        let secondStatus = try await secondStatusContext.value
+        #expect(secondStatus.structuredContent?.objectValue?["workspaceName"]?.stringValue == "second")
+        #expect(grantClient.revokedIDs == [ownedGrant.id])
+
+        await client.disconnect()
+        await server.waitUntilCompleted()
+    }
+
     @Test("unknown tools return a protocol error")
     func unknownToolCall() async throws {
         let fixture = try makeServer()
@@ -568,5 +761,21 @@ private final class DiagnosticRecorder: @unchecked Sendable {
 
     func append(_ message: String) {
         lock.withLock { storage.append(message) }
+    }
+}
+
+private actor LifecycleRootsProvider {
+    private var roots: [Root]
+
+    init(_ roots: [Root]) {
+        self.roots = roots
+    }
+
+    func current() -> [Root] {
+        roots
+    }
+
+    func replace(with roots: [Root]) {
+        self.roots = roots
     }
 }

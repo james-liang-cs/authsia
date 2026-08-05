@@ -8,7 +8,7 @@ struct MCPCommand: AsyncParsableCommand {
         discussion: """
             Print client configuration or run Authsia's local stdio MCP server.
             Most users should configure a supported client, which launches the server
-            automatically from the client's active working directory.
+            automatically and supplies its active workspace when supported.
 
             Examples:
               authsia mcp configure --client codex
@@ -38,19 +38,42 @@ struct MCPCommand: AsyncParsableCommand {
             abstract: "Serve Authsia tools over local stdio"
         )
 
-        @Option(help: "Workspace directory used for binding (defaults to current directory)")
+        @Option(help: "Explicit workspace binding (otherwise uses client roots or launch context)")
         var workspace: String?
 
         mutating func run() async throws {
-            let startingDirectory = URL(
-                fileURLWithPath: workspace ?? FileManager.default.currentDirectoryPath,
-                isDirectory: true
+            let startingDirectory = Self.startingDirectory(
+                workspace: workspace,
+                environment: ProcessInfo.processInfo.environment,
+                currentDirectoryPath: FileManager.default.currentDirectoryPath
             )
             let server = AuthsiaMCPServer(
                 version: Authsia.version(),
-                runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory)
+                runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
+                acceptsClientRoots: workspace == nil
             )
             try await server.runStdio()
+        }
+
+        static func startingDirectory(
+            workspace: String?,
+            environment: [String: String],
+            currentDirectoryPath: String
+        ) -> URL {
+            let clientWorkspacePath: String?
+            if let value = environment["WORKSPACE_FOLDER_PATHS"] {
+                let paths = value.split(separator: ",", omittingEmptySubsequences: false)
+                let path = paths.count == 1 ? String(paths[0]) : ""
+                clientWorkspacePath = path.hasPrefix("/") && path.unicodeScalars.allSatisfy {
+                    !CharacterSet.controlCharacters.contains($0)
+                } ? path : nil
+            } else {
+                clientWorkspacePath = nil
+            }
+            return URL(
+                fileURLWithPath: workspace ?? clientWorkspacePath ?? currentDirectoryPath,
+                isDirectory: true
+            )
         }
     }
 }

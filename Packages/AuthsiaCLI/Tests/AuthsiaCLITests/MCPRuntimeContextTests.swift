@@ -4,8 +4,8 @@ import Testing
 
 @Suite("MCP runtime context")
 struct MCPRuntimeContextTests {
-    @Test("server identity and canonical workspace stay fixed")
-    func fixedServerIdentityAndWorkspace() throws {
+    @Test("server identity and initial canonical workspace are resolved")
+    func serverIdentityAndInitialWorkspace() throws {
         let root = try makeManagedWorkspace()
         defer { try? FileManager.default.removeItem(at: root) }
         let nested = root.appendingPathComponent("Sources/App", isDirectory: true)
@@ -75,11 +75,47 @@ struct MCPRuntimeContextTests {
         }
     }
 
-    private func makeManagedWorkspace() throws -> URL {
+    @Test("client roots bind exactly one managed workspace")
+    func clientRootsBindOneManagedWorkspace() async throws {
+        let launchDirectory = try makeWorkspaceRoot()
+        let managedRoot = try makeManagedWorkspace(name: "ide")
+        defer {
+            try? FileManager.default.removeItem(at: launchDirectory)
+            try? FileManager.default.removeItem(at: managedRoot)
+        }
+        let nested = managedRoot.appendingPathComponent("Sources/App", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let context = MCPRuntimeContext(startingDirectory: launchDirectory)
+
+        await context.bindToClientRoots([nested, managedRoot])
+
+        #expect(context.workspaceName == "ide")
+        #expect(context.workspaceRoot?.path == managedRoot.resolvingSymlinksInPath().path)
+    }
+
+    @Test("ambiguous managed client roots fail closed")
+    func ambiguousClientRootsFailClosed() async throws {
+        let launchDirectory = try makeWorkspaceRoot()
+        let first = try makeManagedWorkspace(name: "frontend")
+        let second = try makeManagedWorkspace(name: "backend")
+        defer {
+            try? FileManager.default.removeItem(at: launchDirectory)
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+        let context = MCPRuntimeContext(startingDirectory: launchDirectory)
+
+        await context.bindToClientRoots([first, second])
+
+        #expect(context.workspaceRoot == nil)
+        #expect(context.workspaceName == nil)
+    }
+
+    private func makeManagedWorkspace(name: String = "api") throws -> URL {
         let root = try makeWorkspaceRoot()
         try WorkspaceConfigStore.write(
             WorkspaceConfig(
-                workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+                workspace: .init(name: name, authsiaFolder: "Workspaces/\(name)"),
                 managedEnvFiles: [],
                 agents: nil
             ),

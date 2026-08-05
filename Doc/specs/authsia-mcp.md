@@ -147,7 +147,7 @@ revocation are bounded non-secret control tools.
 | Grant inspection and revocation | **Operator path.** Access Center and Bridge-owned controls review or revoke JIT grants; this is not a JIT grant capability. | **Supported for owned active grants.** `authsia_access_status` and `authsia_access_revoke` can affect only the current MCP server instance; Access Center handles global, historical, or orphaned review. |
 | Human CLI sessions | **Separate from JIT.** Trusted human-terminal approval can create a terminal-scoped reusable session, but an agent cannot inherit it as JIT authority. | **Not supported.** MCP neither accepts nor creates a human session token and never falls back to the human approval path. |
 | Automation credentials and unattended access | **Separate from JIT.** An explicit automation credential follows its own policy and may authorize capabilities that JIT does not. | **Not supported.** The server strips ambient automation authority, exposes no credential input, and requires interactive JIT for mediated list or exec. |
-| Workspace reach | **Workspace or exact directory.** Inside a managed workspace, canonical workspace authority applies; outside one, exact working-directory matching remains available. | **Managed workspace only.** Startup fails closed outside an initialized safe workspace, and no tool can select another root or working directory. |
+| Workspace reach | **Workspace or exact directory.** Inside a managed workspace, canonical workspace authority applies; outside one, exact working-directory matching remains available. | **Managed workspace only.** Explicit binding, standard MCP Roots, or safe launch context must resolve exactly one initialized workspace. No tool argument can select a root or working directory. |
 | Vault administration | **Not supported.** JIT cannot unlock Authsia, create access, export, add, edit, delete, or otherwise mutate Vault items. | **Not supported.** No unlock, access creation, import/export, clipboard, or Vault mutation tool exists. |
 | Command shape | **Normal CLI argv.** Direct Agent JIT follows the `authsia exec` CLI contract and generated agent guidance favors explicit argv or reviewed scripts. | **Direct argv only.** `authsia_exec` rejects shell command strings and control characters; it does not interpret pipe, redirect, or compound-command syntax. Reviewed workspace scripts may be executed directly. |
 | Output, cleanup, and activity evidence | **Supported on secret-bearing exec.** Existing masking, observed-file cleanup, Process Tree, network evidence, and Bridge audit apply. | **Same runtime protections plus MCP bounds.** Output is structured and capped at 65,536 bytes per stream, with invocation correlation and managed process-group cancellation. |
@@ -160,18 +160,29 @@ delivery mode, item type, approval authority, or grant capability.
 
 ## Workspace Binding
 
-One server process is either unbound or serves one managed workspace:
+One server process is either unbound or serves one canonical managed workspace
+at a time:
 
-1. Startup attempts to resolve the current directory through the existing
-   `WorkspaceRootResolver`.
-2. A resolved root is standardized and canonicalized, and the server reads
-   `.authsia/workspace.json` through the existing validated workspace
-   configuration store.
-3. A valid root is fixed for the process lifetime. No tool argument can select
-   another workspace root or arbitrary working directory.
-4. When the workspace is missing, invalid, unsupported, an unsafe root, or
-   reached through a containment-breaking symlink, the process starts unbound.
-5. An unbound server keeps `authsia_status` available with a
+1. Startup establishes safe launch context from explicit `--workspace`, one
+   absolute `WORKSPACE_FOLDER_PATHS` entry, or the process working directory.
+2. After initialization, a server without explicit binding requests
+   `roots/list` when the client advertises MCP Roots. Only local `file://` URIs
+   are candidates.
+3. Candidate directories pass through the existing `WorkspaceRootResolver`,
+   standardized authority validation, and validated `.authsia/workspace.json`
+   store. Duplicate or nested roots may converge on one canonical workspace;
+   two managed workspaces are ambiguous and clear the binding.
+4. A successful Roots response takes precedence over launch context. A client
+   that does not support Roots, or whose Roots request fails, retains the safe
+   launch-context result used by existing Claude Code and Codex CLI sessions.
+5. `notifications/roots/list_changed` invalidates the cached result. The next
+   workspace-dependent tool re-resolves it; changing or clearing the canonical
+   workspace first attempts to revoke active grants owned by that MCP server
+   instance.
+   No tool argument can select another root or arbitrary working directory.
+6. When the workspace is missing, invalid, unsupported, an unsafe root, or
+   reached through a containment-breaking symlink, the process remains unbound.
+7. An unbound server keeps `authsia_status` available with a
    `workspaceUnavailable` diagnostic. Workspace inspection, metadata listing,
    and execution return the stable `workspaceUnavailable` tool error.
 
@@ -555,10 +566,9 @@ configuration because they do not expose a documented equivalent command.
 
 Generated configuration must:
 
-- pass `mcp serve` as an argv array, with Cursor additionally passing its
-  `${workspaceFolder}` through `--workspace`;
-- omit fixed repository paths so the client launches the server from its active
-  working directory;
+- pass `mcp serve` as an argv array;
+- omit fixed repository paths so one user-global entry works across managed
+  workspaces;
 - contain no secret, bearer token, automation credential, or private endpoint;
 - reject control characters and unsupported clients;
 - warn that the user-global configuration contains a machine-specific absolute
@@ -567,13 +577,23 @@ Generated configuration must:
 The delivered output uses user-global Codex `~/.codex/config.toml`, Claude Code
 `~/.claude.json`, Cursor `~/.cursor/mcp.json`, Windsurf
 `~/.codeium/windsurf/mcp_config.json`, and the VS Code user-profile `mcp.json`
-shapes verified against each client's primary documentation. Cursor's
-workspace placeholder avoids relying on the user-global server process working
-directory. The spawned server attempts to bind the active client workspace at
-startup. Outside an initialized
-Authsia workspace it remains available but unbound, and workspace-dependent
-tools fail closed. Configuration formats remain client-owned compatibility
-surfaces, not part of Authsia authorization.
+shapes verified against each client's primary documentation. At startup, an
+explicit `--workspace` takes precedence and disables client-driven rebinding.
+Otherwise, after MCP initialization, the server requests standard `roots/list`
+when the client advertises the Roots capability. It accepts only local
+`file://` roots and binds when all managed candidates resolve to exactly one
+canonical Authsia workspace; duplicate or nested roots inside that workspace
+are harmless, while two managed workspaces are ambiguous and fail closed.
+
+Clients without usable MCP Roots retain compatibility fallbacks: one absolute
+path from Cursor's `WORKSPACE_FOLDER_PATHS` launch hint, then the process
+working directory. A successful Roots response is authoritative over those
+fallbacks. `notifications/roots/list_changed` causes the next workspace tool to
+resolve the roots again; if the canonical workspace changes, the server
+attempts to revoke its active grants before further mediated work.
+Outside an initialized Authsia workspace the server remains available but
+unbound, and workspace-dependent tools fail closed. Configuration formats
+remain client-owned compatibility surfaces, not part of Authsia authorization.
 
 ## Compatibility And Upgrade Policy
 

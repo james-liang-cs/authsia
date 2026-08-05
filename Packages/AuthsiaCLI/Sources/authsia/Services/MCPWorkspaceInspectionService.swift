@@ -42,7 +42,7 @@ struct MCPWorkspaceInspectionService: @unchecked Sendable {
         if !workspaceReady {
             diagnostics.append(MCPDiagnostic(
                 code: "workspaceUnavailable",
-                message: "Start the MCP server from a valid managed Authsia workspace."
+                message: "Open one initialized Authsia workspace in the MCP client or bind it explicitly."
             ))
         }
         if bridgeState != .ready {

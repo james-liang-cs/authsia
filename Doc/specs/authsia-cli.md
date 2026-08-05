@@ -136,7 +136,7 @@ Key properties:
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
 | `authsia mcp configure` | Print user-global local MCP configuration without editing client files | `authsia mcp configure --client codex` |
-| `authsia mcp serve` | Run the local stdio MCP server with optional explicit workspace binding | `authsia mcp serve --workspace /path/to/repo` |
+| `authsia mcp serve` | Run the local stdio MCP server, discovering one client workspace or using an explicit override | `authsia mcp serve --workspace /path/to/repo` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
@@ -1608,14 +1608,17 @@ manual configuration remains available as a fallback. Cursor and Windsurf
 receive only their manual configuration because they do not expose a documented
 equivalent command.
 
-The generated client starts the `authsia mcp serve` stdio process from
-the client's active working directory. Cursor additionally passes its
-`${workspaceFolder}` as `--workspace` because a user-global server process may
-start elsewhere. The server can initialize in any directory. When the selected
-directory belongs to an initialized Authsia workspace, the
-server remains bound to the validated workspace for its lifetime; otherwise
-status reports the unbound state and workspace-dependent tools fail closed. The
-server exposes only
+The generated client starts the `authsia mcp serve` stdio process without a
+fixed repository path. An explicit `--workspace` wins. Otherwise the server
+prefers standard MCP Roots advertised by an IDE or other client, then a single
+safe `WORKSPACE_FOLDER_PATHS` launch hint, then its working directory. Multiple
+client roots may resolve to one canonical managed workspace; two managed
+workspaces are ambiguous and fail closed. Roots-change notifications re-resolve
+the active workspace and attempt to revoke current-instance grants before
+switching.
+Clients without Roots support keep the launch-context behavior used by Claude
+Code and Codex CLI. Status remains available while unbound, and
+workspace-dependent tools fail closed. The server exposes only
 `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, `authsia_exec`,
 `authsia_access_status`, and `authsia_access_revoke`. `authsia_list` returns
 paginated common metadata only, stays inside the configured workspace Vault

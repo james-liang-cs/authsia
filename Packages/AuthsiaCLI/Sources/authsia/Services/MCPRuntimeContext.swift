@@ -23,8 +23,10 @@ struct MCPInvocationContext: Equatable, Sendable {
 
 actor MCPRuntimeContext {
     nonisolated let instanceID: UUID
-    nonisolated let workspaceRoot: URL?
-    nonisolated let workspaceName: String?
+    nonisolated private let workspaceBinding: MCPWorkspaceBindingState
+
+    nonisolated var workspaceRoot: URL? { workspaceBinding.root }
+    nonisolated var workspaceName: String? { workspaceBinding.name }
 
     private var clientPlatform = "mcp-client"
 
@@ -34,27 +36,10 @@ actor MCPRuntimeContext {
         fileManager: FileManager = .default
     ) {
         self.instanceID = instanceID
-
-        guard let discoveredRoot = WorkspaceRootResolver.findWorkspaceRoot(
+        self.workspaceBinding = MCPWorkspaceBindingState(binding: Self.resolveWorkspace(
             startingAt: startingDirectory,
             fileManager: fileManager
-        ),
-        let config = try? WorkspaceConfigStore.read(
-            fromWorkspaceRoot: discoveredRoot,
-            fileManager: fileManager
-        ),
-        let authorityPath = WorkspaceAuthority.validatedRootPath(
-            discoveredRoot.path,
-            containing: startingDirectory.path,
-            fileManager: fileManager
-        ) else {
-            self.workspaceRoot = nil
-            self.workspaceName = nil
-            return
-        }
-
-        self.workspaceRoot = URL(fileURLWithPath: authorityPath, isDirectory: true)
-        self.workspaceName = config.workspace.name
+        ))
     }
 
     nonisolated func requireWorkspace() throws {
@@ -66,6 +51,22 @@ actor MCPRuntimeContext {
     func updateClientInfo(name: String, version: String) {
         _ = version
         clientPlatform = AgentRuntimeContext.sanitize(name) ?? "mcp-client"
+    }
+
+    func bindToClientRoots(_ roots: [URL]) {
+        var bindingsByPath: [String: MCPWorkspaceBinding] = [:]
+        for root in roots {
+            guard let binding = Self.resolveWorkspace(
+                startingAt: root,
+                fileManager: .default
+            ) else {
+                continue
+            }
+            bindingsByPath[binding.root.path] = binding
+        }
+        workspaceBinding.replace(
+            with: bindingsByPath.count == 1 ? bindingsByPath.values.first : nil
+        )
     }
 
     func makeInvocation(id: UUID = UUID()) -> MCPInvocationContext {
@@ -89,5 +90,56 @@ actor MCPRuntimeContext {
             ],
             agentRuntimeContext: agentRuntimeContext
         )
+    }
+
+    private nonisolated static func resolveWorkspace(
+        startingAt startingDirectory: URL,
+        fileManager: FileManager
+    ) -> MCPWorkspaceBinding? {
+        guard let discoveredRoot = WorkspaceRootResolver.findWorkspaceRoot(
+            startingAt: startingDirectory,
+            fileManager: fileManager
+        ),
+        let config = try? WorkspaceConfigStore.read(
+            fromWorkspaceRoot: discoveredRoot,
+            fileManager: fileManager
+        ),
+        let authorityPath = WorkspaceAuthority.validatedRootPath(
+            discoveredRoot.path,
+            containing: startingDirectory.path,
+            fileManager: fileManager
+        ) else {
+            return nil
+        }
+        return MCPWorkspaceBinding(
+            root: URL(fileURLWithPath: authorityPath, isDirectory: true),
+            name: config.workspace.name
+        )
+    }
+}
+
+private struct MCPWorkspaceBinding: Sendable {
+    let root: URL
+    let name: String
+}
+
+private final class MCPWorkspaceBindingState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var binding: MCPWorkspaceBinding?
+
+    init(binding: MCPWorkspaceBinding?) {
+        self.binding = binding
+    }
+
+    var root: URL? {
+        lock.withLock { binding?.root }
+    }
+
+    var name: String? {
+        lock.withLock { binding?.name }
+    }
+
+    func replace(with binding: MCPWorkspaceBinding?) {
+        lock.withLock { self.binding = binding }
     }
 }

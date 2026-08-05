@@ -26,6 +26,7 @@ struct MCPClientConfigurationTests {
             #expect(first.contains("serve"))
             #expect(first.contains("Machine-specific absolute path"))
             #expect(first.contains("The server can start from any directory"))
+            #expect(first.contains("uses MCP Roots or safe launch context"))
             #expect(first.contains("workspace tools remain unavailable"))
             #expect(first.contains("user-global"))
             #expect(!first.contains("AUTHSIA_ACCESS_CREDENTIAL"))
@@ -56,8 +57,8 @@ struct MCPClientConfigurationTests {
         #expect(!cursor.contains("Configure directly:"))
         #expect(cursor.contains("~/.cursor/mcp.json"))
         #expect(cursor.contains("\"mcpServers\""))
-        #expect(cursor.contains("\"--workspace\""))
-        #expect(cursor.contains("${workspaceFolder}"))
+        #expect(!cursor.contains("\"--workspace\""))
+        #expect(!cursor.contains("${workspaceFolder}"))
 
         let windsurf = try render(.windsurf, fixture: fixture)
         #expect(!windsurf.contains("Configure directly:"))
@@ -70,6 +71,51 @@ struct MCPClientConfigurationTests {
         #expect(vscode.contains("\"servers\""))
         #expect(vscode.contains("\"type" + "\" : \"stdio\""))
         #expect(!vscode.contains("\"cwd\""))
+    }
+
+    @Test("serve discovers one client workspace without fixed configuration")
+    func serveWorkspaceDiscovery() throws {
+        let fallback = "/tmp/fallback"
+
+        #expect(MCPCommand.Serve.startingDirectory(
+            workspace: "/tmp/explicit",
+            environment: ["WORKSPACE_FOLDER_PATHS": "/tmp/client"],
+            currentDirectoryPath: fallback
+        ).path == "/tmp/explicit")
+        #expect(MCPCommand.Serve.startingDirectory(
+            workspace: nil,
+            environment: ["WORKSPACE_FOLDER_PATHS": "/tmp/client"],
+            currentDirectoryPath: fallback
+        ).path == "/tmp/client")
+        #expect(MCPCommand.Serve.startingDirectory(
+            workspace: nil,
+            environment: ["WORKSPACE_FOLDER_PATHS": "/tmp/one,/tmp/two"],
+            currentDirectoryPath: fallback
+        ).path == fallback)
+        #expect(MCPCommand.Serve.startingDirectory(
+            workspace: nil,
+            environment: [:],
+            currentDirectoryPath: fallback
+        ).path == fallback)
+
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                workspace: .init(name: "cursor", authsiaFolder: "Workspaces/cursor"),
+                managedEnvFiles: [],
+                agents: nil
+            ),
+            toWorkspaceRoot: root
+        )
+        let selected = MCPCommand.Serve.startingDirectory(
+            workspace: nil,
+            environment: ["WORKSPACE_FOLDER_PATHS": root.path],
+            currentDirectoryPath: fallback
+        )
+        let runtime = MCPRuntimeContext(startingDirectory: selected)
+        #expect(runtime.workspaceName == "cursor")
+        #expect(runtime.workspaceRoot?.path == root.resolvingSymlinksInPath().path)
     }
 
     @Test("direct commands shell-quote machine-specific paths")
