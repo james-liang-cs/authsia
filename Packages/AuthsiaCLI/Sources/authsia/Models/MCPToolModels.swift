@@ -52,12 +52,33 @@ struct MCPEmptyInput: Codable, Equatable, Sendable, MCPClosedToolInput {
     static let allowedKeys: Set<String> = []
 }
 
-struct MCPWorkspaceInspectInput: Codable, Equatable, Sendable, MCPClosedToolInput {
-    static let allowedKeys: Set<String> = ["environment"]
-    let environment: String?
+struct MCPStatusInput: Codable, Equatable, Sendable, MCPClosedToolInput {
+    static let allowedKeys: Set<String> = ["workspaceRoot"]
+    let workspaceRoot: String?
 
-    init(environment: String? = nil) {
+    init(workspaceRoot: String? = nil) {
+        self.workspaceRoot = workspaceRoot
+    }
+
+    func validated() throws -> MCPStatusInput {
+        try validateWorkspaceRoot(workspaceRoot)
+        return self
+    }
+}
+
+struct MCPWorkspaceInspectInput: Codable, Equatable, Sendable, MCPClosedToolInput {
+    static let allowedKeys: Set<String> = ["environment", "workspaceRoot"]
+    let environment: String?
+    let workspaceRoot: String?
+
+    init(environment: String? = nil, workspaceRoot: String? = nil) {
         self.environment = environment
+        self.workspaceRoot = workspaceRoot
+    }
+
+    func validated() throws -> MCPWorkspaceInspectInput {
+        try validateWorkspaceRoot(workspaceRoot)
+        return self
     }
 }
 
@@ -77,11 +98,14 @@ enum MCPListItemType: String, CaseIterable, Codable, Equatable, Sendable {
 }
 
 struct MCPListInput: Codable, Equatable, Sendable, MCPClosedToolInput {
-    static let allowedKeys: Set<String> = ["type", "folder", "environment", "limit", "offset"]
+    static let allowedKeys: Set<String> = [
+        "type", "folder", "environment", "workspaceRoot", "limit", "offset",
+    ]
 
     let type: MCPListItemType
     let folder: String?
     let environment: String?
+    let workspaceRoot: String?
     let limit: Int
     let offset: Int
 
@@ -89,12 +113,14 @@ struct MCPListInput: Codable, Equatable, Sendable, MCPClosedToolInput {
         type: MCPListItemType,
         folder: String? = nil,
         environment: String? = nil,
+        workspaceRoot: String? = nil,
         limit: Int = 50,
         offset: Int = 0
     ) {
         self.type = type
         self.folder = folder
         self.environment = environment
+        self.workspaceRoot = workspaceRoot
         self.limit = limit
         self.offset = offset
     }
@@ -103,6 +129,7 @@ struct MCPListInput: Codable, Equatable, Sendable, MCPClosedToolInput {
         case type
         case folder
         case environment
+        case workspaceRoot
         case limit
         case offset
     }
@@ -113,12 +140,14 @@ struct MCPListInput: Codable, Equatable, Sendable, MCPClosedToolInput {
             type: try container.decode(MCPListItemType.self, forKey: .type),
             folder: try container.decodeIfPresent(String.self, forKey: .folder),
             environment: try container.decodeIfPresent(String.self, forKey: .environment),
+            workspaceRoot: try container.decodeIfPresent(String.self, forKey: .workspaceRoot),
             limit: try container.decodeIfPresent(Int.self, forKey: .limit) ?? 50,
             offset: try container.decodeIfPresent(Int.self, forKey: .offset) ?? 0
         )
     }
 
     func validated() throws -> MCPListInput {
+        try validateWorkspaceRoot(workspaceRoot)
         if let folder {
             let trimmed = folder.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty,
@@ -155,7 +184,7 @@ struct MCPListInput: Codable, Equatable, Sendable, MCPClosedToolInput {
 
 struct MCPExecInput: Codable, Equatable, Sendable, MCPClosedToolInput {
     static let allowedKeys: Set<String> = [
-        "argv", "environment", "defaultOnly", "envFiles", "timeoutSeconds",
+        "argv", "environment", "defaultOnly", "envFiles", "timeoutSeconds", "workspaceRoot",
     ]
 
     let argv: [String]
@@ -163,19 +192,22 @@ struct MCPExecInput: Codable, Equatable, Sendable, MCPClosedToolInput {
     let defaultOnly: Bool
     let envFiles: [String]
     let timeoutSeconds: Int
+    let workspaceRoot: String?
 
     init(
         argv: [String],
         environment: String? = nil,
         defaultOnly: Bool = false,
         envFiles: [String] = [],
-        timeoutSeconds: Int = 900
+        timeoutSeconds: Int = 900,
+        workspaceRoot: String? = nil
     ) {
         self.argv = argv
         self.environment = environment
         self.defaultOnly = defaultOnly
         self.envFiles = envFiles
         self.timeoutSeconds = timeoutSeconds
+        self.workspaceRoot = workspaceRoot
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -184,6 +216,7 @@ struct MCPExecInput: Codable, Equatable, Sendable, MCPClosedToolInput {
         case defaultOnly
         case envFiles
         case timeoutSeconds
+        case workspaceRoot
     }
 
     init(from decoder: Decoder) throws {
@@ -193,11 +226,13 @@ struct MCPExecInput: Codable, Equatable, Sendable, MCPClosedToolInput {
             environment: try container.decodeIfPresent(String.self, forKey: .environment),
             defaultOnly: try container.decodeIfPresent(Bool.self, forKey: .defaultOnly) ?? false,
             envFiles: try container.decodeIfPresent([String].self, forKey: .envFiles) ?? [],
-            timeoutSeconds: try container.decodeIfPresent(Int.self, forKey: .timeoutSeconds) ?? 900
+            timeoutSeconds: try container.decodeIfPresent(Int.self, forKey: .timeoutSeconds) ?? 900,
+            workspaceRoot: try container.decodeIfPresent(String.self, forKey: .workspaceRoot)
         )
     }
 
     func validated() throws -> MCPExecInput {
+        try validateWorkspaceRoot(workspaceRoot)
         guard !argv.isEmpty else {
             throw MCPToolInputError.invalidArgument("argv must contain an executable.")
         }
@@ -281,6 +316,20 @@ struct MCPExecInput: Codable, Equatable, Sendable, MCPClosedToolInput {
     private static let shellExecutableNames: Set<String> = [
         "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "sh", "tcsh", "zsh",
     ]
+}
+
+private func validateWorkspaceRoot(_ workspaceRoot: String?) throws {
+    guard let workspaceRoot else { return }
+    guard workspaceRoot.hasPrefix("/"),
+          !workspaceRoot.isEmpty,
+          workspaceRoot.utf8.count <= 4_096,
+          workspaceRoot.unicodeScalars.allSatisfy({
+              !CharacterSet.controlCharacters.contains($0)
+          }) else {
+        throw MCPToolInputError.invalidArgument(
+            "workspaceRoot must be a safe absolute local filesystem path."
+        )
+    }
 }
 
 struct MCPAccessRevokeInput: Codable, Equatable, Sendable, MCPClosedToolInput {

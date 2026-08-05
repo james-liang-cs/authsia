@@ -49,8 +49,9 @@ enum MCPClientConfiguration {
         }
 
         let warning = "Machine-specific absolute path for user-global configuration; do not commit or share it. " +
-            "The server can start from any directory and uses MCP Roots or safe launch context to discover one " +
-            "initialized Authsia workspace; workspace tools remain unavailable when discovery is ambiguous."
+            "The server can start from any directory and accepts an optional workspaceRoot tool argument from " +
+            "IDE clients, with safe launch context as fallback; workspace tools remain unavailable until an " +
+            "initialized Authsia workspace is selected."
         switch client {
         case .codex:
             return """

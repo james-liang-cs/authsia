@@ -57,11 +57,11 @@ client files. For Codex, Claude Code, and VS Code, it also prints a direct MCP
 installation command; other clients retain manual configuration guidance.
 `authsia mcp serve` runs the same local stdio server directly and
 is included in CLI help and shell completion. One global client configuration
-can discover one managed workspace through standard MCP Roots, Cursor's safe
-launch hint, or the client working directory without embedding a repository
-path. An explicit `--workspace` remains available; two managed roots or invalid
-workspace context fail closed. Claude Code and Codex CLI retain their existing
-working-directory behavior. Otherwise status remains available while
+can serve every repository: workspace-dependent tools accept the active
+repository's validated absolute path as `workspaceRoot`, with Cursor's safe
+launch hint or the client working directory as compatibility fallbacks. An
+explicit `--workspace` remains available and authoritative. Claude Code and
+Codex CLI retain their existing working-directory behavior. Otherwise status remains available while
 workspace-dependent tools fail closed. The local `stdio` server exposes six
 constrained tools for status, workspace inspection, scoped metadata listing,
 mediated execution, grant status, and grant revocation. It never exposes a

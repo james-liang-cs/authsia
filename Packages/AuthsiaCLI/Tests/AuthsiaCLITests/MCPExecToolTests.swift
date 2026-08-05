@@ -12,7 +12,8 @@ struct MCPExecToolTests {
             argv: ["swift", "test", "--filter", "Safe Test"],
             environment: "Development",
             envFiles: [".env", "config/.env.local"],
-            timeoutSeconds: 30
+            timeoutSeconds: 30,
+            workspaceRoot: "/tmp/active-workspace"
         ).validated()
 
         #expect(AuthsiaMCPServer.execArguments(input) == [

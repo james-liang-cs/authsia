@@ -75,8 +75,8 @@ struct MCPRuntimeContextTests {
         }
     }
 
-    @Test("client roots bind exactly one managed workspace")
-    func clientRootsBindOneManagedWorkspace() async throws {
+    @Test("an explicit tool workspace path binds a managed workspace")
+    func toolWorkspacePathBindsManagedWorkspace() throws {
         let launchDirectory = try makeWorkspaceRoot()
         let managedRoot = try makeManagedWorkspace(name: "ide")
         defer {
@@ -87,25 +87,29 @@ struct MCPRuntimeContextTests {
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
         let context = MCPRuntimeContext(startingDirectory: launchDirectory)
 
-        await context.bindToClientRoots([nested, managedRoot])
+        try context.bindToWorkspaceRoot(nested)
 
         #expect(context.workspaceName == "ide")
         #expect(context.workspaceRoot?.path == managedRoot.resolvingSymlinksInPath().path)
     }
 
-    @Test("ambiguous managed client roots fail closed")
-    func ambiguousClientRootsFailClosed() async throws {
+    @Test("an invalid tool workspace path clears stale authority")
+    func invalidToolWorkspacePathFailsClosed() throws {
         let launchDirectory = try makeWorkspaceRoot()
-        let first = try makeManagedWorkspace(name: "frontend")
-        let second = try makeManagedWorkspace(name: "backend")
+        let managedRoot = try makeManagedWorkspace(name: "frontend")
+        let invalidRoot = try makeWorkspaceRoot()
         defer {
             try? FileManager.default.removeItem(at: launchDirectory)
-            try? FileManager.default.removeItem(at: first)
-            try? FileManager.default.removeItem(at: second)
+            try? FileManager.default.removeItem(at: managedRoot)
+            try? FileManager.default.removeItem(at: invalidRoot)
         }
         let context = MCPRuntimeContext(startingDirectory: launchDirectory)
 
-        await context.bindToClientRoots([first, second])
+        try context.bindToWorkspaceRoot(managedRoot)
+        #expect(context.workspaceName == "frontend")
+        #expect(throws: MCPRuntimeContextError.self) {
+            try context.bindToWorkspaceRoot(invalidRoot)
+        }
 
         #expect(context.workspaceRoot == nil)
         #expect(context.workspaceName == nil)

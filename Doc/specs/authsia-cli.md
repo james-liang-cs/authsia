@@ -1610,21 +1610,24 @@ equivalent command.
 
 The generated client starts the `authsia mcp serve` stdio process without a
 fixed repository path. An explicit `--workspace` wins. Otherwise the server
-prefers standard MCP Roots advertised by an IDE or other client, then a single
-safe `WORKSPACE_FOLDER_PATHS` launch hint, then its working directory. Multiple
-client roots may resolve to one canonical managed workspace; two managed
-workspaces are ambiguous and fail closed. Roots-change notifications re-resolve
-the active workspace and attempt to revoke current-instance grants before
-switching.
-Clients without Roots support keep the launch-context behavior used by Claude
-Code and Codex CLI. Status remains available while unbound, and
+accepts an optional validated absolute `workspaceRoot` on each
+workspace-dependent tool. This keeps one global MCP registration usable across
+repositories and IDE-hosted Claude or Codex sessions without relying on the
+deprecated MCP Roots feature. A single safe `WORKSPACE_FOLDER_PATHS` launch
+hint, then the process working directory, remain compatibility fallbacks used
+by Cursor, Claude Code, and Codex CLI. Changing the tool-selected canonical
+workspace attempts to revoke current-instance grants before further mediated
+work. Status remains available while unbound, and
 workspace-dependent tools fail closed. The server exposes only
 `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, `authsia_exec`,
 `authsia_access_status`, and `authsia_access_revoke`. `authsia_list` returns
 paginated common metadata only, stays inside the configured workspace Vault
 folder, and reuses list-only Agent JIT with the same Mac or paired-iPhone
 approval path. Secret-bearing work remains a Bridge-mediated Agent JIT
-execution; the MCP client cannot request raw secret values, select automation
+execution. `authsia_list` and `authsia_exec` accept an optional `environment`;
+named selection uses exact-tagged and `All` items, while `authsia_exec`
+`defaultOnly` selects the default workspace environment for that call. The MCP
+client cannot request raw secret values, select automation
 credentials, read global audit history, or reuse a grant from another MCP
 server instance. Access Center remains the global operator surface for review,
 export, and revocation.

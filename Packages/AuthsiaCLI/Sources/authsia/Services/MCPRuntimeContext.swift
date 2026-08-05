@@ -53,20 +53,15 @@ actor MCPRuntimeContext {
         clientPlatform = AgentRuntimeContext.sanitize(name) ?? "mcp-client"
     }
 
-    func bindToClientRoots(_ roots: [URL]) {
-        var bindingsByPath: [String: MCPWorkspaceBinding] = [:]
-        for root in roots {
-            guard let binding = Self.resolveWorkspace(
-                startingAt: root,
-                fileManager: .default
-            ) else {
-                continue
-            }
-            bindingsByPath[binding.root.path] = binding
+    nonisolated func bindToWorkspaceRoot(_ root: URL) throws {
+        guard let binding = Self.resolveWorkspace(
+            startingAt: root,
+            fileManager: .default
+        ) else {
+            workspaceBinding.replace(with: nil)
+            throw MCPRuntimeContextError.workspaceUnavailable
         }
-        workspaceBinding.replace(
-            with: bindingsByPath.count == 1 ? bindingsByPath.values.first : nil
-        )
+        workspaceBinding.replace(with: binding)
     }
 
     func makeInvocation(id: UUID = UUID()) -> MCPInvocationContext {

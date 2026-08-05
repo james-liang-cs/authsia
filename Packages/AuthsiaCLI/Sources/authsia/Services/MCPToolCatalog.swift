@@ -51,7 +51,7 @@ enum MCPToolCatalog {
             name: .status,
             description: "Report local Authsia Bridge and workspace readiness." + noPlaintext,
             annotations: .readOnly,
-            inputPropertyNames: [],
+            inputPropertyNames: ["workspaceRoot"],
             requiredInputPropertyNames: [],
             outputPropertyNames: [
                 "serverInstanceID", "protocolRevision", "workspaceName", "workspaceRoot",
@@ -63,7 +63,7 @@ enum MCPToolCatalog {
             name: .workspaceInspect,
             description: "Inspect commit-safe workspace configuration and declared authsia references." + noPlaintext,
             annotations: .readOnly,
-            inputPropertyNames: ["environment"],
+            inputPropertyNames: ["environment", "workspaceRoot"],
             requiredInputPropertyNames: [],
             outputPropertyNames: [
                 "workspaceName", "workspaceRoot", "schemaVersion", "selectedEnvironment",
@@ -76,7 +76,9 @@ enum MCPToolCatalog {
             name: .list,
             description: "List scoped CLI-enabled Vault item metadata through list-only Agent JIT." + noPlaintext,
             annotations: .mediatedRead,
-            inputPropertyNames: ["type", "folder", "environment", "limit", "offset"],
+            inputPropertyNames: [
+                "type", "folder", "environment", "workspaceRoot", "limit", "offset",
+            ],
             requiredInputPropertyNames: ["type"],
             outputPropertyNames: [
                 "invocationID", "type", "folder", "environment", "items", "totalCount",
@@ -97,7 +99,10 @@ enum MCPToolCatalog {
             name: .exec,
             description: "Run argv through Authsia Workspace and Agent JIT mediation." + noPlaintext,
             annotations: .execution,
-            inputPropertyNames: ["argv", "environment", "defaultOnly", "envFiles", "timeoutSeconds"],
+            inputPropertyNames: [
+                "argv", "environment", "defaultOnly", "envFiles", "timeoutSeconds",
+                "workspaceRoot",
+            ],
             requiredInputPropertyNames: ["argv"],
             outputPropertyNames: [
                 "invocationID", "termination", "exitCode", "stdout", "stderr",
@@ -142,10 +147,15 @@ enum MCPToolCatalog {
 
     private static func inputProperties(for name: AuthsiaMCPToolName) -> [String: Value] {
         switch name {
-        case .status, .accessStatus:
+        case .status:
+            return ["workspaceRoot": workspaceRootSchema]
+        case .accessStatus:
             return [:]
         case .workspaceInspect:
-            return ["environment": stringSchema]
+            return [
+                "environment": stringSchema,
+                "workspaceRoot": workspaceRootSchema,
+            ]
         case .list:
             return [
                 "type": .object([
@@ -154,6 +164,7 @@ enum MCPToolCatalog {
                 ]),
                 "folder": stringSchema,
                 "environment": stringSchema,
+                "workspaceRoot": workspaceRootSchema,
                 "limit": .object([
                     "type": "integer",
                     "minimum": 1,
@@ -184,6 +195,7 @@ enum MCPToolCatalog {
                     "minimum": 1,
                     "maximum": 1_800,
                 ]),
+                "workspaceRoot": workspaceRootSchema,
             ]
         case .accessRevoke:
             return ["grantID": stringSchema]
@@ -375,6 +387,10 @@ enum MCPToolCatalog {
     }
 
     private static let stringSchema = Value.object(["type": "string"])
+    private static let workspaceRootSchema = Value.object([
+        "type": "string",
+        "description": "Absolute path of the active initialized Authsia workspace. Pass this when an IDE launches the MCP server outside the repository.",
+    ])
     private static let booleanSchema = Value.object(["type": "boolean"])
     private static let integerSchema = Value.object(["type": "integer"])
     private static let numberSchema = Value.object(["type": "number"])

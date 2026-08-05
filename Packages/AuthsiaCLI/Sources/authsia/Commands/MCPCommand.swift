@@ -38,7 +38,7 @@ struct MCPCommand: AsyncParsableCommand {
             abstract: "Serve Authsia tools over local stdio"
         )
 
-        @Option(help: "Explicit workspace binding (otherwise uses client roots or launch context)")
+        @Option(help: "Explicit workspace binding (otherwise uses tool input or launch context)")
         var workspace: String?
 
         mutating func run() async throws {
@@ -50,7 +50,7 @@ struct MCPCommand: AsyncParsableCommand {
             let server = AuthsiaMCPServer(
                 version: Authsia.version(),
                 runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
-                acceptsClientRoots: workspace == nil
+                acceptsToolWorkspace: workspace == nil
             )
             try await server.runStdio()
         }

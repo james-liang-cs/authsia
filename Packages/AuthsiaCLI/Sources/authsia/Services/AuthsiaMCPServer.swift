@@ -3,12 +3,16 @@ import Dispatch
 import Foundation
 import MCP
 
+private enum MCPWorkspaceSelectionError: Error {
+    case busy
+}
+
 actor AuthsiaMCPServer {
     typealias Diagnostics = @Sendable (String) -> Void
 
     private let server: Server
     private let runtimeContext: MCPRuntimeContext
-    private let acceptsClientRoots: Bool
+    private let acceptsToolWorkspace: Bool
     private let workspaceInspection: MCPWorkspaceInspectionService
     private let grantService: MCPGrantService
     private let listService: any MCPListProviding
@@ -21,9 +25,6 @@ actor AuthsiaMCPServer {
     private var isStopping = false
     private var didUseMediatedTool = false
     private var didCleanupGrants = false
-    private var clientSupportsRoots = false
-    private var clientRootsNeedRefresh = true
-    private var clientRootsRefreshTask: Task<Bool, Never>?
 
     init(
         version: String,
@@ -33,7 +34,7 @@ actor AuthsiaMCPServer {
                 isDirectory: true
             )
         ),
-        acceptsClientRoots: Bool = true,
+        acceptsToolWorkspace: Bool = true,
         workspaceInspection: MCPWorkspaceInspectionService? = nil,
         grantService: MCPGrantService? = nil,
         listService: (any MCPListProviding)? = nil,
@@ -44,12 +45,13 @@ actor AuthsiaMCPServer {
             name: "authsia",
             version: version,
             title: "Authsia",
-            instructions: "Local, JIT-mediated Authsia access. Tools never return plaintext secrets.",
+            instructions: "Local, JIT-mediated Authsia access. Tools never return plaintext secrets. " +
+                "In an IDE, pass the active repository's absolute path as workspaceRoot to workspace tools.",
             capabilities: .init(tools: .init()),
             configuration: .strict
         )
         self.runtimeContext = runtimeContext
-        self.acceptsClientRoots = acceptsClientRoots
+        self.acceptsToolWorkspace = acceptsToolWorkspace
         self.workspaceInspection = workspaceInspection ?? MCPWorkspaceInspectionService(
             runtimeContext: runtimeContext
         )
@@ -63,9 +65,8 @@ actor AuthsiaMCPServer {
 
     func start(transport: any Transport) async throws {
         await registerHandlersIfNeeded()
-        try await server.start(transport: transport) { [weak self, runtimeContext] client, capabilities in
+        try await server.start(transport: transport) { [runtimeContext] client, _ in
             await runtimeContext.updateClientInfo(name: client.name, version: client.version)
-            await self?.updateClientRootsCapability(capabilities.roots != nil)
         }
         diagnostics("Authsia MCP server started")
     }
@@ -114,38 +115,36 @@ actor AuthsiaMCPServer {
             guard let name = AuthsiaMCPToolName(rawValue: parameters.name) else {
                 throw MCPError.invalidParams("Unknown Authsia MCP tool: \(parameters.name)")
             }
-            switch name {
-            case .status, .workspaceInspect, .list, .exec:
-                await self.refreshClientRootsIfNeeded()
-            case .accessStatus, .accessRevoke:
-                break
-            }
             var invocationID: UUID?
             do {
                 switch name {
                 case .status:
-                    _ = try Self.decodeInput(
-                        MCPEmptyInput.self,
+                    let input = try Self.decodeInput(
+                        MCPStatusInput.self,
                         arguments: parameters.arguments
-                    )
+                    ).validated()
+                    try await self.selectWorkspace(input.workspaceRoot)
                     return try Self.successResult(self.workspaceInspection.status())
                 case .workspaceInspect:
                     let input = try Self.decodeInput(
                         MCPWorkspaceInspectInput.self,
                         arguments: parameters.arguments
-                    )
+                    ).validated()
+                    try await self.selectWorkspace(input.workspaceRoot)
                     return try Self.successResult(self.workspaceInspection.inspect(input))
                 case .list:
                     let input = try Self.decodeInput(
                         MCPListInput.self,
                         arguments: parameters.arguments
                     ).validated()
+                    try await self.selectWorkspace(input.workspaceRoot)
                     return try await self.listMetadata(input)
                 case .exec:
                     let input = try Self.decodeInput(
                         MCPExecInput.self,
                         arguments: parameters.arguments
                     ).validated()
+                    try await self.selectWorkspace(input.workspaceRoot)
                     return try await self.execute(input)
                 case .accessStatus:
                     _ = try Self.decodeInput(
@@ -176,6 +175,12 @@ actor AuthsiaMCPServer {
                 return try Self.errorResult(
                     code: .invalidInput,
                     message: error.localizedDescription,
+                    invocationID: invocationID
+                )
+            } catch MCPWorkspaceSelectionError.busy {
+                return try Self.errorResult(
+                    code: .busy,
+                    message: "Another Authsia MCP mediated operation is already active.",
                     invocationID: invocationID
                 )
             } catch let error as MCPGrantServiceError {
@@ -221,72 +226,26 @@ actor AuthsiaMCPServer {
                 )
             }
         }
-        await server.onNotification(RootsListChangedNotification.self) { [weak self] _ in
-            await self?.markClientRootsChanged()
-        }
     }
 
-    private func updateClientRootsCapability(_ supported: Bool) {
-        clientSupportsRoots = supported
-        clientRootsNeedRefresh = supported
-    }
-
-    private func markClientRootsChanged() {
-        guard acceptsClientRoots, clientSupportsRoots else { return }
-        clientRootsNeedRefresh = true
-    }
-
-    private func refreshClientRootsIfNeeded() async {
-        if let clientRootsRefreshTask {
-            _ = await clientRootsRefreshTask.value
-            return
+    private func selectWorkspace(_ workspaceRoot: String?) throws {
+        guard acceptsToolWorkspace, let workspaceRoot else { return }
+        guard !mediatedOperationInProgress else {
+            throw MCPWorkspaceSelectionError.busy
         }
-        guard acceptsClientRoots,
-              clientSupportsRoots,
-              clientRootsNeedRefresh,
-              !mediatedOperationInProgress else {
-            return
-        }
-        clientRootsNeedRefresh = false
         let previousRoot = runtimeContext.workspaceRoot
-        let shouldRevokeGrants = didUseMediatedTool
-        let task = Task { [server, runtimeContext, grantService] in
-            do {
-                let roots = try await server.listRoots()
-                await runtimeContext.bindToClientRoots(Self.fileRootURLs(from: roots))
-                if shouldRevokeGrants,
-                   runtimeContext.workspaceRoot?.path != previousRoot?.path {
-                    grantService.revokeActiveOwnedGrants()
-                }
-                return true
-            } catch {
-                return false
-            }
+        do {
+            try runtimeContext.bindToWorkspaceRoot(URL(
+                fileURLWithPath: workspaceRoot,
+                isDirectory: true
+            ))
+        } catch {
+            diagnostics("Authsia MCP tool workspace is unavailable; workspace tools are closed")
+            throw error
         }
-        clientRootsRefreshTask = task
-        let didResolveRoots = await task.value
-        clientRootsRefreshTask = nil
-        if !didResolveRoots {
-            diagnostics("Authsia MCP client roots unavailable; using launch workspace context")
-        } else if runtimeContext.workspaceRoot == nil {
-            diagnostics("Authsia MCP client roots are ambiguous or unavailable; workspace tools are closed")
-        }
-    }
-
-    private static func fileRootURLs(from roots: [Root]) -> [URL] {
-        roots.compactMap { root in
-            guard root.uri.unicodeScalars.allSatisfy({
-                !CharacterSet.controlCharacters.contains($0)
-            }),
-            let url = URL(string: root.uri),
-            url.isFileURL,
-            url.query == nil,
-            url.fragment == nil,
-            url.path.hasPrefix("/"),
-            url.host == nil || url.host == "" || url.host == "localhost" else {
-                return nil
-            }
-            return url
+        if didUseMediatedTool,
+           runtimeContext.workspaceRoot?.path != previousRoot?.path {
+            grantService.revokeActiveOwnedGrants()
         }
     }
 

@@ -26,7 +26,7 @@ struct MCPClientConfigurationTests {
             #expect(first.contains("serve"))
             #expect(first.contains("Machine-specific absolute path"))
             #expect(first.contains("The server can start from any directory"))
-            #expect(first.contains("uses MCP Roots or safe launch context"))
+            #expect(first.contains("accepts an optional workspaceRoot tool argument"))
             #expect(first.contains("workspace tools remain unavailable"))
             #expect(first.contains("user-global"))
             #expect(!first.contains("AUTHSIA_ACCESS_CREDENTIAL"))

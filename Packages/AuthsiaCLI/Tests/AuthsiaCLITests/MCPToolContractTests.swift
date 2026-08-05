@@ -41,9 +41,11 @@ struct MCPToolContractTests {
             type: .password,
             folder: "Workspaces/api/Production",
             environment: "Production",
+            workspaceRoot: "/tmp/Authsia Demo",
             limit: 25,
             offset: 50
         ).validated()
+        #expect(input.workspaceRoot == "/tmp/Authsia Demo")
         #expect(input.limit == 25)
         #expect(input.offset == 50)
 
@@ -61,6 +63,9 @@ struct MCPToolContractTests {
         }
         #expect(throws: MCPToolInputError.self) {
             try MCPListInput(type: .password, offset: -1).validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPListInput(type: .password, workspaceRoot: "relative/project").validated()
         }
     }
 
@@ -101,9 +106,51 @@ struct MCPToolContractTests {
             argv: ["swift", "test"],
             environment: "Development",
             envFiles: [".env.local"],
-            timeoutSeconds: 30
+            timeoutSeconds: 30,
+            workspaceRoot: "/tmp/Authsia Demo"
         ).validated()
         #expect(input.argv == ["swift", "test"])
+        #expect(input.workspaceRoot == "/tmp/Authsia Demo")
+    }
+
+    @Test("workspace tools accept an optional absolute workspace root")
+    func workspaceRootValidation() throws {
+        #expect(
+            try MCPStatusInput(workspaceRoot: "/tmp/project").validated().workspaceRoot
+                == "/tmp/project"
+        )
+        #expect(
+            try MCPWorkspaceInspectInput(
+                environment: "Development",
+                workspaceRoot: "/tmp/project"
+            ).validated().workspaceRoot == "/tmp/project"
+        )
+        #expect(throws: MCPToolInputError.self) {
+            try MCPStatusInput(workspaceRoot: "project").validated()
+        }
+        #expect(throws: MCPToolInputError.self) {
+            try MCPWorkspaceInspectInput(workspaceRoot: "/tmp/bad\npath").validated()
+        }
+
+        for descriptor in MCPToolCatalog.descriptors where [
+            AuthsiaMCPToolName.status,
+            .workspaceInspect,
+            .list,
+            .exec,
+        ].contains(descriptor.name) {
+            #expect(descriptor.inputPropertyNames.contains("workspaceRoot"))
+        }
+        for tool in MCPToolCatalog.tools where [
+            AuthsiaMCPToolName.status.rawValue,
+            AuthsiaMCPToolName.workspaceInspect.rawValue,
+            AuthsiaMCPToolName.list.rawValue,
+            AuthsiaMCPToolName.exec.rawValue,
+        ].contains(tool.name) {
+            let schema = tool.inputSchema.objectValue?["properties"]?
+                .objectValue?["workspaceRoot"]?.objectValue
+            #expect(schema?["type"]?.stringValue == "string")
+            #expect(schema?["description"]?.stringValue?.contains("active initialized") == true)
+        }
     }
 
     @Test("closed decoder rejects unknown fields")
