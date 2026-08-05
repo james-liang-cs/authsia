@@ -63,8 +63,8 @@ paths by [`storage.md`](storage.md).
 - Standard output contains MCP frames only. Redacted diagnostics go to standard
   error. Child standard output and error are captured and returned inside the
   tool result; they are never written directly to server standard output.
-- A server process creates one random server-instance UUID in memory after it
-  resolves a valid workspace. It does not persist or accept that UUID from the
+- A server process creates one random server-instance UUID in memory whether it
+  starts bound or unbound. It does not persist or accept that UUID from the
   client.
 - Client initialization name and version are untrusted display metadata. They
   never replace OS-observed caller identity or any Bridge authorization check.
@@ -156,18 +156,20 @@ delivery mode, item type, approval authority, or grant capability.
 
 ## Workspace Binding
 
-One server process serves one managed workspace:
+One server process is either unbound or serves one managed workspace:
 
-1. Startup resolves the current directory through the existing
+1. Startup attempts to resolve the current directory through the existing
    `WorkspaceRootResolver`.
-2. The resolved root is standardized and canonicalized.
-3. The server reads `.authsia/workspace.json` through the existing validated
-   workspace configuration store.
-4. The process refuses to start when the workspace is missing, invalid,
-   unsupported, an unsafe root, or reached through a containment-breaking
-   symlink.
-5. No tool argument can select another workspace root or arbitrary working
-   directory.
+2. A resolved root is standardized and canonicalized, and the server reads
+   `.authsia/workspace.json` through the existing validated workspace
+   configuration store.
+3. A valid root is fixed for the process lifetime. No tool argument can select
+   another workspace root or arbitrary working directory.
+4. When the workspace is missing, invalid, unsupported, an unsafe root, or
+   reached through a containment-breaking symlink, the process starts unbound.
+5. An unbound server keeps `authsia_status` available with a
+   `workspaceUnavailable` diagnostic. Workspace inspection, metadata listing,
+   and execution return the stable `workspaceUnavailable` tool error.
 
 The server may inspect only these workspace sources:
 
@@ -515,7 +517,7 @@ payloads.
 | --- | --- |
 | Client requests a plaintext secret | No raw-secret tool exists; unknown tools fail; execution delegates to masked Workspace run. |
 | Client lies about name/version | Treat initialization and platform as display metadata only. |
-| Client broadens workspace | Root is fixed at startup; canonical containment is checked; no root/cwd tool field exists. |
+| Client broadens workspace | A valid root is fixed at startup; an unbound server remains unbound; canonical containment is checked; no root/cwd tool field exists. |
 | Managed file is a symlink escape | Canonicalize and reject sources outside the workspace before reading. |
 | Shell or argument injection | Accept a bounded argv array and self-execute without a shell. |
 | Ambient server credential or stale authority reaches the child | Construct the child environment from the fixed basic-variable allowlist, add only fresh MCP context, remove internal markers before payload launch, and test the effective environment. |
@@ -555,9 +557,10 @@ The delivered output uses user-global Codex `~/.codex/config.toml`, Claude Code
 `~/.claude.json`, Cursor `~/.cursor/mcp.json`, Windsurf
 `~/.codeium/windsurf/mcp_config.json`, and the VS Code user-profile `mcp.json`
 shapes verified against each client's primary documentation. The spawned server
-inherits the active client workspace; server startup validates that workspace
-and fails closed outside initialized Authsia workspaces. Configuration formats
-remain client-owned compatibility surfaces, not part of Authsia authorization.
+attempts to bind the active client workspace at startup. Outside an initialized
+Authsia workspace it remains available but unbound, and workspace-dependent
+tools fail closed. Configuration formats remain client-owned compatibility
+surfaces, not part of Authsia authorization.
 
 ## Compatibility And Upgrade Policy
 
@@ -588,6 +591,8 @@ Implementation is not complete until automated tests prove:
 
 - exactly six tools are advertised with the specified closed schemas and
   annotations;
+- the server initializes outside a managed workspace, status reports the
+  unbound state, and workspace-dependent tools return `workspaceUnavailable`;
 - list requests stay inside the configured workspace folder, create only
   list-capability JIT grants, preserve MCP instance/invocation context through
   the existing local or remote approval path, and return paginated common

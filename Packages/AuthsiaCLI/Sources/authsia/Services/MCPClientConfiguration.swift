@@ -49,7 +49,8 @@ enum MCPClientConfiguration {
         }
 
         let warning = "Machine-specific absolute path for user-global configuration; do not commit or share it. " +
-            "The server starts only from an initialized Authsia workspace."
+            "The server can start from any directory; workspace tools remain unavailable outside an initialized " +
+            "Authsia workspace."
         switch client {
         case .codex:
             return """

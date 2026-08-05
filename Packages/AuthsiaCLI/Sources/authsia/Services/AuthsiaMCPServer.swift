@@ -62,7 +62,6 @@ actor AuthsiaMCPServer {
     }
 
     func start(transport: any Transport) async throws {
-        try runtimeContext.requireWorkspace()
         await registerHandlersIfNeeded()
         try await server.start(transport: transport) { [runtimeContext] client, _ in
             await runtimeContext.updateClientInfo(name: client.name, version: client.version)

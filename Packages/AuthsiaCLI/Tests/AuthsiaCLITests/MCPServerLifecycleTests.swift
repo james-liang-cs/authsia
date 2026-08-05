@@ -52,6 +52,67 @@ struct MCPServerLifecycleTests {
         await server.waitUntilCompleted()
     }
 
+    @Test("server starts outside a managed workspace and keeps workspace tools closed")
+    func initializationWithoutWorkspace() async throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let serverID = UUID()
+        let runtime = MCPRuntimeContext(startingDirectory: root, instanceID: serverID)
+        let server = AuthsiaMCPServer(
+            version: "test",
+            runtimeContext: runtime,
+            workspaceInspection: MCPWorkspaceInspectionService(
+                runtimeContext: runtime,
+                bridgeStateProvider: { .ready },
+                selectionStore: WorkspaceEnvironmentSelectionStore(
+                    fileURL: root.appendingPathComponent("selection.json")
+                )
+            ),
+            grantService: MCPGrantService(
+                serverInstanceID: serverID,
+                client: LifecycleGrantClient(snapshot: .init(active: [], history: []))
+            ),
+            diagnostics: { _ in }
+        )
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "MCP lifecycle test", version: "1")
+
+        try await server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+
+        let statusContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue
+        )
+        let status = try await statusContext.value
+        #expect(status.isError != true)
+        #expect(status.structuredContent?.objectValue?["ready"]?.boolValue == false)
+        #expect(status.structuredContent?.objectValue?["workspaceRoot"]?.stringValue == "")
+        #expect(
+            status.structuredContent?.objectValue?["diagnostics"]?.arrayValue?.first?
+                .objectValue?["code"]?.stringValue == "workspaceUnavailable"
+        )
+
+        for (name, arguments) in [
+            (AuthsiaMCPToolName.workspaceInspect.rawValue, nil),
+            (AuthsiaMCPToolName.list.rawValue, ["type": Value.string("password")]),
+            (AuthsiaMCPToolName.exec.rawValue, ["argv": Value.array([.string("true")])]),
+        ] {
+            let context: RequestContext<CallTool.Result> = try await client.callTool(
+                name: name,
+                arguments: arguments
+            )
+            let result = try await context.value
+            #expect(result.isError == true)
+            #expect(
+                result.structuredContent?.objectValue?["code"]?.stringValue
+                    == MCPToolErrorCode.workspaceUnavailable.rawValue
+            )
+        }
+
+        await client.disconnect()
+        await server.waitUntilCompleted()
+    }
+
     @Test("unknown tools return a protocol error")
     func unknownToolCall() async throws {
         let fixture = try makeServer()

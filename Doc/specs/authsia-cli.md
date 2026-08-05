@@ -1604,9 +1604,11 @@ the binary path is machine-specific. It never edits or launches a third-party
 client.
 
 The generated client starts the hidden `authsia mcp serve` stdio process from
-the client's active working directory. The server starts only when that
-directory belongs to an initialized Authsia workspace, then remains bound to
-that validated workspace for its lifetime. The server exposes only
+the client's active working directory. The server can initialize in any
+directory. When that directory belongs to an initialized Authsia workspace, the
+server remains bound to the validated workspace for its lifetime; otherwise
+status reports the unbound state and workspace-dependent tools fail closed. The
+server exposes only
 `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, `authsia_exec`,
 `authsia_access_status`, and `authsia_access_revoke`. `authsia_list` returns
 paginated common metadata only, stays inside the configured workspace Vault

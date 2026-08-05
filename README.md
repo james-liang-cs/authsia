@@ -53,10 +53,12 @@ authsia mcp configure --client vscode
 ```
 
 The command prints configuration for the exact Authsia binary; it does not edit
-client files. Each server inherits and validates the active client workspace at
-startup. The local `stdio` server exposes six constrained tools for status,
-workspace inspection, scoped metadata listing, mediated execution, grant status,
-and grant revocation. It never exposes a raw-secret or global-audit tool. See the
+client files. The server can start from any client directory and binds to the
+active workspace when it is valid; otherwise status remains available while
+workspace-dependent tools fail closed. The local `stdio` server exposes six
+constrained tools for status, workspace inspection, scoped metadata listing,
+mediated execution, grant status, and grant revocation. It never exposes a
+raw-secret or global-audit tool. See the
 [Local Authsia MCP Server specification](Doc/specs/authsia-mcp.md) for the tool,
 JIT authorization, audit-correlation, and Access Center contracts.
 
