@@ -22,6 +22,7 @@ struct MCPServerLifecycleTests {
         #expect(help.contains("serve"))
         #expect(help.contains("authsia mcp configure --client codex"))
         #expect(help.contains("authsia mcp serve"))
+        #expect(help.contains("Settings > Developer Access"))
     }
 
     @Test("initialize advertises tools only and supports ping")
@@ -63,6 +64,32 @@ struct MCPServerLifecycleTests {
         await server.waitUntilCompleted()
     }
 
+    @Test("disabled MCP access rejects every tool before workspace or mediated work")
+    func disabledMCPAccessRejectsEveryTool() async throws {
+        let fixture = try makeServer(mcpAccessEnabled: { false })
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "MCP disabled test", version: "1")
+
+        try await fixture.server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+
+        for name in AuthsiaMCPToolName.allCases {
+            let context: RequestContext<CallTool.Result> = try await client.callTool(
+                name: name.rawValue
+            )
+            let result = try await context.value
+            #expect(result.isError == true)
+            #expect(
+                result.structuredContent?.objectValue?["code"]?.stringValue
+                    == MCPToolErrorCode.mcpAccessDisabled.rawValue
+            )
+        }
+
+        await client.disconnect()
+        await fixture.server.waitUntilCompleted()
+    }
+
     @Test("server starts outside a managed workspace and keeps workspace tools closed")
     func initializationWithoutWorkspace() async throws {
         let root = try makeWorkspaceRoot()
@@ -83,6 +110,7 @@ struct MCPServerLifecycleTests {
                 serverInstanceID: serverID,
                 client: LifecycleGrantClient(snapshot: .init(active: [], history: []))
             ),
+            mcpAccessEnabled: { true },
             diagnostics: { _ in }
         )
         let transports = await InMemoryTransport.createConnectedPair()
@@ -148,6 +176,7 @@ struct MCPServerLifecycleTests {
                 runtimeContext: runtime,
                 bridgeStateProvider: { .ready }
             ),
+            mcpAccessEnabled: { true },
             diagnostics: { _ in }
         )
         let transports = await InMemoryTransport.createConnectedPair()
@@ -200,6 +229,7 @@ struct MCPServerLifecycleTests {
                 runtimeContext: runtime,
                 bridgeStateProvider: { .ready }
             ),
+            mcpAccessEnabled: { true },
             diagnostics: { _ in }
         )
         let transports = await InMemoryTransport.createConnectedPair()
@@ -260,6 +290,7 @@ struct MCPServerLifecycleTests {
                 client: grantClient
             ),
             childRunner: LifecycleRunner(),
+            mcpAccessEnabled: { true },
             diagnostics: { _ in }
         )
         let transports = await InMemoryTransport.createConnectedPair()
@@ -398,7 +429,7 @@ struct MCPServerLifecycleTests {
     @Test("diagnostics use the injected sink, never protocol output")
     func diagnosticsAreSeparated() async throws {
         let recorder = DiagnosticRecorder()
-        let fixture = try makeServer { recorder.append($0) }
+        let fixture = try makeServer(diagnostics: { recorder.append($0) })
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let transports = await InMemoryTransport.createConnectedPair()
         let server = fixture.server
@@ -512,6 +543,7 @@ struct MCPServerLifecycleTests {
         grantClient: (any MCPGrantClient)? = nil,
         listService: (any MCPListProviding)? = nil,
         childRunner: (any MCPChildRunning)? = nil,
+        mcpAccessEnabled: @escaping @Sendable () -> Bool = { true },
         diagnostics: @escaping AuthsiaMCPServer.Diagnostics = { _ in }
     ) throws -> (server: AuthsiaMCPServer, root: URL) {
         let root = try makeWorkspaceRoot()
@@ -541,6 +573,7 @@ struct MCPServerLifecycleTests {
                 },
                 listService: listService,
                 childRunner: childRunner,
+                mcpAccessEnabled: mcpAccessEnabled,
                 diagnostics: diagnostics
             ),
             root

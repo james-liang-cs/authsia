@@ -1,4 +1,5 @@
 import ArgumentParser
+import AuthenticatorBridge
 import Foundation
 
 struct MCPCommand: AsyncParsableCommand {
@@ -9,6 +10,7 @@ struct MCPCommand: AsyncParsableCommand {
             Print client configuration or run Authsia's local stdio MCP server.
             Most users should configure a supported client, which launches the server
             automatically and supplies its active workspace when supported.
+            Enable MCP Integrations in Authsia Settings > Developer Access first.
 
             Examples:
               authsia mcp configure --client codex
@@ -50,7 +52,8 @@ struct MCPCommand: AsyncParsableCommand {
             let server = AuthsiaMCPServer(
                 version: Authsia.version(),
                 runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
-                acceptsToolWorkspace: workspace == nil
+                acceptsToolWorkspace: workspace == nil,
+                mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
             )
             try await server.runStdio()
         }

@@ -43,6 +43,10 @@ secret in an issue or reproduction.
 
 ## Local MCP server
 
+MCP integrations are disabled by default. Enable **MCP Integrations** in the
+Authsia app under **Settings > Developer Access** before connecting a client.
+Client configuration does not enable this app-level control.
+
 Print a user-global local MCP configuration for a supported client:
 
 ```bash
@@ -55,6 +59,10 @@ authsia mcp configure --client vscode
 The command prints configuration for the exact Authsia binary; it does not edit
 client files. For Codex, Claude Code, and VS Code, it also prints a direct MCP
 installation command; other clients retain manual configuration guidance.
+The generated Codex manual configuration forwards optional local
+`REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` TLS trust settings without forwarding
+credentials or other ambient variables. Use that manual entry on a network with
+a custom CA; Codex's direct installer cannot forward local environment names.
 `authsia mcp serve` runs the same local stdio server directly and
 is included in CLI help and shell completion. One global client configuration
 can serve every repository: workspace-dependent tools accept the active

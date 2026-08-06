@@ -84,6 +84,13 @@ The MCP client and model are untrusted. Tool arguments, initialization
 metadata, cancellation reasons, and client-side confirmation state are all
 untrusted input.
 
+MCP integrations are an explicit macOS app opt-in and are disabled when the
+`mcpAccessEnabled` preference is absent or false. The client may still launch
+the local stdio process, but every recognized tool returns
+`mcpAccessDisabled` before workspace selection, grant access, Vault access, or
+child-process launch. Enabling MCP does not enable CLI access, create a grant,
+or bypass any existing Bridge/JIT check.
+
 For every JIT-mediated list or secret-bearing execution, all existing
 conditions still apply:
 
@@ -98,7 +105,8 @@ conditions still apply:
 MCP V1 is JIT-only. Before launching the wrapper, the server constructs a new
 environment from a fixed set of basic process variables (`HOME`, `LANG`,
 `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `USER`,
-`__CF_USER_TEXT_ENCODING`, and `LC_*`) plus server-generated MCP runtime
+`__CF_USER_TEXT_ENCODING`, and `LC_*`) plus the non-secret TLS trust settings
+`REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE`, and server-generated MCP runtime
 context. It does not copy the rest of the MCP server environment, including
 cloud credentials, access tokens, stale Authsia runtime context, or Authsia
 automation credentials. The internal process-control and error-status markers
@@ -523,6 +531,7 @@ stable structured error:
 | `invalidInput` | Tool arguments violate the closed schema or bounds. |
 | `workspaceUnavailable` | The locked workspace is missing, invalid, or unsafe. |
 | `bridgeUnavailable` | The local Bridge cannot be reached or validated. |
+| `mcpAccessDisabled` | MCP integrations are disabled in Authsia Developer Access settings. |
 | `cliAccessDisabled` | Authsia CLI access is disabled. |
 | `approvalDenied` | The user denied or cancelled Authsia approval. |
 | `grantUnavailable` | Required grant is absent, expired, revoked, or no longer matches. |
@@ -547,7 +556,7 @@ payloads.
 | Client broadens workspace | A valid root is fixed at startup; an unbound server remains unbound; canonical containment is checked; no root/cwd tool field exists. |
 | Managed file is a symlink escape | Canonicalize and reject sources outside the workspace before reading. |
 | Shell or argument injection | Accept a bounded argv array and self-execute without a shell. |
-| Ambient server credential or stale authority reaches the child | Construct the child environment from the fixed basic-variable allowlist, add only fresh MCP context, remove internal markers before payload launch, and test the effective environment. |
+| Ambient server credential or stale authority reaches the child | Construct the child environment from the fixed basic-variable and TLS-trust allowlist, add only fresh MCP context, remove internal markers before payload launch, and test the effective environment. |
 | Another MCP instance reuses a grant | MCP session ID narrows matching in addition to all existing JIT checks. |
 | MCP client views or revokes global access | Status/revoke output is limited to the current server instance; global review stays in Access Center. |
 | Secret leaks through tool output | Reuse continuous strict masking, bound both streams, and test raw and transformed synthetic values. |
@@ -569,6 +578,11 @@ operating-system-wide DLP.
 deterministic user-global local-stdio configuration for the exact installed
 Authsia binary. V1 does not edit third-party configuration, launch the client,
 add credentials, or use a shell wrapper.
+
+Before using the configured client, the user explicitly enables **MCP
+Integrations** under Authsia **Settings > Developer Access**. Client
+configuration and MCP authorization remain separate: configuring a client
+does not turn the Authsia setting on.
 
 For Codex, Claude Code, and VS Code, the output includes a shell-safe direct
 command using the client's supported user-global MCP installation surface, plus

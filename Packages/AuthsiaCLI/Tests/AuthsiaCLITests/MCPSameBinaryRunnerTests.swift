@@ -26,6 +26,8 @@ struct MCPSameBinaryRunnerTests {
                 "PATH": "/usr/bin",
                 "LANG": "en_US.UTF-8",
                 "LC_CTYPE": "UTF-8",
+                "REQUESTS_CA_BUNDLE": "/synthetic/trust/requests.pem",
+                "SSL_CERT_FILE": "/synthetic/trust/openssl.pem",
                 "GITHUB_TOKEN": "synthetic-token-must-not-survive",
                 "AWS_SECRET_ACCESS_KEY": "synthetic-key-must-not-survive",
                 "AUTHSIA_AGENT_ID": "stale-agent-must-not-survive",
@@ -46,6 +48,8 @@ struct MCPSameBinaryRunnerTests {
         #expect(process.environment?["PATH"] == "/usr/bin")
         #expect(process.environment?["LANG"] == "en_US.UTF-8")
         #expect(process.environment?["LC_CTYPE"] == "UTF-8")
+        #expect(process.environment?["REQUESTS_CA_BUNDLE"] == "/synthetic/trust/requests.pem")
+        #expect(process.environment?["SSL_CERT_FILE"] == "/synthetic/trust/openssl.pem")
         #expect(process.environment?["GITHUB_TOKEN"] == nil)
         #expect(process.environment?["AWS_SECRET_ACCESS_KEY"] == nil)
         #expect(process.environment?["AUTHSIA_AGENT_ID"] == nil)

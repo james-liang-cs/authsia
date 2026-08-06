@@ -230,6 +230,7 @@ struct MCPExecToolTests {
                     client: ExecToolGrantClient()
                 ),
                 childRunner: runner,
+                mcpAccessEnabled: { true },
                 diagnostics: { _ in }
             ),
             root

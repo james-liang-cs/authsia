@@ -443,6 +443,7 @@ enum MCPToolErrorCode: String, CaseIterable, Codable, Equatable, Sendable {
     case invalidInput
     case workspaceUnavailable
     case bridgeUnavailable
+    case mcpAccessDisabled
     case cliAccessDisabled
     case approvalDenied
     case grantUnavailable

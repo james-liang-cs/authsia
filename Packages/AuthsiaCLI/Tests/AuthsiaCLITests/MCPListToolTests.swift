@@ -103,6 +103,7 @@ struct MCPListToolTests {
                 client: ListToolGrantClient()
             ),
             listService: provider,
+            mcpAccessEnabled: { true },
             diagnostics: { _ in }
         )
         let transports = await InMemoryTransport.createConnectedPair()
@@ -142,6 +143,7 @@ struct MCPListToolTests {
                 client: ListToolGrantClient()
             ),
             listService: FailingMCPListProvider(),
+            mcpAccessEnabled: { true },
             diagnostics: { _ in }
         )
         let transports = await InMemoryTransport.createConnectedPair()

@@ -1,6 +1,7 @@
 import Darwin
 import Dispatch
 import Foundation
+import AuthenticatorBridge
 import MCP
 
 private enum MCPWorkspaceSelectionError: Error {
@@ -17,6 +18,7 @@ actor AuthsiaMCPServer {
     private let grantService: MCPGrantService
     private let listService: any MCPListProviding
     private let childRunner: (any MCPChildRunning)?
+    private let mcpAccessEnabled: @Sendable () -> Bool
     private let diagnostics: Diagnostics
     private var handlersRegistered = false
     private var mediatedOperationInProgress = false
@@ -39,6 +41,7 @@ actor AuthsiaMCPServer {
         grantService: MCPGrantService? = nil,
         listService: (any MCPListProviding)? = nil,
         childRunner: (any MCPChildRunning)? = nil,
+        mcpAccessEnabled: @escaping @Sendable () -> Bool,
         diagnostics: @escaping Diagnostics = AuthsiaMCPServer.standardErrorDiagnostic
     ) {
         self.server = Server(
@@ -60,6 +63,7 @@ actor AuthsiaMCPServer {
         )
         self.listService = listService ?? MCPListService(runtimeContext: runtimeContext)
         self.childRunner = childRunner
+        self.mcpAccessEnabled = mcpAccessEnabled
         self.diagnostics = diagnostics
     }
 
@@ -114,6 +118,12 @@ actor AuthsiaMCPServer {
         await server.withMethodHandler(CallTool.self) { parameters in
             guard let name = AuthsiaMCPToolName(rawValue: parameters.name) else {
                 throw MCPError.invalidParams("Unknown Authsia MCP tool: \(parameters.name)")
+            }
+            guard self.mcpAccessEnabled() else {
+                return try Self.errorResult(
+                    code: .mcpAccessDisabled,
+                    message: "MCP integrations are disabled in Authsia. Enable them in Settings > Developer Access."
+                )
             }
             var invocationID: UUID?
             do {
@@ -513,6 +523,8 @@ actor AuthsiaMCPServer {
         switch code {
         case .bridgeUnavailable:
             return "The local Authsia Bridge is unavailable."
+        case .mcpAccessDisabled:
+            return "MCP integrations are disabled in Authsia."
         case .cliAccessDisabled:
             return "CLI access is disabled in Authsia."
         case .approvalDenied:

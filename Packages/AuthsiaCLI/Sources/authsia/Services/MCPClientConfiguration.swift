@@ -58,10 +58,13 @@ enum MCPClientConfiguration {
             Configure directly:
             codex mcp add authsia -- \(shellQuoted(binaryPath)) mcp serve
 
+            For a custom TLS CA, use the manual configuration below.
+
             Or add to user-global ~/.codex/config.toml:
             [mcp_servers.authsia]
             command = "\(tomlEscaped(binaryPath))"
             args = ["mcp", "serve"]
+            env_vars = ["REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"]
 
             \(warning)
             """

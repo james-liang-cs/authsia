@@ -46,6 +46,8 @@ struct MCPClientConfigurationTests {
         #expect(codex.contains("~/.codex/config.toml"))
         #expect(codex.contains("[mcp_servers.authsia]"))
         #expect(codex.contains("args = [\"mcp\", \"serve\"]"))
+        #expect(codex.contains("env_vars = [\"REQUESTS_CA_BUNDLE\", \"SSL_CERT_FILE\"]"))
+        #expect(codex.contains("For a custom TLS CA, use the manual configuration below."))
         #expect(!codex.contains("cwd ="))
 
         let claude = try render(.claude, fixture: fixture)
