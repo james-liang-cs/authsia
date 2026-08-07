@@ -133,28 +133,24 @@ actor AuthsiaMCPServer {
                         MCPStatusInput.self,
                         arguments: parameters.arguments
                     ).validated()
-                    try await self.selectWorkspace(input.workspaceRoot)
-                    return try Self.successResult(self.workspaceInspection.status())
+                    return try await self.status(input)
                 case .workspaceInspect:
                     let input = try Self.decodeInput(
                         MCPWorkspaceInspectInput.self,
                         arguments: parameters.arguments
                     ).validated()
-                    try await self.selectWorkspace(input.workspaceRoot)
-                    return try Self.successResult(self.workspaceInspection.inspect(input))
+                    return try await self.inspect(input)
                 case .list:
                     let input = try Self.decodeInput(
                         MCPListInput.self,
                         arguments: parameters.arguments
                     ).validated()
-                    try await self.selectWorkspace(input.workspaceRoot)
                     return try await self.listMetadata(input)
                 case .exec:
                     let input = try Self.decodeInput(
                         MCPExecInput.self,
                         arguments: parameters.arguments
                     ).validated()
-                    try await self.selectWorkspace(input.workspaceRoot)
                     return try await self.execute(input)
                 case .accessStatus:
                     _ = try Self.decodeInput(
@@ -238,6 +234,19 @@ actor AuthsiaMCPServer {
         }
     }
 
+    private func status(_ input: MCPStatusInput) throws -> CallTool.Result {
+        try selectWorkspace(input.workspaceRoot)
+        return try Self.successResult(workspaceInspection.status())
+    }
+
+    private func inspect(_ input: MCPWorkspaceInspectInput) throws -> CallTool.Result {
+        try selectWorkspace(input.workspaceRoot)
+        return try Self.successResult(workspaceInspection.inspect(input))
+    }
+
+    /// The workspace binding is server-wide state, so callers must run selection and the work it
+    /// binds without suspending in between. Concurrent tool calls otherwise interleave and a
+    /// mediated operation runs against a workspace another call selected.
     private func selectWorkspace(_ workspaceRoot: String?) throws {
         guard acceptsToolWorkspace, let workspaceRoot else { return }
         guard !mediatedOperationInProgress else {
@@ -357,6 +366,7 @@ actor AuthsiaMCPServer {
                 message: "Another Authsia MCP mediated operation is already active."
             )
         }
+        try selectWorkspace(input.workspaceRoot)
         mediatedOperationInProgress = true
         defer { mediatedOperationInProgress = false }
         didUseMediatedTool = true
@@ -381,6 +391,12 @@ actor AuthsiaMCPServer {
             return try Self.errorResult(
                 code: .cancelled,
                 message: "The Authsia MCP list operation was cancelled.",
+                invocationID: invocation.id
+            )
+        } catch is MCPListDeadlineError {
+            return try Self.errorResult(
+                code: .timedOut,
+                message: "The Authsia MCP list operation exceeded its deadline.",
                 invocationID: invocation.id
             )
         } catch let error as MCPToolInputError {
@@ -432,6 +448,7 @@ actor AuthsiaMCPServer {
                 message: "Another Authsia MCP execution is already active."
             )
         }
+        try selectWorkspace(input.workspaceRoot)
         let activeChildRunner = childRunner ?? runtimeContext.workspaceRoot.map {
             MCPSameBinaryRunner(workspaceRoot: $0)
         }

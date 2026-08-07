@@ -11,9 +11,12 @@ protocol MCPListProviding: Sendable {
 protocol MCPListBridgeClient: Sendable {
     func list(
         preflight: AgentJITPreflightPayload,
-        agentRuntimeContext: AgentRuntimeContext
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
     ) throws -> BridgeListPayload
 }
+
+struct MCPListDeadlineError: Error {}
 
 struct LiveMCPListBridgeClient: MCPListBridgeClient, @unchecked Sendable {
     let client: AuthsiaBridgeClient
@@ -24,40 +27,70 @@ struct LiveMCPListBridgeClient: MCPListBridgeClient, @unchecked Sendable {
 
     func list(
         preflight: AgentJITPreflightPayload,
-        agentRuntimeContext: AgentRuntimeContext
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
     ) throws -> BridgeListPayload {
         try client.withRequestedCommand("list", includeAutomationCredential: false) {
             _ = try client.agentJITPreflight(
                 preflight,
-                agentRuntimeContext: agentRuntimeContext
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
             )
-            return try client.list(agentRuntimeContext: agentRuntimeContext)
+            return try client.list(
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            )
         }
     }
 }
 
 struct MCPListService: MCPListProviding, @unchecked Sendable {
+    static let defaultDeadlineSeconds = 900
+
     let runtimeContext: MCPRuntimeContext
     let client: any MCPListBridgeClient
     let fileManager: FileManager
+    let deadlineSeconds: Int
 
     init(
         runtimeContext: MCPRuntimeContext,
         client: any MCPListBridgeClient = LiveMCPListBridgeClient(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        deadlineSeconds: Int = MCPListService.defaultDeadlineSeconds
     ) {
         self.runtimeContext = runtimeContext
         self.client = client
         self.fileManager = fileManager
+        self.deadlineSeconds = deadlineSeconds
     }
 
+    /// The bridge call is blocking and cannot be interrupted, so the caller must not wait on the
+    /// detached task itself: awaiting a task's value ignores the awaiting task's cancellation and
+    /// would keep shutdown blocked until a pending approval resolves. The completion box lets
+    /// cancellation and the deadline return immediately while the abandoned work drains.
     func list(
         _ rawInput: MCPListInput,
         invocation: MCPInvocationContext
     ) async throws -> MCPListOutput {
-        try await Task.detached {
-            try listSynchronously(rawInput, invocation: invocation)
-        }.value
+        let completion = MCPListCompletion()
+        let work = Task.detached {
+            completion.finish(Result { try listSynchronously(rawInput, invocation: invocation) })
+        }
+        let deadline = Task {
+            try await Task.sleep(nanoseconds: UInt64(deadlineSeconds) * 1_000_000_000)
+            completion.finish(.failure(MCPListDeadlineError()))
+        }
+        defer {
+            work.cancel()
+            deadline.cancel()
+        }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                completion.attach(continuation)
+            }
+        } onCancel: {
+            completion.finish(.failure(CancellationError()))
+        }
     }
 
     private func listSynchronously(
@@ -97,7 +130,8 @@ struct MCPListService: MCPListProviding, @unchecked Sendable {
         )
         let payload = try client.list(
             preflight: preflight,
-            agentRuntimeContext: agentRuntimeContext
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot
         )
         let allItems = metadataItems(
             type: input.type,
@@ -237,5 +271,42 @@ struct MCPListService: MCPListProviding, @unchecked Sendable {
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
         return lhs.id < rhs.id
+    }
+}
+
+/// Single-resume handoff between the blocking list work and its cancellable awaiter. Whichever of
+/// the work, the deadline, or cancellation arrives first wins; later results are discarded.
+private final class MCPListCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<MCPListOutput, Error>?
+    private var continuation: CheckedContinuation<MCPListOutput, Error>?
+    private var resumed = false
+
+    func attach(_ continuation: CheckedContinuation<MCPListOutput, Error>) {
+        let pending: Result<MCPListOutput, Error>? = lock.withLock {
+            guard !resumed else { return nil }
+            guard let result else {
+                self.continuation = continuation
+                return nil
+            }
+            resumed = true
+            return result
+        }
+        guard let pending else { return }
+        continuation.resume(with: pending)
+    }
+
+    func finish(_ result: Result<MCPListOutput, Error>) {
+        let waiting: CheckedContinuation<MCPListOutput, Error>? = lock.withLock {
+            guard !resumed else { return nil }
+            guard let continuation else {
+                if self.result == nil { self.result = result }
+                return nil
+            }
+            resumed = true
+            self.continuation = nil
+            return continuation
+        }
+        waiting?.resume(with: result)
     }
 }

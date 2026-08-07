@@ -322,6 +322,130 @@ struct MCPServerLifecycleTests {
         await server.waitUntilCompleted()
     }
 
+    @Test("a tool workspace root cannot be swapped under an in-flight mediated operation")
+    func workspaceRootCannotChangeUnderActiveExecution() async throws {
+        let launchDirectory = try makeWorkspaceRoot()
+        let firstWorkspace = try makeWorkspaceRoot()
+        let secondWorkspace = try makeWorkspaceRoot()
+        defer {
+            try? FileManager.default.removeItem(at: launchDirectory)
+            try? FileManager.default.removeItem(at: firstWorkspace)
+            try? FileManager.default.removeItem(at: secondWorkspace)
+        }
+        for (root, name) in [(firstWorkspace, "first"), (secondWorkspace, "second")] {
+            try WorkspaceConfigStore.write(
+                WorkspaceConfig(
+                    workspace: .init(name: name, authsiaFolder: "Workspaces/\(name)"),
+                    managedEnvFiles: [],
+                    agents: nil
+                ),
+                toWorkspaceRoot: root
+            )
+        }
+        let serverID = UUID()
+        let runner = CancellableLifecycleRunner()
+        let runtime = MCPRuntimeContext(
+            startingDirectory: launchDirectory,
+            instanceID: serverID
+        )
+        let server = AuthsiaMCPServer(
+            version: "test",
+            runtimeContext: runtime,
+            workspaceInspection: MCPWorkspaceInspectionService(
+                runtimeContext: runtime,
+                bridgeStateProvider: { .ready }
+            ),
+            grantService: MCPGrantService(
+                serverInstanceID: serverID,
+                client: LifecycleGrantClient(snapshot: .init(active: [], history: []))
+            ),
+            childRunner: runner,
+            mcpAccessEnabled: { true },
+            diagnostics: { _ in }
+        )
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "IDE MCP lifecycle test", version: "1")
+
+        try await server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        let executionContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.exec.rawValue,
+            arguments: [
+                "argv": .array(["true"]),
+                "workspaceRoot": .string(firstWorkspace.path),
+            ]
+        )
+        await runner.waitUntilStarted()
+
+        let contendingContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue,
+            arguments: ["workspaceRoot": .string(secondWorkspace.path)]
+        )
+        let contending = try await contendingContext.value
+        #expect(contending.isError == true)
+        #expect(contending.structuredContent?.objectValue?["code"]?.stringValue == "busy")
+
+        await runner.finish()
+        #expect(try await executionContext.value.isError != true)
+
+        let settledContext: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.status.rawValue,
+            arguments: [:]
+        )
+        let settled = try await settledContext.value
+        #expect(settled.structuredContent?.objectValue?["workspaceName"]?.stringValue == "first")
+
+        await client.disconnect()
+        await server.waitUntilCompleted()
+    }
+
+    @Test("shutdown completes while a list is blocked on the bridge")
+    func shutdownCompletesWithBlockedList() async throws {
+        let bridgeClient = BlockingMCPListBridgeClient()
+        defer { bridgeClient.release() }
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                workspace: .init(name: "blocked", authsiaFolder: "Workspaces/blocked"),
+                managedEnvFiles: [],
+                agents: nil
+            ),
+            toWorkspaceRoot: root
+        )
+        let serverID = UUID()
+        let runtime = MCPRuntimeContext(startingDirectory: root, instanceID: serverID)
+        let server = AuthsiaMCPServer(
+            version: "test",
+            runtimeContext: runtime,
+            workspaceInspection: MCPWorkspaceInspectionService(
+                runtimeContext: runtime,
+                bridgeStateProvider: { .ready }
+            ),
+            grantService: MCPGrantService(
+                serverInstanceID: serverID,
+                client: LifecycleGrantClient(snapshot: .init(active: [], history: []))
+            ),
+            listService: MCPListService(runtimeContext: runtime, client: bridgeClient),
+            mcpAccessEnabled: { true },
+            diagnostics: { _ in }
+        )
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "MCP lifecycle test", version: "1")
+
+        try await server.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        let _: RequestContext<CallTool.Result> = try await client.callTool(
+            name: AuthsiaMCPToolName.list.rawValue,
+            arguments: ["type": "password"]
+        )
+        bridgeClient.waitUntilBlocked()
+
+        await server.stop()
+
+        #expect(bridgeClient.isStillBlocked)
+    }
+
     @Test("unknown tools return a protocol error")
     func unknownToolCall() async throws {
         let fixture = try makeServer()

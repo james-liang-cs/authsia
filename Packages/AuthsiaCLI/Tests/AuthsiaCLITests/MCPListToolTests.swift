@@ -85,6 +85,68 @@ struct MCPListToolTests {
         #expect(client.requests.count == 1)
     }
 
+    @Test("list attributes the bridge call to the bound workspace, not the launch directory")
+    func listAttributesBoundWorkspace() async throws {
+        let launchDirectory = try makeWorkspaceRoot()
+        let root = try makeManagedWorkspace()
+        defer {
+            try? FileManager.default.removeItem(at: launchDirectory)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let runtime = MCPRuntimeContext(startingDirectory: launchDirectory)
+        try runtime.bindToWorkspaceRoot(root)
+        let client = RecordingMCPListBridgeClient(payload: emptyPayload)
+        let service = MCPListService(runtimeContext: runtime, client: client)
+        let invocation = await runtime.makeInvocation()
+
+        _ = try await service.list(MCPListInput(type: .apiKey), invocation: invocation)
+
+        let request = try #require(client.requests.first)
+        #expect(request.workspaceRoot.path == runtime.workspaceRoot?.path)
+        #expect(request.workspaceRoot.path != FileManager.default.currentDirectoryPath)
+    }
+
+    @Test("a blocked list yields to cancellation instead of waiting for the bridge")
+    func blockedListYieldsToCancellation() async throws {
+        let root = try makeManagedWorkspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = MCPRuntimeContext(startingDirectory: root)
+        let client = BlockingMCPListBridgeClient()
+        defer { client.release() }
+        let service = MCPListService(runtimeContext: runtime, client: client)
+        let invocation = await runtime.makeInvocation()
+
+        let task = Task {
+            try await service.list(MCPListInput(type: .apiKey), invocation: invocation)
+        }
+        client.waitUntilBlocked()
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+        #expect(client.isStillBlocked)
+    }
+
+    @Test("a blocked list fails its deadline")
+    func blockedListFailsDeadline() async throws {
+        let root = try makeManagedWorkspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = MCPRuntimeContext(startingDirectory: root)
+        let client = BlockingMCPListBridgeClient()
+        defer { client.release() }
+        let service = MCPListService(
+            runtimeContext: runtime,
+            client: client,
+            deadlineSeconds: 1
+        )
+        let invocation = await runtime.makeInvocation()
+
+        await #expect(throws: MCPListDeadlineError.self) {
+            try await service.list(MCPListInput(type: .apiKey), invocation: invocation)
+        }
+    }
+
     @Test("server dispatches authsia_list as structured metadata output")
     func serverDispatchesList() async throws {
         let root = try makeManagedWorkspace()
@@ -209,6 +271,7 @@ private final class RecordingMCPListBridgeClient: MCPListBridgeClient, @unchecke
     struct Request {
         let preflight: AgentJITPreflightPayload
         let context: AgentRuntimeContext
+        let workspaceRoot: URL
     }
 
     let payload: BridgeListPayload
@@ -220,10 +283,52 @@ private final class RecordingMCPListBridgeClient: MCPListBridgeClient, @unchecke
 
     func list(
         preflight: AgentJITPreflightPayload,
-        agentRuntimeContext: AgentRuntimeContext
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
     ) throws -> BridgeListPayload {
-        requests.append(Request(preflight: preflight, context: agentRuntimeContext))
+        requests.append(Request(
+            preflight: preflight,
+            context: agentRuntimeContext,
+            workspaceRoot: workspaceRoot
+        ))
         return payload
+    }
+}
+
+/// Stands in for a bridge call parked on a pending JIT approval: it never returns on its own.
+final class BlockingMCPListBridgeClient: MCPListBridgeClient, @unchecked Sendable {
+    private let entered = DispatchSemaphore(value: 0)
+    private let gate = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var completed = false
+
+    var isStillBlocked: Bool {
+        lock.withLock { !completed }
+    }
+
+    func waitUntilBlocked() {
+        entered.wait()
+    }
+
+    func release() {
+        gate.signal()
+    }
+
+    func list(
+        preflight: AgentJITPreflightPayload,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> BridgeListPayload {
+        entered.signal()
+        gate.wait()
+        lock.withLock { completed = true }
+        return BridgeListPayload(
+            accounts: [],
+            passwords: [],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
     }
 }
 

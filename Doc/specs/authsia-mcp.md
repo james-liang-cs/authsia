@@ -185,7 +185,10 @@ at a time:
    sessions therefore keep their working-directory behavior.
 5. Changing the canonical tool-selected workspace first attempts to revoke
    active grants owned by that MCP server instance. Rebinding is rejected while
-   a mediated list or execution is active.
+   a mediated list or execution is active. Because concurrent tool calls share
+   one binding, each call selects its workspace and claims the mediated slot
+   without yielding in between, so a mediated operation always runs against the
+   workspace its own call named.
 6. When the workspace is missing, invalid, unsupported, an unsafe path, or
    reached through a containment-breaking symlink, the process remains unbound.
 7. An unbound server keeps `authsia_status` available with a
@@ -406,8 +409,12 @@ reviewing and revoking historical or orphaned MCP grants.
 `authsia_list` validates and bounds its input, allocates a fresh invocation,
 and performs the existing list-only JIT preflight and Bridge list request
 without a shell or child command. It returns only the normalized paginated
-metadata described above. A pending local or remote approval uses the existing
-bounded Bridge wait; status and owned-grant revocation remain separate tools.
+metadata described above. Because the request is issued in-process rather than
+through a mediated child, it reports the bound workspace root as its working
+directory, so approval and audit attribute the call to the workspace the tool
+named. A pending local or remote approval uses the existing bounded Bridge wait
+behind a server deadline, and MCP cancellation abandons that wait instead of
+holding shutdown open; status and owned-grant revocation remain separate tools.
 
 `authsia_exec` follows this execution lifecycle:
 
@@ -537,7 +544,7 @@ stable structured error:
 | `grantUnavailable` | Required grant is absent, expired, revoked, or no longer matches. |
 | `grantNotOwned` | Status/revoke target is not owned by this MCP instance. |
 | `busy` | This server already has an active JIT-mediated list or execution operation. |
-| `timedOut` | Execution exceeded the requested timeout. |
+| `timedOut` | Execution exceeded the requested timeout, or a listing exceeded the server deadline. |
 | `cancelled` | MCP cancellation terminated or abandoned the call. |
 | `executionFailed` | Launch or mediated execution failed. |
 | `internalError` | A redacted unexpected failure occurred. |

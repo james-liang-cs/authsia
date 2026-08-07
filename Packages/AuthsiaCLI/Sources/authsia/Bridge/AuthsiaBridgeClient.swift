@@ -589,13 +589,19 @@ final class AuthsiaBridgeClient:
         return payload
     }
 
-    func list(agentRuntimeContext: AgentRuntimeContext) throws -> BridgeListPayload {
+    func list(
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> BridgeListPayload {
         let request = BridgeRequest(
             id: UUID(),
             type: .list,
             query: "",
             options: BridgeOptions(field: nil, copy: false),
-            context: Self.currentContext(overriding: agentRuntimeContext)
+            context: Self.currentContext(
+                overriding: agentRuntimeContext,
+                currentDirectoryPath: workspaceRoot.path
+            )
         )
         let response: BridgeResponse<BridgeListPayload> = try sendRequest(request)
         if let error = response.error {
@@ -687,12 +693,14 @@ final class AuthsiaBridgeClient:
 
     func agentJITPreflight(
         _ payload: AgentJITPreflightPayload,
-        agentRuntimeContext: AgentRuntimeContext
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL? = nil
     ) throws -> AgentJITPreflightResultPayload {
         try approvalPreflight(
             payload,
             requestType: .agentJITPreflight,
-            agentRuntimeContext: agentRuntimeContext
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot
         )
     }
 
@@ -705,14 +713,21 @@ final class AuthsiaBridgeClient:
     private func approvalPreflight(
         _ payload: AgentJITPreflightPayload,
         requestType: BridgeRequestType,
-        agentRuntimeContext: AgentRuntimeContext? = nil
+        agentRuntimeContext: AgentRuntimeContext? = nil,
+        workspaceRoot: URL? = nil
     ) throws -> AgentJITPreflightResultPayload {
         let request = BridgeRequest(
             id: UUID(),
             type: requestType,
             query: "",
             options: BridgeOptions(field: nil, copy: false),
-            context: agentRuntimeContext.map(Self.currentContext(overriding:)) ?? currentContext(),
+            context: agentRuntimeContext.map {
+                Self.currentContext(
+                    overriding: $0,
+                    currentDirectoryPath: workspaceRoot?.path
+                        ?? FileManager.default.currentDirectoryPath
+                )
+            } ?? currentContext(),
             body: try BridgeCoder.encode(payload),
             sessionToken: agentRuntimeContext == nil ? sessionToken : nil
         )
@@ -1461,21 +1476,29 @@ final class AuthsiaBridgeClient:
         Self.currentContext(sessionScope: sessionScope)
     }
 
-    static func currentContext(sessionScope: String? = nil) -> BridgeContext {
+    static func currentContext(
+        sessionScope: String? = nil,
+        currentDirectoryPath: String = FileManager.default.currentDirectoryPath
+    ) -> BridgeContext {
         let context = AutomationAccessResolver.bridgeContext(
             requestedCommand: requestedCommand,
             fullCommand: fullCommandForAudit(),
-            includeAutomationCredential: includeAutomationCredential ?? true
+            includeAutomationCredential: includeAutomationCredential ?? true,
+            currentDirectoryPath: currentDirectoryPath
         )
         guard let sessionScope else { return context }
         return replacing(context, sessionScope: sessionScope)
     }
 
+    /// In-process MCP tools are not launched inside the workspace they act on, so they pass the
+    /// bound workspace root here. Without it the bridge fingerprints the grant against the MCP
+    /// server's launch directory and the approval prompt names the wrong repository.
     private static func currentContext(
-        overriding agentRuntimeContext: AgentRuntimeContext
+        overriding agentRuntimeContext: AgentRuntimeContext,
+        currentDirectoryPath: String = FileManager.default.currentDirectoryPath
     ) -> BridgeContext {
         replacing(
-            currentContext(),
+            currentContext(currentDirectoryPath: currentDirectoryPath),
             agentRuntimeContext: agentRuntimeContext,
             clearAutomationCredential: true
         )
