@@ -1161,8 +1161,10 @@ already present. With MCP enabled, status, inspection, and scoped list replace
 mandatory CLI preflight; the attributed CLI fallback uses `authsia workspace
 run -- <command> <args>` in an Authsia workspace and `authsia exec <type>
 <query> [options] -- <command> <args>` outside one. With MCP disabled, those
-same attributed commands are the primary path and no MCP tools are named. Both
-variants permit attributed `authsia list ...` only for non-secret metadata,
+same attributed commands are the primary path and no MCP tools are named. In a
+workspace, the CLI-only rules direct agents to fall back to attributed
+`authsia exec` when `authsia workspace run` fails. Both variants permit
+attributed `authsia list ...` only for non-secret metadata,
 direct agents to the complete subcommand's `--help`, and forbid bare
 secret-reading commands.
 
@@ -1640,8 +1642,9 @@ workspace-dependent tools fail closed. The server exposes only
 `authsia_access_status`, and `authsia_access_revoke`. `authsia_list` returns
 paginated common metadata only, stays inside the configured workspace Vault
 folder, and reuses list-only Agent JIT with the same Mac or paired-iPhone
-approval path. Secret-bearing work remains a Bridge-mediated Agent JIT
-execution. `authsia_list` and `authsia_exec` accept an optional `environment`;
+approval path. A requested type with no CLI-enabled items returns a successful
+empty page rather than a mediated-operation error. Secret-bearing work remains
+a Bridge-mediated Agent JIT execution. `authsia_list` and `authsia_exec` accept an optional `environment`;
 named selection uses exact-tagged and `All` items, while `authsia_exec`
 `defaultOnly` selects the default workspace environment for that call. The MCP
 client cannot request raw secret values, select automation

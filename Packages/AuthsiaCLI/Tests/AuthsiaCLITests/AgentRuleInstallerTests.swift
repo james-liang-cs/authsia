@@ -83,6 +83,36 @@ struct AgentRuleInstallerTests {
         }
     }
 
+    @Test("disabled MCP workspace rules fall back to exec when workspace run fails")
+    func disabledMCPWorkspaceRulesIncludeExecFallback() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeNestedFile("{}", relativePath: ".authsia/workspace.json", in: root)
+
+        _ = try AgentRuleInstaller.install(
+            projectRoot: root,
+            agents: [.codex],
+            includeMCPGuidance: false
+        )
+
+        let fallback = "If `authsia workspace run` fails, fall back to `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
+        let agentsRules = try read("AGENTS.md", in: root)
+        let sharedRules = try read(".authsia/agent-rules.md", in: root)
+        for rules in [agentsRules, sharedRules] {
+            #expect(rules.contains("`authsia workspace run -- <command> <args>`"))
+            #expect(rules.contains(fallback))
+            #expect(!rules.contains("`authsia_exec`"))
+        }
+
+        let previousSharedRules = sharedRules.replacingOccurrences(
+            of: "\n- \(fallback)",
+            with: ""
+        )
+        #expect(previousSharedRules != sharedRules)
+        try writeNestedFile(previousSharedRules, relativePath: ".authsia/agent-rules.md", in: root)
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+    }
+
     @Test("rules written under one MCP setting are replaced when the setting flips")
     func rulesInstalledUnderOtherMCPSettingAreReplaced() throws {
         let root = try makeWorkspaceRoot()

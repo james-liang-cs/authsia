@@ -128,11 +128,25 @@ struct MCPListService: MCPListProviding, @unchecked Sendable {
             )],
             environmentScope: environmentScope
         )
-        let payload = try client.list(
-            preflight: preflight,
-            agentRuntimeContext: agentRuntimeContext,
-            workspaceRoot: workspaceRoot
-        )
+        let payload: BridgeListPayload
+        do {
+            payload = try client.list(
+                preflight: preflight,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            )
+        } catch let error as BridgeClientError {
+            guard case .bridgeError(let code, _, _) = error, code == "notFound" else {
+                throw error
+            }
+            payload = BridgeListPayload(
+                accounts: [],
+                passwords: [],
+                certificates: [],
+                notes: [],
+                sshKeys: []
+            )
+        }
         let allItems = metadataItems(
             type: input.type,
             payload: payload,

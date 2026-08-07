@@ -85,6 +85,32 @@ struct MCPListToolTests {
         #expect(client.requests.count == 1)
     }
 
+    @Test("an empty Vault category returns an empty metadata page")
+    func emptyCategoryReturnsEmptyPage() async throws {
+        let root = try makeManagedWorkspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = MCPRuntimeContext(startingDirectory: root)
+        let service = MCPListService(
+            runtimeContext: runtime,
+            client: NotFoundMCPListBridgeClient()
+        )
+        let invocation = await runtime.makeInvocation()
+
+        let output = try await service.list(
+            MCPListInput(type: .password),
+            invocation: invocation
+        )
+
+        #expect(output.invocationID == invocation.id.uuidString)
+        #expect(output.type == .password)
+        #expect(output.folder == "Workspaces/api")
+        #expect(output.items.isEmpty)
+        #expect(output.totalCount == 0)
+        #expect(output.count == 0)
+        #expect(!output.hasMore)
+        #expect(output.nextOffset == nil)
+    }
+
     @Test("list attributes the bridge call to the bound workspace, not the launch directory")
     func listAttributesBoundWorkspace() async throws {
         let launchDirectory = try makeWorkspaceRoot()
@@ -292,6 +318,20 @@ private final class RecordingMCPListBridgeClient: MCPListBridgeClient, @unchecke
             workspaceRoot: workspaceRoot
         ))
         return payload
+    }
+}
+
+private struct NotFoundMCPListBridgeClient: MCPListBridgeClient {
+    func list(
+        preflight: AgentJITPreflightPayload,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> BridgeListPayload {
+        throw BridgeClientError.bridgeError(
+            code: "notFound",
+            message: "No CLI-enabled password items found for the requested JIT scope",
+            query: nil
+        )
     }
 }
 

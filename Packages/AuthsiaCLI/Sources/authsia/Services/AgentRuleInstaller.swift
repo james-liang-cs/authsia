@@ -85,6 +85,9 @@ struct AgentRuleRemovalResult: Equatable {
 }
 
 enum AgentRuleInstaller {
+    private static let cliOnlyWorkspaceExecFallbackLine =
+        "- If `authsia workspace run` fails, fall back to `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
+
     static let managedStartMarker = "<!-- >>> Authsia agent rules >>> -->"
     static let managedEndMarker = "<!-- <<< Authsia agent rules <<< -->"
     private static let legacyClaudeMachLookupValues = ["Authsia.Bridge", "Authsia.SSHAgent"]
@@ -992,7 +995,10 @@ enum AgentRuleInstaller {
             ? "- Every Authsia CLI command \(selectedAgents[0].title) runs must start with:"
             : "- Every Authsia CLI command must start with the matching marker:"
         let execution = includeWorkspaceGuidance
-            ? "- This project is an Authsia workspace. Run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox."
+            ? """
+            - This project is an Authsia workspace. Run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox.
+            \(cliOnlyWorkspaceExecFallbackLine)
+            """
             : "- Outside an Authsia workspace, run secret-dependent commands with `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
         return """
     ## Authsia Secret Handling
@@ -1702,6 +1708,17 @@ enum AgentRuleInstaller {
                 includeCommandHistoryGuidance: false
             ),
         ]
+        let cliOnlyWorkspaceRules = sharedRulesMarkdown(
+            for: agents,
+            includeWorkspaceGuidance: true,
+            includeMCPGuidance: false
+        )
+        variants.append(
+            cliOnlyWorkspaceRules.replacingOccurrences(
+                of: "\n\(cliOnlyWorkspaceExecFallbackLine)",
+                with: ""
+            )
+        )
         if agents.contains(.copilot) {
             variants.append(contentsOf: [
                 legacyV1SharedRulesMarkdown(for: agents, includeCopilotCommandHistoryGuidance: false),

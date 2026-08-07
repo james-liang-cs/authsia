@@ -317,6 +317,12 @@ and environment tags. Passwords, API-key values, note content, certificate
 material, SSH public/private key material, usernames, websites, comments, and
 other type-specific fields are not part of the MCP schema.
 
+When the requested workspace subtree has no CLI-enabled items of that type,
+the Bridge preflight `notFound` result is normalized to a successful empty page
+with `totalCount=0`, `count=0`, and `items=[]`. No approval or grant is created
+for that empty category. Other Bridge, policy, approval, and transport failures
+remain tool errors.
+
 Bridge policy first limits results to CLI-enabled metadata covered by active
 list grants. The MCP adapter then reapplies type, workspace-folder containment,
 and environment filtering before deterministic sorting and pagination. It never
