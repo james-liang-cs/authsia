@@ -97,7 +97,8 @@ enum AgentRuleInstaller {
         projectRoot: URL,
         agents: [AgentTool],
         dryRun: Bool = false,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        includeMCPGuidance: Bool = true
     ) throws -> AgentRuleInstallResult {
         var result = AgentRuleInstallResult(dryRun: dryRun)
         let selectedAgents = unique(agents)
@@ -106,7 +107,11 @@ enum AgentRuleInstaller {
         )
 
         try writeExactFile(
-            sharedRulesMarkdown(for: selectedAgents, includeWorkspaceGuidance: includeWorkspaceGuidance),
+            sharedRulesMarkdown(
+                for: selectedAgents,
+                includeWorkspaceGuidance: includeWorkspaceGuidance,
+                includeMCPGuidance: includeMCPGuidance
+            ),
             relativePath: ".authsia/agent-rules.md",
             projectRoot: projectRoot,
             dryRun: dryRun,
@@ -119,7 +124,11 @@ enum AgentRuleInstaller {
             try upsertMarkdownFile(
                 relativePath: group.rulePath,
                 prefix: markdownPrefix(for: agent),
-                block: agentRuleBlock(for: group.agents, includeWorkspaceGuidance: includeWorkspaceGuidance),
+                block: agentRuleBlock(
+                    for: group.agents,
+                    includeWorkspaceGuidance: includeWorkspaceGuidance,
+                    includeMCPGuidance: includeMCPGuidance
+                ),
                 projectRoot: projectRoot,
                 dryRun: dryRun,
                 fileManager: fileManager,
@@ -891,7 +900,8 @@ enum AgentRuleInstaller {
     private static func sharedRulesMarkdown(
         for agents: [AgentTool],
         includeWorkspaceGuidance: Bool = false,
-        includeMCPWorkspaceInputs: Bool = true
+        includeMCPWorkspaceInputs: Bool = true,
+        includeMCPGuidance: Bool = true
     ) -> String {
         """
     # Authsia Agent Rules
@@ -899,7 +909,8 @@ enum AgentRuleInstaller {
     \(agentRuleBlock(
         for: agents,
         includeWorkspaceGuidance: includeWorkspaceGuidance,
-        includeMCPWorkspaceInputs: includeMCPWorkspaceInputs
+        includeMCPWorkspaceInputs: includeMCPWorkspaceInputs,
+        includeMCPGuidance: includeMCPGuidance
     ))
     """
     }
@@ -907,8 +918,15 @@ enum AgentRuleInstaller {
     private static func agentRuleBlock(
         for agents: [AgentTool],
         includeWorkspaceGuidance: Bool = false,
-        includeMCPWorkspaceInputs: Bool = true
+        includeMCPWorkspaceInputs: Bool = true,
+        includeMCPGuidance: Bool = true
     ) -> String {
+        guard includeMCPGuidance else {
+            return cliOnlyAgentRuleBlock(
+                for: agents,
+                includeWorkspaceGuidance: includeWorkspaceGuidance
+            )
+        }
         let selectedAgents = unique(agents)
         let platformLines = selectedAgents
             .map { "  `env AUTHSIA_AGENT_PLATFORM=\($0.platformName) AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`" }
@@ -955,6 +973,40 @@ enum AgentRuleInstaller {
     \(executionFallback)
     - In CLI fallback mode, use attributed `authsia list ...` only for non-secret metadata discovery.
     - Before composing an unfamiliar CLI fallback, check the complete subcommand's `--help`.
+    - Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code` from an agent.
+    """
+    }
+
+    /// Written when MCP integrations are disabled in Authsia. The agent has no Authsia MCP tools to
+    /// reach for, so the CLI is the primary path rather than a fallback and the MCP tool contract,
+    /// server sandbox boundary, and grant-inspection tools are all omitted.
+    private static func cliOnlyAgentRuleBlock(
+        for agents: [AgentTool],
+        includeWorkspaceGuidance: Bool
+    ) -> String {
+        let selectedAgents = unique(agents)
+        let platformLines = selectedAgents
+            .map { "  `env AUTHSIA_AGENT_PLATFORM=\($0.platformName) AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`" }
+            .joined(separator: "\n")
+        let markerIntro = selectedAgents.count == 1
+            ? "- Every Authsia CLI command \(selectedAgents[0].title) runs must start with:"
+            : "- Every Authsia CLI command must start with the matching marker:"
+        let execution = includeWorkspaceGuidance
+            ? "- This project is an Authsia workspace. Run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox."
+            : "- Outside an Authsia workspace, run secret-dependent commands with `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
+        return """
+    ## Authsia Secret Handling
+
+    - Never ask the user for plaintext secrets.
+    - Never write resolved secret values to source, logs, chat, issues, or generated documents.
+    - MCP integrations are disabled in Authsia, so no Authsia MCP tools are available. Use the Authsia CLI for every task that needs Authsia-managed values.
+    - Use the normal terminal for commands that do not need Authsia-managed values.
+    - If access is denied, ask the user to approve Authsia access; never request the secret itself.
+    \(markerIntro)
+    \(platformLines)
+    \(execution)
+    - Use attributed `authsia list ...` only for non-secret metadata discovery.
+    - Before composing an unfamiliar Authsia command, check the complete subcommand's `--help`.
     - Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code` from an agent.
     """
     }
@@ -1617,6 +1669,12 @@ enum AgentRuleInstaller {
                 for: agents,
                 includeWorkspaceGuidance: true,
                 includeMCPWorkspaceInputs: false
+            ),
+            sharedRulesMarkdown(for: agents, includeMCPGuidance: false),
+            sharedRulesMarkdown(
+                for: agents,
+                includeWorkspaceGuidance: true,
+                includeMCPGuidance: false
             ),
             legacyV1SharedRulesMarkdown(for: agents),
             legacyV1SharedRulesMarkdown(for: agents, includeWorkspaceGuidance: true),

@@ -1081,8 +1081,10 @@ authsia completion fish | source
 Creates local project rule files that teach coding agents to use Authsia safely. This command writes
 rules only; it does not create automation credentials, JIT grants, or new secret access.
 
-Generated rules tell agents to prefer the Authsia MCP tools for managed-secret
-work and construct tool input from natural-language requests. For
+Generated rules follow the user's **MCP Integrations** setting at install or
+workspace-refresh time. When MCP is enabled, they tell agents to prefer the
+Authsia MCP tools for managed-secret work and construct tool input from
+natural-language requests. For
 `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, and
 `authsia_exec`, IDE-hosted agents pass the active repository's absolute path as
 `workspaceRoot`. Named workspace requests pass `environment` to inspection,
@@ -1093,7 +1095,9 @@ normal terminal for commands that need no managed values. They retain a
 compact, attributed CLI
 fallback using `env AUTHSIA_AGENT_PLATFORM=<platform>
 AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...` and prohibit bare secret reads.
-The generated marker lines match the selected tool: `--agent codex` writes only
+When MCP is disabled, generated rules omit MCP tool and server guidance and
+make the attributed CLI the primary path. In either mode, the generated marker
+lines match the selected tool: `--agent codex` writes only
 `AUTHSIA_AGENT_PLATFORM=codex`, while `--all` writes one marker per supported tool.
 For Claude Code, generated local settings also install Bash `PreToolUse` and
 `PostToolUse` hooks that call Authsia's hidden command recorder. For GitHub
@@ -1138,10 +1142,10 @@ Created files depend on the selected agent:
 | Agent | Rule files | Local sandbox helper |
 |-------|------------|----------------------|
 | Claude Code | `.authsia/agent-rules.md`, `CLAUDE.md` | Creates or safely merges `.claude/settings.local.json` with outside-sandbox Authsia/Git/SSH command exclusions and Bash command-history hooks, while removing obsolete Authsia socket and Mach lookup values; incompatible shapes remain unchanged with manual guidance. |
-| Codex | `.authsia/agent-rules.md`, `AGENTS.md` | Existing `AGENTS.md` content is preserved and Authsia's compact MCP-first managed block is appended or replaced. |
+| Codex | `.authsia/agent-rules.md`, `AGENTS.md` | Existing `AGENTS.md` content is preserved and Authsia's setting-aware MCP-first or CLI-only managed block is appended or replaced. |
 | Cursor | `.authsia/agent-rules.md`, `.cursor/rules/authsia.mdc` | Rule text only. |
 | Windsurf | `.authsia/agent-rules.md`, `.windsurf/rules/authsia.md` | Rule text only. |
-| GitHub Copilot | `.authsia/agent-rules.md`, `AGENTS.md` | Creates `.github/copilot/settings.local.json` with a Copilot CLI `PreToolUse` Bash command-history hook if absent; if present, prints a manual merge block. Existing `AGENTS.md` content is preserved and receives the same MCP-first rule with an attributed CLI fallback. Cloud-hosted agents must leave `authsia://` placeholders for local execution. |
+| GitHub Copilot | `.authsia/agent-rules.md`, `AGENTS.md` | Creates `.github/copilot/settings.local.json` with a Copilot CLI `PreToolUse` Bash command-history hook if absent; if present, prints a manual merge block. Existing `AGENTS.md` content is preserved and receives the same setting-aware MCP-first or CLI-only rule. Cloud-hosted agents must leave `authsia://` placeholders for local execution. |
 
 Examples:
 
@@ -1153,12 +1157,14 @@ authsia agent init --all
 ```
 
 Generated rules stay intentionally compact whether or not workspace metadata is
-already present. MCP status, inspection, and scoped list replace mandatory CLI preflight; the
-attributed CLI fallback uses `authsia workspace run -- <command> <args>` in an
-Authsia workspace and `authsia exec <type> <query> [options] -- <command> <args>`
-outside one. Rules use `authsia_list` first and permit attributed
-`authsia list ...` only as non-secret metadata fallback, direct agents to the
-complete subcommand's `--help`, and forbid bare secret-reading commands.
+already present. With MCP enabled, status, inspection, and scoped list replace
+mandatory CLI preflight; the attributed CLI fallback uses `authsia workspace
+run -- <command> <args>` in an Authsia workspace and `authsia exec <type>
+<query> [options] -- <command> <args>` outside one. With MCP disabled, those
+same attributed commands are the primary path and no MCP tools are named. Both
+variants permit attributed `authsia list ...` only for non-secret metadata,
+direct agents to the complete subcommand's `--help`, and forbid bare
+secret-reading commands.
 
 ### `authsia workspace` — Repo-local secure workspace
 

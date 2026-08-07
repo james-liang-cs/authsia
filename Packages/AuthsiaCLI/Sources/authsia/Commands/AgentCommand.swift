@@ -41,7 +41,8 @@ struct Agent: ParsableCommand {
             let result = try AgentRuleInstaller.install(
                 projectRoot: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true),
                 agents: agents,
-                dryRun: dryRun
+                dryRun: dryRun,
+                includeMCPGuidance: MCPAccessSettings.isEnabled()
             )
             print(AgentRuleInstaller.renderResult(result))
         }

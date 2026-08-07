@@ -780,7 +780,11 @@ struct WorkspaceInitPlannerTests {
             agents: WorkspaceConfig.Agents(rules: ["codex"])
         )
         try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
-        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        _ = try AgentRuleInstaller.install(
+            projectRoot: root,
+            agents: [.codex],
+            includeMCPGuidance: MCPAccessSettings.isEnabled()
+        )
         let currentRules = try read("AGENTS.md", in: root)
         let staleRules = currentRules.replacingOccurrences(
             of: AgentRuleInstaller.managedStartMarker,

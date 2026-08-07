@@ -544,7 +544,11 @@ struct Workspace: AsyncParsableCommand {
                 print(AgentRuleInstaller.renderRemovalResult(result))
             }
             if !plan.agents.isEmpty {
-                let result = try AgentRuleInstaller.install(projectRoot: plan.workspaceRoot, agents: plan.agents)
+                let result = try AgentRuleInstaller.install(
+                    projectRoot: plan.workspaceRoot,
+                    agents: plan.agents,
+                    includeMCPGuidance: MCPAccessSettings.isEnabled()
+                )
                 print(AgentRuleInstaller.renderResult(result))
             }
             print("Authsia workspace is ready.")
