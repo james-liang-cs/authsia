@@ -60,6 +60,49 @@ enum WorkspaceGuardedTerminal {
     /// run command can tell implicit shim traffic from explicit CLI calls.
     static let shimInvocationEnvironmentName = "AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION"
 
+    /// Every shim directory is named `authsia-guard-<uuid>`, so this prefix identifies a
+    /// guard entry on PATH even when the marker variables that recorded it are gone.
+    static let shimDirectoryPrefix = "authsia-guard-"
+
+    /// Marker variables a guarded shell exports. Cleared as a set when handing a child
+    /// process an unguarded environment.
+    static let guardEnvironmentNames = [
+        "AUTHSIA_WORKSPACE_GUARD",
+        "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR",
+        "AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH",
+        shimInvocationEnvironmentName,
+    ]
+
+    /// True when the environment carries guard state. PATH is checked as well as the
+    /// marker variables so a shell that lost part of its guard metadata is still
+    /// recognized instead of silently handing shims to a child.
+    static func isGuarded(environment: [String: String]) -> Bool {
+        if guardEnvironmentNames.contains(where: { !(environment[$0] ?? "").isEmpty }) { return true }
+        return searchPaths(from: environment["PATH"]).contains(where: isShimDirectory)
+    }
+
+    /// PATH for a child that should reach real tools directly: the saved pre-guard PATH
+    /// when the guarded shell recorded one, otherwise the current PATH. Either way every
+    /// shim entry is dropped, so stale or incomplete guard metadata is recovered from PATH
+    /// itself rather than left in place. Returns nil when PATH already needs no change.
+    static func unguardedSearchPath(environment: [String: String]) -> String? {
+        let recordedShimDirectory = environment["AUTHSIA_WORKSPACE_GUARD_SHIM_DIR"]
+        let savedPath = environment["AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH"]
+        guard let candidate = (savedPath?.isEmpty == false) ? savedPath : environment["PATH"] else {
+            return nil
+        }
+        let unguarded = candidate.split(separator: ":", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { $0 != recordedShimDirectory && !isShimDirectory($0) }
+            .joined(separator: ":")
+        guard unguarded != environment["PATH"] else { return nil }
+        return unguarded
+    }
+
+    static func isShimDirectory(_ path: String) -> Bool {
+        URL(fileURLWithPath: path).lastPathComponent.hasPrefix(shimDirectoryPrefix)
+    }
+
     static let shellExpansionWarning =
         "Guarded terminal does not make shell-expanded secrets safe. " +
         "Commands like `curl $API_KEY` or `curl ${API_KEY}` expand before Authsia can mediate them. " +

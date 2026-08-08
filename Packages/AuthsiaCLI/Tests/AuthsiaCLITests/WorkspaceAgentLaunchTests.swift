@@ -14,6 +14,10 @@ struct WorkspaceAgentLaunchTests {
         let defaultAgent = try Workspace.Agent.parse([])
         let guardedPrefix = "cd '/tmp/My Project' && __authsia_guard_env=\"$(authsia workspace guard --print-env)\" && " +
             "eval \"$__authsia_guard_env\" && unset __authsia_guard_env && "
+        // The tab stays guarded; only the agent child is handed an unguarded environment.
+        let unguardedChild = "env -u AUTHSIA_WORKSPACE_GUARD -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR " +
+            "-u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH -u AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION " +
+            "PATH=\"${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}\" "
 
         #expect(defaultAgent.tool == .claudeCode)
         #expect(WorkspaceAgentTool.allCases.map(\.title) == [
@@ -32,23 +36,23 @@ struct WorkspaceAgentLaunchTests {
         ])
         #expect(
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .codex).launchCommand ==
-                guardedPrefix + "env AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
+                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
         )
         #expect(
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .claudeCode).launchCommand ==
-                guardedPrefix + "env AUTHSIA_AGENT_PLATFORM=claude-code AUTHSIA_AGENT_INVOKES_AUTHSIA=1 claude"
+                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=claude-code AUTHSIA_AGENT_INVOKES_AUTHSIA=1 claude"
         )
         #expect(
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .vsCode).launchCommand ==
-                guardedPrefix + "env AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1 code ."
+                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1 code ."
         )
         #expect(
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .cursor).launchCommand ==
-                guardedPrefix + "env AUTHSIA_AGENT_PLATFORM=cursor AUTHSIA_AGENT_INVOKES_AUTHSIA=1 cursor ."
+                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=cursor AUTHSIA_AGENT_INVOKES_AUTHSIA=1 cursor ."
         )
         #expect(
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .windsurf).launchCommand ==
-                guardedPrefix + "env AUTHSIA_AGENT_PLATFORM=windsurf AUTHSIA_AGENT_INVOKES_AUTHSIA=1 windsurf ."
+                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=windsurf AUTHSIA_AGENT_INVOKES_AUTHSIA=1 windsurf ."
         )
         #expect(
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .vsCode).openArguments ==
@@ -168,6 +172,74 @@ struct WorkspaceAgentLaunchTests {
         #expect(withoutOriginal.environmentOverrides["PATH"] == "/usr/bin:/bin")
     }
 
+    @Test("terminal agent launch recovers from stale or incomplete guard metadata")
+    func terminalAgentLaunchRecoversFromStaleGuardMetadata() {
+        let root = URL(fileURLWithPath: "/tmp/My Project", isDirectory: true)
+
+        // Shim entry survives on PATH but the marker variable that recorded it is gone.
+        let lostShimDirectory = WorkspaceAgentLauncher.currentTerminalLaunchRequest(
+            tool: .claudeCode,
+            workingDirectory: root,
+            environment: [
+                "PATH": "/tmp/authsia-guard-ABC:/usr/bin:/bin",
+                "AUTHSIA_WORKSPACE_GUARD": "1",
+            ]
+        )
+        #expect(lostShimDirectory.environmentOverrides["PATH"] == "/usr/bin:/bin")
+        #expect(lostShimDirectory.environmentUnsets.contains("AUTHSIA_WORKSPACE_GUARD"))
+
+        // No guard variable at all; only PATH still shows a shim from an earlier session.
+        let markersGone = WorkspaceAgentLauncher.currentTerminalLaunchRequest(
+            tool: .codex,
+            workingDirectory: root,
+            environment: ["PATH": "/tmp/authsia-guard-ABC:/usr/bin:/bin"]
+        )
+        #expect(markersGone.environmentOverrides["PATH"] == "/usr/bin:/bin")
+
+        // A saved pre-guard PATH that itself carries a shim entry is cleaned, not trusted.
+        let staleOriginal = WorkspaceAgentLauncher.currentTerminalLaunchRequest(
+            tool: .codex,
+            workingDirectory: root,
+            environment: [
+                "PATH": "/tmp/authsia-guard-DEF:/tmp/authsia-guard-ABC:/usr/bin:/bin",
+                "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": "/tmp/authsia-guard-DEF",
+                "AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH": "/tmp/authsia-guard-ABC:/usr/bin:/bin",
+            ]
+        )
+        #expect(staleOriginal.environmentOverrides["PATH"] == "/usr/bin:/bin")
+    }
+
+    @Test("GUI agent launch environment drops guard markers and the shim PATH")
+    func guiAgentLaunchEnvironmentDropsGuardMarkersAndShimPath() {
+        // `open` hands its own environment to the app it launches, so the IDE would
+        // otherwise inherit the guarded tab's shims.
+        let unguarded = WorkspaceAgentLauncher.unguardedEnvironment([
+            "PATH": "/tmp/authsia-guard-ABC:/usr/bin:/bin",
+            "HOME": "/Users/example",
+            "AUTHSIA_WORKSPACE_GUARD": "1",
+            "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": "/tmp/authsia-guard-ABC",
+            "AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH": "/usr/local/bin:/usr/bin:/bin",
+            WorkspaceGuardedTerminal.shimInvocationEnvironmentName: "1",
+            "AUTHSIA_WORKSPACE_ROOT": "/tmp/My Project",
+        ])
+
+        #expect(unguarded["PATH"] == "/usr/local/bin:/usr/bin:/bin")
+        #expect(unguarded["AUTHSIA_WORKSPACE_GUARD"] == nil)
+        #expect(unguarded["AUTHSIA_WORKSPACE_GUARD_SHIM_DIR"] == nil)
+        #expect(unguarded["AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH"] == nil)
+        #expect(unguarded[WorkspaceGuardedTerminal.shimInvocationEnvironmentName] == nil)
+        // Workspace root stays: it is context for the agent, not guard machinery.
+        #expect(unguarded["AUTHSIA_WORKSPACE_ROOT"] == "/tmp/My Project")
+        #expect(unguarded["HOME"] == "/Users/example")
+    }
+
+    @Test("GUI agent launch leaves an unguarded environment untouched")
+    func guiAgentLaunchLeavesUnguardedEnvironmentUntouched() {
+        let environment = ["PATH": "/usr/bin:/bin", "HOME": "/Users/example"]
+
+        #expect(WorkspaceAgentLauncher.unguardedEnvironment(environment) == environment)
+    }
+
     @Test("agent launch failures explain install PATH guarded terminal and print fallback")
     func agentLaunchFailuresExplainInstallPathGuardedTerminalAndPrintFallback() {
         let guiFailure = WorkspaceAgentLauncher.openFailureMessage()
@@ -202,7 +274,10 @@ struct WorkspaceAgentLaunchTests {
         #expect(rendered.contains("Command: cd '/tmp/My Project' && __authsia_guard_env="))
         #expect(rendered.contains("authsia workspace guard --print-env"))
         #expect(rendered.contains(
-            "&& env AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
+            "&& env -u AUTHSIA_WORKSPACE_GUARD -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR " +
+            "-u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH -u AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION " +
+            "PATH=\"${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}\" " +
+            "AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
         ))
         #expect(rendered.contains("Authsia injects no managed secrets"))
         #expect(rendered.contains("guarded terminal"))
@@ -217,7 +292,10 @@ struct WorkspaceAgentLaunchTests {
         let root = URL(fileURLWithPath: "/tmp/My Project", isDirectory: true)
         let guardedLaunch = "cd '/tmp/My Project' && __authsia_guard_env=\"$(authsia workspace guard --print-env)\" && " +
             "eval \"$__authsia_guard_env\" && unset __authsia_guard_env && " +
-            "env AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
+            "env -u AUTHSIA_WORKSPACE_GUARD -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR " +
+            "-u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH -u AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION " +
+            "PATH=\"${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}\" " +
+            "AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
         let rendered = WorkspaceAgentLaunchPlan.renderHandoff(
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .codex),
             goal: "Fix checkout bug without printing $API_KEY"

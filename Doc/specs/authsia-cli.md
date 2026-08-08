@@ -1537,17 +1537,29 @@ Use `echo "$AUTHSIA_WORKSPACE_GUARD"` to confirm the session is guarded.
 `authsia workspace agent` opens or prints a secret-free launch for Claude Code by default; pass
 `--tool codex` or another `--tool <tool>` for Codex, VS Code, Cursor, or Windsurf from the workspace root. GUI tools
 (VS Code, Cursor, Windsurf) open their app; terminal tools (Codex, Claude Code) run in the current
-terminal, inheriting this shell's TTY and environment so a guarded shell's PATH still applies.
-Every launch sets `AUTHSIA_AGENT_PLATFORM` and `AUTHSIA_AGENT_INVOKES_AUTHSIA=1` on the selected
+terminal, inheriting this shell's TTY. Every launch sets `AUTHSIA_AGENT_PLATFORM` and `AUTHSIA_AGENT_INVOKES_AUTHSIA=1` on the selected
 tool process (`codex`, `claude-code`, `copilot` for VS Code, `cursor`, or `windsurf`). GUI launches
 request a new app process so an already-running unmarked IDE cannot absorb the workspace-open
 request. These values identify agent provenance for Authsia routing; they are not credentials and do
 not grant access by themselves. Authsia commands outside this launch flow remain direct human CLI.
 "Secret-free" means Authsia injects no managed secrets into the tool, not that it scrubs unrelated
-ambient environment: terminal tools inherit the launching shell, so launch from a guarded terminal
-(`authsia workspace guard`) to avoid passing ambient shell secrets to the agent. GUI tools launch
-from a clean app environment. Either way the agent uses `authsia workspace run`/`authsia exec` for
+ambient environment: the agent process still inherits the launching shell's other variables, so
+launch from a guarded terminal (`authsia workspace guard`) to avoid passing ambient shell secrets to
+the agent. Either way the agent uses `authsia workspace run`/`authsia exec` for
 JIT/automation-controlled secret access.
+
+Launching from a guarded terminal hands the agent an unguarded child environment. Terminal tools
+(exec) and GUI tools (`open`, which passes its own environment to the app it launches) both drop
+`AUTHSIA_WORKSPACE_GUARD`, `AUTHSIA_WORKSPACE_GUARD_SHIM_DIR`,
+`AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH`, and `AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION`, and replace
+`PATH` with the saved pre-guard `PATH` when the guarded shell recorded one. `AUTHSIA_WORKSPACE_ROOT`
+is kept as workspace context. Any `authsia-guard-*` entry still on the resulting `PATH` is removed,
+so a shell whose guard metadata is stale or partly missing is recovered from `PATH` itself rather
+than launching the agent with shims. This is automatic and never blocks the launch. The agent then
+resolves the real `python`, `git`, and other tools directly and requests secrets explicitly; the
+parent terminal stays guarded. `authsia unguard` remains the human-facing way to convert a whole
+tab — an agent's tool call cannot use it, because it cannot change its parent shell's process
+environment.
 `--dry-run` previews the command and app target without opening anything, and `--print` prints a shell
 command instead of launching. Printed launch commands and goal handoffs start by evaluating
 `authsia workspace guard --print-env` from the workspace root before running the selected tool. Add
