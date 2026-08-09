@@ -2471,6 +2471,14 @@ struct Workspace: AsyncParsableCommand {
                         "use `authsia workspace run -- <tool>` instead."
                 )
             }
+            let launcherRequests = WorkspaceGuardedTerminal.requestedAgentLaunchers(in: tool)
+            if !launcherRequests.isEmpty {
+                StandardError.writeLine(
+                    "Not mediating agent launchers: \(launcherRequests.joined(separator: ", ")). " +
+                        "They already get a shim that starts the agent unguarded, so it resolves " +
+                        "real tools and asks for secrets through `authsia workspace run` / `authsia exec`."
+                )
+            }
             if dryRun {
                 print(Self.renderDryRun(plan))
                 print(WorkspaceGuardedTerminal.shellExpansionWarning)
@@ -2538,12 +2546,19 @@ struct Workspace: AsyncParsableCommand {
         }
 
         static func renderInstallResult(_ result: WorkspaceGuardedTerminalInstallResult) -> String {
-            [
+            var lines = [
                 "Guarded terminal shims ready.",
                 "Shim directory: \(result.shimDirectory.path)",
                 "Installed: \(result.installedTools.isEmpty ? "none" : result.installedTools.joined(separator: ", "))",
                 "Skipped: \(result.skippedTools.isEmpty ? "none" : result.skippedTools.joined(separator: ", "))",
-            ].joined(separator: "\n")
+            ]
+            if !result.installedAgentLaunchers.isEmpty {
+                lines.append(
+                    "Agent launchers (start unguarded): " +
+                    result.installedAgentLaunchers.joined(separator: ", ")
+                )
+            }
+            return lines.joined(separator: "\n")
         }
 
         static func renderShellExports(
@@ -2574,8 +2589,30 @@ struct Workspace: AsyncParsableCommand {
             return lines.joined(separator: "\n")
         }
 
-        static func shouldPrintAutoEnv(config: WorkspaceConfig, environment: [String: String]) -> Bool {
-            config.guardSettings.autoTabs && !isAlreadyGuarded(environment: environment)
+        static func shouldPrintAutoEnv(
+            config: WorkspaceConfig,
+            environment: [String: String],
+            processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry()
+        ) -> Bool {
+            guard config.guardSettings.autoTabs, !isAlreadyGuarded(environment: environment) else {
+                return false
+            }
+            return !isAgentOwnedShell(environment: environment, processAncestry: processAncestry)
+        }
+
+        /// Auto-guard declines shells an agent owns. Agent launches hand the tool an
+        /// unguarded environment, but the shells the agent then spawns run the startup
+        /// hook themselves and would re-guard from the inside — and the agent cannot undo
+        /// that, since `authsia unguard` restarts a tab and a child cannot change its
+        /// parent's environment. Ancestry matches only real agent binaries (`claude`,
+        /// `codex`, `cursor-agent`, …), never IDE hosts, so a human's integrated terminal
+        /// stays guarded.
+        private static func isAgentOwnedShell(
+            environment: [String: String],
+            processAncestry: [AgenticProcessReference]
+        ) -> Bool {
+            AgentRuntimeContextResolver.hasExplicitAgentInvocationMarker(environment: environment)
+                || AgenticProcessDetector.containsAgenticProcess(processAncestry)
         }
 
         private static func isAlreadyGuarded(environment: [String: String]) -> Bool {

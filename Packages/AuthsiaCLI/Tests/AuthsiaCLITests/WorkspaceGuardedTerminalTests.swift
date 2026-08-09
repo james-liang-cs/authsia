@@ -202,16 +202,16 @@ struct WorkspaceGuardedTerminalTests {
 
         let updated = Workspace.Guard.configPersistingRequestedTools(
             config,
-            requestedTools: ["codex", "curl", " codex ", "npm"]
+            requestedTools: ["rails", "curl", " rails ", "npm"]
         )
         try WorkspaceConfigStore.write(updated, toWorkspaceRoot: root)
         let reloaded = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
         let tools = Workspace.Guard.toolsForGuard(config: reloaded, requestedTools: [])
 
         #expect(reloaded.guardSettings.autoTabs == false)
-        #expect(reloaded.guardSettings.tools == ["poetry", "codex"])
+        #expect(reloaded.guardSettings.tools == ["poetry", "rails"])
         #expect(tools.contains("poetry"))
-        #expect(tools.contains("codex"))
+        #expect(tools.contains("rails"))
         #expect(tools.contains("npm"))
         #expect(!reloaded.guardSettings.tools.contains("curl"))
         #expect(!reloaded.guardSettings.tools.contains("npm"))
@@ -265,15 +265,15 @@ struct WorkspaceGuardedTerminalTests {
         let shimDirectory = base.appendingPathComponent("authsia-guard-123", isDirectory: true)
         try FileManager.default.createDirectory(at: shimDirectory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: base) }
-        let codex = shimDirectory.appendingPathComponent("codex")
-        try "#!/bin/sh\nexit 0\n".write(to: codex, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codex.path)
+        let rails = shimDirectory.appendingPathComponent("rails")
+        try "#!/bin/sh\nexit 0\n".write(to: rails, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rails.path)
         let root = URL(fileURLWithPath: "/tmp/My Project", isDirectory: true)
         let plan = WorkspaceGuardedTerminalPlan(
             workspaceRoot: root,
             shimDirectory: shimDirectory,
-            tools: ["codex"],
-            aliasTools: ["codex"],
+            tools: ["rails"],
+            aliasTools: ["rails"],
             environment: [
                 "AUTHSIA_WORKSPACE_GUARD": "1",
                 "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": shimDirectory.path,
@@ -291,9 +291,9 @@ struct WorkspaceGuardedTerminalTests {
         process.arguments = [
             "-fc",
             """
-            alias codex='echo bypass'
+            alias rails='echo bypass'
             eval "$(cat \(WorkspaceGuardedTerminal.shellQuoted(scriptURL.path)))"
-            command -v codex
+            command -v rails
             """,
         ]
         let output = Pipe()
@@ -307,7 +307,7 @@ struct WorkspaceGuardedTerminalTests {
         let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         _ = error.fileHandleForReading.readDataToEndOfFile()
         #expect(process.terminationStatus == 0)
-        #expect(stdout.trimmingCharacters(in: .whitespacesAndNewlines) == codex.path)
+        #expect(stdout.trimmingCharacters(in: .whitespacesAndNewlines) == rails.path)
     }
 
     @Test("print env unsets workspace-managed parent env names but preserves Authsia refs")
@@ -454,6 +454,76 @@ struct WorkspaceGuardedTerminalTests {
         #expect(!script.contains("env npm"))
     }
 
+    @Test("agent launchers get an unguard shim instead of a mediated one")
+    func agentLaunchersGetUnguardShimInsteadOfMediatedOne() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let toolBin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: toolBin, withIntermediateDirectories: true)
+        let claude = toolBin.appendingPathComponent("claude")
+        try "#!/bin/sh\nexit 0\n".write(to: claude, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+
+        // Requesting a launcher with `--tool` must not create a mediating shim over it.
+        let plan = try WorkspaceGuardedTerminal.plan(
+            workspaceRoot: root,
+            tools: ["claude"],
+            baseTemporaryDirectory: root.appendingPathComponent(".tmp"),
+            environment: ["PATH": toolBin.path]
+        )
+        let result = try WorkspaceGuardedTerminal.install(
+            plan,
+            authsiaExecutablePath: "/usr/local/bin/authsia",
+            fileManager: .default
+        )
+        let shim = try String(
+            contentsOf: result.shimDirectory.appendingPathComponent("claude"),
+            encoding: .utf8
+        )
+
+        #expect(plan.tools.isEmpty)
+        #expect(result.installedTools.isEmpty)
+        #expect(result.installedAgentLaunchers == ["claude"])
+        #expect(shim.contains(claude.path))
+        #expect(shim.contains("-u AUTHSIA_WORKSPACE_GUARD"))
+        #expect(!shim.contains("workspace run"))
+        #expect(WorkspaceGuardedTerminal.shimmableTools(from: ["npm", "codex", "cursor"]) == ["npm"])
+    }
+
+    @Test("agent launcher shim hands the tool an unguarded environment")
+    func agentLauncherShimHandsToolUnguardedEnvironment() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = root.appendingPathComponent("claude-shim")
+        try WorkspaceGuardedTerminal.unguardShimScript(toolPath: "/usr/bin/env")
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        let process = Process()
+        process.executableURL = script
+        // A stale saved PATH that still carries an older session's shim entry.
+        process.environment = [
+            "PATH": "/tmp/authsia-guard-NEW:/usr/bin:/bin",
+            "AUTHSIA_WORKSPACE_GUARD": "1",
+            "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": "/tmp/authsia-guard-NEW",
+            "AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH": "/tmp/authsia-guard-OLD:/usr/bin:/bin",
+            WorkspaceGuardedTerminal.shimInvocationEnvironmentName: "1",
+            "AUTHSIA_WORKSPACE_ROOT": root.path,
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let lines = (String(data: data, encoding: .utf8) ?? "").split(separator: "\n").map(String.init)
+
+        #expect(process.terminationStatus == 0)
+        #expect(lines.contains("PATH=/usr/bin:/bin"))
+        #expect(!lines.contains { $0.hasPrefix("AUTHSIA_WORKSPACE_GUARD") })
+        // Workspace root stays: it is context for the agent, not guard machinery.
+        #expect(lines.contains("AUTHSIA_WORKSPACE_ROOT=\(root.path)"))
+    }
+
     @Test("install writes executable shims for resolvable tools")
     func installWritesExecutableShimsForResolvableTools() throws {
         let root = try makeWorkspaceRoot()
@@ -552,19 +622,73 @@ struct WorkspaceGuardedTerminalTests {
             guardSettings: WorkspaceConfig.GuardSettings(autoTabs: false)
         )
 
-        #expect(Workspace.Guard.shouldPrintAutoEnv(config: enabled, environment: [:]))
+        // Ancestry is pinned: the real one belongs to whoever launched the test runner.
+        let humanShell = [AgenticProcessReference(processName: "zsh", bundleIdentifier: nil)]
+
         #expect(Workspace.Guard.shouldPrintAutoEnv(
             config: enabled,
-            environment: ["AUTHSIA_WORKSPACE_GUARD": "1"]
+            environment: [:],
+            processAncestry: humanShell
+        ))
+        #expect(Workspace.Guard.shouldPrintAutoEnv(
+            config: enabled,
+            environment: ["AUTHSIA_WORKSPACE_GUARD": "1"],
+            processAncestry: humanShell
         ))
         #expect(!Workspace.Guard.shouldPrintAutoEnv(
             config: enabled,
             environment: [
                 "AUTHSIA_WORKSPACE_GUARD": "1",
                 "PATH": "/tmp/authsia-guard-123:/usr/bin",
-            ]
+            ],
+            processAncestry: humanShell
         ))
-        #expect(!Workspace.Guard.shouldPrintAutoEnv(config: disabled, environment: [:]))
+        #expect(!Workspace.Guard.shouldPrintAutoEnv(
+            config: disabled,
+            environment: [:],
+            processAncestry: humanShell
+        ))
+    }
+
+    @Test("auto env declines shells an agent owns")
+    func autoEnvDeclinesShellsAnAgentOwns() {
+        let enabled = WorkspaceConfig(
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil
+        )
+        let humanShell = [AgenticProcessReference(processName: "zsh", bundleIdentifier: nil)]
+        let ideShell = [
+            AgenticProcessReference(processName: "zsh", bundleIdentifier: nil),
+            AgenticProcessReference(processName: "Code Helper", bundleIdentifier: "com.microsoft.VSCode"),
+        ]
+        let agentShell = humanShell + [AgenticProcessReference(processName: "claude", bundleIdentifier: nil)]
+
+        #expect(Workspace.Guard.shouldPrintAutoEnv(
+            config: enabled,
+            environment: [:],
+            processAncestry: humanShell
+        ))
+        // An IDE host is not an agent: a human's integrated terminal stays guarded.
+        #expect(Workspace.Guard.shouldPrintAutoEnv(
+            config: enabled,
+            environment: [:],
+            processAncestry: ideShell
+        ))
+        #expect(!Workspace.Guard.shouldPrintAutoEnv(
+            config: enabled,
+            environment: [:],
+            processAncestry: agentShell
+        ))
+        // The launch marker alone is enough when ancestry cannot be read.
+        #expect(!Workspace.Guard.shouldPrintAutoEnv(
+            config: enabled,
+            environment: [
+                "AUTHSIA_AGENT_PLATFORM": "codex",
+                "AUTHSIA_AGENT_INVOKES_AUTHSIA": "1",
+            ],
+            processAncestry: humanShell
+        ))
     }
 
     @Test("auto guard can recover workspace root from guarded shell environment")

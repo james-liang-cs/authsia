@@ -32,6 +32,19 @@ struct WorkspaceGuardedTerminalInstallResult: Equatable {
     let shimDirectory: URL
     let installedTools: [String]
     let skippedTools: [String]
+    let installedAgentLaunchers: [String]
+
+    init(
+        shimDirectory: URL,
+        installedTools: [String],
+        skippedTools: [String],
+        installedAgentLaunchers: [String] = []
+    ) {
+        self.shimDirectory = shimDirectory
+        self.installedTools = installedTools
+        self.skippedTools = skippedTools
+        self.installedAgentLaunchers = installedAgentLaunchers
+    }
 }
 
 enum WorkspaceGuardedTerminal {
@@ -54,6 +67,15 @@ enum WorkspaceGuardedTerminal {
         "curl", "echo", "env", "printenv", "cat", "osascript", "sh", "bash", "zsh",
         "vault", "op",
     ]
+
+    /// Agent launchers get an *unguard* shim rather than a mediating one. Typing `claude`
+    /// in a guarded tab must reach the real binary with a clean environment — the same
+    /// boundary `authsia workspace agent` applies — because a launcher started as a child
+    /// of the guarded shell would otherwise inherit the shim directory and route every
+    /// tool it spawns through `workspace run`. An agent cannot fix this for itself:
+    /// `authsia unguard` restarts a tab, and a child process cannot change its parent's
+    /// environment.
+    static let agentLauncherTools = ["claude", "code", "codex", "cursor", "windsurf"]
 
     /// Set to "1" in the environment of every tool invocation that reaches
     /// `workspace run` through a guarded-terminal shim or shell wrapper, so the
@@ -166,10 +188,27 @@ enum WorkspaceGuardedTerminal {
             installedTools.append(tool)
         }
 
+        var installedAgentLaunchers: [String] = []
+        for launcher in agentLauncherTools {
+            guard let launcherPath = resolveToolPath(
+                launcher,
+                searchPaths: plan.originalSearchPaths,
+                fileManager: fileManager
+            ) else {
+                continue
+            }
+
+            let shimURL = plan.shimDirectory.appendingPathComponent(launcher)
+            try unguardShimScript(toolPath: launcherPath).write(to: shimURL, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shimURL.path)
+            installedAgentLaunchers.append(launcher)
+        }
+
         return WorkspaceGuardedTerminalInstallResult(
             shimDirectory: plan.shimDirectory,
             installedTools: installedTools,
-            skippedTools: skippedTools
+            skippedTools: skippedTools,
+            installedAgentLaunchers: installedAgentLaunchers
         )
     }
 
@@ -243,6 +282,29 @@ enum WorkspaceGuardedTerminal {
         """
     }
 
+    /// Runs the real launcher with the guard markers dropped and the pre-guard `PATH`
+    /// restored, stripping any `authsia-guard-*` entry that survives in it. Mirrors
+    /// `unguardedSearchPath`, so a hand-typed `claude` and `authsia workspace agent`
+    /// hand the agent the same environment.
+    static func unguardShimScript(toolPath: String) -> String {
+        """
+        #!/bin/sh
+        _authsia_path="${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}"
+        _authsia_path="$(printf '%s' "$_authsia_path" | awk '
+            BEGIN { RS = ":"; ORS = "" }
+            { entry = $0; sub(/.*\\//, "", entry) }
+            entry !~ /^\(shimDirectoryPrefix)/ { printf "%s%s", sep, $0; sep = ":" }
+        ')"
+        exec /usr/bin/env \\
+            -u AUTHSIA_WORKSPACE_GUARD \\
+            -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR \\
+            -u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH \\
+            -u \(shimInvocationEnvironmentName) \\
+            PATH="$_authsia_path" \\
+            \(shellQuoted(toolPath)) "$@"
+        """
+    }
+
     static func shellQuoted(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
@@ -295,11 +357,20 @@ enum WorkspaceGuardedTerminal {
     /// in first-requested order and de-duplicated. Lets callers tell the user why
     /// an explicit `--tool` request was dropped.
     static func blockedTools(in tools: [String]) -> [String] {
-        let blocked = Set(blockedDefaultTools)
+        requestedTools(in: tools, matching: Set(blockedDefaultTools))
+    }
+
+    /// Requested tool names that are agent launchers. They are not mediated; `install`
+    /// gives them an unguard shim instead, and callers explain that swap.
+    static func requestedAgentLaunchers(in tools: [String]) -> [String] {
+        requestedTools(in: tools, matching: Set(agentLauncherTools))
+    }
+
+    private static func requestedTools(in tools: [String], matching names: Set<String>) -> [String] {
         var seen = Set<String>()
         return tools.compactMap { raw in
             let tool = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard blocked.contains(tool), seen.insert(tool).inserted else { return nil }
+            guard names.contains(tool), seen.insert(tool).inserted else { return nil }
             return tool
         }
     }
@@ -326,11 +397,13 @@ enum WorkspaceGuardedTerminal {
         // are never shimmed — even when explicitly requested via `--tool`. A name-based
         // shim either gives a false sense of safety (shell expansion happens before the
         // shim sees args) or routes secret output outside Authsia's masking boundary.
-        let blocked = Set(blockedDefaultTools)
+        // Agent launchers are excluded too: `install` gives them an unguard shim instead,
+        // so mediating one here would only overwrite it.
+        let excluded = Set(blockedDefaultTools + agentLauncherTools)
         var seen = Set<String>()
         return tools.compactMap { raw in
             let tool = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !tool.isEmpty, !blocked.contains(tool), seen.insert(tool).inserted else { return nil }
+            guard !tool.isEmpty, !excluded.contains(tool), seen.insert(tool).inserted else { return nil }
             return tool
         }
     }

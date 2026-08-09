@@ -1491,6 +1491,24 @@ resolve workspace secrets at agent launch; run them explicitly with `authsia wor
 or add them with `workspace guard --tool <name>`. Non-default tools added with `workspace guard --tool <name>`
 are saved in the workspace's `guard.tools` settings for future guarded terminals; when shell exports
 are printed, all shimmed tool names are unaliased so a user alias cannot bypass the PATH shim.
+
+The agent launchers `claude`, `code`, `codex`, `cursor`, and `windsurf` get a different shim: it
+starts the real launcher with an *unguarded* environment rather than routing it through
+`workspace run`. The shim drops the guard marker variables, restores the saved pre-guard `PATH`, and
+strips any `authsia-guard-*` entry that survives in it, so a hand-typed `claude` in a guarded tab
+gets the same environment as `authsia workspace agent`. This is the only mechanism that can fix the
+hand-launched case: `authsia unguard` restarts a tab for a human, and an agent's own tool call cannot
+change its parent shell's environment. These names are never mediated — `workspace guard --tool
+codex` reports the swap on stderr and is not saved to `guard.tools`. The launchers keep their
+aliases, because a `claude=claude --flag` alias still resolves its command word through `PATH` and
+therefore still reaches the shim.
+
+Auto-guard also declines shells an agent owns, so a shell the agent spawns cannot re-guard itself
+from the inside after the launch handed it a clean environment. A shell is agent-owned when
+`AUTHSIA_AGENT_INVOKES_AUTHSIA` and `AUTHSIA_AGENT_PLATFORM` are set, or when process ancestry
+contains an agent binary (`claude`, `claude-code`, `codex`, `cursor-agent`, `github-copilot`,
+`windsurf-agent`). IDE hosts do not count, so a human's integrated terminal in VS Code, Cursor, or a
+JetBrains IDE stays guarded.
 Generated shims preserve the caller's current working directory so nested package and build tools
 still discover package-local config while Authsia resolves workspace metadata from the project tree.
 If that working directory is outside every Authsia workspace, a shimmed invocation passes directly
@@ -1529,8 +1547,9 @@ New interactive shell tabs opened from an opted-in workspace start guarded autom
 standard Authsia shell integration is installed. `authsia setup --repair` installs the managed
 startup block that evaluates `authsia init <shell>`, and that init script runs
 `authsia workspace guard --print-env --auto` during shell startup. `--auto` prints nothing outside an
-Authsia workspace, when the current shell is already guarded, or when the workspace's macOS Workspace
-UI toggle "Auto-guard new tabs" is off. That toggle is enabled by default for new workspace configs.
+Authsia workspace, when the current shell is already guarded, when the shell is agent-owned, or when
+the workspace's macOS Workspace UI toggle "Auto-guard new tabs" is off. That toggle is enabled by
+default for new workspace configs.
 
 Use `echo "$AUTHSIA_WORKSPACE_GUARD"` to confirm the session is guarded.
 
