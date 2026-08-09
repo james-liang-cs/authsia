@@ -14,10 +14,6 @@ struct WorkspaceAgentLaunchTests {
         let defaultAgent = try Workspace.Agent.parse([])
         let guardedPrefix = "cd '/tmp/My Project' && __authsia_guard_env=\"$(authsia workspace guard --print-env)\" && " +
             "eval \"$__authsia_guard_env\" && unset __authsia_guard_env && "
-        // The tab stays guarded; only the agent child is handed an unguarded environment.
-        let unguardedChild = "env -u AUTHSIA_WORKSPACE_GUARD -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR " +
-            "-u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH -u AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION " +
-            "PATH=\"${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}\" "
 
         #expect(defaultAgent.tool == .claudeCode)
         #expect(WorkspaceAgentTool.allCases.map(\.title) == [
@@ -34,26 +30,20 @@ struct WorkspaceAgentLaunchTests {
             "cursor",
             "windsurf",
         ])
-        #expect(
-            WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .codex).launchCommand ==
-                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
-        )
-        #expect(
-            WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .claudeCode).launchCommand ==
-                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=claude-code AUTHSIA_AGENT_INVOKES_AUTHSIA=1 claude"
-        )
-        #expect(
-            WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .vsCode).launchCommand ==
-                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1 code ."
-        )
-        #expect(
-            WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .cursor).launchCommand ==
-                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=cursor AUTHSIA_AGENT_INVOKES_AUTHSIA=1 cursor ."
-        )
-        #expect(
-            WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .windsurf).launchCommand ==
-                guardedPrefix + unguardedChild + "AUTHSIA_AGENT_PLATFORM=windsurf AUTHSIA_AGENT_INVOKES_AUTHSIA=1 windsurf ."
-        )
+        let launchCases: [(WorkspaceAgentTool, String)] = [
+            (.codex, "AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex)"),
+            (.claudeCode, "AUTHSIA_AGENT_PLATFORM=claude-code AUTHSIA_AGENT_INVOKES_AUTHSIA=1 claude)"),
+            (.vsCode, "AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1 code .)"),
+            (.cursor, "AUTHSIA_AGENT_PLATFORM=cursor AUTHSIA_AGENT_INVOKES_AUTHSIA=1 cursor .)"),
+            (.windsurf, "AUTHSIA_AGENT_PLATFORM=windsurf AUTHSIA_AGENT_INVOKES_AUTHSIA=1 windsurf .)"),
+        ]
+        for (tool, suffix) in launchCases {
+            let command = WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: tool).launchCommand
+            #expect(command.hasPrefix(guardedPrefix))
+            #expect(command.contains("/usr/bin/awk"))
+            #expect(command.contains("entry !~ /^authsia-guard-/"))
+            #expect(command.hasSuffix(suffix))
+        }
         #expect(
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .vsCode).openArguments ==
                 [
@@ -273,12 +263,9 @@ struct WorkspaceAgentLaunchTests {
         #expect(rendered.contains("Agentic workspace launch: Codex"))
         #expect(rendered.contains("Command: cd '/tmp/My Project' && __authsia_guard_env="))
         #expect(rendered.contains("authsia workspace guard --print-env"))
-        #expect(rendered.contains(
-            "&& env -u AUTHSIA_WORKSPACE_GUARD -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR " +
-            "-u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH -u AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION " +
-            "PATH=\"${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}\" " +
-            "AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
-        ))
+        #expect(rendered.contains("/usr/bin/awk"))
+        #expect(rendered.contains("entry !~ /^authsia-guard-/"))
+        #expect(rendered.contains("AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"))
         #expect(rendered.contains("Authsia injects no managed secrets"))
         #expect(rendered.contains("guarded terminal"))
         #expect(rendered.contains("JIT/automation"))
@@ -290,14 +277,10 @@ struct WorkspaceAgentLaunchTests {
     @Test("agent goal handoff renders launch command and secret boundary")
     func agentGoalHandoffRendersLaunchCommandAndSecretBoundary() {
         let root = URL(fileURLWithPath: "/tmp/My Project", isDirectory: true)
-        let guardedLaunch = "cd '/tmp/My Project' && __authsia_guard_env=\"$(authsia workspace guard --print-env)\" && " +
-            "eval \"$__authsia_guard_env\" && unset __authsia_guard_env && " +
-            "env -u AUTHSIA_WORKSPACE_GUARD -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR " +
-            "-u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH -u AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION " +
-            "PATH=\"${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}\" " +
-            "AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex"
+        let plan = WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .codex)
+        let guardedLaunch = plan.launchCommand
         let rendered = WorkspaceAgentLaunchPlan.renderHandoff(
-            WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .codex),
+            plan,
             goal: "Fix checkout bug without printing $API_KEY"
         )
 
@@ -305,6 +288,8 @@ struct WorkspaceAgentLaunchTests {
         #expect(rendered.contains("Workspace: My Project"))
         #expect(rendered.contains("Tool: Codex"))
         #expect(rendered.contains("Launch: \(guardedLaunch)"))
+        #expect(guardedLaunch.contains("/usr/bin/awk"))
+        #expect(guardedLaunch.contains("entry !~ /^authsia-guard-/"))
         #expect(rendered.contains("Fix checkout bug without printing $API_KEY"))
         #expect(rendered.contains("authsia workspace status"))
         #expect(rendered.contains("authsia workspace run --dry-run -- <command>"))

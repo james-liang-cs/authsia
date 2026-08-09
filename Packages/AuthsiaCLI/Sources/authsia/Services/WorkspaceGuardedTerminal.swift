@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticatorCore
 
 struct WorkspaceGuardedTerminalPlan: Equatable {
     let workspaceRoot: URL
@@ -80,27 +81,21 @@ enum WorkspaceGuardedTerminal {
     /// Set to "1" in the environment of every tool invocation that reaches
     /// `workspace run` through a guarded-terminal shim or shell wrapper, so the
     /// run command can tell implicit shim traffic from explicit CLI calls.
-    static let shimInvocationEnvironmentName = "AUTHSIA_WORKSPACE_GUARD_SHIM_INVOCATION"
+    static let shimInvocationEnvironmentName = WorkspaceGuardEnvironment.shimInvocationEnvironmentName
 
     /// Every shim directory is named `authsia-guard-<uuid>`, so this prefix identifies a
     /// guard entry on PATH even when the marker variables that recorded it are gone.
-    static let shimDirectoryPrefix = "authsia-guard-"
+    static let shimDirectoryPrefix = WorkspaceGuardEnvironment.shimDirectoryPrefix
 
     /// Marker variables a guarded shell exports. Cleared as a set when handing a child
     /// process an unguarded environment.
-    static let guardEnvironmentNames = [
-        "AUTHSIA_WORKSPACE_GUARD",
-        "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR",
-        "AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH",
-        shimInvocationEnvironmentName,
-    ]
+    static let guardEnvironmentNames = WorkspaceGuardEnvironment.guardEnvironmentNames
 
     /// True when the environment carries guard state. PATH is checked as well as the
     /// marker variables so a shell that lost part of its guard metadata is still
     /// recognized instead of silently handing shims to a child.
     static func isGuarded(environment: [String: String]) -> Bool {
-        if guardEnvironmentNames.contains(where: { !(environment[$0] ?? "").isEmpty }) { return true }
-        return searchPaths(from: environment["PATH"]).contains(where: isShimDirectory)
+        WorkspaceGuardEnvironment.isGuarded(environment: environment)
     }
 
     /// PATH for a child that should reach real tools directly: the saved pre-guard PATH
@@ -108,21 +103,11 @@ enum WorkspaceGuardedTerminal {
     /// shim entry is dropped, so stale or incomplete guard metadata is recovered from PATH
     /// itself rather than left in place. Returns nil when PATH already needs no change.
     static func unguardedSearchPath(environment: [String: String]) -> String? {
-        let recordedShimDirectory = environment["AUTHSIA_WORKSPACE_GUARD_SHIM_DIR"]
-        let savedPath = environment["AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH"]
-        guard let candidate = (savedPath?.isEmpty == false) ? savedPath : environment["PATH"] else {
-            return nil
-        }
-        let unguarded = candidate.split(separator: ":", omittingEmptySubsequences: false)
-            .map(String.init)
-            .filter { $0 != recordedShimDirectory && !isShimDirectory($0) }
-            .joined(separator: ":")
-        guard unguarded != environment["PATH"] else { return nil }
-        return unguarded
+        WorkspaceGuardEnvironment.unguardedSearchPath(environment: environment)
     }
 
     static func isShimDirectory(_ path: String) -> Bool {
-        URL(fileURLWithPath: path).lastPathComponent.hasPrefix(shimDirectoryPrefix)
+        WorkspaceGuardEnvironment.isShimDirectory(path)
     }
 
     static let shellExpansionWarning =
@@ -287,22 +272,9 @@ enum WorkspaceGuardedTerminal {
     /// `unguardedSearchPath`, so a hand-typed `claude` and `authsia workspace agent`
     /// hand the agent the same environment.
     static func unguardShimScript(toolPath: String) -> String {
-        """
-        #!/bin/sh
-        _authsia_path="${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}"
-        _authsia_path="$(printf '%s' "$_authsia_path" | awk '
-            BEGIN { RS = ":"; ORS = "" }
-            { entry = $0; sub(/.*\\//, "", entry) }
-            entry !~ /^\(shimDirectoryPrefix)/ { printf "%s%s", sep, $0; sep = ":" }
-        ')"
-        exec /usr/bin/env \\
-            -u AUTHSIA_WORKSPACE_GUARD \\
-            -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR \\
-            -u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH \\
-            -u \(shimInvocationEnvironmentName) \\
-            PATH="$_authsia_path" \\
-            \(shellQuoted(toolPath)) "$@"
-        """
+        WorkspaceGuardEnvironment.unguardedExecShellScript(
+            command: "\(shellQuoted(toolPath)) \"$@\""
+        )
     }
 
     static func shellQuoted(_ value: String) -> String {

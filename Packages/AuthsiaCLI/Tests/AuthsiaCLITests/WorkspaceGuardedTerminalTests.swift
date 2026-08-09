@@ -498,14 +498,20 @@ struct WorkspaceGuardedTerminalTests {
         try WorkspaceGuardedTerminal.unguardShimScript(toolPath: "/usr/bin/env")
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let guardedAwkDirectory = root.appendingPathComponent("authsia-guard-CUSTOM", isDirectory: true)
+        try FileManager.default.createDirectory(at: guardedAwkDirectory, withIntermediateDirectories: true)
+        let guardedAwk = guardedAwkDirectory.appendingPathComponent("awk")
+        try "#!/bin/sh\nprintf '%s' '/tmp/authsia-guard-MEDIATED'\n"
+            .write(to: guardedAwk, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: guardedAwk.path)
 
         let process = Process()
         process.executableURL = script
         // A stale saved PATH that still carries an older session's shim entry.
         process.environment = [
-            "PATH": "/tmp/authsia-guard-NEW:/usr/bin:/bin",
+            "PATH": "\(guardedAwkDirectory.path):/usr/bin:/bin",
             "AUTHSIA_WORKSPACE_GUARD": "1",
-            "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": "/tmp/authsia-guard-NEW",
+            "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": guardedAwkDirectory.path,
             "AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH": "/tmp/authsia-guard-OLD:/usr/bin:/bin",
             WorkspaceGuardedTerminal.shimInvocationEnvironmentName: "1",
             "AUTHSIA_WORKSPACE_ROOT": root.path,

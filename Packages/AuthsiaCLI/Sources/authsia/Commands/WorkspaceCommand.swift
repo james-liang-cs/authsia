@@ -2977,14 +2977,12 @@ enum WorkspaceAgentTool: String, CaseIterable, ExpressibleByArgument {
     }
 
     /// Launches the tool with the guard markers dropped and the pre-guard `PATH` restored,
-    /// so the agent reaches real tools while the shell that ran this stays guarded. Mirrors
-    /// the process-level cleanup in `WorkspaceAgentLauncher` and the `authsia unguard` idiom.
+    /// so the agent reaches real tools while the shell that ran this stays guarded.
     var markedShellCommand: String {
-        "env -u AUTHSIA_WORKSPACE_GUARD -u AUTHSIA_WORKSPACE_GUARD_SHIM_DIR " +
-            "-u AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH " +
-            "-u \(WorkspaceGuardedTerminal.shimInvocationEnvironmentName) " +
-            "PATH=\"${AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH:-$PATH}\" " +
-            "AUTHSIA_AGENT_PLATFORM=\(agentPlatform) AUTHSIA_AGENT_INVOKES_AUTHSIA=1 \(shellCommand)"
+        WorkspaceGuardEnvironment.unguardedChildShellCommand(
+            agentPlatform: agentPlatform,
+            command: shellCommand
+        )
     }
 }
 
@@ -3095,15 +3093,7 @@ enum WorkspaceAgentLauncher {
     static func unguardedEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [String: String] {
-        guard WorkspaceGuardedTerminal.isGuarded(environment: environment) else { return environment }
-        var unguarded = environment
-        for name in WorkspaceGuardedTerminal.guardEnvironmentNames {
-            unguarded.removeValue(forKey: name)
-        }
-        if let path = WorkspaceGuardedTerminal.unguardedSearchPath(environment: environment) {
-            unguarded["PATH"] = path
-        }
-        return unguarded
+        WorkspaceGuardEnvironment.unguardedEnvironment(environment)
     }
 
     static func openFailureMessage() -> String {
