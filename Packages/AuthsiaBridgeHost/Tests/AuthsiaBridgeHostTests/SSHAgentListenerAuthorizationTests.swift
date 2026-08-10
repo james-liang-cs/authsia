@@ -24,6 +24,26 @@ final class SSHAgentListenerAuthorizationTests: XCTestCase {
         XCTAssertEqual(persistence.values, [])
     }
 
+    func testSessionGrantAndKeyPolicyApprovalsAreNotAuditedAsBiometric() {
+        for (decision, expectedLabel) in [
+            (SSHAgentApprovalDecision.approvedFromSession, "ssh-session"),
+            (SSHAgentApprovalDecision.approvedByKeyPolicy, "key-policy"),
+        ] {
+            let listener = makeListener(approvalDecision: decision, passphrases: [])
+
+            let result = listener.authorizedSignature(
+                approvalRequest: makeApprovalRequest(),
+                automationDecision: .notAutomation,
+                keyIsEncrypted: false,
+                storedPassphrase: { nil },
+                sign: SigningTracker().sign,
+                persistPassphrase: { _ in XCTFail("passphrase must not be persisted") }
+            )
+
+            XCTAssertEqual(result?.approvedBy, expectedLabel)
+        }
+    }
+
     func testAutomationApprovalSignsWithoutHumanApproval() {
         let approvalProvider = ApprovalProviderFake(decision: .denied)
         let signer = SigningTracker()

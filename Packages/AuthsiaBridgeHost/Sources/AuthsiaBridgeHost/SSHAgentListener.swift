@@ -457,11 +457,12 @@ public final class SSHAgentListener: @unchecked Sendable {
             debugLog("sign request failed: \(message)")
             return nil
         case .notAutomation:
-            guard approvalProvider.evaluateApproval(approvalRequest) == .approved else {
+            let decision = approvalProvider.evaluateApproval(approvalRequest)
+            guard decision.isApproved else {
                 debugLog("sign request failed: approval denied")
                 return nil
             }
-            approvedBy = "biometric"
+            approvedBy = decision.auditLabel
         }
 
         var passphrase = storedPassphrase()
@@ -721,7 +722,8 @@ public final class SSHAgentListener: @unchecked Sendable {
                 peer: peer?.auditRef,
                 instigator: instigator?.auditRef,
                 ancestry: ancestry.map(\.auditRef),
-                targetHost: targetHost
+                targetHost: targetHost,
+                sessionScope: sessionScope
             )
         }
     }

@@ -253,7 +253,8 @@ final class BridgeAuditTests: XCTestCase {
             peer: peer,
             instigator: instigator,
             ancestry: [peer, instigator],
-            targetHost: "github.com"
+            targetHost: "github.com",
+            sessionScope: "tty:/dev/ttys000:sid:52819"
         )
         let record = BridgeAuditRecord(
             command: .sshAgentSign,
@@ -272,5 +273,28 @@ final class BridgeAuditTests: XCTestCase {
         XCTAssertEqual(decoded.sshAgent?.instigator?.name, "git")
         XCTAssertEqual(decoded.sshAgent?.ancestry.map(\.name), ["ssh", "git"])
         XCTAssertEqual(decoded.sshAgent?.targetHost, "github.com")
+        XCTAssertEqual(decoded.sshAgent?.sessionScope, "tty:/dev/ttys000:sid:52819")
+    }
+
+    func testSSHAgentInfoWithoutSessionScopeDecodesFromExistingRecords() throws {
+        let json = """
+        {
+          "command": "sshAgentSign",
+          "itemId": "key-id",
+          "itemName": "github.key",
+          "approvedBy": "biometric",
+          "timestamp": "2026-08-07T03:08:18Z",
+          "sshAgent": {
+            "peer": { "pid": 42, "name": "ssh", "path": "/usr/bin/ssh" },
+            "ancestry": [{ "pid": 42, "name": "ssh", "path": "/usr/bin/ssh" }],
+            "targetHost": "github.com"
+          }
+        }
+        """
+
+        let decoded = try BridgeCoder.decode(BridgeAuditRecord.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.sshAgent?.targetHost, "github.com")
+        XCTAssertNil(decoded.sshAgent?.sessionScope)
     }
 }

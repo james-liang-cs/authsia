@@ -2135,6 +2135,12 @@ Workspace attribution stores only the workspace name, root basename label, and c
 folder; it does not store the absolute local repo path or change authorization. Environment attribution
 stores only `Default environment` or the selected environment tag, never resolved secret values.
 
+For SSH signing events the approval column separates `biometric` (the user was prompted and allowed it)
+from `ssh-session` (an unexpired session grant covered it silently) and `key-policy` (the key is set to
+auto-approve), so prompt volume is measurable from the log. Those events also record the session scope
+the grant was cached against; an empty scope means no scope resolved, which disables caching and prompts
+on every signature.
+
 | Parameter | Required | Values | Description |
 |-----------|----------|--------|-------------|
 | `--format` | No | `table` (default), `json` | Output format |

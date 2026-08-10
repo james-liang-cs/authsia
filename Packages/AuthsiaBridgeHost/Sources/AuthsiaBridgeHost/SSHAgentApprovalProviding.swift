@@ -3,8 +3,34 @@ import AuthenticatorBridge
 import AuthenticatorCore
 
 public enum SSHAgentApprovalDecision: Equatable, Sendable {
+    /// The user was shown a prompt and allowed it.
     case approved
+    /// An unexpired session grant covered the request; no prompt was shown.
+    case approvedFromSession
+    /// The key's policy is `autoApprove`; no prompt was shown.
+    case approvedByKeyPolicy
     case denied
+
+    public var isApproved: Bool {
+        self != .denied
+    }
+
+    /// Value recorded in `BridgeAuditRecord.approvedBy`. Separates a signature the
+    /// user actually authorized from one an existing grant covered silently: the
+    /// log wrote `biometric` for all three, so prompt volume could not be measured
+    /// from it and every cached signature read as a Touch ID the user never saw.
+    public var auditLabel: String {
+        switch self {
+        case .approved:
+            return "biometric"
+        case .approvedFromSession:
+            return "ssh-session"
+        case .approvedByKeyPolicy:
+            return "key-policy"
+        case .denied:
+            return "denied"
+        }
+    }
 }
 
 public struct SSHAgentRequester: Equatable {

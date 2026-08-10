@@ -82,17 +82,25 @@ public struct SSHAgentAuditInfo: Codable, Equatable {
     public let instigator: SSHAgentProcessRef?
     public let ancestry: [SSHAgentProcessRef]
     public let targetHost: String?
+    /// Scope the approval was cached against (`tty:…:sid:…` or `agent:…:pid:…`).
+    /// `nil` means no scope resolved, which disables caching entirely and prompts on
+    /// every signature — the single largest source of repeat prompts, and invisible
+    /// in the log until it is recorded here. Absent on records written before this
+    /// field existed.
+    public let sessionScope: String?
 
     public init(
         peer: SSHAgentProcessRef?,
         instigator: SSHAgentProcessRef?,
         ancestry: [SSHAgentProcessRef],
-        targetHost: String?
+        targetHost: String?,
+        sessionScope: String? = nil
     ) {
         self.peer = peer
         self.instigator = instigator
         self.ancestry = ancestry
         self.targetHost = targetHost
+        self.sessionScope = sessionScope
     }
 }
 
