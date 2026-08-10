@@ -261,12 +261,55 @@ struct StatusCommandTests {
         #expect(status == GuardedTerminalStatus(
             state: .active,
             shimDirectory: shimDirectory.path,
-            toolCount: 3
+            tools: ["aws", "git", "python"]
         ))
         #expect(Status.renderTable(
             snapshot: snapshot(guardedTerminal: status),
             currentDate: Date(timeIntervalSince1970: 1_699_999_900)
         ).contains("Guarded Terminal: Active (3 tools shimmed)"))
+    }
+
+    @Test("verbose status separates a persisted custom tool from agent launcher shims")
+    func guardedTerminalStatusCapturesCustomToolsAndAgentLaunchers() throws {
+        let shimDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-guard-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: shimDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: shimDirectory) }
+        // "rails" stands in for a tool the user added with
+        // `eval "$(authsia workspace guard --tool rails --print-env)"` and persisted to
+        // guard.tools; "claude" and "codex" stand in for the agent-launcher unguard shims
+        // `install()` writes into the same directory.
+        for shim in ["python", "rails", "claude", "codex"] {
+            try Data().write(to: shimDirectory.appendingPathComponent(shim))
+        }
+
+        let status = Status.resolveGuardedTerminalStatus(environment: [
+            "AUTHSIA_WORKSPACE_GUARD": "1",
+            "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": shimDirectory.path,
+            "PATH": "\(shimDirectory.path):/usr/bin:/bin",
+        ])
+
+        #expect(status == GuardedTerminalStatus(
+            state: .active,
+            shimDirectory: shimDirectory.path,
+            tools: ["python", "rails"],
+            agentLaunchers: ["claude", "codex"]
+        ))
+
+        let currentDate = Date(timeIntervalSince1970: 1_699_999_900)
+        let verboseOutput = Status.renderTable(
+            snapshot: snapshot(guardedTerminal: status),
+            currentDate: currentDate,
+            verbose: true
+        )
+        #expect(verboseOutput.contains("Guarded Terminal: Active (4 tools shimmed)"))
+        #expect(verboseOutput.contains("  Tools: python, rails"))
+        #expect(verboseOutput.contains("  Agent launchers (start unguarded): claude, codex"))
+
+        // Without --verbose, only the summary line prints.
+        let terseOutput = Status.renderTable(snapshot: snapshot(guardedTerminal: status), currentDate: currentDate)
+        #expect(!terseOutput.contains("Tools: python"))
+        #expect(!terseOutput.contains("Agent launchers"))
     }
 
     @Test("partial guard state reports stale instead of active")
@@ -349,7 +392,8 @@ private struct StatusJSONPayload: Decodable {
 private struct StatusJSONGuardedTerminal: Decodable {
     let state: String
     let shimDirectory: String?
-    let toolCount: Int?
+    let tools: [String]?
+    let agentLaunchers: [String]?
     let detail: String?
 }
 

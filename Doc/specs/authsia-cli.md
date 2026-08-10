@@ -2002,6 +2002,7 @@ same scope the SSH agent records for approvals made from that terminal.
 | Parameter | Required | Values | Description |
 |-----------|----------|--------|-------------|
 | `--format` | No | `table` (default), `json` | Output format |
+| `--verbose` | No | flag | Table output only: list shimmed tool names instead of just the count |
 
 Example output (table):
 
@@ -2021,7 +2022,7 @@ meant to receive:
 
 | Line | Meaning |
 |------|---------|
-| `Active (<n> tools shimmed)` | Guard markers, an `authsia-guard-*` PATH entry, and the shim directory all agree; `<n>` counts the shims installed in it |
+| `Active (<n> tools shimmed)` | Guard markers, an `authsia-guard-*` PATH entry, and the shim directory all agree; `<n>` counts every shim installed in it — default tools, a user's persisted `--tool` custom additions, and agent-launcher shims alike |
 | `Stale (guard markers missing)` | Partial guard metadata — for example a leftover `AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH`, or an inherited shim PATH entry whose markers were dropped |
 | `Stale (shim directory not on PATH)` | Markers claim a guard the PATH no longer routes through |
 | `Stale (shim directory missing)` | The recorded shim directory was swept from the temp dir, so shims no longer exist |
@@ -2029,8 +2030,19 @@ meant to receive:
 | `Inactive` | An ordinary unguarded shell |
 
 Any `Stale` line means tools resolve to something other than the guard intended; open a new tab, or
-run `authsia guard`, to re-arm. JSON output carries the same state under `guardedTerminal`
-(`state`, `shimDirectory`, `toolCount`, `detail`).
+run `authsia guard`, to re-arm. `--verbose` breaks an `Active` line into names instead of a count,
+listing default and custom tools separately from agent launchers, since a launcher shim means
+something different from a mediated one — it hands the launched agent an unguarded environment
+rather than routing it through `workspace run`:
+
+```
+Guarded Terminal: Active (6 tools shimmed)
+  Tools: aws, git, python, rails
+  Agent launchers (start unguarded): claude, codex
+```
+
+JSON output always carries the full detail under `guardedTerminal`
+(`state`, `shimDirectory`, `tools`, `agentLaunchers`, `detail`) regardless of `--verbose`.
 
 `SSH Session` reflects only the current terminal's approval session; approvals held by other
 terminals are not shown. JSON output includes a `terminalScope` field with the CLI-resolved

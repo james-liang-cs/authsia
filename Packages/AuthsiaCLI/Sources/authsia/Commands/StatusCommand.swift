@@ -23,6 +23,9 @@ struct Status: ParsableCommand {
     @Option(name: .long, help: "Output format: table (default), json")
     var format: OutputFormat = .table
 
+    @Flag(name: .long, help: "List shimmed tool names when the guarded terminal is active")
+    var verbose = false
+
     func run() throws {
         let now = Date()
         let humanSessionScope = SessionCache.humanSessionScope()
@@ -40,13 +43,18 @@ struct Status: ParsableCommand {
             terminalScope: humanSessionScope,
             workspaceContext: WorkspaceRuntimeContextResolver.resolve()
         )
-        print(Self.render(snapshot: snapshot, format: format, currentDate: now))
+        print(Self.render(snapshot: snapshot, format: format, currentDate: now, verbose: verbose))
     }
 
-    static func render(snapshot: StatusSnapshot, format: OutputFormat, currentDate: Date) -> String {
+    static func render(
+        snapshot: StatusSnapshot,
+        format: OutputFormat,
+        currentDate: Date,
+        verbose: Bool = false
+    ) -> String {
         switch format {
         case .table:
-            return renderTable(snapshot: snapshot, currentDate: currentDate)
+            return renderTable(snapshot: snapshot, currentDate: currentDate, verbose: verbose)
         case .json:
             return renderJSON(snapshot: snapshot, currentDate: currentDate)
         }
@@ -122,10 +130,20 @@ struct Status: ParsableCommand {
                 detail: "shim directory missing"
             )
         }
+        // A raw directory listing, not a filtered "known tools" list, so it captures
+        // every shim actually on disk: default tools, a user's persisted `--tool` custom
+        // additions, and the agent-launcher unguard shims alike. Launchers are split out
+        // because they mean something different — they hand the launched agent an
+        // unguarded environment rather than mediating it — so lumping them into one
+        // undifferentiated "Tools" list would misstate what each shim does.
+        let agentLauncherNames = Set(WorkspaceGuardedTerminal.agentLauncherTools)
+        let tools = shims.filter { !agentLauncherNames.contains($0) }.sorted()
+        let agentLaunchers = shims.filter { agentLauncherNames.contains($0) }.sorted()
         return GuardedTerminalStatus(
             state: .active,
             shimDirectory: shimDirectory,
-            toolCount: shims.count
+            tools: tools,
+            agentLaunchers: agentLaunchers.isEmpty ? nil : agentLaunchers
         )
     }
 
@@ -150,13 +168,21 @@ struct Status: ParsableCommand {
         return (true, localSessionExpiresAt)
     }
 
-    static func renderTable(snapshot: StatusSnapshot, currentDate: Date) -> String {
+    static func renderTable(snapshot: StatusSnapshot, currentDate: Date, verbose: Bool = false) -> String {
         var lines: [String] = []
         lines.append("Authsia Status")
         lines.append("Bridge: \(snapshot.bridgeConnected ? "Connected" : "Disconnected")")
         lines.append("Session: \(sessionStatusText(snapshot: snapshot, currentDate: currentDate))")
         lines.append("Shell Integration: \(snapshot.shellIntegrationEnabled ? "Enabled" : "Disabled")")
         lines.append("Guarded Terminal: \(guardedTerminalStatusText(snapshot.guardedTerminal))")
+        if verbose {
+            if let tools = snapshot.guardedTerminal.tools, !tools.isEmpty {
+                lines.append("  Tools: \(tools.joined(separator: ", "))")
+            }
+            if let agentLaunchers = snapshot.guardedTerminal.agentLaunchers, !agentLaunchers.isEmpty {
+                lines.append("  Agent launchers (start unguarded): \(agentLaunchers.joined(separator: ", "))")
+            }
+        }
         lines.append("SSH Agent: \(snapshot.sshAgentRunning ? "Running" : "Not running")")
         lines.append("SSH Session: \(sshSessionStatusText(snapshot: snapshot, currentDate: currentDate))")
         if let workspaceContext = snapshot.workspaceContext {
@@ -220,7 +246,7 @@ struct Status: ParsableCommand {
     private static func guardedTerminalStatusText(_ status: GuardedTerminalStatus) -> String {
         switch status.state {
         case .active:
-            guard let toolCount = status.toolCount else { return "Active" }
+            let toolCount = (status.tools?.count ?? 0) + (status.agentLaunchers?.count ?? 0)
             return "Active (\(toolCount) \(toolCount == 1 ? "tool" : "tools") shimmed)"
         case .stale:
             return "Stale (\(status.detail ?? "incomplete guard state"))"
@@ -284,13 +310,21 @@ struct GuardedTerminalStatus: Codable, Equatable {
 
     let state: State
     let shimDirectory: String?
-    let toolCount: Int?
+    let tools: [String]?
+    let agentLaunchers: [String]?
     let detail: String?
 
-    init(state: State, shimDirectory: String? = nil, toolCount: Int? = nil, detail: String? = nil) {
+    init(
+        state: State,
+        shimDirectory: String? = nil,
+        tools: [String]? = nil,
+        agentLaunchers: [String]? = nil,
+        detail: String? = nil
+    ) {
         self.state = state
         self.shimDirectory = shimDirectory
-        self.toolCount = toolCount
+        self.tools = tools
+        self.agentLaunchers = agentLaunchers
         self.detail = detail
     }
 }
