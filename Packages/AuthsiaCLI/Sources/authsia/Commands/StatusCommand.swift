@@ -80,7 +80,52 @@ struct Status: ParsableCommand {
             sshSessionKeyCount: sshSessionStatus.activeKeyCount,
             sshSessionCurrentTerminal: sshSessionStatus.currentTerminal,
             terminalScope: terminalScope,
-            workspaceContext: workspaceContext
+            workspaceContext: workspaceContext,
+            guardedTerminal: resolveGuardedTerminalStatus(environment: environment)
+        )
+    }
+
+    /// Reports what the *current shell* actually has, not what a guarded shell was meant
+    /// to get: a shell can carry guard markers whose shim directory was swept from the
+    /// temp dir, or a `authsia-guard-*` PATH entry whose markers were dropped by a child
+    /// process. Both leave tools resolving to something other than the user expects, so
+    /// they report as stale rather than active.
+    static func resolveGuardedTerminalStatus(
+        environment: [String: String],
+        fileManager: FileManager = .default
+    ) -> GuardedTerminalStatus {
+        guard WorkspaceGuardedTerminal.isGuarded(environment: environment) else {
+            let isAgentSession = AgentRuntimeContextResolver
+                .hasExplicitAgentInvocationMarker(environment: environment)
+            return GuardedTerminalStatus(
+                state: .inactive,
+                detail: isAgentSession ? "agent session" : nil
+            )
+        }
+
+        let shimDirectory = environment["AUTHSIA_WORKSPACE_GUARD_SHIM_DIR"].flatMap {
+            $0.isEmpty ? nil : $0
+        }
+        guard environment["AUTHSIA_WORKSPACE_GUARD"] == "1", let shimDirectory else {
+            return GuardedTerminalStatus(state: .stale, detail: "guard markers missing")
+        }
+        guard (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+            .contains(where: WorkspaceGuardedTerminal.isShimDirectory) else {
+            return GuardedTerminalStatus(state: .stale, detail: "shim directory not on PATH")
+        }
+        guard let shims = try? fileManager.contentsOfDirectory(atPath: shimDirectory) else {
+            return GuardedTerminalStatus(
+                state: .stale,
+                shimDirectory: shimDirectory,
+                detail: "shim directory missing"
+            )
+        }
+        return GuardedTerminalStatus(
+            state: .active,
+            shimDirectory: shimDirectory,
+            toolCount: shims.count
         )
     }
 
@@ -111,6 +156,7 @@ struct Status: ParsableCommand {
         lines.append("Bridge: \(snapshot.bridgeConnected ? "Connected" : "Disconnected")")
         lines.append("Session: \(sessionStatusText(snapshot: snapshot, currentDate: currentDate))")
         lines.append("Shell Integration: \(snapshot.shellIntegrationEnabled ? "Enabled" : "Disabled")")
+        lines.append("Guarded Terminal: \(guardedTerminalStatusText(snapshot.guardedTerminal))")
         lines.append("SSH Agent: \(snapshot.sshAgentRunning ? "Running" : "Not running")")
         lines.append("SSH Session: \(sshSessionStatusText(snapshot: snapshot, currentDate: currentDate))")
         if let workspaceContext = snapshot.workspaceContext {
@@ -147,7 +193,8 @@ struct Status: ParsableCommand {
                 currentTerminal: snapshot.sshSessionCurrentTerminal
             ),
             terminalScope: snapshot.terminalScope,
-            workspace: snapshot.workspaceContext
+            workspace: snapshot.workspaceContext,
+            guardedTerminal: snapshot.guardedTerminal
         )
 
         let encoder = JSONEncoder()
@@ -168,6 +215,19 @@ struct Status: ParsableCommand {
         guard let expiresAt = snapshot.sessionExpiresAt else { return "Active" }
         let remaining = Int(expiresAt.timeIntervalSince(currentDate))
         return remaining > 0 ? "Active (\(remaining)s remaining)" : "Inactive"
+    }
+
+    private static func guardedTerminalStatusText(_ status: GuardedTerminalStatus) -> String {
+        switch status.state {
+        case .active:
+            guard let toolCount = status.toolCount else { return "Active" }
+            return "Active (\(toolCount) \(toolCount == 1 ? "tool" : "tools") shimmed)"
+        case .stale:
+            return "Stale (\(status.detail ?? "incomplete guard state"))"
+        case .inactive:
+            guard let detail = status.detail else { return "Inactive" }
+            return "Inactive (\(detail))"
+        }
     }
 
     private static func sshSessionStatusText(snapshot: StatusSnapshot, currentDate: Date) -> String {
@@ -215,6 +275,26 @@ struct Status: ParsableCommand {
     }
 }
 
+struct GuardedTerminalStatus: Codable, Equatable {
+    enum State: String, Codable {
+        case active
+        case stale
+        case inactive
+    }
+
+    let state: State
+    let shimDirectory: String?
+    let toolCount: Int?
+    let detail: String?
+
+    init(state: State, shimDirectory: String? = nil, toolCount: Int? = nil, detail: String? = nil) {
+        self.state = state
+        self.shimDirectory = shimDirectory
+        self.toolCount = toolCount
+        self.detail = detail
+    }
+}
+
 struct StatusSnapshot {
     let bridgeConnected: Bool
     let sessionActive: Bool
@@ -227,6 +307,7 @@ struct StatusSnapshot {
     let sshSessionCurrentTerminal: Bool
     let terminalScope: String?
     let workspaceContext: WorkspaceRuntimeContext?
+    let guardedTerminal: GuardedTerminalStatus
 
     init(
         bridgeConnected: Bool,
@@ -239,7 +320,8 @@ struct StatusSnapshot {
         sshSessionKeyCount: Int = 0,
         sshSessionCurrentTerminal: Bool = true,
         terminalScope: String? = nil,
-        workspaceContext: WorkspaceRuntimeContext? = nil
+        workspaceContext: WorkspaceRuntimeContext? = nil,
+        guardedTerminal: GuardedTerminalStatus = GuardedTerminalStatus(state: .inactive)
     ) {
         self.bridgeConnected = bridgeConnected
         self.sessionActive = sessionActive
@@ -252,6 +334,7 @@ struct StatusSnapshot {
         self.sshSessionCurrentTerminal = sshSessionCurrentTerminal
         self.terminalScope = terminalScope
         self.workspaceContext = workspaceContext
+        self.guardedTerminal = guardedTerminal
     }
 }
 
@@ -267,6 +350,7 @@ private struct StatusJSONPayload: Codable {
     let sshSession: StatusJSONSSHSession
     let terminalScope: String?
     let workspace: WorkspaceRuntimeContext?
+    let guardedTerminal: GuardedTerminalStatus
 }
 
 private struct StatusJSONSession: Codable {

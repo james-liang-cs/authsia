@@ -1991,7 +1991,7 @@ authsia ssh git-signing --principal user@example.com --public-key ~/.ssh/deploy.
 ### `authsia status` — System health
 
 Displays bridge connectivity, this terminal's interactive session state, shell integration status,
-SSH agent status, and this terminal's session-based SSH approval status. CLI and SSH approval
+guarded-terminal state, SSH agent status, and this terminal's session-based SSH approval status. CLI and SSH approval
 session state comes from the current terminal scope only; sessions held by other terminals or apps
 are not reported and do not make this terminal report as unlocked.
 `status` reports the current human terminal scope even when an automation credential environment
@@ -2010,10 +2010,27 @@ Authsia Status
 Bridge: Connected
 Session: Active (12s remaining)
 Shell Integration: Enabled
+Guarded Terminal: Active (24 tools shimmed)
 SSH Agent: Running
 SSH Session: Active (10s remaining, 1 key)
 Workspace: selected-api (api) - Workspaces/selected-api
 ```
+
+`Guarded Terminal` reports what the current shell actually carries, not what a guarded shell was
+meant to receive:
+
+| Line | Meaning |
+|------|---------|
+| `Active (<n> tools shimmed)` | Guard markers, an `authsia-guard-*` PATH entry, and the shim directory all agree; `<n>` counts the shims installed in it |
+| `Stale (guard markers missing)` | Partial guard metadata — for example a leftover `AUTHSIA_WORKSPACE_GUARD_ORIGINAL_PATH`, or an inherited shim PATH entry whose markers were dropped |
+| `Stale (shim directory not on PATH)` | Markers claim a guard the PATH no longer routes through |
+| `Stale (shim directory missing)` | The recorded shim directory was swept from the temp dir, so shims no longer exist |
+| `Inactive (agent session)` | An agent launched with `AUTHSIA_AGENT_INVOKES_AUTHSIA=1`; guard is intentionally off so the agent resolves real tools |
+| `Inactive` | An ordinary unguarded shell |
+
+Any `Stale` line means tools resolve to something other than the guard intended; open a new tab, or
+run `authsia guard`, to re-arm. JSON output carries the same state under `guardedTerminal`
+(`state`, `shimDirectory`, `toolCount`, `detail`).
 
 `SSH Session` reflects only the current terminal's approval session; approvals held by other
 terminals are not shown. JSON output includes a `terminalScope` field with the CLI-resolved

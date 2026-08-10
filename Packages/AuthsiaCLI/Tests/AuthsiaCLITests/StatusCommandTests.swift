@@ -239,6 +239,97 @@ struct StatusCommandTests {
         #expect(payload.sshSession.activeKeyCount == 2)
         #expect(payload.sshSession.currentTerminal)
         #expect(payload.terminalScope == "tty:/dev/ttys001:sid:1001")
+        #expect(payload.guardedTerminal.state == "inactive")
+    }
+
+    @Test("guarded terminal status counts the shims backing the current shell")
+    func guardedTerminalStatusReportsActiveShims() throws {
+        let shimDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-guard-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: shimDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: shimDirectory) }
+        for tool in ["python", "git", "aws"] {
+            try Data().write(to: shimDirectory.appendingPathComponent(tool))
+        }
+
+        let status = Status.resolveGuardedTerminalStatus(environment: [
+            "AUTHSIA_WORKSPACE_GUARD": "1",
+            "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": shimDirectory.path,
+            "PATH": "\(shimDirectory.path):/usr/bin:/bin",
+        ])
+
+        #expect(status == GuardedTerminalStatus(
+            state: .active,
+            shimDirectory: shimDirectory.path,
+            toolCount: 3
+        ))
+        #expect(Status.renderTable(
+            snapshot: snapshot(guardedTerminal: status),
+            currentDate: Date(timeIntervalSince1970: 1_699_999_900)
+        ).contains("Guarded Terminal: Active (3 tools shimmed)"))
+    }
+
+    @Test("partial guard state reports stale instead of active")
+    func guardedTerminalStatusReportsStaleState() {
+        let missingShimDirectory = "/tmp/authsia-guard-\(UUID().uuidString)"
+        let sweptShimDirectory = Status.resolveGuardedTerminalStatus(environment: [
+            "AUTHSIA_WORKSPACE_GUARD": "1",
+            "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": missingShimDirectory,
+            "PATH": "\(missingShimDirectory):/usr/bin:/bin",
+        ])
+        #expect(sweptShimDirectory == GuardedTerminalStatus(
+            state: .stale,
+            shimDirectory: missingShimDirectory,
+            detail: "shim directory missing"
+        ))
+
+        // A child that dropped the markers but kept the inherited PATH.
+        let markersDropped = Status.resolveGuardedTerminalStatus(environment: [
+            "PATH": "/tmp/authsia-guard-abc:/usr/bin:/bin",
+        ])
+        #expect(markersDropped == GuardedTerminalStatus(state: .stale, detail: "guard markers missing"))
+
+        let pathRestored = Status.resolveGuardedTerminalStatus(environment: [
+            "AUTHSIA_WORKSPACE_GUARD": "1",
+            "AUTHSIA_WORKSPACE_GUARD_SHIM_DIR": "/tmp/authsia-guard-abc",
+            "PATH": "/usr/bin:/bin",
+        ])
+        #expect(pathRestored == GuardedTerminalStatus(state: .stale, detail: "shim directory not on PATH"))
+
+        #expect(Status.renderTable(
+            snapshot: snapshot(guardedTerminal: pathRestored),
+            currentDate: Date(timeIntervalSince1970: 1_699_999_900)
+        ).contains("Guarded Terminal: Stale (shim directory not on PATH)"))
+    }
+
+    @Test("an unguarded shell separates a plain shell from an agent session")
+    func guardedTerminalStatusReportsInactiveStates() {
+        let plainShell = Status.resolveGuardedTerminalStatus(environment: ["PATH": "/usr/bin:/bin"])
+        #expect(plainShell == GuardedTerminalStatus(state: .inactive))
+
+        let agentShell = Status.resolveGuardedTerminalStatus(environment: [
+            "PATH": "/usr/bin:/bin",
+            "AUTHSIA_AGENT_PLATFORM": "codex",
+            "AUTHSIA_AGENT_INVOKES_AUTHSIA": "1",
+        ])
+        #expect(agentShell == GuardedTerminalStatus(state: .inactive, detail: "agent session"))
+
+        let currentDate = Date(timeIntervalSince1970: 1_699_999_900)
+        #expect(Status.renderTable(snapshot: snapshot(guardedTerminal: plainShell), currentDate: currentDate)
+            .contains("Guarded Terminal: Inactive\n"))
+        #expect(Status.renderTable(snapshot: snapshot(guardedTerminal: agentShell), currentDate: currentDate)
+            .contains("Guarded Terminal: Inactive (agent session)"))
+    }
+
+    private func snapshot(guardedTerminal: GuardedTerminalStatus) -> StatusSnapshot {
+        StatusSnapshot(
+            bridgeConnected: true,
+            sessionActive: false,
+            sessionExpiresAt: nil,
+            shellIntegrationEnabled: true,
+            sshAgentRunning: false,
+            guardedTerminal: guardedTerminal
+        )
     }
 }
 
@@ -252,6 +343,14 @@ private struct StatusJSONPayload: Decodable {
     let sshSession: StatusJSONSSHSession
     let terminalScope: String?
     let workspace: StatusJSONWorkspace?
+    let guardedTerminal: StatusJSONGuardedTerminal
+}
+
+private struct StatusJSONGuardedTerminal: Decodable {
+    let state: String
+    let shimDirectory: String?
+    let toolCount: Int?
+    let detail: String?
 }
 
 private struct StatusJSONSession: Decodable {
