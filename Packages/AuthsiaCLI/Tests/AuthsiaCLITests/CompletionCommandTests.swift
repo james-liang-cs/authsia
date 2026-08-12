@@ -154,7 +154,7 @@ struct CompletionCommandTests {
         #expect(script.contains("--status[Print setup status without changing files]"))
         #expect(script.contains("--repair[Repair user shell integration]"))
         #expect(script.contains("--uninstall-clean[Remove Authsia-managed shell integration and user symlink]"))
-        #expect(script.contains("local -ar ___agent=('claude-code' 'cursor' 'codex' 'windsurf' 'copilot')"))
+        #expect(script.contains("local -ar ___agent=('claude-code' 'cursor' 'codex' 'devin' 'copilot')"))
     }
 
     @Test("item suggestions show safe metadata only")

@@ -107,6 +107,7 @@ struct AgenticProcessDetectorTests {
             "Code Helper (Renderer)",
             "Cursor Helper (Plugin)",
             "Windsurf Helper (Plugin)",
+            "Devin Helper (Plugin)",
             "Zed Helper (GPU)",
         ] {
             #expect(
@@ -237,6 +238,46 @@ struct AgenticProcessDetectorTests {
                 processName: "Cursor Helper (Plugin)",
                 bundleIdentifier: nil
             ) == "cursor-helper"
+        )
+        #expect(
+            AgenticProcessDetector.automationSuspectPlatform(
+                processName: "Devin",
+                bundleIdentifier: nil
+            ) == "devin"
+        )
+        #expect(
+            AgenticProcessDetector.automationSuspectPlatform(
+                processName: "Devin Helper (Plugin)",
+                bundleIdentifier: nil
+            ) == "devin-helper"
+        )
+        #expect(
+            AgenticProcessDetector.automationSuspectPlatform(
+                processName: "Windsurf",
+                bundleIdentifier: nil
+            ) == "windsurf"
+        )
+    }
+
+    @Test("maps Windsurf and Devin Desktop ancestry to the Devin platform")
+    func mapsWindsurfAndDevinDesktopAncestryToDevinPlatform() {
+        #expect(
+            AgenticProcessDetector.agentPlatform(
+                processName: "windsurf-agent",
+                bundleIdentifier: nil
+            ) == "devin"
+        )
+        #expect(
+            AgenticProcessDetector.agentPlatform(
+                processName: "Devin",
+                bundleIdentifier: "com.exafunction.windsurf"
+            ) == nil
+        )
+        #expect(
+            AgenticProcessDetector.isAutomationSuspectProcess(
+                processName: "Devin",
+                bundleIdentifier: "com.cognition.devin"
+            )
         )
     }
 

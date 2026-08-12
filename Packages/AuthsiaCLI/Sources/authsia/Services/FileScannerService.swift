@@ -96,6 +96,7 @@ actor FileScannerService {
         ".aider",
         ".continue",
         ".windsurf",
+        ".devin",
 
         // General build / cache / generated output
         ".cache",

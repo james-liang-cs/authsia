@@ -40,9 +40,10 @@ struct AgentRuleInstallerTests {
             #expect(!rules.contains("use the full command's `-h` help"))
             #expect(!rules.contains("Authsia Command History"))
             #expect(!rules.contains("Authsia Sandbox Handling"))
-            #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=<claude-code|codex|cursor|windsurf|copilot>"))
+            #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=<claude-code|codex|cursor|devin|copilot>"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=claude-code"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=cursor"))
+            #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=devin"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=windsurf"))
             #expect(!rules.contains("AUTHSIA_AGENT_PLATFORM=copilot"))
             #expect(!rules.contains("Every GitHub Copilot Authsia terminal command"))
@@ -141,5 +142,53 @@ struct AgentRuleInstallerTests {
         )
         #expect(try read(".authsia/agent-rules.md", in: root).contains("`authsia_exec`"))
         #expect(try !read(".authsia/agent-rules.md", in: root).contains("MCP integrations are disabled"))
+    }
+
+    @Test("Devin Desktop rules use .devin and still accept the Windsurf alias")
+    func devinDesktopRulesUseDevinPathAndAcceptWindsurfAlias() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        #expect(AgentTool(argument: "windsurf") == .devin)
+        #expect(AgentTool(argument: "devin-desktop") == .devin)
+        #expect(AgentTool.devin.rulePath == ".devin/rules/authsia.md")
+        #expect(AgentTool.devin.platformName == "devin")
+        #expect(AgentTool.devin.title == "Devin Desktop")
+
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.devin])
+
+        let rules = try read(".devin/rules/authsia.md", in: root)
+        #expect(rules.contains("AUTHSIA_AGENT_PLATFORM=devin"))
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .devin))
+    }
+
+    @Test("pre-rename Windsurf rules still count as installed and uninstall removes them")
+    func preRenameWindsurfRulesStillCountAsInstalledAndUninstallRemovesThem() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.devin])
+        try rewriteDevinArtifactsToWindsurfEra(in: root)
+
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .devin))
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".devin/rules/authsia.md").path))
+
+        _ = try AgentRuleInstaller.uninstall(projectRoot: root, agents: [.devin])
+
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".windsurf/rules/authsia.md").path))
+        #expect(!AgentRuleInstaller.isInstalled(projectRoot: root, agent: .devin))
+    }
+
+    private func rewriteDevinArtifactsToWindsurfEra(in root: URL) throws {
+        let shared = try read(".authsia/agent-rules.md", in: root)
+            .replacingOccurrences(of: "AUTHSIA_AGENT_PLATFORM=devin", with: "AUTHSIA_AGENT_PLATFORM=windsurf")
+            .replacingOccurrences(of: "Devin Desktop", with: "Windsurf")
+        try writeNestedFile(shared, relativePath: ".authsia/agent-rules.md", in: root)
+
+        let rules = try read(".devin/rules/authsia.md", in: root)
+            .replacingOccurrences(of: "AUTHSIA_AGENT_PLATFORM=devin", with: "AUTHSIA_AGENT_PLATFORM=windsurf")
+            .replacingOccurrences(of: "Devin Desktop", with: "Windsurf")
+        try writeNestedFile(rules, relativePath: ".windsurf/rules/authsia.md", in: root)
+        try FileManager.default.removeItem(at: root.appendingPathComponent(".devin/rules/authsia.md"))
     }
 }

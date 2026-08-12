@@ -1,12 +1,35 @@
 import ArgumentParser
 import Foundation
 
-enum MCPClient: String, CaseIterable, ExpressibleByArgument, Sendable {
+enum MCPClient: String, CaseIterable, Sendable {
     case codex
     case claude
     case cursor
-    case windsurf
+    case devin
     case vscode
+}
+
+extension MCPClient: ExpressibleByArgument {
+    init?(argument: String) {
+        switch argument.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "codex":
+            self = .codex
+        case "claude":
+            self = .claude
+        case "cursor":
+            self = .cursor
+        case "devin", "devin-desktop", "windsurf":
+            self = .devin
+        case "vscode":
+            self = .vscode
+        default:
+            return nil
+        }
+    }
+
+    static var allValueStrings: [String] {
+        ["codex", "claude", "cursor", "devin", "vscode"]
+    }
 }
 
 enum MCPClientConfigurationError: LocalizedError, Equatable {
@@ -16,7 +39,7 @@ enum MCPClientConfigurationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .unsupportedClient:
-            return "Supported MCP clients are codex, claude, cursor, windsurf, and vscode."
+            return "Supported MCP clients are codex, claude, cursor, devin, and vscode."
         case .unsafeValue:
             return "MCP configuration values must be absolute paths without control characters."
         }
@@ -28,7 +51,7 @@ enum MCPClientConfiguration {
         clientName: String,
         executableURL: URL
     ) throws -> String {
-        guard isSafe(clientName), let client = MCPClient(rawValue: clientName) else {
+        guard isSafe(clientName), let client = MCPClient(argument: clientName) else {
             throw isSafe(clientName)
                 ? MCPClientConfigurationError.unsupportedClient
                 : MCPClientConfigurationError.unsafeValue
@@ -90,9 +113,9 @@ enum MCPClientConfiguration {
                 includeType: false,
                 warning: warning
             )
-        case .windsurf:
+        case .devin:
             return try jsonConfiguration(
-                heading: "Place in user-global ~/.codeium/windsurf/mcp_config.json:",
+                heading: "Place in user-global ~/.config/devin/mcp_config.json:",
                 rootKey: "mcpServers",
                 binaryPath: binaryPath,
                 includeType: false,

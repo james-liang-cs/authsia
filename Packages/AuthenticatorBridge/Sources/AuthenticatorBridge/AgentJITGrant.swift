@@ -337,8 +337,9 @@ public struct AgentJITCallerFingerprint: Codable, Equatable, Sendable {
             || normalizedBundle.contains("com.cursor") {
             return "Cursor"
         }
-        if normalizedBundle.contains("windsurf") {
-            return "Windsurf"
+        if normalizedBundle.contains("windsurf")
+            || normalizedBundle.contains("com.cognition.devin") {
+            return "Devin Desktop"
         }
         if normalizedBundle.contains("dev.zed.zed") {
             return "Zed"
@@ -348,6 +349,13 @@ public struct AgentJITCallerFingerprint: Codable, Equatable, Sendable {
         }
         if normalizedBundle.contains("codex") {
             return "Codex"
+        }
+
+        let normalizedName = processName.lowercased()
+        if normalizedName.contains("windsurf")
+            || normalizedName == "devin"
+            || normalizedName.hasPrefix("devin-") {
+            return "Devin Desktop"
         }
 
         return processName

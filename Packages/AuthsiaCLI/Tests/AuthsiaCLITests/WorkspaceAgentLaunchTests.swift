@@ -21,21 +21,21 @@ struct WorkspaceAgentLaunchTests {
             "Claude Code",
             "VS Code",
             "Cursor",
-            "Windsurf",
+            "Devin Desktop",
         ])
         #expect(WorkspaceAgentTool.allCases.map(\.agentPlatform) == [
             "codex",
             "claude-code",
             "copilot",
             "cursor",
-            "windsurf",
+            "devin",
         ])
         let launchCases: [(WorkspaceAgentTool, String)] = [
             (.codex, "AUTHSIA_AGENT_PLATFORM=codex AUTHSIA_AGENT_INVOKES_AUTHSIA=1 codex)"),
             (.claudeCode, "AUTHSIA_AGENT_PLATFORM=claude-code AUTHSIA_AGENT_INVOKES_AUTHSIA=1 claude)"),
             (.vsCode, "AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1 code .)"),
             (.cursor, "AUTHSIA_AGENT_PLATFORM=cursor AUTHSIA_AGENT_INVOKES_AUTHSIA=1 cursor .)"),
-            (.windsurf, "AUTHSIA_AGENT_PLATFORM=windsurf AUTHSIA_AGENT_INVOKES_AUTHSIA=1 windsurf .)"),
+            (.devin, "AUTHSIA_AGENT_PLATFORM=devin AUTHSIA_AGENT_INVOKES_AUTHSIA=1 devin-desktop .)"),
         ]
         for (tool, suffix) in launchCases {
             let command = WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: tool).launchCommand
@@ -67,12 +67,12 @@ struct WorkspaceAgentLaunchTests {
                 ]
         )
         #expect(
-            WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .windsurf).openArguments ==
+            WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .devin).openArguments ==
                 [
                     "-n",
-                    "--env", "AUTHSIA_AGENT_PLATFORM=windsurf",
+                    "--env", "AUTHSIA_AGENT_PLATFORM=devin",
                     "--env", "AUTHSIA_AGENT_INVOKES_AUTHSIA=1",
-                    "-a", "Windsurf",
+                    "-a", "Devin",
                     "--args",
                     "/tmp/My Project",
                 ]
@@ -91,6 +91,9 @@ struct WorkspaceAgentLaunchTests {
             printLaunchCommand: false,
             hasGoalHandoff: false
         ))
+        #expect(WorkspaceAgentTool(argument: "windsurf") == .devin)
+        #expect(WorkspaceAgentTool(argument: "devin-desktop") == .devin)
+        #expect(WorkspaceAgentTool(argument: "devin") == .devin)
     }
 
     @Test("terminal agent launch uses exec request and repairs dumb TERM")

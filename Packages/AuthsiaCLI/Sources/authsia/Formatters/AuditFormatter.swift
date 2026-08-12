@@ -99,8 +99,8 @@ struct AuditFormatter {
             return "GitHub Copilot"
         case "cursor":
             return "Cursor"
-        case "windsurf":
-            return "Windsurf"
+        case "windsurf", "devin", "devin-desktop":
+            return "Devin Desktop"
         case let value?:
             return value
         case nil:

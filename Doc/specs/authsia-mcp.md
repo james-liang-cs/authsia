@@ -587,7 +587,7 @@ operating-system-wide DLP.
 
 ## Client Configuration
 
-`authsia mcp configure --client <codex|claude|cursor|windsurf|vscode>` prints a
+`authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints a
 deterministic user-global local-stdio configuration for the exact installed
 Authsia binary. V1 does not edit third-party configuration, launch the client,
 add credentials, or use a shell wrapper.
@@ -599,7 +599,7 @@ does not turn the Authsia setting on.
 
 For Codex, Claude Code, and VS Code, the output includes a shell-safe direct
 command using the client's supported user-global MCP installation surface, plus
-the manual configuration fallback. Cursor and Windsurf receive only the manual
+the manual configuration fallback. Cursor and Devin Desktop receive only the manual
 configuration because they do not expose a documented equivalent command.
 
 Generated configuration must:
@@ -613,8 +613,8 @@ Generated configuration must:
   binary path and must not be committed or shared.
 
 The delivered output uses user-global Codex `~/.codex/config.toml`, Claude Code
-`~/.claude.json`, Cursor `~/.cursor/mcp.json`, Windsurf
-`~/.codeium/windsurf/mcp_config.json`, and the VS Code user-profile `mcp.json`
+`~/.claude.json`, Cursor `~/.cursor/mcp.json`, Devin Desktop
+`~/.config/devin/mcp_config.json`, and the VS Code user-profile `mcp.json`
 shapes verified against each client's primary documentation. At startup, an
 explicit `--workspace` takes precedence and disables client-driven rebinding.
 Otherwise, each workspace-dependent tool may supply its active repository as a

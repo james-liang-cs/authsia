@@ -56,12 +56,16 @@ public enum AgenticProcessDetector {
         "webstorm",
         "windsurf",
         "windsurf-helper",
+        "devin",
+        "devin-helper",
+        "devin-desktop",
         "zed",
         "zed-helper",
     ]
 
     private static let automationSuspectBundleFragments: [String] = [
         "ai.windsurf",
+        "com.cognition.devin",
         "com.cursor",
         "com.exafunction.windsurf",
         "com.jetbrains.",
@@ -310,7 +314,7 @@ public enum AgenticProcessDetector {
         case "cursor-agent":
             return "cursor"
         case "windsurf-agent":
-            return "windsurf"
+            return "devin"
         default:
             return normalizedName
         }

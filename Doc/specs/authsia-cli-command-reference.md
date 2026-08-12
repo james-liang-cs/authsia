@@ -304,7 +304,7 @@ grant secret access.
 | 4 | Incompatible Claude settings | parseable JSON with an incompatible non-null hooks, sandbox, excluded-command, network, or value shape | `authsia agent init --agent claude-code` | Leaves the file byte-identical and prints manual merge guidance |
 | 5 | Codex rules | N/A | `authsia agent init --agent codex` | Creates or updates `.authsia/agent-rules.md` and `AGENTS.md` with scoped `authsia_list`, MCP-first execution routing, and attributed workspace/non-workspace CLI fallbacks |
 | 6 | Cursor rules | N/A | `authsia agent init --agent cursor` | Creates `.cursor/rules/authsia.mdc` |
-| 7 | Windsurf rules | N/A | `authsia agent init --agent windsurf` | Creates `.windsurf/rules/authsia.md` |
+| 7 | Devin Desktop rules | N/A | `authsia agent init --agent devin` | Creates `.devin/rules/authsia.md` |
 | 8 | Copilot rules | N/A | `authsia agent init --agent copilot` | Creates or updates `.authsia/agent-rules.md` and `AGENTS.md`; creates `.github/copilot/settings.local.json` when absent, otherwise leaves it unchanged with manual merge guidance |
 | 9 | All agents | N/A | `authsia agent init --all --dry-run` | Prints planned changes without writing files |
 

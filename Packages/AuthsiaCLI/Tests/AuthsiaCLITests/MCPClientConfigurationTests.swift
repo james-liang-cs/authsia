@@ -62,10 +62,10 @@ struct MCPClientConfigurationTests {
         #expect(!cursor.contains("\"--workspace\""))
         #expect(!cursor.contains("${workspaceFolder}"))
 
-        let windsurf = try render(.windsurf, fixture: fixture)
-        #expect(!windsurf.contains("Configure directly:"))
-        #expect(windsurf.contains("~/.codeium/windsurf/mcp_config.json"))
-        #expect(windsurf.contains("\"mcpServers\""))
+        let devin = try render(.devin, fixture: fixture)
+        #expect(!devin.contains("Configure directly:"))
+        #expect(devin.contains("~/.config/devin/mcp_config.json"))
+        #expect(devin.contains("\"mcpServers\""))
 
         let vscode = try render(.vscode, fixture: fixture)
         #expect(vscode.contains("code --add-mcp"))
@@ -159,6 +159,7 @@ struct MCPClientConfigurationTests {
         #expect(MCPCommand.Configure.configuration.shouldDisplay)
         #expect(MCPCommand.Serve.configuration.shouldDisplay)
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "codex"])
+        _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "devin"])
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "windsurf"])
         _ = try Authsia.parseAsRoot(["mcp", "serve", "--workspace", "/tmp/project"])
     }

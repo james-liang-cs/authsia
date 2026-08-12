@@ -262,8 +262,15 @@ enum AgentRuntimeContextResolver {
             if values.contains(where: { $0.contains("com.cursor") || $0.contains("cursor") }) {
                 platforms.insert("cursor")
             }
-            if values.contains(where: { $0.contains("windsurf") }) {
-                platforms.insert("windsurf")
+            if values.contains(where: {
+                $0.contains("windsurf")
+                    || $0.contains("devin-desktop")
+                    || $0.contains("devin.app")
+                    || $0.contains("com.cognition")
+                    || $0.contains("/devin")
+                    || $0 == "devin"
+            }) {
+                platforms.insert("devin")
             }
         }
         return platforms
@@ -299,8 +306,8 @@ enum AgentRuntimeContextResolver {
         if platform == "cursor" {
             return "cursor"
         }
-        if platform == "windsurf" {
-            return "windsurf"
+        if platform == "devin" || platform == "devin-desktop" || platform == "windsurf" {
+            return "devin"
         }
         return platform
     }

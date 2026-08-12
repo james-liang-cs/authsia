@@ -80,7 +80,7 @@ struct Workspace: AsyncParsableCommand {
 
         @Option(
             name: .long,
-            help: "Agent rules to install; normal init defaults to claude-code: claude-code, cursor, codex, windsurf, copilot"
+            help: "Agent rules to install; normal init defaults to claude-code: claude-code, cursor, codex, devin, copilot"
         )
         var agent: [AgentTool] = []
 
@@ -753,7 +753,7 @@ struct Workspace: AsyncParsableCommand {
         )
         var recursiveEnv = false
 
-        @Option(name: .long, help: "Agent rules to add: claude-code, cursor, codex, windsurf, copilot")
+        @Option(name: .long, help: "Agent rules to add: claude-code, cursor, codex, devin, copilot")
         var agent: [AgentTool] = []
 
         @Flag(name: .long, help: "Install rules for all supported agents")
@@ -2725,7 +2725,7 @@ struct Workspace: AsyncParsableCommand {
                 """
         )
 
-        @Option(name: .long, help: "Agent tool; default claude-code: claude-code, codex, vscode, cursor, windsurf")
+        @Option(name: .long, help: "Agent tool; default claude-code: claude-code, codex, vscode, cursor, devin")
         var tool: WorkspaceAgentTool = .claudeCode
 
         @Flag(name: .long, help: "Preview the launch without opening an app")
@@ -2895,7 +2895,7 @@ enum WorkspaceAgentTool: String, CaseIterable, ExpressibleByArgument {
     case claudeCode
     case vsCode
     case cursor
-    case windsurf
+    case devin
 
     init?(argument: String) {
         switch argument.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
@@ -2907,15 +2907,15 @@ enum WorkspaceAgentTool: String, CaseIterable, ExpressibleByArgument {
             self = .vsCode
         case "cursor":
             self = .cursor
-        case "windsurf":
-            self = .windsurf
+        case "devin", "devin-desktop", "windsurf":
+            self = .devin
         default:
             return nil
         }
     }
 
     static var allValueStrings: [String] {
-        ["codex", "claude-code", "vscode", "cursor", "windsurf"]
+        ["codex", "claude-code", "vscode", "cursor", "devin"]
     }
 
     var title: String {
@@ -2928,8 +2928,8 @@ enum WorkspaceAgentTool: String, CaseIterable, ExpressibleByArgument {
             return "VS Code"
         case .cursor:
             return "Cursor"
-        case .windsurf:
-            return "Windsurf"
+        case .devin:
+            return "Devin Desktop"
         }
     }
 
@@ -2941,8 +2941,8 @@ enum WorkspaceAgentTool: String, CaseIterable, ExpressibleByArgument {
             return "Visual Studio Code"
         case .cursor:
             return "Cursor"
-        case .windsurf:
-            return "Windsurf"
+        case .devin:
+            return "Devin"
         }
     }
 
@@ -2956,8 +2956,8 @@ enum WorkspaceAgentTool: String, CaseIterable, ExpressibleByArgument {
             return "code ."
         case .cursor:
             return "cursor ."
-        case .windsurf:
-            return "windsurf ."
+        case .devin:
+            return "devin-desktop ."
         }
     }
 
@@ -2971,8 +2971,8 @@ enum WorkspaceAgentTool: String, CaseIterable, ExpressibleByArgument {
             return "copilot"
         case .cursor:
             return "cursor"
-        case .windsurf:
-            return "windsurf"
+        case .devin:
+            return "devin"
         }
     }
 

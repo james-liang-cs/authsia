@@ -27,7 +27,7 @@ struct Agent: ParsableCommand {
                 """
         )
 
-        @Option(name: .long, help: "Agent to configure: claude-code, cursor, codex, windsurf, copilot")
+        @Option(name: .long, help: "Agent to configure: claude-code, cursor, codex, devin, copilot")
         var agent: AgentTool?
 
         @Flag(name: .long, help: "Configure all supported agents")

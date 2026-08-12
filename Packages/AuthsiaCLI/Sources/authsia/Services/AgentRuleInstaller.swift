@@ -5,7 +5,7 @@ enum AgentTool: CaseIterable, Equatable {
     case claudeCode
     case cursor
     case codex
-    case windsurf
+    case devin
     case copilot
 
     var title: String {
@@ -13,7 +13,7 @@ enum AgentTool: CaseIterable, Equatable {
         case .claudeCode: return "Claude Code"
         case .cursor: return "Cursor"
         case .codex: return "Codex"
-        case .windsurf: return "Windsurf"
+        case .devin: return "Devin Desktop"
         case .copilot: return "GitHub Copilot"
         }
     }
@@ -23,7 +23,7 @@ enum AgentTool: CaseIterable, Equatable {
         case .claudeCode: return "CLAUDE.md"
         case .cursor: return ".cursor/rules/authsia.mdc"
         case .codex: return "AGENTS.md"
-        case .windsurf: return ".windsurf/rules/authsia.md"
+        case .devin: return ".devin/rules/authsia.md"
         case .copilot: return "AGENTS.md"
         }
     }
@@ -33,8 +33,22 @@ enum AgentTool: CaseIterable, Equatable {
         case .claudeCode: return "claude-code"
         case .cursor: return "cursor"
         case .codex: return "codex"
-        case .windsurf: return "windsurf"
+        case .devin: return "devin"
         case .copilot: return "copilot"
+        }
+    }
+
+    var recognizedPlatformNames: [String] {
+        switch self {
+        case .devin: return ["devin", "windsurf"]
+        default: return [platformName]
+        }
+    }
+
+    var legacyRulePaths: [String] {
+        switch self {
+        case .devin: return [".windsurf/rules/authsia.md"]
+        default: return []
         }
     }
 }
@@ -48,8 +62,8 @@ extension AgentTool: ExpressibleByArgument {
             self = .cursor
         case "codex":
             self = .codex
-        case "windsurf":
-            self = .windsurf
+        case "devin", "devin-desktop", "windsurf":
+            self = .devin
         case "copilot", "github-copilot", "githubcopilot":
             self = .copilot
         default:
@@ -58,7 +72,7 @@ extension AgentTool: ExpressibleByArgument {
     }
 
     static var allValueStrings: [String] {
-        ["claude-code", "cursor", "codex", "windsurf", "copilot"]
+        ["claude-code", "cursor", "codex", "devin", "copilot"]
     }
 }
 
@@ -154,7 +168,7 @@ enum AgentRuleInstaller {
                         fileManager: fileManager,
                         result: &result
                     )
-                case .cursor, .codex, .windsurf:
+                case .cursor, .codex, .devin:
                     break
                 }
             }
@@ -206,9 +220,10 @@ enum AgentRuleInstaller {
 
         var processedRulePaths = Set<String>()
         for agent in selectedAgents {
-            if processedRulePaths.insert(agent.rulePath).inserted {
+            let rulePaths = [agent.rulePath] + agent.legacyRulePaths
+            for relativePath in rulePaths where processedRulePaths.insert(relativePath).inserted {
                 try removeManagedMarkdownBlock(
-                    relativePath: agent.rulePath,
+                    relativePath: relativePath,
                     removablePrefix: markdownPrefix(for: agent),
                     projectRoot: projectRoot,
                     dryRun: dryRun,
@@ -268,18 +283,23 @@ enum AgentRuleInstaller {
         fileManager: FileManager = .default
     ) -> Bool {
         let sharedRulesURL = projectRoot.appendingPathComponent(".authsia/agent-rules.md")
-        let toolRulesURL = projectRoot.appendingPathComponent(agent.rulePath)
         guard fileManager.fileExists(atPath: sharedRulesURL.path),
-              fileManager.fileExists(atPath: toolRulesURL.path),
               let sharedRules = try? String(contentsOf: sharedRulesURL, encoding: .utf8),
-              let toolRules = try? String(contentsOf: toolRulesURL, encoding: .utf8) else {
+              generatedSharedRules(sharedRules, contains: agent) else {
             return false
         }
-        guard generatedSharedRules(sharedRules, contains: agent),
-              let range = managedBlockRange(in: toolRules) else {
-            return false
+        let rulePaths = [agent.rulePath] + agent.legacyRulePaths
+        return rulePaths.contains { relativePath in
+            let toolRulesURL = projectRoot.appendingPathComponent(relativePath)
+            guard fileManager.fileExists(atPath: toolRulesURL.path),
+                  let toolRules = try? String(contentsOf: toolRulesURL, encoding: .utf8),
+                  let range = managedBlockRange(in: toolRules) else {
+                return false
+            }
+            return agent.recognizedPlatformNames.contains { platform in
+                toolRules[range].contains("AUTHSIA_AGENT_PLATFORM=\(platform)")
+            }
         }
-        return toolRules[range].contains("AUTHSIA_AGENT_PLATFORM=\(agent.platformName)")
     }
 
     // MARK: - File Installation
@@ -1151,6 +1171,31 @@ enum AgentRuleInstaller {
     - Never run bare `authsia get`, `authsia read`, `authsia load`, `authsia code`, `authsia inject`, or any unprefixed `authsia ...` command from an agent.
     - Unprefixed Authsia commands are treated as direct human CLI and will not be attributed to the agent.
     - When your agent runs Authsia, every Authsia terminal command must start with:
+      `env AUTHSIA_AGENT_PLATFORM=<claude-code|codex|cursor|devin|copilot> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`
+    - Every GitHub Copilot Authsia terminal command must start with:
+      `env AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`
+    - If access is denied, ask the user to approve Authsia access instead of requesting the secret.
+
+    ## Authsia Sandbox Handling
+
+    - If sandboxed, request access to `Authsia.Bridge`, `Authsia.SSHAgent`, and `~/.authsia/agent.sock`.
+    - If sandbox access is unavailable, request permission to run Authsia-backed commands outside the sandbox.
+    - Treat missing `authsia`, missing `/Applications/Authsia.app`, missing `~/.authsia/agent.sock`, or bridge communication failures inside a sandbox as sandbox/runtime-boundary issues first.
+    """
+
+    private static let legacyWindsurfSharedRulesMarkdown = """
+    # Authsia Agent Rules
+
+    ## Authsia Secret Handling
+
+    - Never ask the user for plaintext secrets.
+    - Never write resolved secret values to source files, logs, issues, chat, or generated docs.
+    - Use `authsia list ...` only for safe metadata discovery, and still include the Authsia agent marker.
+    - Use `authsia://` references when a file or template needs a secret placeholder.
+    - Use `authsia exec ... -- <command>` when a command needs real secret values.
+    - Never run bare `authsia get`, `authsia read`, `authsia load`, `authsia code`, `authsia inject`, or any unprefixed `authsia ...` command from an agent.
+    - Unprefixed Authsia commands are treated as direct human CLI and will not be attributed to the agent.
+    - When your agent runs Authsia, every Authsia terminal command must start with:
       `env AUTHSIA_AGENT_PLATFORM=<claude-code|codex|cursor|windsurf|copilot> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`
     - Every GitHub Copilot Authsia terminal command must start with:
       `env AUTHSIA_AGENT_PLATFORM=copilot AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`
@@ -1611,7 +1656,7 @@ enum AgentRuleInstaller {
             alwaysApply: true
             ---
             """
-        case .windsurf:
+        case .devin:
             return """
             ---
             trigger: always_on
@@ -1635,7 +1680,7 @@ enum AgentRuleInstaller {
     }
 
     private static func isGeneratedSharedRulesMarkdown(_ content: String) -> Bool {
-        if content == legacySharedRulesMarkdown {
+        if content == legacySharedRulesMarkdown || content == legacyWindsurfSharedRulesMarkdown {
             return true
         }
         let agents = generatedAgents(in: content)
@@ -1648,8 +1693,10 @@ enum AgentRuleInstaller {
         content.split(separator: "\n").compactMap { line in
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
             return AgentTool.allCases.first { agent in
-                trimmedLine == "`env AUTHSIA_AGENT_PLATFORM=\(agent.platformName) " +
-                    "AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`"
+                agent.recognizedPlatformNames.contains { platform in
+                    trimmedLine == "`env AUTHSIA_AGENT_PLATFORM=\(platform) " +
+                        "AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia ...`"
+                }
             }
         }
     }
@@ -1740,7 +1787,21 @@ enum AgentRuleInstaller {
                 ),
             ])
         }
-        return variants
+        return withLegacyPlatformAliases(variants, agents: agents)
+    }
+
+    private static func withLegacyPlatformAliases(_ variants: [String], agents: [AgentTool]) -> [String] {
+        guard agents.contains(.devin) else { return variants }
+        var result = variants
+        for variant in variants {
+            let aliased = variant
+                .replacingOccurrences(of: "AUTHSIA_AGENT_PLATFORM=devin", with: "AUTHSIA_AGENT_PLATFORM=windsurf")
+                .replacingOccurrences(of: "Devin Desktop", with: "Windsurf")
+            if aliased != variant {
+                result.append(aliased)
+            }
+        }
+        return result
     }
 
     // MARK: - Utilities

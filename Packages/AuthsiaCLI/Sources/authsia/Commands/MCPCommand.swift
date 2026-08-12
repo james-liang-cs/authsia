@@ -24,7 +24,7 @@ struct MCPCommand: AsyncParsableCommand {
             abstract: "Print user-global MCP client configuration"
         )
 
-        @Option(help: "Client: codex, claude, cursor, windsurf, or vscode")
+        @Option(help: "Client: codex, claude, cursor, devin, or vscode")
         var client: MCPClient
 
         mutating func run() throws {

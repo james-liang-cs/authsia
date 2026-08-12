@@ -1148,7 +1148,7 @@ unchanged with manual cleanup guidance.
 
 | Parameter | Required | Values | Description |
 |-----------|----------|--------|-------------|
-| `--agent` | No | `claude-code`, `cursor`, `codex`, `windsurf`, `copilot` | Agent rule set to create. If omitted, the command prompts. |
+| `--agent` | No | `claude-code`, `cursor`, `codex`, `devin`, `copilot` | Agent rule set to create. If omitted, the command prompts. `windsurf` remains an alias for `devin`. |
 | `--all` | No | flag | Create rules for all supported agents. Use either `--agent` or `--all`, not both. |
 | `--dry-run` | No | flag | Print planned changes without writing files. |
 
@@ -1159,7 +1159,7 @@ Created files depend on the selected agent:
 | Claude Code | `.authsia/agent-rules.md`, `CLAUDE.md` | Creates or safely merges `.claude/settings.local.json` with outside-sandbox Authsia/Git/SSH command exclusions and Bash command-history hooks, while removing obsolete Authsia socket and Mach lookup values; incompatible shapes remain unchanged with manual guidance. |
 | Codex | `.authsia/agent-rules.md`, `AGENTS.md` | Existing `AGENTS.md` content is preserved and Authsia's setting-aware MCP-first or CLI-only managed block is appended or replaced. |
 | Cursor | `.authsia/agent-rules.md`, `.cursor/rules/authsia.mdc` | Rule text only. |
-| Windsurf | `.authsia/agent-rules.md`, `.windsurf/rules/authsia.md` | Rule text only. |
+| Devin Desktop | `.authsia/agent-rules.md`, `.devin/rules/authsia.md` | Rule text only. Devin still reads legacy `.windsurf/rules/` if the new path is absent. |
 | GitHub Copilot | `.authsia/agent-rules.md`, `AGENTS.md` | Creates `.github/copilot/settings.local.json` with a Copilot CLI `PreToolUse` Bash command-history hook if absent; if present, prints a manual merge block. Existing `AGENTS.md` content is preserved and receives the same setting-aware MCP-first or CLI-only rule. Cloud-hosted agents must leave `authsia://` placeholders for local execution. |
 
 Examples:
@@ -1217,7 +1217,7 @@ Current Workspace CLI capabilities:
   banner, default coverage for common developer/devops tools, and optional
   extra tool shims.
 - `workspace agent` for secret-free Codex, Claude Code, VS Code, Cursor, and
-  Windsurf launches or validated goal handoffs from inline text, a file, or
+  Devin Desktop launches or validated goal handoffs from inline text, a file, or
   stdin.
 - `workspace reset` for previewing managed env restore and applying repo-local
   workspace config plus managed agent-rule cleanup. `--yes` is reserved for
@@ -1507,7 +1507,7 @@ or add them with `workspace guard --tool <name>`. Non-default tools added with `
 are saved in the workspace's `guard.tools` settings for future guarded terminals; when shell exports
 are printed, all shimmed tool names are unaliased so a user alias cannot bypass the PATH shim.
 
-The agent launchers `claude`, `code`, `codex`, `cursor`, and `windsurf` get a different shim: it
+The agent launchers `claude`, `code`, `codex`, `cursor`, `devin-desktop`, `devin`, `windsurf`, and `surf` get a different shim: it
 starts the real launcher with an *unguarded* environment rather than routing it through
 `workspace run`. The shim drops the guard marker variables, restores the saved pre-guard `PATH`, and
 strips any `authsia-guard-*` entry that survives in it, so a hand-typed `claude` in a guarded tab
@@ -1569,10 +1569,10 @@ default for new workspace configs.
 Use `echo "$AUTHSIA_WORKSPACE_GUARD"` to confirm the session is guarded.
 
 `authsia workspace agent` opens or prints a secret-free launch for Claude Code by default; pass
-`--tool codex` or another `--tool <tool>` for Codex, VS Code, Cursor, or Windsurf from the workspace root. GUI tools
-(VS Code, Cursor, Windsurf) open their app; terminal tools (Codex, Claude Code) run in the current
+`--tool codex` or another `--tool <tool>` for Codex, VS Code, Cursor, or Devin Desktop from the workspace root. GUI tools
+(VS Code, Cursor, Devin Desktop) open their app; terminal tools (Codex, Claude Code) run in the current
 terminal, inheriting this shell's TTY. Every launch sets `AUTHSIA_AGENT_PLATFORM` and `AUTHSIA_AGENT_INVOKES_AUTHSIA=1` on the selected
-tool process (`codex`, `claude-code`, `copilot` for VS Code, `cursor`, or `windsurf`). GUI launches
+tool process (`codex`, `claude-code`, `copilot` for VS Code, `cursor`, or `devin`). GUI launches
 request a new app process so an already-running unmarked IDE cannot absorb the workspace-open
 request. These values identify agent provenance for Authsia routing; they are not credentials and do
 not grant access by themselves. Authsia commands outside this launch flow remain direct human CLI.
@@ -1656,14 +1656,14 @@ from the parent process; follow-up secret access still goes through `authsia wor
 
 ### `authsia mcp` — Local MCP server
 
-`authsia mcp configure --client <codex|claude|cursor|windsurf|vscode>` prints a
+`authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints a
 deterministic user-global configuration for the exact installed Authsia binary.
 It rejects unsupported clients and unsafe path values. The output contains no
 secret, bearer, automation credential, or fixed repository path and warns that
 the binary path is machine-specific. It never edits or launches a third-party
 client. For Codex, Claude Code, and VS Code, the output first provides a
 shell-safe direct command that uses the client's supported MCP installer; the
-manual configuration remains available as a fallback. Cursor and Windsurf
+manual configuration remains available as a fallback. Cursor and Devin Desktop
 receive only their manual configuration because they do not expose a documented
 equivalent command.
 
@@ -1702,7 +1702,7 @@ export, and revocation.
 authsia mcp configure --client codex
 authsia mcp configure --client claude
 authsia mcp configure --client cursor
-authsia mcp configure --client windsurf
+authsia mcp configure --client devin
 authsia mcp configure --client vscode
 ```
 
@@ -2179,7 +2179,7 @@ authsia audit export --format ndjson --out events.ndjson
 
 ## Agentic AI Workflows
 
-AI coding agents (Codex, Claude Code, Cursor, Windsurf, GitHub Copilot) observe terminal output, environment
+AI coding agents (Codex, Claude Code, Cursor, Devin Desktop, GitHub Copilot) observe terminal output, environment
 variables, file contents, and shell history. Any plaintext secret that appears in any of these surfaces
 is captured by the agent's context window and potentially sent to a remote API.
 
@@ -2251,7 +2251,7 @@ Add instructions to the agent's rules file so it uses `authsia://` references by
 # List API keys: env AUTHSIA_AGENT_PLATFORM=cursor AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia list api-keys --format table
 ```
 
-**Windsurf** — `.windsurfrules` / **GitHub Copilot** — `AGENTS.md`:
+**Devin Desktop** — `.devin/rules/` / **GitHub Copilot** — `AGENTS.md`:
 
 ```
 # Secret Management
@@ -2259,10 +2259,10 @@ Add instructions to the agent's rules file so it uses `authsia://` references by
 # Pattern: authsia://password/<name>/password
 # Pattern: authsia://api-key/<name>/key
 # Execute: authsia exec -- <command>
-# Agent JIT: env AUTHSIA_AGENT_PLATFORM=<windsurf|copilot> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia exec -- <command>
+# Agent JIT: env AUTHSIA_AGENT_PLATFORM=<devin|copilot> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia exec -- <command>
 # Explicit env file: authsia exec --env-file path/to/.env -- <command>
-# List: env AUTHSIA_AGENT_PLATFORM=<windsurf|copilot> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia list passwords --format table
-# List API keys: env AUTHSIA_AGENT_PLATFORM=<windsurf|copilot> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia list api-keys --format table
+# List: env AUTHSIA_AGENT_PLATFORM=<devin|copilot> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia list passwords --format table
+# List API keys: env AUTHSIA_AGENT_PLATFORM=<devin|copilot> AUTHSIA_AGENT_INVOKES_AUTHSIA=1 authsia list api-keys --format table
 # Never run bare authsia get/read/load/code/inject from an agent; unprefixed Authsia commands are direct human CLI.
 ```
 
@@ -2546,7 +2546,7 @@ available to agentic or CLI workflows.
 | Codex | `AGENTS.md` | Local IDE: `authsia exec -- <cmd>` with the Authsia agent marker |
 | Claude Code | `CLAUDE.md`, `.claude/settings.local.json` | Outside-sandbox `authsia exec -- <cmd>`, Git/SSH network authentication, and command-history hooks |
 | Cursor | `.cursor/rules/authsia.mdc` | `authsia exec -- <cmd>` |
-| Windsurf | `.windsurf/rules/authsia.md` | `authsia exec -- <cmd>` |
+| Devin Desktop | `.devin/rules/authsia.md` | `authsia exec -- <cmd>` |
 | GitHub Copilot | `AGENTS.md` | Local IDE: `authsia exec -- <cmd>`; cloud agents leave `authsia://` refs for local execution |
 | GitHub Actions | `.github/workflows/*.yml` | `authsia exec -- make deploy` with automation credential |
 | Any terminal agent | — | Set `AUTHSIA_ACCESS_CREDENTIAL` + `authsia exec`; add `--allow list` for metadata discovery, and create a separate `--allow ssh` credential only for Git/SSH signing |

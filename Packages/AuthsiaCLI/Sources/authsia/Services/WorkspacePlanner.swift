@@ -1459,7 +1459,7 @@ extension AgentTool {
         case .claudeCode: return "claude-code"
         case .cursor: return "cursor"
         case .codex: return "codex"
-        case .windsurf: return "windsurf"
+        case .devin: return "devin"
         case .copilot: return "copilot"
         }
     }

@@ -385,12 +385,12 @@ The CLI starts JIT preflight when all of these are true:
    API keys, certificates, notes, or SSH keys.
 
 Known coding-agent names contribute a strong ancestry signal. Examples include `claude`,
-`claude-code`, `codex`, `cursor-agent`, `windsurf-agent`, and GitHub Copilot
+`claude-code`, `codex`, `cursor-agent`, `windsurf-agent` (legacy Cascade), and GitHub Copilot
 process names or bundle fragments.
 
 IDE helpers are treated as automation-suspect rather than proven agents when
 only ancestry is available.
-Examples include VS Code, Cursor, Windsurf, JetBrains IDEs, Zed, and extension
+Examples include VS Code, Cursor, Devin Desktop, JetBrains IDEs, Zed, and extension
 host processes. An IDE name in the ancestry does not by itself turn a
 stdin-TTY command into a human session: ongoing human authority also requires a
 server-current token for the same terminal scope.

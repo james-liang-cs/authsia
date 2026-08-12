@@ -76,7 +76,7 @@ enum WorkspaceGuardedTerminal {
     /// tool it spawns through `workspace run`. An agent cannot fix this for itself:
     /// `authsia unguard` restarts a tab, and a child process cannot change its parent's
     /// environment.
-    static let agentLauncherTools = ["claude", "code", "codex", "cursor", "windsurf"]
+    static let agentLauncherTools = ["claude", "code", "codex", "cursor", "devin-desktop", "devin", "windsurf", "surf"]
 
     /// Set to "1" in the environment of every tool invocation that reaches
     /// `workspace run` through a guarded-terminal shim or shell wrapper, so the
