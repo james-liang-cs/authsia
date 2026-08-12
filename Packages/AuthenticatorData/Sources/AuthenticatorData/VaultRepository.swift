@@ -283,13 +283,18 @@ public class VaultRepository {
         let prunedCertificates = pruneMissingMetadata(loadedCertificates, existence: keychain.certificateExistence)
         let prunedNotes = pruneMissingMetadata(loadedNotes, existence: keychain.noteExistence)
         let prunedSSHKeys = pruneMissingMetadata(loadedSSHKeys, existence: keychain.sshKeyExistence)
+        let suspectedStorageFault = prunedPasswords.suspectedStorageFault
+            || prunedAPIKeys.suspectedStorageFault
+            || prunedCertificates.suspectedStorageFault
+            || prunedNotes.suspectedStorageFault
+            || prunedSSHKeys.suspectedStorageFault
         var changedNames: [Notification.Name] = []
 
-        passwords = prunedPasswords.metadata
-        apiKeys = prunedAPIKeys.metadata
-        certificates = prunedCertificates.metadata
-        notes = prunedNotes.metadata
-        sshKeys = prunedSSHKeys.metadata
+        passwords = suspectedStorageFault ? unexpiredPasswords : prunedPasswords.metadata
+        apiKeys = suspectedStorageFault ? unexpiredAPIKeys : prunedAPIKeys.metadata
+        certificates = suspectedStorageFault ? loadedCertificates : prunedCertificates.metadata
+        notes = suspectedStorageFault ? loadedNotes : prunedNotes.metadata
+        sshKeys = suspectedStorageFault ? loadedSSHKeys : prunedSSHKeys.metadata
 
         if !expiredPasswordIDs.isEmpty {
             try recordPasswordDeletions(
@@ -305,23 +310,23 @@ public class VaultRepository {
                 sourceMetadata: loadedAPIKeys
             )
         }
-        if !expiredPasswordIDs.isEmpty || prunedPasswords.didPrune {
+        if !expiredPasswordIDs.isEmpty || (!suspectedStorageFault && prunedPasswords.didPrune) {
             try metadataStore.replacePasswords(passwords)
             changedNames.append(.vaultPasswordsDidChange)
         }
-        if !expiredAPIKeyIDs.isEmpty || prunedAPIKeys.didPrune {
+        if !expiredAPIKeyIDs.isEmpty || (!suspectedStorageFault && prunedAPIKeys.didPrune) {
             try metadataStore.replaceAPIKeys(apiKeys)
             changedNames.append(.vaultAPIKeysDidChange)
         }
-        if prunedCertificates.didPrune {
+        if !suspectedStorageFault && prunedCertificates.didPrune {
             try metadataStore.replaceCertificates(certificates)
             changedNames.append(.vaultCertificatesDidChange)
         }
-        if prunedNotes.didPrune {
+        if !suspectedStorageFault && prunedNotes.didPrune {
             try metadataStore.replaceNotes(notes)
             changedNames.append(.vaultNotesDidChange)
         }
-        if prunedSSHKeys.didPrune {
+        if !suspectedStorageFault && prunedSSHKeys.didPrune {
             try metadataStore.replaceSSHKeys(sshKeys)
             changedNames.append(.vaultSSHKeysDidChange)
         }
@@ -353,7 +358,7 @@ public class VaultRepository {
     private func pruneMissingMetadata<Metadata: Identifiable>(
         _ metadata: [Metadata],
         existence: (UUID) -> SecretExistence
-    ) -> (metadata: [Metadata], didPrune: Bool) where Metadata.ID == UUID {
+    ) -> (metadata: [Metadata], didPrune: Bool, suspectedStorageFault: Bool) where Metadata.ID == UUID {
         var retained: [Metadata] = []
         var missingCount = 0
 
@@ -366,14 +371,14 @@ public class VaultRepository {
             }
         }
 
-        guard missingCount > 0 else { return (retained, false) }
+        guard missingCount > 0 else { return (retained, false, false) }
 
         let prunedFraction = Double(missingCount) / Double(metadata.count)
         guard prunedFraction <= Self.maxPrunedFraction else {
-            return (metadata, false)
+            return (metadata, false, true)
         }
 
-        return (retained, true)
+        return (retained, true, false)
     }
 
     @discardableResult

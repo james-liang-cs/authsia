@@ -133,6 +133,34 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         XCTAssertTrue(metadataStore.savedSSHKeys.isEmpty)
     }
 
+    func testLoadRefusesAllPrunesWhenAnyMetadataSetLooksFaulted() throws {
+        let liveNoteID = UUID()
+        let missingNoteID = UUID()
+        let metadataStore = FakeVaultMetadataStore(
+            passwords: [
+                makePasswordMetadata(id: UUID()),
+                makePasswordMetadata(id: UUID()),
+            ],
+            notes: [
+                makeNoteMetadata(id: liveNoteID),
+                makeNoteMetadata(id: missingNoteID),
+            ]
+        )
+        let keychain = FakeVaultKeychainStore()
+        keychain.notes[liveNoteID] = Data("synthetic-fixture".utf8)
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+
+        try repository.load()
+
+        XCTAssertEqual(repository.passwords.count, 2)
+        XCTAssertEqual(Set(repository.notes.map(\.id)), [liveNoteID, missingNoteID])
+        XCTAssertTrue(metadataStore.savedPasswords.isEmpty)
+        XCTAssertTrue(
+            metadataStore.savedNotes.isEmpty,
+            "A fault in one set must suppress otherwise eligible prunes in the same load."
+        )
+    }
+
     /// The guard is a cap, not a ban: a minority of stale rows is still cleaned
     /// up, which is what the prune exists for after a namespace change.
     func testLoadStillPrunesAMinorityOfStaleMetadata() throws {

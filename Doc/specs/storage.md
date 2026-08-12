@@ -295,6 +295,15 @@ the matching secret is no longer available in the current Keychain namespace.
 `VaultRepository.load()` performs a one-time per-repository validation pass to
 prune these stale vault rows.
 
+That prune is **bounded across the load**. If more than half of any metadata set
+disappears in a single load, the result is read as a storage fault rather than
+staleness. No metadata set is pruned or persisted by stale cleanup during that
+load. Staleness and a fault are indistinguishable at this layer — both answer
+"not found" — but their consequences are not. A retained stale row shows an
+item that will not open, which the user can delete. A pruned live row erases the
+only index to a secret that is still stored. Clearing a whole set therefore
+requires an explicit user action, not a silent load-time prune.
+
 That validation uses lightweight Keychain existence queries:
 
 - `containsPassword(for:)`
