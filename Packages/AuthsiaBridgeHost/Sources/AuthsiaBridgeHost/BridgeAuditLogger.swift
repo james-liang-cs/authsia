@@ -38,6 +38,10 @@ public final class BridgeAuditLogger {
     private static let legacyV9 = 9
     private static let fileMode: mode_t = 0o600
     private static let directoryMode: NSNumber = 0o700
+    /// Bounded wait for the cross-process audit lock. A stuck holder must not wedge
+    /// bridge requests or SSH signing, so acquisition gives up instead of blocking.
+    private static let lockTimeout: TimeInterval = 5
+    private static let lockRetryInterval: useconds_t = 1_000
 
     // MARK: - HMAC Key Keychain Constants
     private static let hmacKeyService = "com.authsia.audit.hmac-key"
@@ -57,8 +61,10 @@ public final class BridgeAuditLogger {
 
     public func record(_ record: BridgeAuditRecord) throws {
         try queue.sync {
+            // Resolved before taking the lock: the Keychain call can block on securityd
+            // and does not depend on the chain tip.
+            let key = try hmacKeyProvider()
             try withFileLock {
-                let key = try hmacKeyProvider()
                 let previousHash = try readLastEntryHashFromFile()
                 let entryHash = Self.computeHMAC(for: record, previousHash: previousHash, key: key)
                 let entry = AuditEntry(
@@ -79,9 +85,12 @@ public final class BridgeAuditLogger {
 
     public func verifyIntegrity() throws -> Bool {
         try queue.sync {
-            try withFileLock {
+            // Checked before the lock so verifying a fresh install neither creates the
+            // lock sidecar nor provisions an HMAC key for a log that does not exist.
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { return true }
+            let key = try hmacKeyProvider()
+            return try withFileLock {
                 guard FileManager.default.fileExists(atPath: fileURL.path) else { return true }
-                let key = try hmacKeyProvider()
                 let data = try Data(contentsOf: fileURL)
                 let lines = data.split(separator: 0x0A)
                 guard !lines.isEmpty else { return true }
@@ -328,11 +337,27 @@ public final class BridgeAuditLogger {
         guard fchmod(fileDescriptor, Self.fileMode) == 0 else {
             throw BridgeAuditLoggerError.failedToSetPermissions(errno)
         }
-        guard flock(fileDescriptor, LOCK_EX) == 0 else {
-            throw BridgeAuditLoggerError.failedToLock(errno)
-        }
+        try acquireLock(fileDescriptor)
         defer { _ = flock(fileDescriptor, LOCK_UN) }
         return try body()
+    }
+
+    /// Takes the exclusive lock without blocking indefinitely. Retries on contention
+    /// and on signal interruption, then gives up so a stuck holder in the peer process
+    /// cannot stall the request being served.
+    private func acquireLock(_ fileDescriptor: Int32) throws {
+        let deadline = Date().addingTimeInterval(Self.lockTimeout)
+        while true {
+            if flock(fileDescriptor, LOCK_EX | LOCK_NB) == 0 { return }
+            let code = errno
+            guard code == EWOULDBLOCK || code == EINTR else {
+                throw BridgeAuditLoggerError.failedToLock(code)
+            }
+            guard Date() < deadline else {
+                throw BridgeAuditLoggerError.lockTimeout
+            }
+            usleep(Self.lockRetryInterval)
+        }
     }
 
     private func readLastEntryHashFromFile() throws -> String? {
@@ -403,6 +428,7 @@ private enum BridgeAuditLoggerError: Error {
     case invalidEntryVersion
     case failedToOpen(Int32)
     case failedToLock(Int32)
+    case lockTimeout
     case failedToWrite(Int32)
     case failedToSetPermissions(Int32)
     case keychainError(OSStatus)
