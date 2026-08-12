@@ -188,10 +188,12 @@ enum AgentGrantActivityAttribution {
 public final class AgentCommandHistoryStore {
     private static let directoryPermissions: NSNumber = 0o700
     private static let filePermissions: NSNumber = 0o600
+    private static let filePermissionsMode: mode_t = S_IRUSR | S_IWUSR
     private static let mutationLock = NSLock()
+    private static let compactionSizeThreshold: UInt64 = 128 * 1024 * 1024
     /// Aligns with Access Center's 30-day audit window.
     public static let defaultRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
-    /// Hard cap so a busy machine cannot grow the history without bound.
+    /// Caps the materialized history returned to Access Center and retained by compaction.
     public static let defaultMaximumEventCount = 5_000
 
     public static var defaultFileURL: URL {
@@ -207,6 +209,25 @@ public final class AgentCommandHistoryStore {
     private let fileManager: FileManager
     private let retentionInterval: TimeInterval
     private let maximumEventCount: Int
+    private let dataLoader: (URL) throws -> Data
+    private let tailDataLoader: (URL, UInt64) throws -> Data
+    private var historyCache: HistoryCache?
+
+    private struct FileSnapshot: Equatable {
+        let fileNumber: UInt64?
+        let size: UInt64
+        let modificationDate: Date?
+
+        func isSameFile(as other: FileSnapshot) -> Bool {
+            guard let fileNumber, let otherFileNumber = other.fileNumber else { return false }
+            return fileNumber == otherFileNumber
+        }
+    }
+
+    private struct HistoryCache {
+        let snapshot: FileSnapshot
+        let events: [AgentCommandEvent]
+    }
 
     public init(
         fileURL: URL = AgentCommandHistoryStore.defaultFileURL,
@@ -218,22 +239,37 @@ public final class AgentCommandHistoryStore {
         self.fileManager = fileManager
         self.retentionInterval = retentionInterval
         self.maximumEventCount = max(1, maximumEventCount)
+        self.dataLoader = { try Data(contentsOf: $0) }
+        self.tailDataLoader = Self.readData(from:offset:)
+    }
+
+    init(
+        fileURL: URL,
+        fileManager: FileManager = .default,
+        retentionInterval: TimeInterval = AgentCommandHistoryStore.defaultRetentionInterval,
+        maximumEventCount: Int = AgentCommandHistoryStore.defaultMaximumEventCount,
+        dataLoader: @escaping (URL) throws -> Data,
+        tailDataLoader: @escaping (URL, UInt64) throws -> Data
+    ) {
+        self.fileURL = fileURL
+        self.fileManager = fileManager
+        self.retentionInterval = retentionInterval
+        self.maximumEventCount = max(1, maximumEventCount)
+        self.dataLoader = dataLoader
+        self.tailDataLoader = tailDataLoader
     }
 
     public func record(_ event: AgentCommandEvent) throws {
+        var line = try JSONEncoder.agentCommandHistoryLine.encode(event)
+        line.append(0x0A)
+
         try Self.mutationLock.withLock {
-            var events = try loadAllUnlocked()
-            if let index = events.firstIndex(where: { $0.mergeKey == event.mergeKey && event.mergeKey != nil }) {
-                events[index] = event
-            } else {
-                events.append(event)
+            try withFileLock(operation: LOCK_EX) {
+                try appendLineUnlocked(line)
+                if fileSnapshot()?.size ?? 0 > Self.compactionSizeThreshold {
+                    try writeUnlocked(loadAllUnlocked())
+                }
             }
-            events = Self.pruned(
-                events.sorted { $0.recordedAt < $1.recordedAt },
-                retentionInterval: retentionInterval,
-                maximumEventCount: maximumEventCount
-            )
-            try writeUnlocked(events)
         }
         #if os(macOS)
         AccessCenterActivityNotifier.post()
@@ -242,7 +278,9 @@ public final class AgentCommandHistoryStore {
 
     public func loadAll() throws -> [AgentCommandEvent] {
         try Self.mutationLock.withLock {
-            try loadAllUnlocked()
+            try withFileLock(operation: LOCK_SH) {
+                try loadAllUnlocked()
+            }
         }
     }
 
@@ -278,12 +316,74 @@ public final class AgentCommandHistoryStore {
     }
 
     private func loadAllUnlocked() throws -> [AgentCommandEvent] {
-        guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            historyCache = nil
+            return []
+        }
         try enforceFilePermissions()
-        let data = try Data(contentsOf: fileURL)
-        return try data.split(separator: 0x0A, omittingEmptySubsequences: true)
+        guard let snapshot = fileSnapshot() else {
+            historyCache = nil
+            return try materializedEvents(from: dataLoader(fileURL))
+        }
+
+        if let historyCache, snapshot == historyCache.snapshot {
+            return historyCache.events
+        }
+
+        if let historyCache,
+           snapshot.isSameFile(as: historyCache.snapshot),
+           snapshot.size > historyCache.snapshot.size {
+            let appendedData = try tailDataLoader(fileURL, historyCache.snapshot.size)
+            let appendedEvents = try decodedEvents(from: appendedData)
+            let events = materializedEvents(historyCache.events + appendedEvents)
+            self.historyCache = HistoryCache(snapshot: snapshot, events: events)
+            return events
+        }
+
+        let events = try materializedEvents(from: dataLoader(fileURL))
+        historyCache = HistoryCache(snapshot: snapshot, events: events)
+        return events
+    }
+
+    private func materializedEvents(from data: Data) throws -> [AgentCommandEvent] {
+        materializedEvents(try decodedEvents(from: data))
+    }
+
+    private func materializedEvents(_ events: [AgentCommandEvent]) -> [AgentCommandEvent] {
+        var merged: [AgentCommandEvent] = []
+        var indexesByMergeKey: [String: Int] = [:]
+        for event in events {
+            if let mergeKey = event.mergeKey, let index = indexesByMergeKey[mergeKey] {
+                merged[index] = event
+            } else {
+                if let mergeKey = event.mergeKey {
+                    indexesByMergeKey[mergeKey] = merged.count
+                }
+                merged.append(event)
+            }
+        }
+        return Self.pruned(
+            merged.sorted { $0.recordedAt < $1.recordedAt },
+            retentionInterval: retentionInterval,
+            maximumEventCount: maximumEventCount
+        )
+    }
+
+    private func decodedEvents(from data: Data) throws -> [AgentCommandEvent] {
+        try data.split(separator: 0x0A, omittingEmptySubsequences: true)
             .map { try JSONDecoder.agentCommandHistory.decode(AgentCommandEvent.self, from: Data($0)) }
-            .sorted { $0.recordedAt < $1.recordedAt }
+    }
+
+    private func appendLineUnlocked(_ line: Data) throws {
+        try ensureDirectory()
+        let fileDescriptor = open(fileURL.path, O_WRONLY | O_CREAT | O_APPEND, Self.filePermissionsMode)
+        guard fileDescriptor >= 0 else {
+            throw Self.posixError()
+        }
+        defer { close(fileDescriptor) }
+
+        try Self.writeAll(line, to: fileDescriptor)
+        try enforceFilePermissions()
     }
 
     private func writeUnlocked(_ events: [AgentCommandEvent]) throws {
@@ -296,6 +396,67 @@ public final class AgentCommandHistoryStore {
         }
         try data.write(to: fileURL, options: .atomic)
         try enforceFilePermissions()
+        if let snapshot = fileSnapshot() {
+            historyCache = HistoryCache(snapshot: snapshot, events: events)
+        } else {
+            historyCache = nil
+        }
+    }
+
+    private func withFileLock<T>(operation: Int32, _ body: () throws -> T) throws -> T {
+        try ensureDirectory()
+        let lockPath = fileURL.path + ".lock"
+        let fileDescriptor = open(lockPath, O_RDWR | O_CREAT, Self.filePermissionsMode)
+        guard fileDescriptor >= 0 else {
+            throw Self.posixError()
+        }
+        defer { close(fileDescriptor) }
+        try fileManager.setAttributes([.posixPermissions: Self.filePermissions], ofItemAtPath: lockPath)
+
+        guard flock(fileDescriptor, operation) == 0 else {
+            throw Self.posixError()
+        }
+        defer { flock(fileDescriptor, LOCK_UN) }
+        return try body()
+    }
+
+    private func fileSnapshot() -> FileSnapshot? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+              let size = (attributes[.size] as? NSNumber)?.uint64Value else {
+            return nil
+        }
+        return FileSnapshot(
+            fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+            size: size,
+            modificationDate: attributes[.modificationDate] as? Date
+        )
+    }
+
+    private static func readData(from fileURL: URL, offset: UInt64) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: offset)
+        return try handle.readToEnd() ?? Data()
+    }
+
+    private static func writeAll(_ data: Data, to fileDescriptor: Int32) throws {
+        try data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            var offset = 0
+            while offset < buffer.count {
+                let written = write(fileDescriptor, baseAddress.advanced(by: offset), buffer.count - offset)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw posixError()
+                }
+                guard written > 0 else { throw POSIXError(.EIO) }
+                offset += written
+            }
+        }
+    }
+
+    private static func posixError() -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 
     private func ensureDirectory() throws {

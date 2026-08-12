@@ -108,6 +108,84 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(decoded.map(\.command), ["swift test", "npm test"])
     }
 
+    func testRecordingNewActivityAppendsWithoutReplacingExistingHistory() throws {
+        let fileURL = try makeTempURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let store = AgentCommandHistoryStore(fileURL: fileURL)
+        let first = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 10),
+            agentPlatform: "codex",
+            captureSource: .process,
+            command: "authsia exec -- first"
+        )
+        let second = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 20),
+            agentPlatform: "codex",
+            captureSource: .process,
+            command: "authsia exec -- second"
+        )
+
+        try store.record(first)
+        let existingHistory = try FileHandle(forReadingFrom: fileURL)
+        defer { try? existingHistory.close() }
+        _ = try existingHistory.seekToEnd()
+
+        try store.record(second)
+
+        let appendedData = try XCTUnwrap(try existingHistory.readToEnd())
+        XCTAssertFalse(
+            appendedData.isEmpty,
+            "Recording activity must append one event instead of replacing and re-encoding the full history"
+        )
+        let appendedEvent = try JSONDecoder.agentCommandHistory.decode(
+            AgentCommandEvent.self,
+            from: Data(appendedData.dropLast())
+        )
+        XCTAssertEqual(appendedEvent.id, second.id)
+    }
+
+    func testOpenHistoryStoreLoadsOnlyNewlyAppendedActivity() throws {
+        let fileURL = try makeTempURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let writer = AgentCommandHistoryStore(fileURL: fileURL)
+        let first = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 10),
+            agentPlatform: "codex",
+            captureSource: .process,
+            command: "authsia exec -- first"
+        )
+        let second = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 20),
+            agentPlatform: "codex",
+            captureSource: .process,
+            command: "authsia exec -- second"
+        )
+        try writer.record(first)
+
+        var fullReadCount = 0
+        var tailReadCount = 0
+        let reader = AgentCommandHistoryStore(
+            fileURL: fileURL,
+            dataLoader: { url in
+                fullReadCount += 1
+                return try Data(contentsOf: url)
+            },
+            tailDataLoader: { url, offset in
+                tailReadCount += 1
+                let handle = try FileHandle(forReadingFrom: url)
+                defer { try? handle.close() }
+                try handle.seek(toOffset: offset)
+                return try handle.readToEnd() ?? Data()
+            }
+        )
+
+        XCTAssertEqual(try reader.loadAll().map(\.id), [first.id])
+        try writer.record(second)
+        XCTAssertEqual(try reader.loadAll().map(\.id), [first.id, second.id])
+        XCTAssertEqual(fullReadCount, 1)
+        XCTAssertEqual(tailReadCount, 1)
+    }
+
     func testRecordPrunesEventsOutsideRetentionWindow() throws {
         let fileURL = try makeTempURL()
         let now = Date(timeIntervalSince1970: 1_700_000_000)

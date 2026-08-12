@@ -90,6 +90,41 @@ struct AgentRuntimeContextResolverTests {
         #expect(reloaded.map(\.agentType) == ["older", "newer"])
     }
 
+    @Test("loadRecords parses only records appended to a cached history file")
+    func loadRecordsReadsAppendedTail() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let firstLine = record(
+            id: "11111111-1111-1111-1111-111111111111",
+            platform: "codex",
+            agentType: "older",
+            workingDirectory: "/repo",
+            recordedAt: now.addingTimeInterval(-10),
+            expiresAt: now.addingTimeInterval(20)
+        )
+        let secondLine = record(
+            id: "22222222-2222-2222-2222-222222222222",
+            platform: "codex",
+            agentType: "newer",
+            workingDirectory: "/repo",
+            recordedAt: now.addingTimeInterval(-1),
+            expiresAt: now.addingTimeInterval(20)
+        )
+        let eventsURL = try writeEvents([firstLine])
+
+        #expect(AgentRuntimeContextResolver.loadRecords(from: eventsURL).count == 1)
+
+        let handle = try FileHandle(forUpdating: eventsURL)
+        defer { try? handle.close() }
+        _ = try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\n\(secondLine)".utf8))
+        try handle.seek(toOffset: 0)
+        try handle.write(contentsOf: Data(repeating: UInt8(ascii: "a"), count: firstLine.utf8.count))
+
+        let loaded = AgentRuntimeContextResolver.loadRecords(from: eventsURL)
+        #expect(loaded.count == 2)
+        #expect(loaded.map(\.agentType) == ["older", "newer"])
+    }
+
     @Test("loadRecords parses byte newlines without requiring String splits")
     func loadRecordsParsesByteNewlines() throws {
         let now = Date(timeIntervalSince1970: 1_000)

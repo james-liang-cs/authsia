@@ -655,11 +655,16 @@ struct Exec: ParsableCommand {
         ) else {
             return try client.directCLIApprovalPreflight(payload).grantIDs
         }
+        let runtimeContext = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: currentDirectoryPath,
+            processAncestry: processAncestry,
+            environment: parentEnvironment
+        )
         var grantIDs: [UUID] = []
         defer {
             recordAgentCommandHistory(
-                parentEnvironment: parentEnvironment,
-                processAncestry: processAncestry,
+                runtimeContext: runtimeContext,
                 store: commandHistoryStore,
                 now: now,
                 currentDirectoryPath: currentDirectoryPath,
@@ -700,8 +705,7 @@ struct Exec: ParsableCommand {
     }
 
     private static func recordAgentCommandHistory(
-        parentEnvironment: [String: String],
-        processAncestry: [AgenticProcessReference],
+        runtimeContext: AgentRuntimeContext?,
         store: AgentCommandHistoryStore,
         now: Date,
         currentDirectoryPath: String,
@@ -709,24 +713,18 @@ struct Exec: ParsableCommand {
         commandLine: [String],
         grantIDs: [UUID]
     ) {
-        let context = AgentRuntimeContextResolver.resolve(
-            now: now,
-            currentDirectoryPath: currentDirectoryPath,
-            processAncestry: processAncestry,
-            environment: parentEnvironment
-        )
         let command = commandLine.isEmpty ? nil : commandLine.joined(separator: " ")
         let executable = commandLine.first.map { URL(fileURLWithPath: $0).lastPathComponent }
         let historyGrantIDs: [UUID?] = grantIDs.isEmpty ? [nil] : grantIDs.map(Optional.some)
         for grantID in historyGrantIDs {
             let event = AgentCommandEvent(
                 recordedAt: now,
-                agentPlatform: context?.platform,
-                sessionID: context?.sessionID,
-                turnID: context?.turnID,
-                agentID: context?.agentID,
-                agentType: context?.agentType,
-                toolUseID: context?.toolUseID,
+                agentPlatform: runtimeContext?.platform,
+                sessionID: runtimeContext?.sessionID,
+                turnID: runtimeContext?.turnID,
+                agentID: runtimeContext?.agentID,
+                agentType: runtimeContext?.agentType,
+                toolUseID: runtimeContext?.toolUseID,
                 agentJITGrantID: grantID,
                 captureSource: .process,
                 contextExpiresAt: now.addingTimeInterval(60 * 60),

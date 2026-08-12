@@ -12,6 +12,7 @@ enum AgentRuntimeContextResolver {
 
     private struct RecordsCache {
         let path: String
+        let fileNumber: UInt64?
         let modificationEpochSecond: Int?
         let fileSize: Int
         let records: [AgentRuntimeContextRecord]
@@ -115,23 +116,58 @@ enum AgentRuntimeContextResolver {
         // after attribute round-trips, while still invalidating across real writes.
         let modificationEpochSecond = (attributes?[.modificationDate] as? Date)
             .map { Int($0.timeIntervalSince1970) }
+        let fileNumber = (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value
         let fileSize = attributes?[.size] as? Int ?? -1
         let path = url.path
 
         recordsCacheBox.lock.lock()
-        if let cache = recordsCacheBox.caches[path],
-           cache.modificationEpochSecond == modificationEpochSecond,
-           cache.fileSize == fileSize {
-            let cached = cache.records
-            recordsCacheBox.lock.unlock()
-            return cached
+        if let cache = recordsCacheBox.caches[path] {
+            if cache.modificationEpochSecond == modificationEpochSecond,
+               cache.fileSize == fileSize {
+                let cached = cache.records
+                recordsCacheBox.lock.unlock()
+                return cached
+            }
+            if let fileNumber,
+               cache.fileNumber == fileNumber,
+               fileSize > cache.fileSize {
+                recordsCacheBox.lock.unlock()
+                let appended = loadRecordsFromDisk(url: url, offset: UInt64(cache.fileSize))
+                let records = cache.records + appended
+                cacheRecords(
+                    records,
+                    path: path,
+                    fileNumber: fileNumber,
+                    modificationEpochSecond: modificationEpochSecond,
+                    fileSize: fileSize
+                )
+                return records
+            }
         }
         recordsCacheBox.lock.unlock()
 
         let records = loadRecordsFromDisk(url: url)
+        cacheRecords(
+            records,
+            path: path,
+            fileNumber: fileNumber,
+            modificationEpochSecond: modificationEpochSecond,
+            fileSize: fileSize
+        )
+        return records
+    }
+
+    private static func cacheRecords(
+        _ records: [AgentRuntimeContextRecord],
+        path: String,
+        fileNumber: UInt64?,
+        modificationEpochSecond: Int?,
+        fileSize: Int
+    ) {
         recordsCacheBox.lock.lock()
         recordsCacheBox.caches[path] = RecordsCache(
             path: path,
+            fileNumber: fileNumber,
             modificationEpochSecond: modificationEpochSecond,
             fileSize: fileSize,
             records: records
@@ -144,11 +180,10 @@ enum AgentRuntimeContextResolver {
             }
         }
         recordsCacheBox.lock.unlock()
-        return records
     }
 
-    private static func loadRecordsFromDisk(url: URL) -> [AgentRuntimeContextRecord] {
-        guard let data = try? Data(contentsOf: url) else {
+    private static func loadRecordsFromDisk(url: URL, offset: UInt64 = 0) -> [AgentRuntimeContextRecord] {
+        guard let data = try? readData(from: url, offset: offset) else {
             return []
         }
 
@@ -168,6 +203,16 @@ enum AgentRuntimeContextResolver {
                 }
                 return AgentRuntimeContextRecord(event: event)
             }
+    }
+
+    private static func readData(from url: URL, offset: UInt64) throws -> Data {
+        if offset == 0 {
+            return try Data(contentsOf: url)
+        }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: offset)
+        return try handle.readToEnd() ?? Data()
     }
 
     private static func workingDirectoryMatches(_ recordPath: String?, currentDirectoryPath: String) -> Bool {
