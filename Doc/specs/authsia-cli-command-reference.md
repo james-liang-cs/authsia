@@ -82,7 +82,7 @@ Use `load` to resolve vault values into environment-style key/value assignments.
 
 | Step | Activity | Test Payload | Command | Notes |
 |------|---------|--------------|---------|-------|
-| 0 | Enable shell integration (one-time) | shell=zsh | `eval "$(authsia init zsh)"` | Required for `--silent` to affect active shell |
+| 0 | Enable shell integration (one-time) | shell=zsh | `eval "$(authsia init zsh)"` | Enables `--silent` active-shell load and shell-local `authsia://` references for `exec` |
 | 1 | Load one password field as shell exports | name=Demo Password | `authsia load password "Demo Password"` | Emits `export KEY='value'` lines |
 | 2 | Load folder scope (nested included) | folder=Team/API | `authsia load password --folder Team/API` | Loads all matching items in folder tree |
 | 3 | Load global scope by type | type=password | `authsia load password --all` | Scraped items default to current machine |
@@ -112,11 +112,12 @@ are still concealed before reaching stdout/stderr.
 | 6 | Exec note content | name=Kube Config | `authsia exec --type note --query "Kube Config" -- env` | Note content as env var |
 | 7 | Exec from current .env file | .env with authsia:// refs in the current directory | `authsia exec -- make deploy` | Auto-loads the current `.env` and resolves all authsia:// refs before launch, including folder-scoped refs |
 | 8 | Exec from explicit .env file | env file with authsia:// refs | `authsia exec --env-file config/.env -- make deploy` | Use for env files with another name or outside the current directory |
-| 9 | Verify parent shell clean | N/A | `echo $DEMO_PASSWORD` | Should be empty — secrets don't leak to parent |
-| 10 | Verify credential not inherited | env=AUTHSIA_ACCESS_CREDENTIAL=<uuid> | `AUTHSIA_ACCESS_CREDENTIAL=<uuid> authsia exec --type password --query "Demo Password" -- env \| grep AUTHSIA_ACCESS_CREDENTIAL` | No output — child does not receive the automation credential |
-| 11 | Reject scope flags without type | query=MyKey (no --type) | `authsia exec --query MyKey -- env` | Returns error: --type required with scope flags |
-| 12 | Reject SSH type | type=ssh | `authsia exec --type ssh --all -- env` | Returns error: use the built-in Authsia SSH agent instead |
-| 13 | Reject missing command | type=password | `authsia exec --type password --all` | Returns error: use `--` to separate command |
+| 9 | Exec a shell-local reference without export | shell integration enabled | `API_KEY='authsia://api-key/Demo/key'`<br>`authsia exec -- printenv API_KEY` | The wrapper forwards matching refs for this invocation only; ordinary unexported variables stay private |
+| 10 | Verify parent shell clean | N/A | `echo $DEMO_PASSWORD` | Should be empty — secrets don't leak to parent |
+| 11 | Verify credential not inherited | env=AUTHSIA_ACCESS_CREDENTIAL=<uuid> | `AUTHSIA_ACCESS_CREDENTIAL=<uuid> authsia exec --type password --query "Demo Password" -- env \| grep AUTHSIA_ACCESS_CREDENTIAL` | No output — child does not receive the automation credential |
+| 12 | Reject scope flags without type | query=MyKey (no --type) | `authsia exec --query MyKey -- env` | Returns error: --type required with scope flags |
+| 13 | Reject SSH type | type=ssh | `authsia exec --type ssh --all -- env` | Returns error: use the built-in Authsia SSH agent instead |
+| 14 | Reject missing command | type=password | `authsia exec --type password --all` | Returns error: use `--` to separate command |
 
 ## Read (Secret Reference Resolution)
 

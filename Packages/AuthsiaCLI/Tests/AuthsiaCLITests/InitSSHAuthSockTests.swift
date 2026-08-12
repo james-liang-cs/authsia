@@ -65,6 +65,60 @@ struct InitSSHAuthSockTests {
         }
     }
 
+    @Test("authsia exec receives unexported secret references", arguments: Init.Shell.allCases)
+    func shellIntegrationPassesUnexportedSecretReferences(shell: Init.Shell) throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-init-exec-test-\(UUID().uuidString)", isDirectory: true)
+        let binDir = tempDir.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let scriptURL = tempDir.appendingPathComponent("init.\(shell.rawValue)")
+        try Init.renderScript(for: shell).write(to: scriptURL, atomically: true, encoding: .utf8)
+
+        let executableURL = binDir.appendingPathComponent("authsia")
+        try """
+        #!/bin/sh
+        if [ "$1" = "workspace" ] && [ "$2" = "guard" ]; then
+            exit 0
+        fi
+        if [ "$1" = "exec" ]; then
+            printf 'reference=%s ordinary=%s\\n' \
+                "${AUTHSIA_TEST_UNEXPORTED_REFERENCE:-missing}" \
+                "${AUTHSIA_TEST_UNEXPORTED_ORDINARY:-missing}"
+            exit 0
+        fi
+        exit 1
+        """.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executableURL.path)
+
+        let existingPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let reference = "authsia://api-key/Synthetic/key"
+        let result = try runShell(
+            shell,
+            command: """
+            source "$AUTHSIA_TEST_INIT_SCRIPT"
+            unset AUTHSIA_TEST_UNEXPORTED_REFERENCE
+            unset AUTHSIA_TEST_UNEXPORTED_ORDINARY
+            AUTHSIA_TEST_UNEXPORTED_REFERENCE='\(reference)'
+            AUTHSIA_TEST_UNEXPORTED_ORDINARY='ordinary-local-value'
+            authsia exec -- synthetic-command
+            if command env | grep -q '^AUTHSIA_TEST_UNEXPORTED_REFERENCE='; then
+                echo reference-remained-exported
+            fi
+            """,
+            environment: [
+                "AUTHSIA_TEST_INIT_SCRIPT": scriptURL.path,
+                "PATH": "\(binDir.path):\(existingPath)",
+                "XDG_STATE_HOME": tempDir.path,
+            ]
+        )
+
+        #expect(result.status == 0)
+        #expect(result.stdout.contains("reference=\(reference) ordinary=missing"))
+        #expect(!result.stdout.contains("reference-remained-exported"))
+    }
+
     @Test("shell integration restarts the tab in normal mode with authsia unguard")
     func shellIntegrationAddsUnguardCommand() {
         for shell in Init.Shell.allCases {

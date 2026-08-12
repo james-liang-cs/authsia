@@ -326,6 +326,21 @@ launches. This includes existing parent environment variables and values from `-
 at least one parent environment variable contains an `authsia://` reference, no item type or
 `--env-file` is required.
 
+With Authsia shell integration loaded in zsh or bash, a matching shell-local variable does not need
+an explicit `export`. The wrapper passes only `authsia://` references to the `authsia exec`
+invocation; ordinary unexported variables remain private, and each variable keeps its prior export
+state after the command:
+
+```bash
+API_KEY='authsia://api-key/Stripe/key?folder=Team/API'
+authsia exec -- npm start
+```
+
+Without shell integration, normal process inheritance applies. Use the same-line form
+`API_KEY='authsia://…' authsia exec -- npm start`, explicitly export the reference, or use an env
+file. Shell integration forwards reference metadata only; the resolved secret still exists only in
+the mediated child environment.
+
 If no `--env-file` or parent environment reference is provided, `exec` auto-loads a literal `.env`
 file in the current working directory when that file contains at least one `authsia://` reference.
 This also applies when an item type/scope is provided, so scoped folder loads can be combined with

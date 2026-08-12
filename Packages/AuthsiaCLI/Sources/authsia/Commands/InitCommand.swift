@@ -6,8 +6,9 @@ struct Init: ParsableCommand {
         commandName: "init",
         abstract: "Print shell integration script",
         discussion: """
-            Prints shell integration that enables active-session export for:
-              authsia load ... --silent
+            Prints shell integration that enables:
+              - active-session export for authsia load ... --silent
+              - shell-local authsia:// references for authsia exec
 
             Examples:
               eval "$(authsia init zsh)"
@@ -61,9 +62,60 @@ struct Init: ParsableCommand {
     }
 
     private static func renderSharedHeader(shellName: String) -> String {
+        let execReferenceForwarding: String
+        if shellName == "zsh" {
+            execReferenceForwarding = """
+            if [ "$#" -ge 1 ] && [ "$1" = "exec" ]; then
+                (
+                    local _authsia_name _authsia_value _authsia_kind
+                    for _authsia_name in ${(k)parameters}; do
+                        case "$_authsia_name" in
+                            _authsia_*) continue ;;
+                        esac
+                        _authsia_kind="${parameters[$_authsia_name]}"
+                        case "$_authsia_kind" in
+                            *array*|*association*) continue ;;
+                        esac
+                        _authsia_value="${(P)_authsia_name}"
+                        case "$_authsia_value" in
+                            authsia://*) export "$_authsia_name" ;;
+                        esac
+                    done
+                    command authsia "$@"
+                )
+                return $?
+            fi
+            """
+        } else {
+            execReferenceForwarding = """
+            if [ "$#" -ge 1 ] && [ "$1" = "exec" ]; then
+                (
+                    local _authsia_name _authsia_value _authsia_declaration _authsia_attributes
+                    while IFS= read -r _authsia_name; do
+                        case "$_authsia_name" in
+                            _authsia_*) continue ;;
+                        esac
+                        _authsia_declaration="$(declare -p "$_authsia_name" 2>/dev/null)" || continue
+                        _authsia_attributes="${_authsia_declaration#declare -}"
+                        _authsia_attributes="${_authsia_attributes%% *}"
+                        case "$_authsia_attributes" in
+                            *a*|*A*|*n*) continue ;;
+                        esac
+                        _authsia_value="${!_authsia_name}"
+                        case "$_authsia_value" in
+                            authsia://*) export "$_authsia_name" ;;
+                        esac
+                    done < <(compgen -v)
+                    command authsia "$@"
+                )
+                return $?
+            fi
+            """
+        }
+
         return """
         # Authsia shell integration (\(shellName))
-        # Enables active-shell export for: authsia load ... --silent
+        # Enables active-shell export and shell-local authsia:// references for authsia exec.
         unset -f authsia >/dev/null 2>&1 || true
         unfunction authsia >/dev/null 2>&1 || true
         export AUTHSIA_SHELL_INTEGRATION=1
@@ -102,6 +154,7 @@ struct Init: ParsableCommand {
                     /bin/\(shellName)
                 return $?
             fi
+            \(execReferenceForwarding)
             command authsia "$@"
         }
         export AUTHSIA_SHELL_EXPORT_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/authsia"

@@ -25,7 +25,7 @@ struct Authsia: AsyncParsableCommand {
               ssh         SSH key generation, host config, and signing setup
               read        Resolve a secret reference URI and print its value
               inject      Inject resolved secrets into a template
-              init        Print shell integration script for --silent load
+              init        Print shell integration for --silent load and exec references
               guard       Activate workspace guard in the current shell
               unguard     Restart the current tab in normal terminal mode
               unlock      Start session to skip repeated prompts
