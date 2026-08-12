@@ -102,16 +102,16 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         XCTAssertEqual(keychain.sshPrivateKeys[sshKeyCopyID], sshKey.privateKey)
     }
 
-    func testLoadPrunesVaultMetadataWhoseSecretsAreMissingAndPersistsPrune() throws {
-        let passwordID = UUID()
-        let certificateID = UUID()
-        let noteID = UUID()
-        let sshKeyID = UUID()
+    /// Regression: a Keychain migration once made every secret answer
+    /// "not found", and an unbounded prune erased the whole vault index while
+    /// the secrets were still stored. Losing most of a set at once now reads as
+    /// a storage fault, and nothing is pruned or persisted.
+    func testLoadRefusesToPruneWhenEverySecretLooksMissing() throws {
         let metadataStore = FakeVaultMetadataStore(
-            passwords: [makePasswordMetadata(id: passwordID)],
-            certificates: [makeCertificateMetadata(id: certificateID)],
-            notes: [makeNoteMetadata(id: noteID)],
-            sshKeys: [makeSSHKeyMetadata(id: sshKeyID)]
+            passwords: [makePasswordMetadata(id: UUID())],
+            certificates: [makeCertificateMetadata(id: UUID())],
+            notes: [makeNoteMetadata(id: UUID())],
+            sshKeys: [makeSSHKeyMetadata(id: UUID())]
         )
         let repository = VaultRepository(
             keychainStore: FakeVaultKeychainStore(),
@@ -120,14 +120,41 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
 
         try repository.load()
 
-        XCTAssertTrue(repository.passwords.isEmpty)
-        XCTAssertTrue(repository.certificates.isEmpty)
-        XCTAssertTrue(repository.notes.isEmpty)
-        XCTAssertTrue(repository.sshKeys.isEmpty)
-        XCTAssertEqual(metadataStore.savedPasswords.last?.map(\.id), [])
-        XCTAssertEqual(metadataStore.savedCertificates.last?.map(\.id), [])
-        XCTAssertEqual(metadataStore.savedNotes.last?.map(\.id), [])
-        XCTAssertEqual(metadataStore.savedSSHKeys.last?.map(\.id), [])
+        XCTAssertEqual(repository.passwords.count, 1)
+        XCTAssertEqual(repository.certificates.count, 1)
+        XCTAssertEqual(repository.notes.count, 1)
+        XCTAssertEqual(repository.sshKeys.count, 1)
+        XCTAssertTrue(
+            metadataStore.savedPasswords.isEmpty,
+            "A suspected storage fault must not persist an emptied index."
+        )
+        XCTAssertTrue(metadataStore.savedCertificates.isEmpty)
+        XCTAssertTrue(metadataStore.savedNotes.isEmpty)
+        XCTAssertTrue(metadataStore.savedSSHKeys.isEmpty)
+    }
+
+    /// The guard is a cap, not a ban: a minority of stale rows is still cleaned
+    /// up, which is what the prune exists for after a namespace change.
+    func testLoadStillPrunesAMinorityOfStaleMetadata() throws {
+        let livePasswordIDs = (0..<3).map { _ in UUID() }
+        let stalePasswordID = UUID()
+        let metadataStore = FakeVaultMetadataStore(
+            passwords: (livePasswordIDs + [stalePasswordID]).map { makePasswordMetadata(id: $0) }
+        )
+        let keychain = FakeVaultKeychainStore()
+        for id in livePasswordIDs {
+            keychain.passwords[id] = Data("synthetic-fixture".utf8)
+        }
+        let repository = VaultRepository(keychainStore: keychain, metadataStore: metadataStore)
+
+        try repository.load()
+
+        XCTAssertEqual(Set(repository.passwords.map(\.id)), Set(livePasswordIDs))
+        XCTAssertEqual(
+            metadataStore.savedPasswords.last.map { Set($0.map(\.id)) },
+            Set(livePasswordIDs),
+            "One stale row out of four is below the fault threshold and should be pruned."
+        )
     }
 
     func testImportDoesNotTreatStaleVaultMetadataAsDuplicate() async throws {

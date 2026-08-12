@@ -334,23 +334,46 @@ public class VaultRepository {
         postVaultChanges(changedNames)
     }
 
+    /// Share of a set that may disappear in one load before the result is read
+    /// as a storage fault rather than stale rows.
+    static let maxPrunedFraction = 0.5
+
+    /// Drops rows whose secret is gone, which happens after a namespace or
+    /// access group change leaves metadata behind.
+    ///
+    /// A storage fault is indistinguishable from staleness here — every probe
+    /// answers "not found" either way — but the consequences are not symmetric.
+    /// Keeping a stale row shows an item that will not open, which the user can
+    /// delete. Pruning a live row erases the only index to a secret that is
+    /// still stored, stranding it. So when most of a set vanishes at once, the
+    /// fault reading wins and nothing is pruned this load.
+    ///
+    /// `.unavailable` is already retained by the switch below; this guard covers
+    /// the case where the Keychain answers confidently and wrongly.
     private func pruneMissingMetadata<Metadata: Identifiable>(
         _ metadata: [Metadata],
         existence: (UUID) -> SecretExistence
     ) -> (metadata: [Metadata], didPrune: Bool) where Metadata.ID == UUID {
         var retained: [Metadata] = []
-        var didPrune = false
+        var missingCount = 0
 
         for item in metadata {
             switch existence(item.id) {
             case .present, .unavailable:
                 retained.append(item)
             case .missing:
-                didPrune = true
+                missingCount += 1
             }
         }
 
-        return (retained, didPrune)
+        guard missingCount > 0 else { return (retained, false) }
+
+        let prunedFraction = Double(missingCount) / Double(metadata.count)
+        guard prunedFraction <= Self.maxPrunedFraction else {
+            return (metadata, false)
+        }
+
+        return (retained, true)
     }
 
     @discardableResult
