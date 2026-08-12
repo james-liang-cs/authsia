@@ -8,9 +8,6 @@ public final class BridgeAuditLogger {
     private let fileURL: URL
     private let hmacKeyProvider: () throws -> SymmetricKey
     private let queue = DispatchQueue(label: "com.authsia.bridge.audit")
-    /// In-memory tip of the hash chain. Avoids re-reading the whole audit log on
-    /// every append (the log is multi-megabyte in active installs).
-    private var cachedLastEntryHash: String?
     /// Current audit entry schema version.
     /// - v1: Plain SHA256, non-deterministic key order (cannot be re-verified).
     /// - v2: HMAC-SHA256 but non-deterministic key order (cannot be re-verified).
@@ -60,77 +57,79 @@ public final class BridgeAuditLogger {
 
     public func record(_ record: BridgeAuditRecord) throws {
         try queue.sync {
-            try ensureDirectory()
-            let key = try hmacKeyProvider()
-            let previousHash = try lastEntryHash()
-            let entryHash = Self.computeHMAC(for: record, previousHash: previousHash, key: key)
-            let entry = AuditEntry(
-                version: Self.entryVersion,
-                record: record,
-                previousHash: previousHash,
-                entryHash: entryHash
-            )
+            try withFileLock {
+                let key = try hmacKeyProvider()
+                let previousHash = try readLastEntryHashFromFile()
+                let entryHash = Self.computeHMAC(for: record, previousHash: previousHash, key: key)
+                let entry = AuditEntry(
+                    version: Self.entryVersion,
+                    record: record,
+                    previousHash: previousHash,
+                    entryHash: entryHash
+                )
 
-            let data = try JSONEncoder.bridge.encode(entry)
-            var lineData = data
-            lineData.append(0x0A)
-            try appendLineData(lineData)
-            cachedLastEntryHash = entryHash
+                let data = try JSONEncoder.bridge.encode(entry)
+                var lineData = data
+                lineData.append(0x0A)
+                try appendLineData(lineData)
+            }
         }
         AccessCenterActivityNotifier.post()
     }
 
     public func verifyIntegrity() throws -> Bool {
         try queue.sync {
-            guard FileManager.default.fileExists(atPath: fileURL.path) else { return true }
-            let key = try hmacKeyProvider()
-            let data = try Data(contentsOf: fileURL)
-            let lines = data.split(separator: 0x0A)
-            guard !lines.isEmpty else { return true }
+            try withFileLock {
+                guard FileManager.default.fileExists(atPath: fileURL.path) else { return true }
+                let key = try hmacKeyProvider()
+                let data = try Data(contentsOf: fileURL)
+                let lines = data.split(separator: 0x0A)
+                guard !lines.isEmpty else { return true }
 
-            var needsMigration = false
-            var previousHash: String?
-            for rawLine in lines {
-                let lineData = Data(rawLine)
-                guard let entry = try? JSONDecoder.bridge.decode(AuditEntry.self, from: lineData) else {
-                    return false
-                }
-                guard entry.previousHash == previousHash else {
-                    return false
-                }
-                switch entry.version {
-                case Self.legacyV1:
-                    // v1 used plain SHA256 with non-deterministic key order — cannot reliably verify after struct changes
-                    needsMigration = true
-                case Self.legacyV2:
-                    // v2 used HMAC but non-deterministic key order — cannot reliably verify after struct changes
-                    needsMigration = true
-                case Self.legacyV3, Self.legacyV4, Self.legacyV5, Self.legacyV6, Self.legacyV7,
-                     Self.legacyV8, Self.legacyV9:
-                    // v3+ use sorted-key HMAC over the record payload. Verify before re-signing
-                    // so a legacy row cannot be tampered with and then silently migrated.
-                    let expectedHash = Self.computeHMAC(for: entry.record, previousHash: entry.previousHash, key: key)
-                    guard expectedHash == entry.entryHash else {
+                var needsMigration = false
+                var previousHash: String?
+                for rawLine in lines {
+                    let lineData = Data(rawLine)
+                    guard let entry = try? JSONDecoder.bridge.decode(AuditEntry.self, from: lineData) else {
                         return false
                     }
-                    needsMigration = true
-                case Self.entryVersion:
-                    // Current entries use HMAC with sorted keys over the current record schema — fully verifiable
-                    let expectedHash = Self.computeHMAC(for: entry.record, previousHash: entry.previousHash, key: key)
-                    guard expectedHash == entry.entryHash else {
+                    guard entry.previousHash == previousHash else {
                         return false
                     }
-                default:
-                    return false
+                    switch entry.version {
+                    case Self.legacyV1:
+                        // v1 used plain SHA256 with non-deterministic key order — cannot reliably verify after struct changes
+                        needsMigration = true
+                    case Self.legacyV2:
+                        // v2 used HMAC but non-deterministic key order — cannot reliably verify after struct changes
+                        needsMigration = true
+                    case Self.legacyV3, Self.legacyV4, Self.legacyV5, Self.legacyV6, Self.legacyV7,
+                         Self.legacyV8, Self.legacyV9:
+                        // v3+ use sorted-key HMAC over the record payload. Verify before re-signing
+                        // so a legacy row cannot be tampered with and then silently migrated.
+                        let expectedHash = Self.computeHMAC(for: entry.record, previousHash: entry.previousHash, key: key)
+                        guard expectedHash == entry.entryHash else {
+                            return false
+                        }
+                        needsMigration = true
+                    case Self.entryVersion:
+                        // Current entries use HMAC with sorted keys over the current record schema — fully verifiable
+                        let expectedHash = Self.computeHMAC(for: entry.record, previousHash: entry.previousHash, key: key)
+                        guard expectedHash == entry.entryHash else {
+                            return false
+                        }
+                    default:
+                        return false
+                    }
+                    previousHash = entry.entryHash
                 }
-                previousHash = entry.entryHash
-            }
 
-            if needsMigration {
-                try migrateLog(data: data, key: key)
-            }
+                if needsMigration {
+                    try migrateLog(data: data, key: key)
+                }
 
-            return true
+                return true
+            }
         }
     }
 
@@ -301,7 +300,6 @@ public final class BridgeAuditLogger {
         }
 
         try migrated.write(to: fileURL, options: .atomic)
-        cachedLastEntryHash = previousHash
     }
 
     // MARK: - File Helpers
@@ -319,13 +317,22 @@ public final class BridgeAuditLogger {
         }
     }
 
-    private func lastEntryHash() throws -> String? {
-        if let cachedLastEntryHash {
-            return cachedLastEntryHash
+    private func withFileLock<T>(_ body: () throws -> T) throws -> T {
+        try ensureDirectory()
+        let lockPath = fileURL.path + ".lock"
+        let fileDescriptor = open(lockPath, O_RDWR | O_CREAT, Self.fileMode)
+        guard fileDescriptor >= 0 else {
+            throw BridgeAuditLoggerError.failedToOpen(errno)
         }
-        let hash = try readLastEntryHashFromFile()
-        cachedLastEntryHash = hash
-        return hash
+        defer { _ = close(fileDescriptor) }
+        guard fchmod(fileDescriptor, Self.fileMode) == 0 else {
+            throw BridgeAuditLoggerError.failedToSetPermissions(errno)
+        }
+        guard flock(fileDescriptor, LOCK_EX) == 0 else {
+            throw BridgeAuditLoggerError.failedToLock(errno)
+        }
+        defer { _ = flock(fileDescriptor, LOCK_UN) }
+        return try body()
     }
 
     private func readLastEntryHashFromFile() throws -> String? {
@@ -395,6 +402,7 @@ private nonisolated struct AuditEntry: Codable {
 private enum BridgeAuditLoggerError: Error {
     case invalidEntryVersion
     case failedToOpen(Int32)
+    case failedToLock(Int32)
     case failedToWrite(Int32)
     case failedToSetPermissions(Int32)
     case keychainError(OSStatus)

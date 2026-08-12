@@ -84,6 +84,65 @@ final class BridgeAuditLoggerTests: XCTestCase {
         XCTAssertTrue(try logger.verifyIntegrity())
     }
 
+    func testMultipleLoggerInstancesShareSingleChain() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let fileURL = tempDir.appendingPathComponent("bridge_audit.log")
+        let bridgeLogger = makeLogger(fileURL: fileURL)
+        let sshLogger = makeLogger(fileURL: fileURL)
+
+        try bridgeLogger.record(BridgeAuditRecord(
+            command: .getPassword,
+            itemId: "bridge-1",
+            approvedBy: "session",
+            timestamp: Date()
+        ))
+        try sshLogger.record(BridgeAuditRecord(
+            command: .sshAgentSign,
+            itemId: "ssh-1",
+            approvedBy: "session",
+            timestamp: Date()
+        ))
+        try bridgeLogger.record(BridgeAuditRecord(
+            command: .getPassword,
+            itemId: "bridge-2",
+            approvedBy: "session",
+            timestamp: Date()
+        ))
+
+        XCTAssertTrue(try makeLogger(fileURL: fileURL).verifyIntegrity())
+    }
+
+    func testConcurrentLoggerInstancesShareSingleChain() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let fileURL = tempDir.appendingPathComponent("bridge_audit.log")
+        let errors = LockedAuditErrors()
+
+        DispatchQueue.concurrentPerform(iterations: 100) { index in
+            do {
+                let logger = BridgeAuditLogger(
+                    fileURL: fileURL,
+                    hmacKeyProvider: { SymmetricKey(data: Data(repeating: 0xA5, count: 32)) }
+                )
+                try logger.record(BridgeAuditRecord(
+                    command: .getPassword,
+                    itemId: "item-\(index)",
+                    approvedBy: "session",
+                    timestamp: Date(timeIntervalSince1970: TimeInterval(index))
+                ))
+            } catch {
+                errors.append(error)
+            }
+        }
+
+        XCTAssertTrue(errors.values.isEmpty)
+        XCTAssertEqual(try makeLogger(fileURL: fileURL).loadRecords().count, 100)
+        XCTAssertTrue(try makeLogger(fileURL: fileURL).verifyIntegrity())
+    }
+
     func testVerifyIntegrityDetectsTamperedEntry() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -282,6 +341,10 @@ final class BridgeAuditLoggerTests: XCTestCase {
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let mode = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
         XCTAssertEqual(mode & 0o777, 0o600)
+
+        let lockAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path + ".lock")
+        let lockMode = (lockAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        XCTAssertEqual(lockMode & 0o777, 0o600)
     }
 
     private func makeLogger(fileURL: URL) -> BridgeAuditLogger {
@@ -306,6 +369,21 @@ final class BridgeAuditLoggerTests: XCTestCase {
         var line = try JSONEncoder.bridge.encode(entry)
         line.append(0x0A)
         try line.write(to: fileURL)
+    }
+}
+
+private final class LockedAuditErrors: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Error] = []
+
+    func append(_ error: Error) {
+        lock.withLock {
+            storage.append(error)
+        }
+    }
+
+    var values: [Error] {
+        lock.withLock { storage }
     }
 }
 

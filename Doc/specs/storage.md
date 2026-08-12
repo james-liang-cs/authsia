@@ -68,6 +68,7 @@ Application Support unless noted otherwise.
 |---|---|---|
 | `~/Library/Application Support/Authsia/CLI/vault_metadata_snapshot.json` | App / bridge | Non-secret CLI metadata snapshot for vault list and lookup fallback. |
 | `~/Library/Application Support/Authsia/bridge_audit.log` | Bridge / SSH agent | HMAC-chained audit log for sensitive bridge requests and SSH signing. |
+| `~/Library/Application Support/Authsia/bridge_audit.log.lock` | Bridge / SSH agent | Empty `0600` advisory-lock sidecar that serializes audit appends and integrity verification across both headless processes. |
 | `~/Library/Application Support/Authsia/agent-jit-grants.json` | Upgrade migration only | Legacy unsigned JIT data. On first grant-store access it is moved to `agent-jit-grants.json.legacy`, or removed when that quarantine file already exists. Neither file is authority. |
 | `~/Library/Application Support/Authsia/agent-command-history.jsonl` | CLI / hooks / Access Center | Redacted agent command-history evidence for Access Center. |
 | `~/Library/Application Support/Authsia/agent-file-activity.jsonl` | Agent hooks / Access Center | Redacted hook and workspace-diff file-activity evidence for Access Center. |
@@ -486,10 +487,11 @@ The key uses the data-protection Keychain and
 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. It is not synchronizable.
 
 The audit log directory is created with `0700` permissions, and the log file is
-created/appended with `0600` permissions. Normal writes append one line per
-successful audited access. Integrity verification may rewrite older audit lines
-to migrate legacy hash versions to the current schema while preserving the
-records and chain order.
+created/appended with `0600` permissions. Bridge and SSH-agent writers acquire
+the `0600` `bridge_audit.log.lock` sidecar before reading the current chain tip
+and appending. Integrity verification uses the same exclusive lock, including
+when it rewrites older audit lines to migrate legacy hash versions to the
+current schema while preserving the records and chain order.
 
 Audit records are operational metadata, not secret storage. They may include the
 bridge command, item ID, item name, approval source, timestamp, caller identity,
