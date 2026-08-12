@@ -211,6 +211,10 @@ enum InjectedSecretFileScrubber {
             let budgetedMaxBytes = remainingBytes <= maxBytes
                 ? max(0, remainingBytes - 1)
                 : maxBytes
+            if remainingBytes <= maxBytes, fileSizeExceedsBudget(path, maxBytes: budgetedMaxBytes) {
+                results.append(budgetExceededResult(path: path))
+                break
+            }
             var bytesRead = 0
             let budgetedHooks = InjectedSecretFileScrubHooks(
                 afterTargetOpened: hooks.afterTargetOpened,
@@ -323,22 +327,10 @@ enum InjectedSecretFileScrubber {
             if errno == ENOENT {
                 return InjectedSecretFileScrubResult(path: path, outcome: .notFound, event: nil)
             }
-            return verificationFailedResult(
-                path: path,
-                masker: masker,
-                context: context,
-                mode: mode,
-                now: now
-            )
+            return skippedResult(path: path)
         }
-        guard metadataIsSafe(initialEntryMetadata, maxBytes: maxBytes) else {
-            return verificationFailedResult(
-                path: path,
-                masker: masker,
-                context: context,
-                mode: mode,
-                now: now
-            )
+        guard metadataIsInspectable(initialEntryMetadata, maxBytes: maxBytes) else {
+            return skippedResult(path: path)
         }
 
         guard directoryIsUnderValidatedRoot(
@@ -362,13 +354,7 @@ enum InjectedSecretFileScrubber {
             if errno == ENOENT {
                 return InjectedSecretFileScrubResult(path: path, outcome: .notFound, event: nil)
             }
-            return verificationFailedResult(
-                path: path,
-                masker: masker,
-                context: context,
-                mode: mode,
-                now: now
-            )
+            return skippedResult(path: path)
         }
         defer { Darwin.close(targetDescriptor) }
 
@@ -378,7 +364,7 @@ enum InjectedSecretFileScrubber {
                 allowedRootBindings: allowedRootBindings
               ),
               Darwin.fstat(targetDescriptor, &initialTargetMetadata) == 0,
-              metadataIsSafe(initialTargetMetadata, maxBytes: maxBytes),
+              metadataIsInspectable(initialTargetMetadata, maxBytes: maxBytes),
               metadataIsUnchanged(initialEntryMetadata, initialTargetMetadata) else {
             return verificationFailedResult(
                 path: path,
@@ -404,8 +390,7 @@ enum InjectedSecretFileScrubber {
             )
         }
 
-        guard data.count <= maxBytes,
-              let content = String(data: data, encoding: .utf8) else {
+        guard data.count <= maxBytes else {
             return verificationFailedResult(
                 path: path,
                 masker: masker,
@@ -414,9 +399,22 @@ enum InjectedSecretFileScrubber {
                 now: now
             )
         }
+        guard let content = String(data: data, encoding: .utf8) else {
+            return skippedResult(path: path)
+        }
 
         guard representationMasker.containsMatch(in: content) else {
             return InjectedSecretFileScrubResult(path: path, outcome: .noMatch, event: nil)
+        }
+
+        guard initialTargetMetadata.st_nlink == 1 else {
+            return verificationFailedResult(
+                path: path,
+                masker: masker,
+                context: context,
+                mode: mode,
+                now: now
+            )
         }
 
         guard targetIsUnchanged(
@@ -503,6 +501,19 @@ enum InjectedSecretFileScrubber {
                 now: now
             )
         )
+    }
+
+    private static func skippedResult(path: String) -> InjectedSecretFileScrubResult {
+        InjectedSecretFileScrubResult(path: path, outcome: .noMatch, event: nil)
+    }
+
+    private static func fileSizeExceedsBudget(_ path: String, maxBytes: Int) -> Bool {
+        var metadata = stat()
+        guard Darwin.lstat(path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG else {
+            return false
+        }
+        return metadata.st_size > off_t(max(0, maxBytes))
     }
 
     private static func verificationFailedResult(
@@ -796,11 +807,10 @@ enum InjectedSecretFileScrubber {
             .path
     }
 
-    private static func metadataIsSafe(_ metadata: stat, maxBytes: Int) -> Bool {
+    private static func metadataIsInspectable(_ metadata: stat, maxBytes: Int) -> Bool {
         maxBytes >= 0
             && maxBytes < Int.max
             && metadata.st_mode & S_IFMT == S_IFREG
-            && metadata.st_nlink == 1
             && metadata.st_size >= 0
             && metadata.st_size <= off_t(maxBytes)
     }

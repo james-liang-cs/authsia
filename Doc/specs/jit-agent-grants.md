@@ -742,13 +742,16 @@ Post-exit file handling:
   and trusted temporary roots added. Roots are conservatively bounded and
   captured by device/inode before launch. A missing or replaced root fails
   identity checks during fallback and at destructive boundaries.
-- Filesystem events provide observed candidates. The high-signal-name mtime
-  fallback is capped across deduplicated roots at 10,000 entries or one
-  monotonic second and prunes `.git`, `.build`, `DerivedData`, and
-  `node_modules`. Discovery remains best-effort, so a missed ordinary-file
+- Filesystem events provide observed candidates and ignore generated trees
+  (`.git`, `.build`, `build`, `DerivedData`, `node_modules`) relative to each
+  watch root. The high-signal-name mtime fallback is capped across
+  deduplicated roots at 10,000 entries or one monotonic second and prunes the
+  same directories. Discovery remains best-effort, so a missed ordinary-file
   event can leave that file unexamined without a warning.
 - Automatic cleanup accepts only an identity-stable, within-root, regular
-  single-link UTF-8 file no larger than 2 MiB. Eligible exact and supported
+  single-link UTF-8 file no larger than 2 MiB. Binary, non-UTF-8, oversized,
+  and symbolic-link writes are skipped quietly: no per-file event, no finding,
+  and no CLI warning. Eligible exact and supported
   transformed matches are replaced in place with `<concealed by authsia>`,
   regardless of filename. Surrounding and unrelated file content stays
   unchanged. Replacing an encoded match intentionally invalidates that payload
@@ -761,8 +764,9 @@ Post-exit file handling:
   but rollback can fail. A crash or power loss between truncation, writing, and
   restoration can leave partial or already-masked content; remediation is not
   crash-atomic.
-- Cleanup failures record `verification-failed` or `remediation-failed` and may
-  produce `Secret-file cleanup incomplete`. Confirmed detection, incomplete
+- Cleanup failures record `verification-failed` or `remediation-failed` only
+  after a secret match is confirmed and rewrite or verify cannot complete, and
+  may produce `Secret-file cleanup incomplete`. Confirmed detection, incomplete
   inspection, successful scrub, and cleanup failure remain distinct findings.
 - Evidence persistence is best-effort, so a CLI warning may occur without a
   finding. Outside-root candidates produce no per-file event. No inspection,
@@ -838,7 +842,8 @@ After a secret-injected `authsia exec` / secret-bearing `workspace run` child
 exits, Authsia may record `injectedExec` events with `secret-detected`,
 `inspection-failed`, `scrubbed`, `verification-failed`, or
 `remediation-failed`. The first two are legacy detect-only evidence; the others
-distinguish successful replacement and cleanup failures.
+distinguish successful replacement and cleanup failures after a confirmed secret
+match. Binary, non-UTF-8, oversized, and symbolic-link writes produce no event.
 They store path metadata, not file contents or injected token
 bytes. Evidence persistence is best-effort, and outside-root candidates do not
 produce a per-file event.

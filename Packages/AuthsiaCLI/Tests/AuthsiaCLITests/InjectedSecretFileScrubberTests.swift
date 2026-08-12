@@ -413,15 +413,14 @@ struct InjectedSecretFileScrubberTests {
         )
 
         #expect(results.count == 1)
-        #expect(results[0].outcome == .verificationFailed)
-        #expect(results[0].event?.status == .failed)
-        #expect(results[0].event?.action == .modify)
-        #expect(results[0].event?.detail == InjectedSecretFileActivityDetail.verificationFailed)
+        #expect(results[0].outcome == .noMatch)
+        #expect(results[0].event == nil)
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
         #expect(try String(contentsOfFile: targetPath, encoding: .utf8) == original)
     }
 
-    @Test("detect-only records unsafe symbolic links as incomplete inspection")
-    func detectOnlyRejectsSymbolicLinksAsInspectionFailure() throws {
+    @Test("detect-only skips symbolic links without an inspection finding")
+    func detectOnlySkipsSymbolicLinksWithoutFinding() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -443,9 +442,9 @@ struct InjectedSecretFileScrubberTests {
             mode: .detectOnly
         )
 
-        #expect(results.map(\.outcome) == [.verificationFailed])
-        #expect(results[0].event?.status == .failed)
-        #expect(results[0].event?.detail == "inspection-failed")
+        #expect(results.map(\.outcome) == [.noMatch])
+        #expect(results[0].event == nil)
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
         #expect(try String(contentsOfFile: targetPath, encoding: .utf8) == original)
     }
 
@@ -500,9 +499,9 @@ struct InjectedSecretFileScrubberTests {
         )
 
         #expect(results.count == 1)
-        #expect(results[0].outcome == .verificationFailed)
-        #expect(results[0].event?.status == .failed)
-        #expect(results[0].event?.detail == InjectedSecretFileActivityDetail.verificationFailed)
+        #expect(results[0].outcome == .noMatch)
+        #expect(results[0].event == nil)
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
         #expect(try String(contentsOfFile: path, encoding: .utf8) == original)
     }
 
@@ -526,10 +525,89 @@ struct InjectedSecretFileScrubberTests {
         )
 
         #expect(results.count == 1)
-        #expect(results[0].outcome == .verificationFailed)
-        #expect(results[0].event?.status == .failed)
-        #expect(results[0].event?.detail == InjectedSecretFileActivityDetail.verificationFailed)
+        #expect(results[0].outcome == .noMatch)
+        #expect(results[0].event == nil)
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
         #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == original)
+    }
+
+    @Test("invalid UTF-8 writes are skipped without a cleanup finding")
+    func skipsInvalidUTF8WritesWithoutFinding() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = "utf8-skip-secret-value"
+        let path = directory.appendingPathComponent("notes.o").path
+        var original = Data("leak=\(secret)\n".utf8)
+        original.append(0xFF)
+        try original.write(to: URL(fileURLWithPath: path))
+
+        let results = InjectedSecretFileScrubber.scrub(
+            paths: [path],
+            masker: OutputMasker(secrets: [secret]),
+            allowedRoots: [directory.path],
+            context: scrubContext(directory: directory),
+            mode: .remediate
+        )
+
+        #expect(results.map(\.outcome) == [.noMatch])
+        #expect(results[0].event == nil)
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == original)
+    }
+
+    @Test("oversized writes are skipped without a cleanup finding")
+    func skipsOversizedWritesWithoutFinding() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = "oversized-skip-secret"
+        let path = directory.appendingPathComponent("blob.bin").path
+        let original = "leak=\(secret)\n"
+        try original.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let results = InjectedSecretFileScrubber.scrub(
+            paths: [path],
+            masker: OutputMasker(secrets: [secret]),
+            allowedRoots: [directory.path],
+            context: scrubContext(directory: directory),
+            maxBytes: 8,
+            mode: .remediate
+        )
+
+        #expect(results.map(\.outcome) == [.noMatch])
+        #expect(results[0].event == nil)
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == original)
+    }
+
+    @Test("symbolic links are skipped without a cleanup finding")
+    func skipsSymbolicLinksWithoutFinding() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = "symlink-skip-secret-value"
+        let targetPath = directory.appendingPathComponent("target.txt").path
+        let linkPath = directory.appendingPathComponent("link.txt").path
+        let original = "leak=\(secret)\n"
+        try original.write(toFile: targetPath, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            atPath: linkPath,
+            withDestinationPath: targetPath
+        )
+
+        let results = InjectedSecretFileScrubber.scrub(
+            paths: [linkPath],
+            masker: OutputMasker(secrets: [secret]),
+            allowedRoots: [directory.path],
+            context: scrubContext(directory: directory),
+            mode: .remediate
+        )
+
+        #expect(results.map(\.outcome) == [.noMatch])
+        #expect(results[0].event == nil)
+        #expect(InjectedSecretFileCleanupStatus.forRequestedCleanup(results) == .complete)
+        #expect(try String(contentsOfFile: targetPath, encoding: .utf8) == original)
     }
 
     @Test("descriptor rewrite preserves ACL, xattrs, flags, and exact timestamps")
@@ -961,15 +1039,18 @@ struct InjectedSecretFileScrubberTests {
         let secret = "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
         let directory = parent.appendingPathComponent("workspace-\(secret)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let targetPath = directory.appendingPathComponent("target.txt").path
-        let linkPath = directory.appendingPathComponent("link-\(secret).txt").path
-        try "leak=\(secret)\n".write(toFile: targetPath, atomically: true, encoding: .utf8)
-        try FileManager.default.createSymbolicLink(atPath: linkPath, withDestinationPath: targetPath)
+        let path = directory.appendingPathComponent("link-\(secret).txt").path
+        let aliasPath = directory.appendingPathComponent("alias.txt").path
+        try "leak=\(secret)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.linkItem(
+            at: URL(fileURLWithPath: path),
+            to: URL(fileURLWithPath: aliasPath)
+        )
         let storeURL = parent.appendingPathComponent("events.jsonl")
         let store = AgentFileActivityStore(fileURL: storeURL)
 
         let results = InjectedSecretFileScrubber.scrub(
-            paths: [linkPath],
+            paths: [path],
             masker: OutputMasker(secrets: [secret]),
             allowedRoots: [directory.path],
             context: InjectedSecretFileScrubContext(
@@ -1002,16 +1083,16 @@ struct InjectedSecretFileScrubberTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let secret = "BCBCBCBC-BCBC-4CBC-8CBC-BCBCBCBCBCBC"
-        let targetPath = directory.appendingPathComponent("target.txt").path
-        let linkPath = directory.appendingPathComponent("link.txt").path
+        let path = directory.appendingPathComponent("target.txt").path
+        let aliasPath = directory.appendingPathComponent("alias.txt").path
         try "leak=\(secret)\n".write(
-            toFile: targetPath,
+            toFile: path,
             atomically: true,
             encoding: .utf8
         )
-        try FileManager.default.createSymbolicLink(
-            atPath: linkPath,
-            withDestinationPath: targetPath
+        try FileManager.default.linkItem(
+            at: URL(fileURLWithPath: path),
+            to: URL(fileURLWithPath: aliasPath)
         )
         let firstGrantID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
         let secondGrantID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
@@ -1020,7 +1101,7 @@ struct InjectedSecretFileScrubberTests {
         )
 
         let results = InjectedSecretFileScrubber.scrub(
-            paths: [linkPath],
+            paths: [path],
             masker: OutputMasker(secrets: [secret]),
             allowedRoots: [directory.path],
             context: InjectedSecretFileScrubContext(
@@ -1190,7 +1271,7 @@ struct InjectedSecretFileScrubberTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         var prunedPaths: [String] = []
-        for name in [".git", ".build", "DerivedData", "node_modules"] {
+        for name in [".git", ".build", "build", "DerivedData", "node_modules"] {
             let generated = directory.appendingPathComponent(name, isDirectory: true)
             try FileManager.default.createDirectory(
                 at: generated,
@@ -1794,14 +1875,14 @@ struct InjectedSecretFileScrubberTests {
         let linkPath = directory.appendingPathComponent(
             "link-\(shortSecret)-\(eligibleSecret).txt"
         ).path
-        try "original remains unchanged\n".write(
-            toFile: targetPath,
+        try "leak=\(eligibleSecret)\n".write(
+            toFile: linkPath,
             atomically: true,
             encoding: .utf8
         )
-        try FileManager.default.createSymbolicLink(
-            atPath: linkPath,
-            withDestinationPath: targetPath
+        try FileManager.default.linkItem(
+            at: URL(fileURLWithPath: linkPath),
+            to: URL(fileURLWithPath: targetPath)
         )
         let watcher = InjectedFileTouchWatcher(
             roots: [directory.path],
@@ -1838,8 +1919,8 @@ struct InjectedSecretFileScrubberTests {
 
         #expect(result.fileCleanupStatus == .incomplete)
         #expect(
-            try String(contentsOfFile: targetPath, encoding: .utf8)
-                == "original remains unchanged\n"
+            try String(contentsOfFile: linkPath, encoding: .utf8)
+                == "leak=\(eligibleSecret)\n"
         )
         let persisted = try String(contentsOf: activityURL, encoding: .utf8)
         #expect(!persisted.contains(shortSecret))
@@ -1878,9 +1959,9 @@ struct InjectedSecretFileScrubberTests {
             atomically: true,
             encoding: .utf8
         )
-        let targetPath = directory.appendingPathComponent("target.txt").path
-        try "original remains unchanged\n".write(
-            toFile: targetPath,
+        let secretPath = directory.appendingPathComponent("secret.txt").path
+        try "leak=\(injectedSecrets[0])\n".write(
+            toFile: secretPath,
             atomically: true,
             encoding: .utf8
         )
@@ -1888,9 +1969,9 @@ struct InjectedSecretFileScrubberTests {
             directory.appendingPathComponent("link-\($0).txt").path
         }
         for path in failurePaths {
-            try FileManager.default.createSymbolicLink(
-                atPath: path,
-                withDestinationPath: targetPath
+            try FileManager.default.linkItem(
+                at: URL(fileURLWithPath: secretPath),
+                to: URL(fileURLWithPath: path)
             )
         }
         let storeURL = directory.appendingPathComponent("files.jsonl")
@@ -2518,7 +2599,7 @@ struct InjectedSecretFileScrubberTests {
         #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
-    @Test("default detection plus inspection failure emits one combined warning")
+    @Test("default detection with an ineligible write keeps a detection warning")
     func defaultDetectionAndInspectionFailureEmitCombinedWarning() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -2570,10 +2651,9 @@ struct InjectedSecretFileScrubberTests {
         #expect(result.fileCleanupStatus == .incomplete)
         #expect(
             warning
-                == "Warning: Authsia detected an injected secret in an observed file and left "
-                    + "it unchanged, and secret-file inspection was incomplete; review Access "
-                    + "Center. Automatic replacement was unavailable. "
-                    + "The child exit status was preserved.\n"
+                == "Warning: Authsia detected an injected secret in an observed file and "
+                    + "left it unchanged; review Access Center. Automatic replacement was "
+                    + "unavailable. The child exit status was preserved.\n"
         )
         #expect(warning.filter { $0 == "\n" }.count == 1)
         #expect(!warning.contains(secret))
@@ -2589,14 +2669,11 @@ struct InjectedSecretFileScrubberTests {
             $0.detail == InjectedSecretFileActivityDetail.secretDetected
                 && $0.status == .inferred
         })
-        #expect(events.contains {
-            $0.detail == "inspection-failed"
-                && $0.status == .failed
-        })
+        #expect(!events.contains { $0.detail == "inspection-failed" })
     }
 
-    @Test("default unsafe symlink reports incomplete inspection without confirming a secret")
-    func defaultUnsafeSymlinkReportsIncompleteInspection() throws {
+    @Test("default unsafe symlink is skipped without an inspection warning")
+    func defaultUnsafeSymlinkIsSkippedWithoutWarning() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -2637,19 +2714,13 @@ struct InjectedSecretFileScrubberTests {
         )
 
         #expect(result.exitCode == 0)
-        #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file inspection was incomplete; review Access "
-                    + "Center. No secret presence was confirmed. Child exit preserved.\n"
-        )
-        let events = try AgentFileActivityStore(fileURL: activityURL).loadAll()
-        #expect(events.map(\.detail) == ["inspection-failed"])
-        #expect(events.map(\.status) == [.failed])
+        #expect(result.fileCleanupStatus == .complete)
+        #expect(warning.isEmpty)
+        #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
-    @Test("explicit cleanup keeps unsafe symlink cleanup failure semantics")
-    func explicitCleanupUnsafeSymlinkReportsCleanupFailure() throws {
+    @Test("explicit cleanup skips unsafe symlinks without a cleanup warning")
+    func explicitCleanupUnsafeSymlinkIsSkippedWithoutWarning() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -2691,15 +2762,9 @@ struct InjectedSecretFileScrubberTests {
         )
 
         #expect(result.exitCode == 0)
-        #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file cleanup was incomplete; review Access Center. "
-                    + "The child exit status was preserved.\n"
-        )
-        let events = try AgentFileActivityStore(fileURL: activityURL).loadAll()
-        #expect(events.map(\.detail) == [InjectedSecretFileActivityDetail.verificationFailed])
-        #expect(events.map(\.status) == [.failed])
+        #expect(result.fileCleanupStatus == .complete)
+        #expect(warning.isEmpty)
+        #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
     @Test("explicit cleanup reports a replaced observation root as incomplete cleanup")
@@ -2859,7 +2924,7 @@ struct InjectedSecretFileScrubberTests {
         #expect(!FileManager.default.fileExists(atPath: root.path))
     }
 
-    @Test("default oversized file reports incomplete inspection without confirming a secret")
+    @Test("default oversized file is skipped without an inspection warning")
     func defaultOversizedFileReportsIncompleteInspection() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -2903,24 +2968,15 @@ struct InjectedSecretFileScrubberTests {
 
         #expect(result.terminationStatus == 0)
         #expect(result.exitCode == 0)
-        #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file inspection was incomplete; review Access "
-                    + "Center. No secret presence was confirmed. Child exit preserved.\n"
-        )
+        #expect(result.fileCleanupStatus == .complete)
+        #expect(warning.isEmpty)
         #expect(!warning.contains(secret))
         #expect(!warning.contains(path))
-
-        let events = try AgentFileActivityStore(fileURL: activityURL).loadAll()
-        #expect(events.contains {
-            $0.status == .failed
-                && $0.detail == "inspection-failed"
-        })
+        #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
-    @Test("explicit cleanup keeps oversized file cleanup failure semantics")
-    func explicitCleanupOversizedFileReportsCleanupFailure() throws {
+    @Test("explicit cleanup skips oversized files without a cleanup warning")
+    func explicitCleanupOversizedFileIsSkippedWithoutWarning() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -2965,17 +3021,9 @@ struct InjectedSecretFileScrubberTests {
         )
 
         #expect(result.exitCode == 0)
-        #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file cleanup was incomplete; review Access Center. "
-                    + "The child exit status was preserved.\n"
-        )
-        let events = try AgentFileActivityStore(fileURL: activityURL).loadAll()
-        #expect(events.contains {
-            $0.status == .failed
-                && $0.detail == InjectedSecretFileActivityDetail.verificationFailed
-        })
+        #expect(result.fileCleanupStatus == .complete)
+        #expect(warning.isEmpty)
+        #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
     @Test("default watcher start failure reports incomplete inspection")
@@ -3081,6 +3129,78 @@ struct InjectedSecretFileScrubberTests {
         #expect(!InjectedFileTouchWatcher.shouldRecordEvent(directory | modified))
         #expect(!InjectedFileTouchWatcher.shouldRecordEvent(file | removed))
         #expect(!InjectedFileTouchWatcher.shouldRecordEvent(file))
+    }
+
+    @Test("live touch watcher ignores generated directory writes")
+    func liveTouchWatcherIgnoresGeneratedDirectoryWrites() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let buildDir = directory.appendingPathComponent("build", isDirectory: true)
+        let gitDir = directory.appendingPathComponent(".git", isDirectory: true)
+        try FileManager.default.createDirectory(at: buildDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        let objectPath = buildDir.appendingPathComponent("foo.o").path
+        let gitPath = gitDir.appendingPathComponent("HEAD").path
+        let sourcePath = directory.appendingPathComponent("notes.txt").path
+        try Data([0xCF, 0xFA, 0xED, 0xFE]).write(to: URL(fileURLWithPath: objectPath))
+        try "ref: refs/heads/main\n".write(toFile: gitPath, atomically: true, encoding: .utf8)
+        try "ok\n".write(toFile: sourcePath, atomically: true, encoding: .utf8)
+
+        let watcher = InjectedFileTouchWatcher(
+            roots: [directory.path],
+            startOverride: { true }
+        )
+        watcher.recordForTesting(objectPath)
+        watcher.recordForTesting(gitPath)
+        watcher.recordForTesting(sourcePath)
+        let observation = watcher.stop()
+        let standardizedSource = URL(fileURLWithPath: sourcePath).standardizedFileURL.path
+
+        #expect(observation.paths == [standardizedSource])
+        #expect(!observation.isIncomplete)
+    }
+
+    @Test("ineligible object-file writes do not warn or persist findings")
+    func ineligibleObjectFileWritesDoNotWarnOrPersistFindings() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let secret = "eligible-secret-value"
+        let objectPath = directory.appendingPathComponent("foo.o").path
+        let notesPath = directory.appendingPathComponent("notes.txt").path
+        try Data([0xCF, 0xFA, 0xED, 0xFE, 0xFF]).write(to: URL(fileURLWithPath: objectPath))
+        try "ordinary text\n".write(toFile: notesPath, atomically: true, encoding: .utf8)
+        let watcher = InjectedFileTouchWatcher(
+            roots: [directory.path],
+            startOverride: { true }
+        )
+        watcher.recordForTesting(objectPath)
+        watcher.recordForTesting(notesPath)
+        let activityURL = directory.appendingPathComponent("files.jsonl")
+        let error = Pipe()
+
+        let result = Exec.runChildProcess(
+            command: ["/bin/sh", "-c", "exit 0"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            masker: OutputMasker(secrets: [secret]),
+            fileCleanupMasker: OutputMasker(exactSecrets: [secret]),
+            cleanupSecretFiles: true,
+            standardError: error.fileHandleForWriting,
+            fileScrubContext: scrubContext(directory: directory),
+            fileActivityStore: AgentFileActivityStore(fileURL: activityURL),
+            fileTouchWatcher: watcher
+        )
+        try error.fileHandleForWriting.close()
+        let warning = String(
+            decoding: (try error.fileHandleForReading.readToEnd()) ?? Data(),
+            as: UTF8.self
+        )
+
+        #expect(result.exitCode == 0)
+        #expect(result.fileCleanupStatus == .complete)
+        #expect(warning.isEmpty)
+        #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
     @Test("FSEvents loss and invalidation flags require incomplete cleanup")

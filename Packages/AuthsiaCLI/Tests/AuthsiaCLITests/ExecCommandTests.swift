@@ -240,10 +240,13 @@ struct ExecCommandTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let secret = UUID().uuidString
-        let path = directory.appendingPathComponent("oversized.txt").path
-        var oversized = Data("TOKEN=\(secret)\n".utf8)
-        oversized.append(Data(repeating: 0x41, count: InjectedSecretFileScrubber.defaultMaxBytes))
-        try oversized.write(to: URL(fileURLWithPath: path))
+        let path = directory.appendingPathComponent("secret.txt").path
+        let aliasPath = directory.appendingPathComponent("alias.txt").path
+        try "TOKEN=\(secret)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.linkItem(
+            at: URL(fileURLWithPath: path),
+            to: URL(fileURLWithPath: aliasPath)
+        )
 
         let watcher = InjectedFileTouchWatcher(
             roots: [directory.path],

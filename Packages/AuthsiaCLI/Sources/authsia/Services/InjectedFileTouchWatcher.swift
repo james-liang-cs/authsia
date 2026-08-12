@@ -69,6 +69,13 @@ struct InjectedFileTouchFallbackResult: Equatable, Sendable {
 /// Collects created/modified paths under workspace + temp roots while a secret-injected child runs.
 final class InjectedFileTouchWatcher: @unchecked Sendable {
     static let defaultMaximumCandidatePaths = 10_000
+    static let prunedDirectoryNames: Set<String> = [
+        ".git",
+        ".build",
+        "build",
+        "DerivedData",
+        "node_modules",
+    ]
 
     private let roots: [String]
     private let rootBindings: [InjectedFileTouchRootBinding]
@@ -320,6 +327,7 @@ final class InjectedFileTouchWatcher: @unchecked Sendable {
     private func note(_ path: String) {
         let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
         guard !standardized.isEmpty else { return }
+        guard !Self.isPrunedGeneratedPath(standardized, relativeTo: roots) else { return }
         lock.lock()
         if !touched.contains(standardized) {
             if touched.count < maximumCandidatePaths {
@@ -430,12 +438,7 @@ final class InjectedFileTouchWatcher: @unchecked Sendable {
             .isRegularFileKey,
             .contentModificationDateKey,
         ]
-        let prunedDirectoryNames: Set<String> = [
-            ".git",
-            ".build",
-            "DerivedData",
-            "node_modules",
-        ]
+        let prunedDirectoryNames = Self.prunedDirectoryNames
         var results = Set<String>()
         var visitedEntries = 0
         var isIncomplete = false
@@ -594,6 +597,21 @@ final class InjectedFileTouchWatcher: @unchecked Sendable {
             .resolvingSymlinksInPath()
             .standardizedFileURL
             .path
+    }
+
+    static func isPrunedGeneratedPath(_ path: String, relativeTo roots: [String]) -> Bool {
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        for root in roots {
+            let standardizedRoot = URL(fileURLWithPath: root).standardizedFileURL.path
+            guard isPath(standardized, under: standardizedRoot) else { continue }
+            let pathComponents = URL(fileURLWithPath: standardized).pathComponents
+            let rootComponents = URL(fileURLWithPath: standardizedRoot).pathComponents
+            let relativeDirectories = pathComponents.dropFirst(rootComponents.count).dropLast()
+            if relativeDirectories.contains(where: { prunedDirectoryNames.contains($0) }) {
+                return true
+            }
+        }
+        return false
     }
 
     private static func isPath(_ path: String, under root: String) -> Bool {

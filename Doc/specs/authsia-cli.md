@@ -2349,23 +2349,27 @@ safety checks; a valid containing workspace and trusted temporary directories ar
 Roots are rejected when they are filesystem-wide, home-wide, mount roots, or otherwise too broad.
 Their device/inode identity is captured before launch and revalidated during fallback and at every
 destructive boundary, so a missing or replaced root is never treated as the selected root.
-Filesystem events provide observed file paths; directory events are ignored. Event collection and
+Filesystem events provide observed file paths; directory events and generated
+trees (`.git`, `.build`, `build`, `DerivedData`, `node_modules`) relative to each
+watch root are ignored. Event collection and
 final inspection are capped at 10,000 unique paths, inspection reads at most 32 MiB of file content
 across the batch, and no additional candidate starts after one monotonic second. Inspection is
 incomplete when remaining work is blocked by one of these caps. A separate post-exit
 high-signal-name fallback is bounded across deduplicated roots to 10,000 visited entries or one
-monotonic second and prunes `.git`, `.build`, `DerivedData`, and `node_modules`. Discovery remains
+monotonic second and prunes the same generated directories. Discovery remains
 best-effort: a missed ordinary-file event can leave that file unexamined without a warning. The
 fallback runs only when filesystem event observation fails to start. Once event observation starts,
 inspection uses only event-reported candidates; event loss or root-integrity failure makes
 inspection incomplete without starting a directory scan.
 
 Eligible candidates are within identity-bound roots, regular single-link files, valid UTF-8, no
-larger than 2 MiB, and stable during verification. A completed no-match inspection is quiet. If
-bounded inspection cannot complete,
-Authsia may record `inspection-failed` and the Review finding `Secret-file inspection incomplete`;
-that finding explicitly does not confirm secret presence. A combined detection plus inspection
-failure still produces only one warning.
+larger than 2 MiB, and stable during verification. A completed no-match inspection is quiet.
+Binary, non-UTF-8, oversized, and symbolic-link writes are skipped without a per-file event,
+finding, or CLI warning. `verification-failed` and `remediation-failed` are recorded only after a
+secret match is confirmed and rewrite or verify cannot complete. Watcher health failures and
+path/byte/time budget exhaustion can still produce a CLI warning without a per-file event or
+per-grant finding. Legacy detect-only releases may persist `inspection-failed`; that finding
+explicitly does not confirm secret presence.
 
 For every mediated run, each safely verified eligible exact or supported transformed match is
 replaced in place with `<concealed by authsia>`, regardless of filename. Replacement changes only
@@ -2382,9 +2386,9 @@ loss between truncation, writing, and restoration can therefore leave partial or
 contents; the rewrite is not crash-atomic.
 
 Cleanup failures may persist `verification-failed` or `remediation-failed` evidence and the Review
-finding `Secret-file cleanup incomplete`. Legacy confirmed detections, incomplete inspections,
-successful scrubs, and cleanup failures are separate findings. Evidence persistence is best-effort,
-so a CLI warning may occur without a finding.
+finding `Secret-file cleanup incomplete` only after a secret match is confirmed. Legacy confirmed
+detections, incomplete inspections, successful scrubs, and cleanup failures are separate findings.
+Evidence persistence is best-effort, so a CLI warning may occur without a finding.
 Outside-root candidates have no per-file event.
 
 Before persistence, injected-exec path, working-directory, and workspace metadata is redacted using
