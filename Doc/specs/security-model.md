@@ -5,6 +5,7 @@
 - [How It Works In Brief](#how-it-works-in-brief)
 - [Security Goals](#security-goals)
 - [Trust Boundaries](#trust-boundaries)
+- [Keychain Storage And Access Control](#keychain-storage-and-access-control)
 - [Security Flow](#security-flow)
 - [Direct Bridge Access](#direct-bridge-access)
 - [Caller Classification](#caller-classification)
@@ -67,7 +68,7 @@ For detailed JIT grant behavior, see [`jit-agent-grants.md`](jit-agent-grants.md
 
 | Boundary | Trusted side | Untrusted or less-trusted side | Main gate |
 | --- | --- | --- | --- |
-| Vault Keychain | `Authsia.app` and signed `AuthsiaHeadless.app` | CLI, shells, IDEs, scripts, tools | App Keychain entitlements |
+| Vault Keychain | `Authsia.app` and signed `AuthsiaHeadless.app` | CLI, shells, IDEs, scripts, tools | Data protection keychain, gated by the signed `keychain-access-groups` entitlement and shared access group |
 | Bridge XPC | `Authsia.Bridge` headless role | Local processes in the user session | Code signature or bundled CLI path validation |
 | CLI request policy | `AuthsiaBridgeHost.XPCRequestHandler` | CLI-provided request context and query data | CLI access switch, per-item CLI flag, session, approval, JIT, automation credentials |
 | Human session | Bridge session manager | Repeated CLI invocations | Terminal/session-scoped token and replay checks |
@@ -78,6 +79,52 @@ For detailed JIT grant behavior, see [`jit-agent-grants.md`](jit-agent-grants.md
 The reusable gates and headless runtime mechanics are owned by
 `Packages/AuthsiaBridgeHost`. Private app code supplies approval and passphrase
 UI through injected protocols; it does not replace the package policy checks.
+
+## Keychain Storage And Access Control
+
+Vault secrets, SSH private keys, and OTP seeds are Keychain items. "The Keychain"
+on macOS is three separate stores with different enforcement, and which store a
+record lands in decides what can read it outside Authsia.
+
+Every local write sets `kSecUseDataProtectionKeychain` and the shared access
+group read from the signed `keychain-access-groups` entitlement, at
+`kSecAttrAccessibleWhenUnlocked`. `AuthsiaHeadless.app` carries the same shared
+group alongside its own, which is how the Bridge and SSH-agent roles reach the
+app's records.
+
+| Store | When Authsia writes there | Enforcement | Readable by `security(1)` | Shown in Keychain Access |
+| --- | --- | --- | --- | --- |
+| Data protection keychain | Every local, non-synchronizable write | Code-signed entitlement and access group; no per-item ACL | No | No |
+| iCloud keychain | An added copy per write, when iCloud Keychain Sync is enabled | Apple's iCloud Keychain protection, bound to the Apple Account and its trusted devices | No | Yes, under **iCloud** |
+| File-based login keychain | Only as a fallback, when a data-protection write returns `errSecMissingEntitlement` | Per-item ACL the user can widen to "Always Allow" | **Yes** | Yes |
+
+The file-based login keychain is the weak one. Its per-item ACL is a prompt the
+user can answer permanently, and once answered, `security find-generic-password -w`
+prints the raw secret to any same-user process — no Bridge, no approval, no audit
+record. Records reach that store only when the entitlement is unavailable, which
+in practice means an unsigned or improperly provisioned build.
+
+The other two stores are `securityd`-managed and absent from the `security(1)`
+search list, so the legacy `SecKeychain*` API that `security(1)` uses cannot reach
+them at all. Access there is decided by the caller's code signature, not by a
+prompt a user can answer once and forget.
+
+Reads try the data protection store first and the file-based store second, so a
+record stranded by an earlier entitlement failure still resolves. Read-time
+backfill rewrites a record only when it was found under a legacy *service name*;
+a record found in the file-based store under the current service name is returned
+as-is and stays in that weaker store, where it remains exportable until removed.
+
+Enabling iCloud Keychain Sync does not move existing records. It adds a second,
+synchronizable copy of each subsequent write. Synchronizable items do not carry
+`kSecUseDataProtectionKeychain`; they live in the iCloud keychain, replicate to
+the other devices on the Apple Account, and appear in Keychain Access under
+**iCloud**. Authsia sets no `kSecAttrAccessControl` on any item, because a
+user-presence check would break unattended Bridge and SSH-agent operation, so a
+user who authenticates to Keychain Access can reveal a synced value directly.
+That read bypasses the Bridge and produces no approval prompt and no audit
+record. See
+[What The Model Does Not Guarantee](#what-the-model-does-not-guarantee).
 
 ## Security Flow
 
@@ -437,6 +484,15 @@ of scope for app-level controls:
 - a user approving a misleading prompt
 - a same-user process invoking the signed CLI with the server-current token for
   an already-approved human session in the same terminal scope
+- a user who authenticates to Keychain Access with the login password or Touch ID
+  reading a synchronizable item's value directly, when iCloud Keychain Sync is
+  enabled; that read never reaches the Bridge, so it raises no approval prompt and
+  leaves no audit record. Local, non-synchronizable records are not exposed this
+  way; see
+  [Keychain Storage And Access Control](#keychain-storage-and-access-control)
+- values in records left in the file-based login keychain by an unsigned or
+  improperly provisioned build, which `security find-generic-password -w` can
+  export after a single ACL approval
 
 The design reduces blast radius by using CLI-enabled item flags, named-folder
 JIT subtrees or root-only scope, TTLs, terminal-scoped human sessions, audit
@@ -462,3 +518,16 @@ For non-leaking secret-read validation:
 ```sh
 authsia exec password SERVICE_ENDPOINT --shell 'test -n "$SERVICE_ENDPOINT" && echo SERVICE_ENDPOINT=set'
 ```
+
+To confirm no vault record is sitting in the file-based login keychain, where
+`security(1)` could export it. A correctly provisioned install reports `0`; a
+non-zero count means records were written by a build without the entitlement and
+are still exportable:
+
+```sh
+security dump-keychain | grep -c '"svce"<blob>="com.authsia.vault"'
+```
+
+`dump-keychain` without `-d` prints attributes only, never secret values. It also
+cannot see the data protection or iCloud stores, so a `0` here is evidence about
+the file-based keychain alone.
