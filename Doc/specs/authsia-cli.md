@@ -1,5 +1,9 @@
 # Authsia CLI Feature Spec (XPC Bridge Architecture)
 
+Do not load this whole file. Use the [Table of Contents](#table-of-contents)
+or [Command Summary](#command-summary). This is the public publication copy;
+the private Authenticator working copy is `Doc/specs/authsia-cli.md`.
+
 ## Table of Contents
 
 - [Overview](#overview)

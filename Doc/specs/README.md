@@ -14,3 +14,6 @@ Private app operations (build, packaging, release, LaunchAgent repair, and
 manual verification runbooks) stay in the private application's `Doc/ops/`.
 Private-only product surfaces such as Workspace Center UI contracts stay in the
 private application's `Doc/specs/`.
+
+When this tree is the Authenticator gitlink, follow the owner path on the
+parent route card before editing a spec here.
