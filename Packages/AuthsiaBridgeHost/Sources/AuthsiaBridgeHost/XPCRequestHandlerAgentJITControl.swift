@@ -171,13 +171,9 @@ extension XPCRequestHandler {
     }
 
     /// Notifies the app (a separate process) that the JIT grant set changed so Access
-    /// Center refreshes immediately instead of waiting for its periodic poll. Mirrors the
-    /// `.agentLeakIncidentDidRecord` distributed-notification pattern.
+    /// Center refreshes immediately instead of waiting for its periodic poll.
     func postAgentJITGrantDidChange() {
-        DistributedNotificationCenter.default().post(
-            name: .agentJITGrantDidChange,
-            object: nil
-        )
+        AccessCenterActivityNotifier.postGrantDidChange()
     }
 
     private func recordGrantRevocation(

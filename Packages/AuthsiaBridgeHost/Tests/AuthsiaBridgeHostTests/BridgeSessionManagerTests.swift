@@ -18,6 +18,37 @@ final class BridgeSessionManagerTests: XCTestCase {
         super.tearDown()
     }
 
+    #if os(macOS)
+    func testCreatingSessionBroadcastsAccessCenterActivityChange() throws {
+        let expected = expectation(description: "Access Center activity change was broadcast")
+        let observer = observeAccessCenterActivity { expected.fulfill() }
+        defer { DistributedNotificationCenter.default().removeObserver(observer) }
+
+        _ = try makeManager().createSession(
+            ttlSeconds: 60,
+            scope: "tty:/dev/ttys001:sid:123"
+        )
+
+        wait(for: [expected], timeout: 1)
+    }
+
+    func testInvalidatingSessionBroadcastsAccessCenterActivityChange() throws {
+        let manager = makeManager()
+        _ = try manager.createSession(
+            ttlSeconds: 60,
+            scope: "tty:/dev/ttys001:sid:123"
+        )
+
+        let expected = expectation(description: "Access Center activity change was broadcast")
+        let observer = observeAccessCenterActivity { expected.fulfill() }
+        defer { DistributedNotificationCenter.default().removeObserver(observer) }
+
+        manager.invalidate()
+
+        wait(for: [expected], timeout: 1)
+    }
+    #endif
+
     func testActiveSessionsExposeScopeAndExpiryWithoutToken() throws {
         let scope = "tty:/dev/ttys001:sid:123"
         let manager = makeManager()
@@ -321,6 +352,21 @@ final class BridgeSessionManagerTests: XCTestCase {
     private func makeManager() -> BridgeSessionManager {
         BridgeSessionManager(sessionStatusFileURL: statusFileURL, terminalScopeIsUsable: { _ in true })
     }
+
+    #if os(macOS)
+    private func observeAccessCenterActivity(onMatch: @escaping @Sendable () -> Void) -> NSObjectProtocol {
+        DistributedNotificationCenter.default().addObserver(
+            forName: .accessCenterActivityDidChange,
+            object: AccessCenterActivityNotifier.objectName,
+            queue: .main
+        ) { notification in
+            if let sourcePID = notification.userInfo?["pid"] as? Int,
+               sourcePID == ProcessInfo.processInfo.processIdentifier {
+                onMatch()
+            }
+        }
+    }
+    #endif
 
     private nonisolated(unsafe) static let iso8601: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()

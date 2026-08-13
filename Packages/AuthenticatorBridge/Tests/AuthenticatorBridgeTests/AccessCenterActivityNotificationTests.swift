@@ -3,6 +3,20 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class AccessCenterActivityNotificationTests: XCTestCase {
+    func testAccessCenterChangeSignalsDeliverImmediately() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/AuthenticatorBridge/AccessCenterActivityNotification.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // Queued (deliverImmediately: false) posts wait until the Bridge run loop is
+        // idle, so Access Center can miss grant/session rows until the 30s safety poll.
+        XCTAssertTrue(source.contains("deliverImmediately: true"))
+        XCTAssertTrue(source.contains("func postGrantDidChange()"))
+    }
+
     func testActivityStoresBroadcastAfterSuccessfulMutations() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("authsia-access-center-events-\(UUID().uuidString)", isDirectory: true)

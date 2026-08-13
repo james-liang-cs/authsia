@@ -41,4 +41,16 @@ final class BridgeHostCompositionTests: XCTestCase {
             "SecCSFlags(rawValue: kSecCSSigningInformation)"
         ))
     }
+
+    func testGrantChangeNotificationPostsImmediately() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/AuthsiaBridgeHost/XPCRequestHandlerAgentJITControl.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("AccessCenterActivityNotifier.postGrantDidChange()"))
+        XCTAssertFalse(source.contains("DistributedNotificationCenter.default().post("))
+    }
 }
