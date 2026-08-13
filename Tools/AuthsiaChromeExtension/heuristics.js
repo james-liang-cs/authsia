@@ -116,6 +116,19 @@
         return keywords.some(keyword => lower.includes(keyword));
     }
 
+    // HTML autocomplete is a space-separated token list, e.g.
+    // "username webauthn" on identifier-only passkey sign-in pages.
+    function autocompleteTokens(input) {
+        return String(input && input.getAttribute('autocomplete') || '')
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean);
+    }
+
+    function autocompleteHasToken(input, token) {
+        return autocompleteTokens(input).includes(token);
+    }
+
     function hasNegativeSignal(input) {
         if (!input) return false;
         return [
@@ -163,7 +176,6 @@
 
         if (hasNegativeSignal(input)) return 0;
 
-        const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
         const name = (input.getAttribute('name') || '').toLowerCase();
         const id = (input.getAttribute('id') || '').toLowerCase();
         const placeholder = (input.getAttribute('placeholder') || '').toLowerCase();
@@ -173,8 +185,8 @@
         let score = 0;
 
         // Autocomplete hints (highest priority)
-        if (autocomplete === 'username') score += WEIGHTS.autocompleteUsername;
-        if (autocomplete === 'email') score += WEIGHTS.autocompleteEmail;
+        if (autocompleteHasToken(input, 'username')) score += WEIGHTS.autocompleteUsername;
+        if (autocompleteHasToken(input, 'email')) score += WEIGHTS.autocompleteEmail;
 
         // Type hints
         if (type === 'email') score += WEIGHTS.typeEmail;
@@ -355,8 +367,9 @@
     // ============================================================================
     // A bare username/email field is only a login field when the page shows
     // login intent: a visible password field exists, or the field explicitly
-    // declares autocomplete="username" (multi-step sign-in flows). This keeps
-    // newsletter/contact/email fields from opening the menu.
+    // includes an autocomplete username token (multi-step sign-in flows,
+    // including "username webauthn"). This keeps newsletter/contact/email
+    // fields from opening the menu.
 
     function pageHasPasswordField(doc) {
         return toArray(doc.querySelectorAll('input[type="password"]'))
@@ -364,8 +377,7 @@
     }
 
     function usernameContextAllowed(input, doc) {
-        const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
-        if (autocomplete === 'username') return true;
+        if (autocompleteHasToken(input, 'username')) return true;
         return pageHasPasswordField(doc);
     }
 

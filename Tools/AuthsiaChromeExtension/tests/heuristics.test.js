@@ -530,6 +530,24 @@ function testClassifyAutocompleteUsernameWithoutPasswordContext() {
     );
 }
 
+function testClassifyUsernameWebAuthnWithoutPasswordContext() {
+    const H = loadHeuristics();
+
+    const identifierInput = createMockInput({
+        type: 'email',
+        name: 'identifier',
+        id: 'identifierId',
+        autocomplete: 'username webauthn',
+        'aria-label': 'Email or phone',
+    });
+    const doc = createMockDocument([identifierInput]);
+    assert.strictEqual(
+        H.classifyCredentialField(identifierInput, doc),
+        'username',
+        'autocomplete username webauthn should classify on identifier-only pages'
+    );
+}
+
 function testClassifyOTPFieldWithoutPasswordContext() {
     const H = loadHeuristics();
 
@@ -598,6 +616,7 @@ function run() {
     // Page-context classification
     testClassifyEmailFieldRequiresLoginContext();
     testClassifyAutocompleteUsernameWithoutPasswordContext();
+    testClassifyUsernameWebAuthnWithoutPasswordContext();
     testClassifyOTPFieldWithoutPasswordContext();
     testFindAllLoginFieldsSkipsContextlessEmailField();
 
