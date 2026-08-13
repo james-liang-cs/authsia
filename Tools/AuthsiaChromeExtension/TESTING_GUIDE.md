@@ -28,10 +28,8 @@ This guide walks you through setting up and verifying the Chrome autofill featur
 - Google Chrome installed
 - Authsia app installed and `authsia status` reports a healthy bridge
 - At least one password entry in your vault with:
-  - `isCliEnabled` set to `true`
   - A valid `website` URL
 - Optional OTP entry testing requires:
-  - `isCliEnabled` set to `true`
   - Hosts metadata matching the sign-in page, or issuer/label text that matches the site
 
 ## Step 1: Load the Chrome Extension
@@ -92,13 +90,13 @@ Open Chrome DevTools (F12) on any page, go to the Console, and check for errors 
 ### Fields not filling
 
 - Confirm `authsia status` reports a healthy bridge
-- Verify the password entry has `isCliEnabled = true`
+- CLI Access does not need to be enabled on the item
 - Check that the website URL matches the page hostname. `www.example.com` and `example.com` are treated as the same site.
 - Open DevTools Console to see any error messages
 
 ### "No match" or "Multiple matches"
 
-- The inline picker can show multiple matching CLI-enabled items for a site.
+- The inline picker can show multiple matching items for a site.
 - A direct native-host `getCredentials` request without a selected item still fails closed when multiple matches are ambiguous.
 - Check your vault for duplicate entries with the same website if a direct lookup reports ambiguity.
 
@@ -110,7 +108,6 @@ Open Chrome DevTools (F12) on any page, go to the Console, and check for errors 
 - [ ] Extension ID in manifest matches loaded extension
 - [ ] Chrome restarted after manifest installation
 - [ ] Authsia app is running
-- [ ] Test password has CLI access enabled
 - [ ] Test password website matches target page hostname
 - [ ] Login page has a visible username, password, or OTP field
 

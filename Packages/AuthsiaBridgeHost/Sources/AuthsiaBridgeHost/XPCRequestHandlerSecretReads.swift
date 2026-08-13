@@ -74,7 +74,7 @@ extension XPCRequestHandler {
                 }
 
                 // Chrome autofill uses the CLI transport but should not inherit the per-item CLI toggle.
-                guard Self.itemCLIRestrictionAllowsAccess(
+                guard itemCLIRestrictionAllowsAccess(
                     isCliEnabled: match.isCliEnabled,
                     request: bridgeRequest,
                     callerIdentity: callerIdentity
@@ -252,7 +252,7 @@ extension XPCRequestHandler {
 
                 // Check per-item CLI access before requesting approval. Chrome autofill
                 // uses the CLI transport but should not inherit the per-item CLI toggle.
-                guard Self.itemCLIRestrictionAllowsAccess(
+                guard itemCLIRestrictionAllowsAccess(
                     isCliEnabled: match.isCliEnabled,
                     request: bridgeRequest,
                     callerIdentity: callerIdentity
@@ -443,7 +443,7 @@ extension XPCRequestHandler {
                     return
                 }
 
-                guard Self.itemCLIRestrictionAllowsAccess(
+                guard itemCLIRestrictionAllowsAccess(
                     isCliEnabled: match.isCliEnabled,
                     request: bridgeRequest,
                     callerIdentity: callerIdentity

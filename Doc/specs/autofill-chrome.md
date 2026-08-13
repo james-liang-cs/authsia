@@ -58,9 +58,12 @@ Chrome Extension ←→ Native Host ←→ Authsia CLI ←→ Keychain/App
 2. **Native Host** (`Tools/AuthsiaNativeHost/`)
    - Swift binary that bridges Chrome and the CLI
    - Validates all requests
-   - Enforces `isCliEnabled` filtering
-   - Asks the app which vault items match the page host, and receives only
-     that host's non-secret metadata; it never lists the vault
+   - Resolves the app-bundled `authsia` helper without depending on a shell CLI
+     installation or Chrome's inherited `PATH`
+   - Requests signing metadata and uses only a valid same-Team-ID `authsia`
+     executable; missing or mismatched identity fails closed
+   - Asks the app for host matches rather than listing the vault itself; it
+     cannot enumerate stored items
 
 3. **CLI Integration** (`Packages/AuthsiaCLI/`)
    - `authsia` command-line tool
@@ -74,7 +77,8 @@ Chrome Extension ←→ Native Host ←→ Authsia CLI ←→ Keychain/App
 - **Inline Menu** - Popup appears when focusing login fields
 - **Smart Form Detection** - Heuristic-based username/password field identification
 - **Host Matching** - Exact and subdomain matching with security validation
-- **CLI Gating** - Only items with `isCliEnabled=true` are eligible
+- **Browser Scope** - Matching vault items are eligible regardless of their CLI
+  Access toggle because browser access is authorized separately
 - **Keyboard Navigation** - Arrow keys + Enter to select credentials
 - **Visual Feedback** - Loading, empty, and error states
 - **React/Angular Support** - Proper event dispatching for frameworks
@@ -105,8 +109,11 @@ the private app installation workflow.
 For a password to be available for autofill:
 
 1. Set a valid **Website** URL (e.g., `https://github.com`)
-2. Enable **CLI Access** toggle in the password details
-3. The website hostname must match the current page
+2. Ensure the website hostname matches the current page
+
+The password's **CLI Access** toggle does not control browser autofill. Browser
+requests instead require a host match, the signed and path-verified bundled
+native host, and a user-approved browser session.
 
 ## Security
 
@@ -129,7 +136,7 @@ For a password to be available for autofill:
 ### Security Measures
 
 - Host sanitization in both extension and native host
-- `isCliEnabled` acts as per-item allowlist
+- Browser autofill is authorized independently of the per-item CLI Access flag
 - Exact host matches preferred over subdomain matches
 - Host matching is answered without approval and only for the requested host, so
   focusing a field on a site with nothing stored raises no prompt; approval
@@ -216,7 +223,7 @@ mirrors the same rules for extension-side sanitization)
 | Issue | Solution |
 |-------|----------|
 | Menu doesn't appear | Check native host installation and extension ID match |
-| "No credentials found" | Verify `isCliEnabled=true` and website URL matches |
+| "No credentials found" | Verify the website URL or OTP hosts match the page |
 | "Multiple matches" | Remove duplicate entries for the same website |
 | Fields don't fill | Ensure Authsia app is running and unlocked |
 

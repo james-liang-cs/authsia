@@ -1076,6 +1076,106 @@ final class XPCRequestHandlerWriteTests: XCTestCase {
         #endif
     }
 
+    func testChromeNativeHostCLIBypassResolvesHelperFromParentAppBundle() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let parentApp = temporaryDirectory.appendingPathComponent("Authsia.app", isDirectory: true)
+        let nativeHostURL = parentApp.appendingPathComponent(
+            "Contents/Helpers/AuthsiaNativeHost",
+            isDirectory: false
+        )
+        let headlessApp = parentApp.appendingPathComponent(
+            "Contents/Helpers/AuthsiaHeadless.app",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: nativeHostURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: nativeHostURL)
+        try FileManager.default.createDirectory(at: headlessApp, withIntermediateDirectories: true)
+
+        let chromeRequest = BridgeRequest(
+            id: UUID(),
+            type: .getPassword,
+            query: "Disabled",
+            options: .init(field: nil, copy: false),
+            context: .init(
+                isTTY: false,
+                isPiped: true,
+                isSSH: false,
+                isCI: false,
+                timestamp: Date(),
+                requestedCommand: BridgeContext.chromeNativeHostRequestedCommand
+            )
+        )
+        let otpRequest = BridgeRequest(
+            id: UUID(),
+            type: .getOTP,
+            query: "Disabled",
+            options: .init(field: nil, copy: false),
+            context: .init(
+                isTTY: false,
+                isPiped: true,
+                isSSH: false,
+                isCI: false,
+                timestamp: Date(),
+                requestedCommand: BridgeContext.chromeNativeHostRequestedCommand
+            )
+        )
+        let expectedTeamIdentifier = "TESTTEAM123"
+        let nativeHostCaller = CallerIdentity(
+            pid: 100,
+            processName: "authsia",
+            bundleIdentifier: nil,
+            signingTeamId: nil,
+            signingIdentity: nil,
+            parentProcess: ParentProcessInfo(
+                pid: 99,
+                processName: "AuthsiaNativeHost",
+                bundleIdentifier: nil,
+                signingTeamId: expectedTeamIdentifier,
+                executablePath: nativeHostURL.path
+            )
+        )
+
+        let parentHandler = XPCRequestHandler(
+            approver: ApprovalTracker(result: true),
+            appBundlePath: parentApp.path
+        )
+        let headlessHandler = XPCRequestHandler(
+            approver: ApprovalTracker(result: true),
+            appBundlePath: headlessApp.path
+        )
+
+        XCTAssertTrue(parentHandler.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: false,
+            request: chromeRequest,
+            callerIdentity: nativeHostCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier
+        ))
+        XCTAssertTrue(parentHandler.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: false,
+            request: otpRequest,
+            callerIdentity: nativeHostCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier
+        ))
+        XCTAssertFalse(headlessHandler.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: false,
+            request: chromeRequest,
+            callerIdentity: nativeHostCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier
+        ))
+        XCTAssertFalse(headlessHandler.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: false,
+            request: otpRequest,
+            callerIdentity: nativeHostCaller,
+            expectedTeamIdentifier: expectedTeamIdentifier
+        ))
+    }
+
     func testUpdatePasswordRejectsAmbiguousExactNameWithoutMutation() async throws {
         let previousValue = UserDefaults.standard.bool(forKey: "cliAccessEnabled")
         UserDefaults.standard.set(true, forKey: "cliAccessEnabled")

@@ -133,6 +133,23 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         return true
     }
 
+    func itemCLIRestrictionAllowsAccess(
+        isCliEnabled: Bool,
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?,
+        expectedTeamIdentifier: String? = XPCListenerManager.getOurTeamIdentifier()
+    ) -> Bool {
+        Self.itemCLIRestrictionAllowsAccess(
+            isCliEnabled: isCliEnabled,
+            request: request,
+            callerIdentity: callerIdentity,
+            expectedTeamIdentifier: expectedTeamIdentifier,
+            expectedExecutableURL: ChromeNativeHostLocation.executableURL(
+                appBundle: URL(fileURLWithPath: appBundlePath)
+            )
+        )
+    }
+
     /// These default providers must be built outside the @MainActor init: closure
     /// literals in its body inherit main-actor isolation and trap in
     /// dispatch_assert_queue when the XPC queue invokes them during synchronous
