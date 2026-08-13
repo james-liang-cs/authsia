@@ -132,4 +132,52 @@ final class AgentFileActivityInferrerTests: XCTestCase {
         XCTAssertEqual(first.map(\.id), second.map(\.id))
         XCTAssertEqual(first.first?.path, "/tmp/project/.env")
     }
+
+    /// Access Center reloads this merge on every grant and session signal, so it has to
+    /// stay proportional to the evidence it reads. Matching each inferred candidate against
+    /// every stored event made a real 5,000-command history take more than 20 seconds, which
+    /// is what the grant and Direct CLI rows were waiting on.
+    func testMergingStaysFastAcrossLargeEvidenceSets() {
+        let grantID = UUID()
+        let recordedAt = Date(timeIntervalSince1970: 100)
+        let count = 800
+
+        // Stored events record a create; the commands read the same paths, so every
+        // candidate has a distinct correlation key but still overlaps a stored event.
+        let existing = (0..<count).map { index in
+            AgentFileActivityEvent(
+                recordedAt: recordedAt,
+                agentPlatform: "claude-code",
+                agentJITGrantID: grantID,
+                captureSource: .hook,
+                workingDirectory: "/tmp/project",
+                workspaceRoot: "/tmp/project",
+                path: "/tmp/project/file-\(index).txt",
+                kind: .file,
+                action: .create,
+                status: .succeeded,
+                confidence: .direct
+            )
+        }
+        let commands = (0..<count).map { index in
+            AgentCommandEvent(
+                recordedAt: recordedAt,
+                agentPlatform: "claude-code",
+                agentJITGrantID: grantID,
+                captureSource: .hook,
+                workingDirectory: "/tmp/project",
+                executable: "cat",
+                arguments: ["cat", "file-\(index).txt"],
+                command: "cat file-\(index).txt",
+                exitStatus: 0
+            )
+        }
+
+        let start = Date()
+        let merged = AgentFileActivityInferrer.merging(commands: commands, fileEvents: existing)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(merged.count, count, "stored events survive and overlapping inferences stay suppressed")
+        XCTAssertLessThan(elapsed, 1.0, "merging \(count)x\(count) events took \(elapsed)s")
+    }
 }

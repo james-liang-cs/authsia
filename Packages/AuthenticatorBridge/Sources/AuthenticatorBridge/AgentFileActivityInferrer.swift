@@ -27,6 +27,13 @@ public enum AgentFileActivityInferrer {
         let existingKeys = Set(existingFileEvents.compactMap(correlationKey(for:)))
         var emittedKeys = existingKeys
         var inferred: [AgentFileActivityEvent] = []
+        // `overlaps` only matches events sharing a standardized path, so bucket the stored
+        // events by that path once. Rescanning every stored event per candidate made Access
+        // Center's refresh grow with commands x stored events.
+        var existingByPath: [String: [AgentFileActivityEvent]] = [:]
+        for existing in existingFileEvents {
+            existingByPath[standardizedPath(existing.path), default: []].append(existing)
+        }
 
         for command in commands {
             guard let executable = executableName(from: command),
@@ -66,7 +73,8 @@ public enum AgentFileActivityInferrer {
                 guard let key = correlationKey(for: event), !emittedKeys.contains(key) else {
                     continue
                 }
-                if existingFileEvents.contains(where: { overlaps($0, with: event) }) {
+                if let sharingPath = existingByPath[standardizedPath(event.path)],
+                   sharingPath.contains(where: { overlaps($0, with: event) }) {
                     continue
                 }
                 emittedKeys.insert(key)
@@ -214,13 +222,15 @@ public enum AgentFileActivityInferrer {
         ))
     }
 
+    private static func standardizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
     private static func overlaps(
         _ existing: AgentFileActivityEvent,
         with inferred: AgentFileActivityEvent
     ) -> Bool {
-        let existingPath = URL(fileURLWithPath: existing.path).standardizedFileURL.path
-        let inferredPath = URL(fileURLWithPath: inferred.path).standardizedFileURL.path
-        guard existingPath == inferredPath else { return false }
+        guard standardizedPath(existing.path) == standardizedPath(inferred.path) else { return false }
         if let lhs = existing.agentJITGrantID, let rhs = inferred.agentJITGrantID, lhs != rhs {
             return false
         }
