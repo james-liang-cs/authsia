@@ -307,14 +307,18 @@ public enum AgentCommandFindingDetector {
         auditRecords: [BridgeAuditRecord],
         now: Date = Date()
     ) -> [AgentCommandFinding] {
-        grantsEligibleForFindings(grants, now: now)
+        // Built once for the whole grant set: every grant would otherwise rescan all events
+        // looking for each process event's hook counterpart.
+        let hookIndex = HookEventIndex(events: events)
+        return grantsEligibleForFindings(grants, now: now)
             .flatMap { grant in
                 findings(
                     for: grant,
                     events: events,
                     fileEvents: fileEvents,
                     networkSnapshots: networkSnapshots,
-                    auditRecords: auditRecords
+                    auditRecords: auditRecords,
+                    hookIndex: hookIndex
                 )
             }
             .sorted { lhs, rhs in
@@ -369,8 +373,27 @@ public enum AgentCommandFindingDetector {
         networkSnapshots: [AgentNetworkActivityRunSnapshot],
         auditRecords: [BridgeAuditRecord]
     ) -> [AgentCommandFinding] {
+        findings(
+            for: grant,
+            events: events,
+            fileEvents: fileEvents,
+            networkSnapshots: networkSnapshots,
+            auditRecords: auditRecords,
+            hookIndex: HookEventIndex(events: events)
+        )
+    }
+
+    private static func findings(
+        for grant: AgentJITGrant,
+        events: [AgentCommandEvent],
+        fileEvents: [AgentFileActivityEvent],
+        networkSnapshots: [AgentNetworkActivityRunSnapshot],
+        auditRecords: [BridgeAuditRecord],
+        hookIndex: HookEventIndex
+    ) -> [AgentCommandFinding] {
+        let matchKey = GrantMatchKey(grant: grant)
         let grantEvents = events
-            .filter { matchesGrantOrScope(event: $0, grant: grant) }
+            .filter { matchesGrantOrScope(event: $0, key: matchKey) }
             .sorted { $0.recordedAt < $1.recordedAt }
         let grantFileEvents = AgentFileActivityQuery.events(for: grant, from: fileEvents)
         var findings: [AgentCommandFinding] = []
@@ -387,7 +410,7 @@ public enum AgentCommandFindingDetector {
             if allowsInformationalFinding(for: event, grant: grant, isExactGrantMatch: isExactGrantMatch) {
                 if event.captureSource == .process {
                     if isHookCapable(event: event, grant: grant) {
-                        if !hasMatchingHookEvent(for: event, grant: grant, events: events) {
+                        if !hasMatchingHookEvent(for: event, key: matchKey, hookIndex: hookIndex) {
                             findings.append(processOnlyCaptureFinding(for: event, grant: grant))
                         }
                     } else {
@@ -844,15 +867,48 @@ public enum AgentCommandFindingDetector {
         return date >= grant.expiresAt
     }
 
+    /// Hook events grouped by the two keys `commandsMatch` compares, so a process event
+    /// reaches its hook counterpart without rescanning every recorded event.
+    struct HookEventIndex {
+        private var byCommand: [String: [AgentCommandEvent]] = [:]
+        private var byExecutableArguments: [String: [AgentCommandEvent]] = [:]
+
+        init(events: [AgentCommandEvent]) {
+            for event in events where event.captureSource == .hook {
+                if let command = normalized(event.command) {
+                    byCommand[command, default: []].append(event)
+                }
+                byExecutableArguments[executableArgumentsKey(event), default: []].append(event)
+            }
+        }
+
+        /// Every hook event that `commandsMatch` would accept for `event`.
+        func candidates(for event: AgentCommandEvent) -> [AgentCommandEvent] {
+            var matches = normalized(event.command).flatMap { byCommand[$0] } ?? []
+            if let sameInvocation = byExecutableArguments[executableArgumentsKey(event)] {
+                matches.append(contentsOf: sameInvocation)
+            }
+            return matches
+        }
+    }
+
+    /// Encodes `commandsMatch`'s second branch: equal normalized executables (nil included)
+    /// and equal normalized arguments. The leading flag keeps a nil executable from
+    /// colliding with an executable that literally normalizes to the empty string.
+    private static func executableArgumentsKey(_ event: AgentCommandEvent) -> String {
+        let executable = normalized(event.executable)
+        return ([executable == nil ? "0" : "1", executable ?? ""] + event.arguments.map(normalizedToken))
+            .joined(separator: "\u{0}")
+    }
+
     private static func hasMatchingHookEvent(
         for event: AgentCommandEvent,
-        grant: AgentJITGrant,
-        events: [AgentCommandEvent]
+        key: GrantMatchKey,
+        hookIndex: HookEventIndex
     ) -> Bool {
-        events.contains { candidate in
-            guard candidate.captureSource == .hook else { return false }
-            guard matchesGrantOrScope(event: candidate, grant: grant) else { return false }
-            guard commandsMatch(event, candidate) else { return false }
+        // The index already guarantees `captureSource == .hook` and `commandsMatch`.
+        hookIndex.candidates(for: event).contains { candidate in
+            guard matchesGrantOrScope(event: candidate, key: key) else { return false }
             return abs(candidate.recordedAt.timeIntervalSince(event.recordedAt)) <= hookMatchWindow
         }
     }
@@ -867,43 +923,67 @@ public enum AgentCommandFindingDetector {
             && lhs.arguments.map(normalizedToken) == rhs.arguments.map(normalizedToken)
     }
 
-    private static func matchesGrantOrScope(event: AgentCommandEvent, grant: AgentJITGrant) -> Bool {
-        event.agentJITGrantID == grant.id
-            || matchesRuntimeContext(event: event, grant: grant)
-            || matchesTerminalScope(event: event, grant: grant)
+    /// The grant-side values `matchesGrantOrScope` compares, normalized once per grant
+    /// rather than once per event.
+    struct GrantMatchKey {
+        let id: UUID
+        let contextPlatform: String?
+        let contextSessionID: String?
+        let contextTurnID: String?
+        let contextAgentID: String?
+        let contextToolUseID: String?
+        let sessionScope: String?
+        let workingDirectory: String?
+
+        init(grant: AgentJITGrant) {
+            let context = grant.agentRuntimeContext
+            id = grant.id
+            contextPlatform = context.flatMap { normalizedPlatform($0.platform) }
+            contextSessionID = context.flatMap { normalized($0.sessionID) }
+            contextTurnID = context.flatMap { normalized($0.turnID) }
+            contextAgentID = context.flatMap { normalized($0.agentID) }
+            contextToolUseID = context.flatMap { normalized($0.toolUseID) }
+            sessionScope = normalized(grant.callerFingerprint.sessionScope)
+            workingDirectory = normalizedPath(grant.callerFingerprint.workingDirectory)
+        }
     }
 
-    private static func matchesRuntimeContext(event: AgentCommandEvent, grant: AgentJITGrant) -> Bool {
-        guard let context = grant.agentRuntimeContext else { return false }
-        guard let eventPlatform = normalizedPlatform(event.agentPlatform),
-              let contextPlatform = normalizedPlatform(context.platform),
+    private static func matchesGrantOrScope(event: AgentCommandEvent, key: GrantMatchKey) -> Bool {
+        event.agentJITGrantID == key.id
+            || matchesRuntimeContext(event: event, key: key)
+            || matchesTerminalScope(event: event, key: key)
+    }
+
+    private static func matchesRuntimeContext(event: AgentCommandEvent, key: GrantMatchKey) -> Bool {
+        guard let contextPlatform = key.contextPlatform,
+              let eventPlatform = normalizedPlatform(event.agentPlatform),
               eventPlatform == contextPlatform else {
             return false
         }
 
         let comparisons = [
-            (event.sessionID, context.sessionID),
-            (event.turnID, context.turnID),
-            (event.agentID, context.agentID),
-            (event.toolUseID, context.toolUseID),
+            (event.sessionID, key.contextSessionID),
+            (event.turnID, key.contextTurnID),
+            (event.agentID, key.contextAgentID),
+            (event.toolUseID, key.contextToolUseID),
         ]
         var hasMatchingIdentifier = false
         for (lhs, rhs) in comparisons {
-            guard let lhs = normalized(lhs), let rhs = normalized(rhs) else { continue }
+            guard let lhs = normalized(lhs), let rhs else { continue }
             guard lhs == rhs else { return false }
             hasMatchingIdentifier = true
         }
         return hasMatchingIdentifier
     }
 
-    private static func matchesTerminalScope(event: AgentCommandEvent, grant: AgentJITGrant) -> Bool {
+    private static func matchesTerminalScope(event: AgentCommandEvent, key: GrantMatchKey) -> Bool {
         guard let eventScope = normalized(event.terminalSessionScope),
-              let grantScope = normalized(grant.callerFingerprint.sessionScope),
+              let grantScope = key.sessionScope,
               eventScope == grantScope else {
             return false
         }
         guard let eventWorkingDirectory = normalizedPath(event.workingDirectory),
-              let grantWorkingDirectory = normalizedPath(grant.callerFingerprint.workingDirectory) else {
+              let grantWorkingDirectory = key.workingDirectory else {
             return true
         }
         return WorkspaceAuthority.matchesWorkingDirectory(

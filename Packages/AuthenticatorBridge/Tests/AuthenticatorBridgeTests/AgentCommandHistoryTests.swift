@@ -1573,4 +1573,60 @@ final class AgentCommandHistoryTests: XCTestCase {
             approvedBy: "biometric"
         )
     }
+
+    /// Access Center recomputes findings inside the snapshot loader's lock on every refresh,
+    /// so this has to stay proportional to the evidence. Matching each process event against
+    /// every recorded event made a real 5,000-command history take over 15 seconds, which
+    /// blocked every queued refresh behind it.
+    func testFindingsStayFastAcrossManyGrantsAndEvents() {
+        let now = Date(timeIntervalSince1970: 200)
+        let grantCount = 30
+        let eventsPerGrant = 40
+
+        var grants: [AgentJITGrant] = []
+        var events: [AgentCommandEvent] = []
+        for grantIndex in 0..<grantCount {
+            let grantID = UUID()
+            grants.append(makeGrant(id: grantID, expiresAt: Date(timeIntervalSince1970: 5000)))
+            for eventIndex in 0..<eventsPerGrant {
+                // A per-grant terminal scope (and no runtime identifiers) keeps each event
+                // bound to one grant, so this measures the hook lookup rather than fan-out.
+                let name = "build-\(grantIndex)-\(eventIndex)"
+                // Only half the process events get a hook twin, so the other half still
+                // produce processOnlyCapture findings and the lookup cannot be skipped.
+                var sources: [AgentCommandCaptureSource] = [.process]
+                if eventIndex.isMultiple(of: 2) { sources.append(.hook) }
+                for source in sources {
+                    events.append(AgentCommandEvent(
+                        recordedAt: Date(timeIntervalSince1970: 100),
+                        agentPlatform: "claude-code",
+                        agentJITGrantID: grantID,
+                        captureSource: source,
+                        workingDirectory: "/tmp/project",
+                        terminalSessionScope: "tty:/dev/ttys\(grantIndex):sid:\(grantIndex)",
+                        executable: name,
+                        arguments: [name, "--flag"],
+                        command: "\(name) --flag",
+                        exitStatus: 0
+                    ))
+                }
+            }
+        }
+
+        let start = Date()
+        let findings = AgentCommandFindingDetector.findings(
+            for: grants,
+            events: events,
+            auditRecords: [],
+            now: now
+        )
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertFalse(findings.isEmpty, "findings are still derived")
+        XCTAssertLessThan(
+            elapsed,
+            2.0,
+            "findings over \(grantCount) grants x \(events.count) events took \(elapsed)s"
+        )
+    }
 }
