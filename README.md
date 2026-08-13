@@ -21,7 +21,7 @@ repository. See [OPEN_SOURCE.md](OPEN_SOURCE.md) for the exact boundary and
 - `AuthsiaNativeHost`: the standalone Chrome native-messaging host under
   `Tools/AuthsiaNativeHost`.
 
-The reusable root package targets macOS 15+ and iOS 16+. Host and CLI behavior
+The reusable root package targets macOS 15+ and iOS 17+. Host and CLI behavior
 is macOS-only. The standalone native host retains its macOS 13+ package floor.
 
 ## Build and test

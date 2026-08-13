@@ -5,7 +5,7 @@ let package = Package(
     name: "Authsia",
     platforms: [
         .macOS(.v15),
-        .iOS(.v16)
+        .iOS(.v17)
     ],
     products: [
         .library(name: "AuthenticatorCore", targets: ["AuthenticatorCore"]),
