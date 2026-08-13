@@ -1092,11 +1092,18 @@ struct AgentCommandTests {
         let agents = try read("AGENTS.md", in: root)
         #expect(agents.contains("`authsia_status`"))
         #expect(agents.contains("`authsia_workspace_inspect`"))
-        #expect(agents.contains("`authsia_list` for scoped CLI-enabled Vault item metadata"))
+        #expect(agents.contains("If `.authsia/workspace.json` exists, use `authsia_workspace_inspect` to list declared `authsia://` refs from that file and managed env files, including env bindings that point at another vault folder"))
+        #expect(agents.contains("Keep declared folders as written"))
+        #expect(agents.contains("Do not call `authsia_list` to enumerate this workspace folder or any other folder"))
+        #expect(agents.contains("`authsia_list` only when there is no workspace config, or for vault metadata that is not already declared there"))
+        #expect(!agents.contains("`authsia_list` for scoped CLI-enabled Vault item metadata"))
+        #expect(!agents.contains("do not call `authsia_list` to enumerate the vault"))
         #expect(agents.contains("`authsia_exec`"))
         #expect(agents.contains("`authsia workspace run -- <command> <args>`"))
         #expect(!agents.contains("`authsia exec <type> <query> [options] -- <command> <args>`"))
-        #expect(agents.contains("In CLI fallback mode, use attributed `authsia list ...` only for non-secret metadata discovery"))
+        #expect(agents.contains("In CLI fallback mode, if `.authsia/workspace.json` exists, list declared `authsia://` refs from that file or `authsia workspace status`, including env bindings that point at another vault folder"))
+        #expect(agents.contains("`authsia list <type> --folder <declared-folder> ...`"))
+        #expect(!agents.contains("In CLI fallback mode, use attributed `authsia list ...` only for non-secret metadata discovery"))
         #expect(agents.contains("check the complete subcommand's `--help`"))
         #expect(agents.contains("Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code`"))
         #expect(!agents.contains("Authsia Workspace Handling"))
@@ -1139,6 +1146,73 @@ struct AgentCommandTests {
 
         #expect(previous != current)
         #expect(!previous.contains("workspaceRoot"))
+        try write(previous, to: ".authsia/agent-rules.md", in: root)
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+    }
+
+    @Test("previous vault-list agent rules remain recognized")
+    func previousVaultListAgentRulesRemainRecognized() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("{}", to: ".authsia/workspace.json", in: root)
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        let current = try read(".authsia/agent-rules.md", in: root)
+        let previous = current
+            .replacingOccurrences(
+                of: "- Use `authsia_status` when server readiness is unknown. If `.authsia/workspace.json` exists, use `authsia_workspace_inspect` to list declared `authsia://` refs from that file and managed env files, including env bindings that point at another vault folder.\n- Keep declared folders as written. Do not call `authsia_list` to enumerate this workspace folder or any other folder. Use `authsia_list` only when there is no workspace config, or for vault metadata that is not already declared there.\n",
+                with: "- Use `authsia_status` when server readiness is unknown, `authsia_workspace_inspect` for commit-safe workspace metadata, and `authsia_list` for scoped CLI-enabled Vault item metadata.\n"
+            )
+            .replacingOccurrences(
+                of: "- In CLI fallback mode, if `.authsia/workspace.json` exists, list declared `authsia://` refs from that file or `authsia workspace status`, including env bindings that point at another vault folder. Keep those folders as written. Use attributed `authsia list <type> --folder <declared-folder> ...` only when there is no workspace config, or for vault metadata that is not already declared there.\n",
+                with: "- In CLI fallback mode, use attributed `authsia list ...` only for non-secret metadata discovery.\n"
+            )
+
+        #expect(previous != current)
+        #expect(previous.contains("`authsia_list` for scoped CLI-enabled Vault item metadata"))
+        #expect(!previous.contains("env bindings that point at another vault folder"))
+        try write(previous, to: ".authsia/agent-rules.md", in: root)
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+    }
+
+    @Test("previous workspace-json inventory agent rules remain recognized")
+    func previousWorkspaceJSONInventoryAgentRulesRemainRecognized() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("{}", to: ".authsia/workspace.json", in: root)
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        let current = try read(".authsia/agent-rules.md", in: root)
+        let previous = current
+            .replacingOccurrences(
+                of: "- Use `authsia_status` when server readiness is unknown. If `.authsia/workspace.json` exists, use `authsia_workspace_inspect` to list declared `authsia://` refs from that file and managed env files, including env bindings that point at another vault folder.\n- Keep declared folders as written. Do not call `authsia_list` to enumerate this workspace folder or any other folder. Use `authsia_list` only when there is no workspace config, or for vault metadata that is not already declared there.\n",
+                with: "- Use `authsia_status` when server readiness is unknown. If `.authsia/workspace.json` exists, use `authsia_workspace_inspect` to list this workspace's declared secrets from that file and managed env files; do not call `authsia_list` to enumerate the vault.\n- Use `authsia_list` only when there is no workspace config, or for vault metadata that is not already declared there.\n"
+            )
+            .replacingOccurrences(
+                of: "- In CLI fallback mode, if `.authsia/workspace.json` exists, list declared `authsia://` refs from that file or `authsia workspace status`, including env bindings that point at another vault folder. Keep those folders as written. Use attributed `authsia list <type> --folder <declared-folder> ...` only when there is no workspace config, or for vault metadata that is not already declared there.\n",
+                with: "- In CLI fallback mode, if `.authsia/workspace.json` exists, list workspace secrets from that file or `authsia workspace status`; use attributed `authsia list ...` only when there is no workspace config, or for vault metadata that is not already declared there.\n"
+            )
+
+        #expect(previous != current)
+        #expect(previous.contains("do not call `authsia_list` to enumerate the vault"))
+        #expect(!previous.contains("env bindings that point at another vault folder"))
+        try write(previous, to: ".authsia/agent-rules.md", in: root)
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+    }
+
+    @Test("previous cross-folder inventory without --folder remains recognized")
+    func previousCrossFolderInventoryWithoutFolderFlagRemainsRecognized() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("{}", to: ".authsia/workspace.json", in: root)
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        let current = try read(".authsia/agent-rules.md", in: root)
+        let previous = current.replacingOccurrences(
+            of: "`authsia list <type> --folder <declared-folder> ...`",
+            with: "`authsia list ...`"
+        )
+
+        #expect(previous != current)
+        #expect(previous.contains("env bindings that point at another vault folder"))
+        #expect(!previous.contains("--folder <declared-folder>"))
         try write(previous, to: ".authsia/agent-rules.md", in: root)
         #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
     }

@@ -1107,7 +1107,10 @@ Authsia MCP tools for managed-secret work and construct tool input from
 natural-language requests. For
 `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, and
 `authsia_exec`, IDE-hosted agents pass the active repository's absolute path as
-`workspaceRoot`. Named workspace requests pass `environment` to inspection,
+`workspaceRoot`. If `.authsia/workspace.json` exists, agents list declared
+`authsia://` refs through `authsia_workspace_inspect`, including env bindings
+that point at another vault folder, rather than enumerating this workspace
+folder or any other folder with `authsia_list`. Named workspace requests pass `environment` to inspection,
 list, or execution. List and execution preserve exact-tagged plus `All`
 eligibility; `authsia_exec` uses `defaultOnly` for the Default scope. Rules also pass
 `authsia_exec` arguments directly without a shell command string and use the
@@ -1177,16 +1180,24 @@ authsia agent init --all
 ```
 
 Generated rules stay intentionally compact whether or not workspace metadata is
-already present. With MCP enabled, status, inspection, and scoped list replace
-mandatory CLI preflight; the attributed CLI fallback uses `authsia workspace
-run -- <command> <args>` in an Authsia workspace and `authsia exec <type>
-<query> [options] -- <command> <args>` outside one. With MCP disabled, those
-same attributed commands are the primary path and no MCP tools are named. In a
-workspace, the CLI-only rules direct agents to fall back to attributed
-`authsia exec` when `authsia workspace run` fails. Both variants permit
-attributed `authsia list ...` only for non-secret metadata,
-direct agents to the complete subcommand's `--help`, and forbid bare
-secret-reading commands.
+already present. With MCP enabled, status and workspace inspection replace
+mandatory CLI preflight. If `.authsia/workspace.json` exists, inspection lists
+declared `authsia://` references from that file and managed env files, including
+env bindings whose folder is not this workspace's vault folder. Agents must keep
+those declared folders as written and must not call `authsia_list` to enumerate
+this workspace folder or any other folder. Scoped list remains available only
+when there is no workspace config, or for vault metadata that is not already
+declared there. The attributed CLI fallback uses `authsia
+workspace run -- <command> <args>` in an Authsia workspace and `authsia exec
+<type> <query> [options] -- <command> <args>` outside one. With MCP disabled,
+those same attributed commands are the primary path and no MCP tools are named.
+In a workspace, the CLI-only rules direct agents to fall back to attributed
+`authsia exec` when `authsia workspace run` fails. Both variants tell agents to
+list declared refs from `.authsia/workspace.json` or `authsia workspace
+status`, including cross-folder env bindings, permit attributed
+`authsia list <type> --folder <declared-folder> ...` only when there is no
+workspace config or for undeclared vault metadata, direct agents to the complete
+subcommand's `--help`, and forbid bare secret-reading commands.
 
 ### `authsia workspace` — Repo-local secure workspace
 

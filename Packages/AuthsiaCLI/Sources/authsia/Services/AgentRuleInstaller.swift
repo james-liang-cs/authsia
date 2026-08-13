@@ -101,6 +101,32 @@ struct AgentRuleRemovalResult: Equatable {
 enum AgentRuleInstaller {
     private static let cliOnlyWorkspaceExecFallbackLine =
         "- If `authsia workspace run` fails, fall back to `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
+    private static let previousMCPToolUsageLine =
+        "- Use `authsia_status` when server readiness is unknown, `authsia_workspace_inspect` for commit-safe workspace metadata, and `authsia_list` for scoped CLI-enabled Vault item metadata."
+    private static let previousWorkspaceInventoryLine =
+        "- Use `authsia_status` when server readiness is unknown. If `.authsia/workspace.json` exists, use `authsia_workspace_inspect` to list this workspace's declared secrets from that file and managed env files; do not call `authsia_list` to enumerate the vault."
+    private static let previousUndeclaredListLine =
+        "- Use `authsia_list` only when there is no workspace config, or for vault metadata that is not already declared there."
+    private static let mcpWorkspaceInventoryLine =
+        "- Use `authsia_status` when server readiness is unknown. If `.authsia/workspace.json` exists, use `authsia_workspace_inspect` to list declared `authsia://` refs from that file and managed env files, including env bindings that point at another vault folder."
+    private static let mcpUndeclaredListLine =
+        "- Keep declared folders as written. Do not call `authsia_list` to enumerate this workspace folder or any other folder. Use `authsia_list` only when there is no workspace config, or for vault metadata that is not already declared there."
+    private static let previousCLIFallbackListLine =
+        "- In CLI fallback mode, use attributed `authsia list ...` only for non-secret metadata discovery."
+    private static let previousCLIFallbackWorkspaceInventoryLine =
+        "- In CLI fallback mode, if `.authsia/workspace.json` exists, list workspace secrets from that file or `authsia workspace status`; use attributed `authsia list ...` only when there is no workspace config, or for vault metadata that is not already declared there."
+    private static let previousCLIFallbackCrossFolderInventoryLine =
+        "- In CLI fallback mode, if `.authsia/workspace.json` exists, list declared `authsia://` refs from that file or `authsia workspace status`, including env bindings that point at another vault folder. Keep those folders as written. Use attributed `authsia list ...` only when there is no workspace config, or for vault metadata that is not already declared there."
+    private static let mcpCLIFallbackInventoryLine =
+        "- In CLI fallback mode, if `.authsia/workspace.json` exists, list declared `authsia://` refs from that file or `authsia workspace status`, including env bindings that point at another vault folder. Keep those folders as written. Use attributed `authsia list <type> --folder <declared-folder> ...` only when there is no workspace config, or for vault metadata that is not already declared there."
+    private static let previousCLIOnlyListLine =
+        "- Use attributed `authsia list ...` only for non-secret metadata discovery."
+    private static let previousCLIOnlyWorkspaceInventoryLine =
+        "- If `.authsia/workspace.json` exists, list workspace secrets from that file or `authsia workspace status`. Use attributed `authsia list ...` only when there is no workspace config, or for vault metadata that is not already declared there."
+    private static let previousCLIOnlyCrossFolderInventoryLine =
+        "- If `.authsia/workspace.json` exists, list declared `authsia://` refs from that file or `authsia workspace status`, including env bindings that point at another vault folder. Keep those folders as written. Use attributed `authsia list ...` only when there is no workspace config, or for vault metadata that is not already declared there."
+    private static let cliOnlyInventoryLine =
+        "- If `.authsia/workspace.json` exists, list declared `authsia://` refs from that file or `authsia workspace status`, including env bindings that point at another vault folder. Keep those folders as written. Use attributed `authsia list <type> --folder <declared-folder> ...` only when there is no workspace config, or for vault metadata that is not already declared there."
 
     static let managedStartMarker = "<!-- >>> Authsia agent rules >>> -->"
     static let managedEndMarker = "<!-- <<< Authsia agent rules <<< -->"
@@ -984,7 +1010,8 @@ enum AgentRuleInstaller {
     \(mcpGuidance)
     - The client-managed Authsia MCP server must run outside the agent command sandbox so it can reach the local Authsia Bridge and launch mediated child processes.
     - Do not start `authsia mcp serve` from a sandboxed shell. If the MCP tools are missing or disconnected, treat the client MCP runtime boundary as the first diagnostic.
-    - Use `authsia_status` when server readiness is unknown, `authsia_workspace_inspect` for commit-safe workspace metadata, and `authsia_list` for scoped CLI-enabled Vault item metadata.
+    \(mcpWorkspaceInventoryLine)
+    \(mcpUndeclaredListLine)
     - Use `authsia_exec` only when a command needs Authsia-managed values. Pass `argv` as a direct argument array.
     - Do not use `sh -c`, `bash -c`, other shell command strings, pipes, redirects, compound commands, or control characters with `authsia_exec`.
     - If shell behavior is required, create or use a reviewed workspace script and execute that script directly with `authsia_exec`.
@@ -994,7 +1021,7 @@ enum AgentRuleInstaller {
     \(markerIntro)
     \(platformLines)
     \(executionFallback)
-    - In CLI fallback mode, use attributed `authsia list ...` only for non-secret metadata discovery.
+    \(mcpCLIFallbackInventoryLine)
     - Before composing an unfamiliar CLI fallback, check the complete subcommand's `--help`.
     - Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code` from an agent.
     """
@@ -1031,7 +1058,7 @@ enum AgentRuleInstaller {
     \(markerIntro)
     \(platformLines)
     \(execution)
-    - Use attributed `authsia list ...` only for non-secret metadata discovery.
+    \(cliOnlyInventoryLine)
     - Before composing an unfamiliar Authsia command, check the complete subcommand's `--help`.
     - Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code` from an agent.
     """
@@ -1787,7 +1814,58 @@ enum AgentRuleInstaller {
                 ),
             ])
         }
-        return withLegacyPlatformAliases(variants, agents: agents)
+        return withLegacyPlatformAliases(withPreviousInventoryGuidance(variants), agents: agents)
+    }
+
+    private static func withPreviousInventoryGuidance(_ variants: [String]) -> [String] {
+        var result = variants
+        for variant in variants {
+            let original = variant
+                .replacingOccurrences(
+                    of: "\(mcpWorkspaceInventoryLine)\n\(mcpUndeclaredListLine)",
+                    with: previousMCPToolUsageLine
+                )
+                .replacingOccurrences(
+                    of: mcpCLIFallbackInventoryLine,
+                    with: previousCLIFallbackListLine
+                )
+                .replacingOccurrences(
+                    of: cliOnlyInventoryLine,
+                    with: previousCLIOnlyListLine
+                )
+            let intermediate = variant
+                .replacingOccurrences(
+                    of: "\(mcpWorkspaceInventoryLine)\n\(mcpUndeclaredListLine)",
+                    with: "\(previousWorkspaceInventoryLine)\n\(previousUndeclaredListLine)"
+                )
+                .replacingOccurrences(
+                    of: mcpCLIFallbackInventoryLine,
+                    with: previousCLIFallbackWorkspaceInventoryLine
+                )
+                .replacingOccurrences(
+                    of: cliOnlyInventoryLine,
+                    with: previousCLIOnlyWorkspaceInventoryLine
+                )
+            let crossFolder = variant
+                .replacingOccurrences(
+                    of: mcpCLIFallbackInventoryLine,
+                    with: previousCLIFallbackCrossFolderInventoryLine
+                )
+                .replacingOccurrences(
+                    of: cliOnlyInventoryLine,
+                    with: previousCLIOnlyCrossFolderInventoryLine
+                )
+            if original != variant {
+                result.append(original)
+            }
+            if intermediate != variant {
+                result.append(intermediate)
+            }
+            if crossFolder != variant {
+                result.append(crossFolder)
+            }
+        }
+        return result
     }
 
     private static func withLegacyPlatformAliases(_ variants: [String], agents: [AgentTool]) -> [String] {
