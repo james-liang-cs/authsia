@@ -371,10 +371,13 @@ final class InjectedProcessTreeTests: XCTestCase {
             exitStatus: nil
         )
 
+        // Pin `now` inside the grant window; otherwise the recency filter drops this
+        // epoch-dated grant before any finding is derived and the assertions pass vacuously.
         let findings = AgentCommandFindingDetector.findings(
             for: [grant],
             events: [event],
-            auditRecords: []
+            auditRecords: [],
+            now: Date(timeIntervalSince1970: 200)
         )
 
         XCTAssertFalse(findings.contains { $0.type == .processOnlyCapture })
