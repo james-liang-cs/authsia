@@ -1478,6 +1478,23 @@ struct ExecCollectSecretsTests {
         #expect(masker.mask("1234") == "1234")
     }
 
+    @Test("argv masking conceals xxd -p wrapped hex without shell transformation tokens")
+    func argvMaskingConcealsWrappedHexWithoutShellTransformations() {
+        let secret = String(repeating: "a", count: 32)
+        let result = Exec.collectSecrets(
+            entries: [],
+            resolvedSecrets: [secret],
+            shellCommand: nil,
+            environment: ["API_TOKEN": secret]
+        )
+        let masker = OutputMasker(secrets: result)
+        let hex = String(repeating: "61", count: 32)
+        let wrapped = String(hex.prefix(60)) + "\n" + String(hex.dropFirst(60))
+
+        #expect(masker.mask(wrapped) == OutputMasker.placeholder)
+        #expect(masker.mask(String(hex.prefix(8))) == String(hex.prefix(8)))
+    }
+
     @Test("includes binary and hash command transformations for injected secrets")
     func collectSecretsIncludesBinaryAndHashCommandTransformations() {
         let secret = "hunter2"

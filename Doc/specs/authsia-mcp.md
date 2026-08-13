@@ -382,7 +382,7 @@ Output fields:
 | `invocationID` | Server-generated UUID used for audit/activity correlation. |
 | `termination` | `exited`, `signalled`, `timedOut`, `cancelled`, or `launchFailed`. |
 | `exitCode` | Child exit code when available. Nonzero is not a protocol error. |
-| `stdout` / `stderr` | Existing Authsia-masked UTF-8 output, each bounded to 65,536 bytes. |
+| `stdout` / `stderr` | Existing Authsia-masked UTF-8 output, each bounded to 65,536 bytes. Last-mile masking is the same path as `workspace run`, including whitespace- or newline-wrapped hexadecimal such as `xxd -p`, even when `argv` is a script rather than `--shell`. |
 | `stdoutTruncated` / `stderrTruncated` | True when the corresponding bounded capture omitted bytes. |
 | `durationMilliseconds` | Nonnegative bounded duration metadata. |
 

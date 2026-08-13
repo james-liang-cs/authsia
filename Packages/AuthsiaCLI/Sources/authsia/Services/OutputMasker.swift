@@ -39,7 +39,7 @@ struct OutputMasker {
     }
 
     func containsMatch(in input: String) -> Bool {
-        sortedSecrets.contains { input.range(of: $0) != nil }
+        !matchedRanges(in: input).isEmpty
     }
 
     private func matchedRanges(
@@ -51,12 +51,13 @@ struct OutputMasker {
             var searchStart = input.startIndex
             while searchStart < input.endIndex,
                   let range = input.range(of: secret, range: searchStart..<input.endIndex) {
-                matches.append((
-                    range: range,
-                    lowerBound: input.distance(from: input.startIndex, to: range.lowerBound),
-                    upperBound: input.distance(from: input.startIndex, to: range.upperBound)
-                ))
+                matches.append(Self.locatedRange(range, in: input))
                 searchStart = input.index(after: range.lowerBound)
+            }
+
+            guard Self.isFlexibleHexToken(secret) else { continue }
+            for range in Self.whitespaceFlexibleHexRanges(of: secret, in: input) {
+                matches.append(Self.locatedRange(range, in: input))
             }
         }
 
@@ -66,6 +67,88 @@ struct OutputMasker {
             }
             return lhs.upperBound > rhs.upperBound
         }
+    }
+
+    private static func locatedRange(
+        _ range: Range<String.Index>,
+        in input: String
+    ) -> (range: Range<String.Index>, lowerBound: Int, upperBound: Int) {
+        (
+            range: range,
+            lowerBound: input.distance(from: input.startIndex, to: range.lowerBound),
+            upperBound: input.distance(from: input.startIndex, to: range.upperBound)
+        )
+    }
+
+    private static let minimumFlexibleHexTokenLength = 8
+
+    private static func isFlexibleHexToken(_ token: String) -> Bool {
+        token.count >= minimumFlexibleHexTokenLength
+            && token.count.isMultiple(of: 2)
+            && token.allSatisfy(\.isHexDigit)
+    }
+
+    private static func whitespaceFlexibleHexRanges(
+        of hex: String,
+        in input: String
+    ) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var searchStart = input.startIndex
+
+        while searchStart < input.endIndex {
+            guard let range = firstWhitespaceFlexibleHexMatch(
+                of: hex,
+                in: input,
+                from: searchStart
+            ) else {
+                break
+            }
+            if input[range].contains(where: \.isWhitespace) {
+                ranges.append(range)
+            }
+            searchStart = input.index(after: range.lowerBound)
+        }
+
+        return ranges
+    }
+
+    private static func firstWhitespaceFlexibleHexMatch(
+        of hex: String,
+        in input: String,
+        from start: String.Index
+    ) -> Range<String.Index>? {
+        guard let firstDigit = hex.first else { return nil }
+        var search = start
+
+        while search < input.endIndex {
+            guard input[search] == firstDigit else {
+                search = input.index(after: search)
+                continue
+            }
+
+            var hexIndex = hex.startIndex
+            var inputIndex = search
+            var matchEnd = search
+
+            while hexIndex < hex.endIndex, inputIndex < input.endIndex {
+                let character = input[inputIndex]
+                if character.isWhitespace {
+                    inputIndex = input.index(after: inputIndex)
+                    continue
+                }
+                guard character == hex[hexIndex] else { break }
+                hexIndex = hex.index(after: hexIndex)
+                matchEnd = input.index(after: inputIndex)
+                inputIndex = matchEnd
+            }
+
+            if hexIndex == hex.endIndex {
+                return search..<matchEnd
+            }
+            search = input.index(after: search)
+        }
+
+        return nil
     }
 
     /// Mask a Data buffer. Treats input as UTF-8; non-UTF-8 data passes through unchanged.
@@ -226,9 +309,53 @@ struct OutputMasker {
                     }
                     candidateCount -= 1
                 }
+
+                if OutputMasker.isFlexibleHexToken(secret) {
+                    longestPrefixCount = max(
+                        longestPrefixCount,
+                        pendingWhitespaceFlexibleHexPrefixCount(hex: secret)
+                    )
+                }
             }
 
             return longestPrefixCount
+        }
+
+        private func pendingWhitespaceFlexibleHexPrefixCount(hex: String) -> Int {
+            var longest = 0
+            var candidateCount = pending.count
+
+            while candidateCount > longest {
+                let start = pending.index(pending.endIndex, offsetBy: -candidateCount)
+                let suffix = pending[start...]
+                guard suffix.first?.isHexDigit == true else {
+                    candidateCount -= 1
+                    continue
+                }
+
+                var hexIndex = hex.startIndex
+                var matchesThroughEnd = true
+                var sawHexDigit = false
+                for character in suffix {
+                    if character.isWhitespace {
+                        continue
+                    }
+                    guard hexIndex < hex.endIndex, character == hex[hexIndex] else {
+                        matchesThroughEnd = false
+                        break
+                    }
+                    hexIndex = hex.index(after: hexIndex)
+                    sawHexDigit = true
+                }
+
+                if matchesThroughEnd, sawHexDigit, hexIndex < hex.endIndex {
+                    longest = candidateCount
+                    break
+                }
+                candidateCount -= 1
+            }
+
+            return longest
         }
 
         private func adjustedEmitCountAvoidingSplitSecrets(_ initialEmitCount: Int) -> Int {
@@ -237,34 +364,16 @@ struct OutputMasker {
 
             while changed {
                 changed = false
-                for secret in masker.sortedSecrets {
-                    for range in ranges(of: secret, in: pending) {
-                        guard range.lowerBound < emitCount, range.upperBound > emitCount else {
-                            continue
-                        }
-                        emitCount = min(emitCount, range.lowerBound)
-                        changed = true
+                for match in masker.matchedRanges(in: pending) {
+                    guard match.lowerBound < emitCount, match.upperBound > emitCount else {
+                        continue
                     }
+                    emitCount = min(emitCount, match.lowerBound)
+                    changed = true
                 }
             }
 
             return emitCount
-        }
-
-        private func ranges(of secret: String, in text: String) -> [(lowerBound: Int, upperBound: Int)] {
-            var ranges: [(lowerBound: Int, upperBound: Int)] = []
-            var searchStart = text.startIndex
-
-            while searchStart < text.endIndex,
-                  let range = text.range(of: secret, range: searchStart..<text.endIndex) {
-                ranges.append((
-                    lowerBound: text.distance(from: text.startIndex, to: range.lowerBound),
-                    upperBound: text.distance(from: text.startIndex, to: range.upperBound)
-                ))
-                searchStart = text.index(after: range.lowerBound)
-            }
-
-            return ranges
         }
     }
 

@@ -130,6 +130,43 @@ struct OutputMaskerTests {
         #expect(masker.mask("hex=68756E74657232") == "hex=<concealed by authsia>")
     }
 
+    @Test("masks xxd -p wrapped hex without shell transformation tokens")
+    func masksXxdPlainWrappedHex() {
+        let secret = String(repeating: "a", count: 32)
+        let masker = OutputMasker(secrets: [secret])
+        let hex = String(repeating: "61", count: 32)
+        let wrapped = String(hex.prefix(60)) + "\n" + String(hex.dropFirst(60))
+
+        #expect(masker.mask(wrapped) == OutputMasker.placeholder)
+        #expect(masker.mask(wrapped + "\n") == OutputMasker.placeholder + "\n")
+        #expect(masker.mask(String(hex.prefix(8))) == String(hex.prefix(8)))
+    }
+
+    @Test("masks whitespace-separated hex byte pairs")
+    func masksWhitespaceSeparatedHex() {
+        let masker = OutputMasker(secrets: ["hunter2"])
+
+        #expect(masker.mask("68 75 6e 74 65 72 32") == OutputMasker.placeholder)
+        #expect(masker.mask("68 75\n6e 74 65 72 32") == OutputMasker.placeholder)
+    }
+
+    @Test("streaming masker hides xxd -p wrapped hex split across buffers")
+    func streamMasksWrappedHexSplitAcrossBuffers() {
+        let secret = String(repeating: "a", count: 32)
+        let masker = OutputMasker(secrets: [secret])
+        var stream = masker.makeStream()
+        let hex = String(repeating: "61", count: 32)
+        let firstLine = String(hex.prefix(60)) + "\n"
+        let secondLine = String(hex.dropFirst(60)) + "\n"
+
+        let first = stream.mask(Data(firstLine.utf8))
+        let second = stream.mask(Data(secondLine.utf8))
+        let flushed = stream.flush()
+        let output = String(data: first + second + flushed, encoding: .utf8)
+
+        #expect(output == OutputMasker.placeholder + "\n")
+    }
+
     @Test("exact secret masker excludes derived encodings")
     func exactSecretMaskerExcludesDerivedEncodings() {
         let exactMasker = OutputMasker(exactSecrets: ["", "abcd", "abcd"])

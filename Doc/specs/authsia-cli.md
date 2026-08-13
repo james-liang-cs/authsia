@@ -389,7 +389,8 @@ receives secrets resolved by `exec` and keeps output masking, but nested tools i
 real executable inside that explicit boundary instead of re-entering `authsia workspace run`.
 
 **Secret masking:** Resolved secret values and common deterministic encodings of those values
-(Base64 padded/unpadded/URL-safe, hex, percent encoding, and JSON escaping) are scanned out of
+(Base64 padded/unpadded/URL-safe, hex including whitespace- or newline-wrapped forms such as
+`xxd -p`, percent encoding, and JSON escaping) are scanned out of
 subprocess stdout and stderr and replaced with `<concealed by authsia>`. When the command clearly
 references an injected secret environment variable through a shell, pipeline, or runtime accessor,
 `exec` also masks common deterministic transformations: shell substrings, prefix/suffix trims,
