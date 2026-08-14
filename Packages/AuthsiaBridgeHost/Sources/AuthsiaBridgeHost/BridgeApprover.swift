@@ -1,3 +1,4 @@
+import Foundation
 import AuthenticatorBridge
 
 @MainActor
@@ -29,6 +30,16 @@ public extension BridgeApprover {
             remoteRequests: []
         )
     }
+}
+
+@MainActor
+public protocol TerminalPairingApproving: BridgeApprover {
+    func requestTerminalPairingApproval(_ request: TerminalPairingApprovalRequest) async -> Bool
+    func finishTerminalPairing(id: UUID)
+}
+
+public extension TerminalPairingApproving {
+    func finishTerminalPairing(id: UUID) {}
 }
 
 @MainActor

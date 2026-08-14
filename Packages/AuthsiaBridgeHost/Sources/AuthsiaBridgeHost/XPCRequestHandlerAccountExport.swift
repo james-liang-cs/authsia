@@ -63,7 +63,7 @@ extension XPCRequestHandler {
         }
 
         let callerIdentity = callerIdentityProvider()
-        if let denial = Self.unsupportedAgentJITBridgeCommandDenial(
+        if let denial = unsupportedAgentJITBridgeCommandDenial(
             for: bridgeRequest,
             callerIdentity: callerIdentity
         ) {

@@ -37,6 +37,7 @@ extension XPCRequestHandler {
             return
         }
 
+        let callerIdentity = callerIdentityProvider()
         let currentSession = Self.sharedSessionManager.currentSession(scope: bridgeRequest.context.sessionScope)
         let payload = BridgePingPayload(
             protocolVersion: String(BridgeContext.securityProtocolVersion),
@@ -44,7 +45,11 @@ extension XPCRequestHandler {
             bundledCLIPath: bundledCLIHelperPath(),
             sessionActive: currentSession != nil,
             sessionExpiresAt: currentSession?.expiresAt,
-            cliAccessEnabled: BridgeSettings.isCliAccessEnabled()
+            cliAccessEnabled: BridgeSettings.isCliAccessEnabled(),
+            terminalPairing: pairedHumanSession(
+                request: bridgeRequest,
+                callerIdentity: callerIdentity
+            )
         )
         let response: BridgeResponse<BridgePingPayload> = BridgeResponseBuilder.success(
             id: bridgeRequest.id,
@@ -94,14 +99,15 @@ extension XPCRequestHandler {
         }
 
         let callerIdentity = callerIdentityProvider()
-        if let denial = Self.unsupportedAgentJITBridgeCommandDenial(
+        if let denial = unsupportedAgentJITBridgeCommandDenial(
             for: bridgeRequest,
             callerIdentity: callerIdentity
         ) {
             replyError(id: bridgeRequest.id, code: denial.code, message: denial.message, reply: reply)
             return
         }
-        guard AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity) else {
+        guard AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
+                || hasPairedHumanSession(request: bridgeRequest, callerIdentity: callerIdentity) else {
             replyError(
                 id: bridgeRequest.id,
                 code: .policyDenied,
@@ -179,6 +185,11 @@ extension XPCRequestHandler {
             return
         }
 
+        let callerIdentity = callerIdentityProvider()
+        let pairings = terminalPairingsOwnedByCaller(
+            request: bridgeRequest,
+            callerIdentity: callerIdentity
+        )
         let didInvalidate: Bool
         if let token = bridgeRequest.sessionToken, !token.isEmpty {
             didInvalidate = Self.sharedSessionManager.invalidate(
@@ -188,7 +199,21 @@ extension XPCRequestHandler {
         } else {
             didInvalidate = Self.sharedSessionManager.invalidate(scope: bridgeRequest.context.sessionScope)
         }
-        let message = didInvalidate ? "Session locked" : "No matching active session"
+        let revokedPairings = pairings.compactMap { try? terminalPairingStore.revoke(id: $0.id) }
+        for revokedPairing in revokedPairings {
+            recordAudit(
+                command: .terminalPairingRevoke,
+                itemId: revokedPairing.id.uuidString,
+                approvedBy: "paired-human-revoked",
+                caller: callerIdentity,
+                requestedCommand: bridgeRequest.context.requestedCommand,
+                terminalPairingID: revokedPairing.id,
+                workspaceContext: bridgeRequest.context.workspaceContext
+            )
+        }
+        let message = didInvalidate || !revokedPairings.isEmpty
+            ? "Session locked"
+            : "No matching active session"
         let payload = WriteResultPayload(id: "session", message: message)
         replyWriteSuccess(id: bridgeRequest.id, payload: payload, reply: reply)
     }

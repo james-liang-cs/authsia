@@ -1,4 +1,5 @@
 #if os(macOS)
+import Foundation
 import AuthenticatorBridge
 
 public enum AgentJITCallerContext {
@@ -90,6 +91,61 @@ public enum AgentJITCallerContext {
         AgenticProcessDetector.containsAutomationSuspectProcess(ancestry(for: callerIdentity))
     }
 
+    static func terminalPairingWorkspaceRoot(
+        request: BridgeRequest,
+        fileManager: FileManager = .default
+    ) -> String? {
+        guard let workingDirectory = request.context.workingDirectory else { return nil }
+        return WorkspaceAuthority.validatedRootPath(
+            request.context.workspaceAuthorityPath ?? workingDirectory,
+            containing: workingDirectory,
+            fileManager: fileManager
+        )
+    }
+
+    public static func hasPairedHumanSession(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?,
+        pairings: [TerminalPairing],
+        now: Date = Date(),
+        processStartTime: (Int32) -> UInt64? = { TerminalSessionScope.startTimeSeconds(pid: $0) }
+    ) -> Bool {
+        pairedHumanSession(
+            request: request,
+            callerIdentity: callerIdentity,
+            pairings: pairings,
+            now: now,
+            processStartTime: processStartTime
+        ) != nil
+    }
+
+    static func pairedHumanSession(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?,
+        pairings: [TerminalPairing],
+        now: Date = Date(),
+        processStartTime: (Int32) -> UInt64? = { TerminalSessionScope.startTimeSeconds(pid: $0) }
+    ) -> TerminalPairing? {
+        guard request.context.agentRuntimeContext == nil,
+              let callerIdentity,
+              let controllingTerminal = callerIdentity.controllingTerminal,
+              let shellAncestryPrefix = callerIdentity.shellAncestryPrefix,
+              let workspaceRoot = terminalPairingWorkspaceRoot(request: request) else {
+            return nil
+        }
+
+        return pairings.first { pairing in
+            pairing.expiresAt > now
+                && pairing.controllingTerminal == controllingTerminal
+                && pairing.workspaceRoot == workspaceRoot
+                && processStartTime(pairing.anchorShellPID) == pairing.anchorShellStartTime
+                && shellAncestryPrefix.contains {
+                    $0.pid == pairing.anchorShellPID
+                        && $0.startTimeSeconds == pairing.anchorShellStartTime
+                }
+        }
+    }
+
     public static func isTrustedHumanTerminal(_ callerIdentity: CallerIdentity?) -> Bool {
         guard let callerIdentity,
               let bundleIdentifier = callerIdentity.bundleIdentifier,
@@ -151,7 +207,7 @@ public enum AgentJITCallerContext {
         "com.authsia.cli",
     ]
 
-    private static let trustedShellProcessNames: Set<String> = [
+    static let trustedShellProcessNames: Set<String> = [
         "bash",
         "fish",
         "nu",

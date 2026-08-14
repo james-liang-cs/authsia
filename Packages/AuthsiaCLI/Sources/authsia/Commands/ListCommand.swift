@@ -80,16 +80,52 @@ struct List: ParsableCommand {
             requestedCommand,
             includeAutomationCredential: !chromeNativeHost
         ) {
-            try runJITPreflight(
-                scope: scope,
-                folder: folder,
-                parentEnvironment: parentEnvironment,
-                processAncestry: processAncestry,
-                chromeNativeHost: chromeNativeHost,
-                client: jitClient
+            try loadAfterHostDecision(
+                probe: {
+                    try AuthsiaBridgeClient.shared.withoutApprovalPrompt {
+                        try AuthsiaBridgeClient.shared.list()
+                    }
+                },
+                list: { try AuthsiaBridgeClient.shared.list() },
+                preflight: {
+                    try runJITPreflight(
+                        scope: scope,
+                        folder: folder,
+                        parentEnvironment: parentEnvironment,
+                        processAncestry: processAncestry,
+                        chromeNativeHost: chromeNativeHost,
+                        client: jitClient
+                    )
+                }
             )
-            return try AuthsiaBridgeClient.shared.list()
         }
+    }
+
+    /// Ask the host first. A paired IDE human list succeeds without opening Agent JIT.
+    /// Only a host denial that requires a list grant starts preflight.
+    static func loadAfterHostDecision(
+        probe: (() throws -> BridgeListPayload)? = nil,
+        list: () throws -> BridgeListPayload,
+        preflight: () throws -> Void
+    ) throws -> BridgeListPayload {
+        do {
+            if let probe {
+                return try probe()
+            }
+            return try list()
+        } catch {
+            guard requiresListJITGrant(error) else { throw error }
+            try preflight()
+            return try list()
+        }
+    }
+
+    static func requiresListJITGrant(_ error: Error) -> Bool {
+        guard case let BridgeClientError.bridgeError(code, message, _) = error else {
+            return false
+        }
+        return code == BridgeErrorCode.policyDenied.rawValue
+            && message.contains("JIT preflight grant")
     }
 
     static func runJITPreflight(
@@ -98,6 +134,7 @@ struct List: ParsableCommand {
         parentEnvironment: [String: String],
         processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
         chromeNativeHost: Bool = false,
+        hasCurrentTerminalPairing: () -> Bool = { false },
         client: ExecJITPreflightClient = AuthsiaBridgeClient.shared
     ) throws {
         guard !chromeNativeHost,
@@ -105,6 +142,11 @@ struct List: ParsableCommand {
               let reference = jitPreflightReference(scope: scope, folder: folder) else {
             return
         }
+        // The Bridge returns a pairing only when it belongs to this exact
+        // non-agent caller, TTY, live shell anchor, and workspace. Keep the
+        // authoritative host check ahead of ancestry-based list preflight so
+        // an IDE-hosted human shell does not request an agent grant.
+        guard !hasCurrentTerminalPairing() else { return }
         _ = try client.agentJITPreflight(
             AgentJITPreflightPayload(requestedCommand: "list", references: [reference])
         )

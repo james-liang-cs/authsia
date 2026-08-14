@@ -104,6 +104,22 @@ extension XPCRequestHandler {
                 return
             }
 
+            // Pair eligible IDE humans here, including direct `authsia list`.
+            // read/edit also arrive as list RPCs with their real verb; pairing
+            // on that bootstrap so the next handler is not denied. Agents are
+            // not pairing-eligible and stay on the JIT grant path.
+            if self.terminalPairingEligible(
+                request: bridgeRequest,
+                callerIdentity: callerIdentity
+            ) {
+                await self.requestTerminalPairing(
+                    request: bridgeRequest,
+                    callerIdentity: callerIdentity,
+                    reply: reply
+                )
+                return
+            }
+
             // Validate session and request for replay protection
             var newSessionToken: String?
             var newSessionExpiresAt: Date?
@@ -111,12 +127,12 @@ extension XPCRequestHandler {
             guard let bypassApproval = self.resolveAutomationApproval(
                 for: bridgeRequest, itemFolderPath: nil, itemKind: "list", reply: reply
             ) else { return }
-            let interactiveHumanBootstrap = Self.interactiveHumanBootstrapEligible(
+            let interactiveHumanBootstrap = self.interactiveHumanBootstrapEligible(
                 request: bridgeRequest,
                 callerIdentity: callerIdentity
             )
             let callerUsesAgentJIT = !bypassApproval
-                && Self.isAgentJITCaller(request: bridgeRequest, callerIdentity: callerIdentity)
+                && self.shouldUseAgentJIT(request: bridgeRequest, callerIdentity: callerIdentity)
                 && !interactiveHumanBootstrap
             let jitListScopes: [AgentJITFolderScope]
             let jitListGrants: [AgentJITGrant]

@@ -45,7 +45,7 @@ extension XPCRequestHandler {
             )
             return
         }
-        if let denial = Self.unsupportedAgentJITBridgeCommandDenial(
+        if let denial = unsupportedAgentJITBridgeCommandDenial(
             for: bridgeRequest,
             callerIdentity: callerIdentityProvider()
         ) {
@@ -121,7 +121,7 @@ extension XPCRequestHandler {
             )
             return
         }
-        if let denial = Self.unsupportedAgentJITBridgeCommandDenial(
+        if let denial = unsupportedAgentJITBridgeCommandDenial(
             for: bridgeRequest,
             callerIdentity: callerIdentityProvider()
         ) {

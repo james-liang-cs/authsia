@@ -167,20 +167,33 @@ public enum TerminalSessionScope {
 
     public static func controllingTerminalPath(pid: Int32) -> String? {
         #if os(macOS)
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        let result = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
-        guard result == size,
-              info.e_tdev != 0,
-              info.e_tdev != UInt32.max else {
-            return nil
-        }
+        return controllingTerminal(pid: pid).map { "/dev/\($0)" }
+        #else
+        return nil
+        #endif
+    }
 
-        let terminalDevice = dev_t(bitPattern: info.e_tdev)
-        guard let terminalName = devname(terminalDevice, mode_t(S_IFCHR)) else {
+    /// Host-derived controlling terminal for `pid`, for example `ttys004`.
+    /// GUI descendants and processes that called `setsid()` normally have none.
+    public static func controllingTerminal(pid: Int32) -> String? {
+        #if os(macOS)
+        guard let info = bsdInfo(pid: pid),
+              info.e_tdev != UInt32.max,
+              info.e_tdev != 0,
+              let terminalName = devname(dev_t(bitPattern: info.e_tdev), mode_t(S_IFCHR)) else {
             return nil
         }
-        return "/dev/\(String(cString: terminalName))"
+        return String(cString: terminalName)
+        #else
+        return nil
+        #endif
+    }
+
+    /// Process start time in seconds, used to distinguish a live process from a
+    /// later process that reused the same PID.
+    public static func startTimeSeconds(pid: Int32) -> UInt64? {
+        #if os(macOS)
+        return bsdInfo(pid: pid).map { UInt64($0.pbi_start_tvsec) }
         #else
         return nil
         #endif
@@ -240,6 +253,17 @@ public enum TerminalSessionScope {
         return nil
         #endif
     }
+
+    #if os(macOS)
+    private static func bsdInfo(pid: Int32) -> proc_bsdinfo? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else {
+            return nil
+        }
+        return info
+    }
+    #endif
 
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value else { return nil }

@@ -2022,7 +2022,9 @@ authsia ssh git-signing --principal user@example.com --public-key ~/.ssh/deploy.
 ### `authsia status` — System health
 
 Displays bridge connectivity, this terminal's interactive session state, shell integration status,
-guarded-terminal state, SSH agent status, and this terminal's session-based SSH approval status. CLI and SSH approval
+guarded-terminal state, SSH agent status, and this terminal's session-based SSH approval status.
+A signed terminal reports the Direct CLI session and omits pairing; an IDE-integrated terminal
+reports pairing and omits the Direct CLI session line. CLI and SSH approval
 session state comes from the current terminal scope only; sessions held by other terminals or apps
 are not reported and do not make this terminal report as unlocked.
 `status` reports the current human terminal scope even when an automation credential environment

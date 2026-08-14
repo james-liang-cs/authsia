@@ -19,7 +19,7 @@ extension XPCRequestHandler {
         }
 
         let callerIdentity = callerIdentityProvider()
-        if let denial = Self.unsupportedAgentJITBridgeCommandDenial(
+        if let denial = unsupportedAgentJITBridgeCommandDenial(
             for: bridgeRequest,
             callerIdentity: callerIdentity
         ) {
@@ -432,7 +432,7 @@ extension XPCRequestHandler {
 
         let callerIdentity = callerIdentityProvider()
         let callback = NSXPCConnection.current()?.remoteObjectProxy as? AuthsiaBridgeApprovalCallbackProtocol
-        if let denial = Self.unsupportedAgentJITBridgeCommandDenial(
+        if let denial = unsupportedAgentJITBridgeCommandDenial(
             for: bridgeRequest,
             callerIdentity: callerIdentity
         ) {
@@ -948,7 +948,7 @@ extension XPCRequestHandler {
         }
 
         let callerIdentity = callerIdentityProvider()
-        if let denial = Self.unsupportedAgentJITBridgeCommandDenial(
+        if let denial = unsupportedAgentJITBridgeCommandDenial(
             for: bridgeRequest,
             callerIdentity: callerIdentity
         ) {

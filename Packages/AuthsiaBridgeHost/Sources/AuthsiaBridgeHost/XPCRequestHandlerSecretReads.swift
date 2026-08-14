@@ -45,6 +45,13 @@ extension XPCRequestHandler {
             ) {
             case .allowed:
                 break
+            case .needsPairing:
+                await self.requestTerminalPairing(
+                    request: bridgeRequest,
+                    callerIdentity: callerIdentity,
+                    reply: reply
+                )
+                return
             case .denied(let code, let message):
                 let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                     id: bridgeRequest.id,
@@ -170,16 +177,24 @@ extension XPCRequestHandler {
                     sessionToken: newSessionToken,
                     sessionExpiresAt: newSessionExpiresAt
                 )
+                let sessionAttribution = self.pairedHumanAuditAttribution(
+                    request: bridgeRequest,
+                    callerIdentity: callerIdentity
+                )
+                let auditApprovedBy = bypassApproval
+                    ? "automation"
+                    : (interactiveApprovalAttribution ?? sessionAttribution.approvedBy)
                 self.recordAudit(
                     command: .getOTP,
                     itemId: match.id.uuidString,
                     itemName: match.issuer,
-                    approvedBy: bypassApproval
-                        ? "automation"
-                        : (interactiveApprovalAttribution ?? "session"),
+                    approvedBy: auditApprovedBy,
                     caller: callerIdentity,
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
+                    terminalPairingID: auditApprovedBy == "paired-human"
+                        ? sessionAttribution.pairingID
+                        : nil,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                     workspaceContext: bridgeRequest.context.workspaceContext
                 )
@@ -286,6 +301,13 @@ extension XPCRequestHandler {
                     approvedBy = decisionApprovedBy
                     needsApproval = decisionNeedsApproval
                     agentJITGrantID = decisionAgentJITGrantID
+                case .needsPairing:
+                    await self.requestTerminalPairing(
+                        request: bridgeRequest,
+                        callerIdentity: callerIdentity,
+                        reply: reply
+                    )
+                    return
                 case .denied(let code, let message):
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                         id: bridgeRequest.id,
@@ -344,6 +366,9 @@ extension XPCRequestHandler {
                     newSessionExpiresAt = session.expiresAt
                 }
                 let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
+                let terminalPairingID = auditApprovedBy == "paired-human"
+                    ? self.pairedHumanSession(request: bridgeRequest, callerIdentity: callerIdentity)?.id
+                    : nil
 
                 let secretData = try VaultKeychainStore.shared.retrievePassword(for: match.id)
                 let passwordString = String(data: secretData, encoding: .utf8) ?? ""
@@ -374,6 +399,7 @@ extension XPCRequestHandler {
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
                     agentJITGrantID: agentJITGrantID,
+                    terminalPairingID: terminalPairingID,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                     workspaceContext: bridgeRequest.context.workspaceContext
                 )
@@ -476,6 +502,13 @@ extension XPCRequestHandler {
                     approvedBy = decisionApprovedBy
                     needsApproval = decisionNeedsApproval
                     agentJITGrantID = decisionAgentJITGrantID
+                case .needsPairing:
+                    await self.requestTerminalPairing(
+                        request: bridgeRequest,
+                        callerIdentity: callerIdentity,
+                        reply: reply
+                    )
+                    return
                 case .denied(let code, let message):
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                         id: bridgeRequest.id,
@@ -535,6 +568,9 @@ extension XPCRequestHandler {
                     newSessionExpiresAt = session.expiresAt
                 }
                 let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
+                let terminalPairingID = auditApprovedBy == "paired-human"
+                    ? self.pairedHumanSession(request: bridgeRequest, callerIdentity: callerIdentity)?.id
+                    : nil
 
                 let secretData = try VaultKeychainStore.shared.retrieveAPIKey(for: match.id)
                 let keyString = String(data: secretData, encoding: .utf8) ?? ""
@@ -564,6 +600,7 @@ extension XPCRequestHandler {
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
                     agentJITGrantID: agentJITGrantID,
+                    terminalPairingID: terminalPairingID,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                     workspaceContext: bridgeRequest.context.workspaceContext
                 )
@@ -659,6 +696,13 @@ extension XPCRequestHandler {
                     approvedBy = decisionApprovedBy
                     needsApproval = decisionNeedsApproval
                     agentJITGrantID = decisionAgentJITGrantID
+                case .needsPairing:
+                    await self.requestTerminalPairing(
+                        request: bridgeRequest,
+                        callerIdentity: callerIdentity,
+                        reply: reply
+                    )
+                    return
                 case .denied(let code, let message):
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                         id: bridgeRequest.id,
@@ -717,6 +761,9 @@ extension XPCRequestHandler {
                     newSessionExpiresAt = session.expiresAt
                 }
                 let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
+                let terminalPairingID = auditApprovedBy == "paired-human"
+                    ? self.pairedHumanSession(request: bridgeRequest, callerIdentity: callerIdentity)?.id
+                    : nil
 
                 let (certData, keyData) = try VaultKeychainStore.shared.retrieveCertificate(for: match.id)
                 let certString = String(data: certData, encoding: .utf8) ?? certData.base64EncodedString()
@@ -750,6 +797,7 @@ extension XPCRequestHandler {
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
                     agentJITGrantID: agentJITGrantID,
+                    terminalPairingID: terminalPairingID,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                     workspaceContext: bridgeRequest.context.workspaceContext
                 )
@@ -845,6 +893,13 @@ extension XPCRequestHandler {
                     approvedBy = decisionApprovedBy
                     needsApproval = decisionNeedsApproval
                     agentJITGrantID = decisionAgentJITGrantID
+                case .needsPairing:
+                    await self.requestTerminalPairing(
+                        request: bridgeRequest,
+                        callerIdentity: callerIdentity,
+                        reply: reply
+                    )
+                    return
                 case .denied(let code, let message):
                     let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                         id: bridgeRequest.id,
@@ -903,6 +958,9 @@ extension XPCRequestHandler {
                     newSessionExpiresAt = session.expiresAt
                 }
                 let auditApprovedBy = interactiveApprovalAttribution ?? approvedBy
+                let terminalPairingID = auditApprovedBy == "paired-human"
+                    ? self.pairedHumanSession(request: bridgeRequest, callerIdentity: callerIdentity)?.id
+                    : nil
 
                 let contentData = try VaultKeychainStore.shared.retrieveNoteContent(for: match.id)
                 let contentString = String(data: contentData, encoding: .utf8) ?? ""
@@ -930,6 +988,7 @@ extension XPCRequestHandler {
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
                     agentJITGrantID: agentJITGrantID,
+                    terminalPairingID: terminalPairingID,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                     workspaceContext: bridgeRequest.context.workspaceContext
                 )
@@ -983,6 +1042,13 @@ extension XPCRequestHandler {
             ) {
             case .allowed:
                 break
+            case .needsPairing:
+                await self.requestTerminalPairing(
+                    request: bridgeRequest,
+                    callerIdentity: callerIdentity,
+                    reply: reply
+                )
+                return
             case .denied(let code, let message):
                 let response: BridgeResponse<String> = BridgeResponseBuilder.error(
                     id: bridgeRequest.id,
@@ -1103,16 +1169,24 @@ extension XPCRequestHandler {
                     sessionToken: newSessionToken,
                     sessionExpiresAt: newSessionExpiresAt
                 )
+                let sessionAttribution = self.pairedHumanAuditAttribution(
+                    request: bridgeRequest,
+                    callerIdentity: callerIdentity
+                )
+                let auditApprovedBy = bypassApproval
+                    ? "automation"
+                    : (interactiveApprovalAttribution ?? sessionAttribution.approvedBy)
                 self.recordAudit(
                     command: .getSSH,
                     itemId: match.id.uuidString,
                     itemName: match.name,
-                    approvedBy: bypassApproval
-                        ? "automation"
-                        : (interactiveApprovalAttribution ?? "session"),
+                    approvedBy: auditApprovedBy,
                     caller: callerIdentity,
                     requestedCommand: bridgeRequest.context.requestedCommand,
                     fullCommand: bridgeRequest.context.fullCommand,
+                    terminalPairingID: auditApprovedBy == "paired-human"
+                        ? sessionAttribution.pairingID
+                        : nil,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                     workspaceContext: bridgeRequest.context.workspaceContext
                 )

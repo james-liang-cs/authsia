@@ -60,6 +60,8 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     let authorityStore: AuthorityStoring
     let agentJITGrantStore: AgentJITGrantStoring
     let agentJITGrantAuthorizer: AgentJITGrantAuthorizer
+    let terminalPairingStore: TerminalPairingStoring
+    let terminalPairingCoordinator: TerminalPairingCoordinator
     let callerIdentityProvider: CallerIdentityProvider
     let callerIdentityRevalidationProvider: CallerIdentityRevalidationProvider
     let remoteJITApprovalRequestBuilder: RemoteJITApprovalRequestBuilding?
@@ -218,6 +220,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         },
         authorityStore: AuthorityStoring = KeychainAuthorityStore(),
         agentJITGrantStore: AgentJITGrantStoring? = nil,
+        terminalPairingStore: TerminalPairingStoring = TerminalPairingStore(),
         callerIdentityProvider: @escaping CallerIdentityProvider = {
             CallerIdentityExtractor.extract(from: NSXPCConnection.current())
         },
@@ -256,6 +259,8 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
             ?? AgentJITGrantStore(authorityStore: authorityStore)
         self.agentJITGrantStore = resolvedAgentJITGrantStore
         self.agentJITGrantAuthorizer = AgentJITGrantAuthorizer(store: resolvedAgentJITGrantStore)
+        self.terminalPairingStore = terminalPairingStore
+        self.terminalPairingCoordinator = TerminalPairingCoordinator()
         self.callerIdentityProvider = callerIdentityProvider
         self.callerIdentityRevalidationProvider = callerIdentityRevalidationProvider
         self.remoteJITApprovalRequestBuilder = remoteJITApprovalRequestBuilder

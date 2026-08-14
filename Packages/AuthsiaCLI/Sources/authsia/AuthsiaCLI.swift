@@ -30,7 +30,7 @@ struct Authsia: AsyncParsableCommand {
               unguard     Restart the current tab in normal terminal mode
               unlock      Start session to skip repeated prompts
               lock        End active Authsia sessions
-              status      Show app, session, shell, ssh agent, and ssh approval status
+              status      Show app, session, pairing, shell, ssh agent, and ssh approval status
               doctor      Check setup and suggest fixes
               setup       Set up or repair local CLI integration
               access      Manage automation access

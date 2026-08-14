@@ -132,9 +132,22 @@ extension XPCRequestHandler {
             return
         }
 
+        // Pairing is host-authoritative. An installed CLI that still preflights
+        // from IDE ancestry must not open Agent JIT for a paired human shell.
+        if bridgeRequest.type == .agentJITPreflight,
+           !shouldUseAgentJIT(request: bridgeRequest, callerIdentity: callerIdentity) {
+            let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
+                id: bridgeRequest.id,
+                payload: AgentJITPreflightResultPayload(grantIDs: [])
+            )
+            reply(encodeResponse(response), nil)
+            return
+        }
+
         if bridgeRequest.type == .directCLIPreflight {
             guard requestedCommand == "exec",
-                  AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity) else {
+                  AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
+                    || hasPairedHumanSession(request: bridgeRequest, callerIdentity: callerIdentity) else {
                 replyError(
                     id: bridgeRequest.id,
                     code: .policyDenied,

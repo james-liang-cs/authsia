@@ -61,6 +61,9 @@ public enum BridgeRequestType: String, Codable {
     case agentJITSnapshot
     case agentJITRevoke
     case agentJITRevokeAll
+    case terminalPairingComplete
+    /// Audit-only lifecycle marker. Pairing revocation is performed by `lock`.
+    case terminalPairingRevoke
 }
 
 public struct BridgeRequest: Codable, Equatable {
@@ -103,7 +106,7 @@ public struct BridgeOptions: Codable, Equatable {
 }
 
 public struct BridgeContext: Codable, Equatable {
-    public static let securityProtocolVersion = 3
+    public static let securityProtocolVersion = 4
     public static let chromeNativeHostRequestedCommand = "chromeNativeHost"
     public static let chromeNativeHostProcessName = "AuthsiaNativeHost"
     /// Stable Bridge session scope for Chrome autofill CLI invocations.
@@ -266,15 +269,18 @@ public enum BridgeErrorCode: String, Codable, Sendable {
     case multipleMatches
     case invalidRequest
     case appUnavailable
+    case requiresPairing
 }
 
 public struct BridgeErrorPayload: Codable, Equatable {
     public let code: BridgeErrorCode
     public let message: String
+    public let pairingRequestID: UUID?
 
-    public init(code: BridgeErrorCode, message: String) {
+    public init(code: BridgeErrorCode, message: String, pairingRequestID: UUID? = nil) {
         self.code = code
         self.message = message
+        self.pairingRequestID = pairingRequestID
     }
 }
 
@@ -313,6 +319,8 @@ public struct BridgePingPayload: Codable, Equatable, Sendable {
     public let sessionExpiresAt: Date?
     /// Live CLI access setting. Nil means the bridge predates this field.
     public let cliAccessEnabled: Bool?
+    /// Pairing for the requesting terminal and validated workspace, when active.
+    public let terminalPairing: TerminalPairing?
 
     public init(
         protocolVersion: String,
@@ -320,7 +328,8 @@ public struct BridgePingPayload: Codable, Equatable, Sendable {
         bundledCLIPath: String? = nil,
         sessionActive: Bool? = nil,
         sessionExpiresAt: Date? = nil,
-        cliAccessEnabled: Bool? = nil
+        cliAccessEnabled: Bool? = nil,
+        terminalPairing: TerminalPairing? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.appVersion = appVersion
@@ -328,6 +337,7 @@ public struct BridgePingPayload: Codable, Equatable, Sendable {
         self.sessionActive = sessionActive
         self.sessionExpiresAt = sessionExpiresAt
         self.cliAccessEnabled = cliAccessEnabled
+        self.terminalPairing = terminalPairing
     }
 }
 

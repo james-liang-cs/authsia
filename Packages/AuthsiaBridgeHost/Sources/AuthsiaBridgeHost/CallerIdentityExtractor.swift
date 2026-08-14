@@ -18,6 +18,8 @@ public enum CallerIdentityExtractor {
     static func extract(fromPID pid: pid_t) -> CallerIdentity? {
         guard pid > 0, let processName = Self.processName(for: pid) else { return nil }
         let parentContext = parentProcessContext(for: pid)
+        let controllingTerminal = TerminalSessionScope.controllingTerminal(pid: pid)
+        let hostCommand = renderedCommand(processArguments(for: pid))
 
         var code: SecCode?
         let pidAttr = [kSecGuestAttributePid as String: pid] as CFDictionary
@@ -30,7 +32,10 @@ public enum CallerIdentityExtractor {
                 signingTeamId: nil,
                 signingIdentity: nil,
                 parentProcess: parentContext.parent,
-                hostProcess: parentContext.host
+                hostProcess: parentContext.host,
+                controllingTerminal: controllingTerminal,
+                shellAncestryPrefix: parentContext.shellAncestryPrefix,
+                hostCommand: hostCommand
             )
         }
 
@@ -44,7 +49,10 @@ public enum CallerIdentityExtractor {
                 signingTeamId: nil,
                 signingIdentity: nil,
                 parentProcess: parentContext.parent,
-                hostProcess: parentContext.host
+                hostProcess: parentContext.host,
+                controllingTerminal: controllingTerminal,
+                shellAncestryPrefix: parentContext.shellAncestryPrefix,
+                hostCommand: hostCommand
             )
         }
 
@@ -59,7 +67,10 @@ public enum CallerIdentityExtractor {
                 signingTeamId: nil,
                 signingIdentity: nil,
                 parentProcess: parentContext.parent,
-                hostProcess: parentContext.host
+                hostProcess: parentContext.host,
+                controllingTerminal: controllingTerminal,
+                shellAncestryPrefix: parentContext.shellAncestryPrefix,
+                hostCommand: hostCommand
             )
         }
 
@@ -88,7 +99,10 @@ public enum CallerIdentityExtractor {
             signingTeamId: teamId,
             signingIdentity: signingAuthority,
             parentProcess: parentContext.parent,
-            hostProcess: parentContext.host
+            hostProcess: parentContext.host,
+            controllingTerminal: controllingTerminal,
+            shellAncestryPrefix: parentContext.shellAncestryPrefix,
+            hostCommand: hostCommand
         )
     }
 
@@ -161,26 +175,50 @@ public enum CallerIdentityExtractor {
         return arguments
     }
 
+    private static func renderedCommand(_ arguments: [String]) -> String? {
+        guard !arguments.isEmpty else { return nil }
+        return arguments.map(shellQuote).joined(separator: " ")
+    }
+
+    private static func shellQuote(_ argument: String) -> String {
+        guard !argument.isEmpty else { return "''" }
+        let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_/:=.,+-"))
+        guard argument.rangeOfCharacter(from: safe.inverted) != nil else { return argument }
+        return "'\(argument.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
     struct ParentProcessContext {
         let parent: ParentProcessInfo?
         let host: ParentProcessInfo?
+        let shellAncestryPrefix: [ParentProcessInfo]
     }
 
     static func parentProcessContext(from ancestry: [ParentProcessInfo]) -> ParentProcessContext {
+        let shellAncestryPrefix = Array(ancestry.prefix { process in
+            AgentJITCallerContext.trustedShellProcessNames.contains(process.processName.lowercased())
+        })
         let context = AgenticProcessDetector.parentProcessContext(from: ancestry)
         guard context.host == nil,
               let parent = context.parent,
               let parentIndex = ancestry.firstIndex(where: { $0.pid == parent.pid }),
               ancestry.indices.contains(parentIndex + 1) else {
-            return ParentProcessContext(parent: context.parent, host: context.host)
+            return ParentProcessContext(
+                parent: context.parent,
+                host: context.host,
+                shellAncestryPrefix: shellAncestryPrefix
+            )
         }
         let host = ancestry[parentIndex + 1]
         guard AgentJITCallerContext.isTrustedITermServer(parent, hostedBy: host) else {
-            return ParentProcessContext(parent: context.parent, host: context.host)
+            return ParentProcessContext(
+                parent: context.parent,
+                host: context.host,
+                shellAncestryPrefix: shellAncestryPrefix
+            )
         }
         // iTerm inserts its signed server between login and the app. Preserve the
         // helper as parent evidence while restoring the signed app as its host.
-        return ParentProcessContext(parent: parent, host: host)
+        return ParentProcessContext(parent: parent, host: host, shellAncestryPrefix: shellAncestryPrefix)
     }
 
     /// Walks up the process tree so bridge caller identity uses the same ancestry
@@ -207,7 +245,8 @@ public enum CallerIdentityExtractor {
                 signingIdentity: signing?.identity,
                 isPlatformBinary: signing?.isPlatformBinary,
                 executablePath: executablePath,
-                arguments: arguments
+                arguments: arguments,
+                startTimeSeconds: TerminalSessionScope.startTimeSeconds(pid: ppid)
             )
             ancestry.append(info)
             currentPID = ppid
