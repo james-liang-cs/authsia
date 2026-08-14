@@ -1464,7 +1464,7 @@ passthrough instead of blocking on `exec`'s secret-input guard. Known read-only 
 probes that agent and IDE harnesses spawn automatically — `docker context ls`/`inspect`, `docker`
 `version`/`info`/`ps`/`images`, `npm`/`pnpm`/`yarn` `view`/`info`/`ls`/`list`/`outdated`,
 `config get`/`list`, `npm ping`, `pip`/`pip3` `list`/`show`, `kubectl`/`terraform`/`tofu`/`go`
-`version`, `cargo` `metadata`/`tree`, `gcloud` `version`/`config list`/`config get-value`, and bare
+`version`, `kubectl config current-context`/`get-contexts`, `cargo` `metadata`/`tree`, `gcloud` `version`/`config list`/`config get-value`, and bare
 `--version`/`--help`
 invocations — also pass through without injecting secrets, forwarding automation credential markers,
 or firing a JIT preflight, so launching an agent tool does not request approval until a command
