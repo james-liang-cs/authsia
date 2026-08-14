@@ -556,7 +556,9 @@ and note references only. OTP and SSH references are rejected in that JIT path; 
 built-in SSH-agent flow. Direct agent commands that intentionally emit plaintext (`get`, `read`,
 `load`, and `inject`) are not authorized by JIT. Direct agent `authsia list` for passwords,
 API keys, certificates, notes, and SSH metadata runs through JIT preflight and returns only the approved
-named-folder subtrees or root-only scope.
+named-folder subtrees or root-only scope. When the host already requires a list
+grant, the CLI still preflights even if its local detector does not name the
+agent.
 
 Within a managed Authsia workspace, an active agent JIT grant follows the same
 agent session across descendant directories of the canonical workspace root.

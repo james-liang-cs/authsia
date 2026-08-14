@@ -443,6 +443,13 @@ When JIT is required:
    new folder paths and active scopes. No broad prompt names items or secrets.
 7. The bridge stores short-lived grants bound to the caller fingerprint,
    terminal/session scope, working directory, TTL, and folder-tree/root scope.
+   After local biometric approval, optional signing or parent/host fields may
+   be missing on the second read; process name, session scope, and working
+   directory must still match. The saved grant binds the pre-approval
+   fingerprint so later reuse cannot widen if signing evidence flickered. A
+   vault or grant-store reload failure fails closed. After a grant exists,
+   follow-up list or exec uses it even if the same TTY also looks eligible
+   for a one-request human bootstrap.
 8. Final secret reads must match an active grant.
 
 Agent attribution improves Access Center and audit readability, but it is not

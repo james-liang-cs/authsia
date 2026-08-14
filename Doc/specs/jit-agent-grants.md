@@ -411,7 +411,9 @@ The CLI starts JIT preflight when all of these are true:
    ancestry contains a known coding agent or automation-suspect IDE
    helper/extension host. A Bridge-validated paired-human session skips list
    JIT preflight; the host also returns empty grants without opening approval
-   when the CLI still preflights that caller.
+   when the CLI still preflights that caller. When the host already requires a
+   list grant, the CLI still preflights even if its local detector does not
+   name the agent.
 4. The command has secret inputs through a type scope, an env file, or
    `authsia://` references, or it is a Vault metadata list for passwords,
    API keys, certificates, notes, or SSH keys.
@@ -502,7 +504,13 @@ authorization.
    duration, reuse policy, and exact item metadata.
 6. A multiple-item decision persists atomically; denial or storage failure
    creates no partial grant.
-7. Approved grants are saved in authenticated Bridge-owned authority and
+7. After local biometric approval, the Bridge revalidates the caller and
+   approved item set before saving. Optional signing or parent/host fields may
+   be missing on that second read after Touch ID; process name, session scope,
+   and working directory must still match. The saved grant binds to the
+   pre-approval fingerprint so later reuse cannot widen if signing evidence
+   flickered. A vault or grant-store reload failure still fails closed.
+   Approved grants are then saved in authenticated Bridge-owned authority and
    returned to the CLI.
 8. The `exec` internal metadata list can use the grant's `list` capability only
    within the displayed exact-item or explicit folder scope.
@@ -526,7 +534,8 @@ persists the approved batch as one exact-item grant containing every resolved
 item identity. This preserves the signed remote approval contract while
 avoiding one Access Center grant per folder. If no matching list grant exists,
 the bridge fails closed instead of falling back to the normal list approval
-prompt:
+prompt. After a grant exists, the follow-up list or exec uses it even if the
+same TTY caller also looks eligible for a one-request human bootstrap:
 
 ```text
 Agent list requests require a valid JIT preflight grant for a supported Vault scope.
