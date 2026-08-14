@@ -335,10 +335,11 @@ Classification runs twice, from different vantage points:
   (`XPCRequestHandler.isAgentJITCaller`), using the XPC peer's ancestry.
 
 These must reach the same verdict for the same caller. If the host demands a
-grant the CLI never sought, the request fails with no grant obtainable and no
-way for the user to satisfy the error. If the CLI still preflights a caller the
-host does not treat as an Agent JIT caller, the host returns empty grants
-without opening approval or writing an `agentJITPreflight` audit record.
+list grant the CLI's local detector did not expect — including an unrecognized
+agent such as Grok — the CLI still runs list JIT preflight. If the CLI still
+preflights a caller the host does not treat as an Agent JIT caller, the host
+returns empty grants without opening approval or writing an `agentJITPreflight`
+audit record.
 
 Because the two run in different processes, they read different evidence: the
 CLI has argv for the whole ancestry, while the host has code-signing identity,

@@ -94,6 +94,7 @@ struct List: ParsableCommand {
                         parentEnvironment: parentEnvironment,
                         processAncestry: processAncestry,
                         chromeNativeHost: chromeNativeHost,
+                        honorHostGrantRequirement: true,
                         client: jitClient
                     )
                 }
@@ -135,17 +136,21 @@ struct List: ParsableCommand {
         processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
         chromeNativeHost: Bool = false,
         hasCurrentTerminalPairing: () -> Bool = { false },
+        honorHostGrantRequirement: Bool = false,
         client: ExecJITPreflightClient = AuthsiaBridgeClient.shared
     ) throws {
+        let locallyRequired = Exec.shouldRunJITPreflight(
+            environment: parentEnvironment,
+            processAncestry: processAncestry
+        )
         guard !chromeNativeHost,
-              Exec.shouldRunJITPreflight(environment: parentEnvironment, processAncestry: processAncestry),
+              honorHostGrantRequirement || locallyRequired,
               let reference = jitPreflightReference(scope: scope, folder: folder) else {
             return
         }
-        // The Bridge returns a pairing only when it belongs to this exact
-        // non-agent caller, TTY, live shell anchor, and workspace. Keep the
-        // authoritative host check ahead of ancestry-based list preflight so
-        // an IDE-hosted human shell does not request an agent grant.
+        // honorHostGrantRequirement is for the host's grant-required denial.
+        // The local name list does not know Grok and other unnamed agents;
+        // the host already classified the caller. Pairing still skips this.
         guard !hasCurrentTerminalPairing() else { return }
         _ = try client.agentJITPreflight(
             AgentJITPreflightPayload(requestedCommand: "list", references: [reference])

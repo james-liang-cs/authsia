@@ -453,6 +453,57 @@ struct AgentJITPreflightTests {
         #expect(client.payloads.count == 2)
     }
 
+    @Test("unrecognized agent ancestry does not locally enable list preflight")
+    func unrecognizedAgentAncestryDoesNotLocallyEnableListPreflight() {
+        #expect(!Exec.shouldRunJITPreflight(
+            environment: [:],
+            processAncestry: Self.grokBuildAncestry
+        ))
+    }
+
+    @Test("host grant requirement preflights list even for unrecognized agent ancestry")
+    func hostGrantRequirementPreflightsUnrecognizedAgentList() throws {
+        let client = RecordingJITPreflightClient()
+
+        try List.runJITPreflight(
+            scope: .apiKeys,
+            folder: nil,
+            parentEnvironment: [:],
+            processAncestry: Self.grokBuildAncestry,
+            honorHostGrantRequirement: true,
+            client: client
+        )
+
+        #expect(client.payloads == [
+            AgentJITPreflightPayload(
+                requestedCommand: "list",
+                references: [
+                    AgentJITPreflightReference(
+                        type: "api-key",
+                        query: "",
+                        folderPath: nil,
+                        isFolderScoped: false
+                    ),
+                ]
+            ),
+        ])
+    }
+
+    @Test("unrecognized agent list still skips preflight without a host grant requirement")
+    func unrecognizedAgentListSkipsPreflightWithoutHostGrantRequirement() throws {
+        let client = RecordingJITPreflightClient()
+
+        try List.runJITPreflight(
+            scope: .apiKeys,
+            folder: nil,
+            parentEnvironment: [:],
+            processAncestry: Self.grokBuildAncestry,
+            client: client
+        )
+
+        #expect(client.payloads == [])
+    }
+
     @Test("paired VS Code terminal skips list JIT preflight")
     func pairedVSCodeTerminalSkipsListJITPreflight() throws {
         let client = RecordingJITPreflightClient()
@@ -537,6 +588,12 @@ struct AgentJITPreflightTests {
             sshKeys: []
         )
     }
+
+    private static let grokBuildAncestry = [
+        AgenticProcessReference(processName: "authsia", bundleIdentifier: "authsia"),
+        AgenticProcessReference(processName: "zsh", bundleIdentifier: nil),
+        AgenticProcessReference(processName: "grok", bundleIdentifier: nil),
+    ]
 
     private static let humanTerminalAncestry = [
         AgenticProcessReference(processName: "authsia", bundleIdentifier: "com.authsia.cli"),
