@@ -352,18 +352,11 @@ extension XPCRequestHandler {
             return .needsPairing
         }
 
-        if shouldUseAgentJIT(request: request, callerIdentity: callerIdentity)
-            && !interactiveHumanBootstrapEligible(
+        if shouldUseAgentJIT(request: request, callerIdentity: callerIdentity) {
+            let bootstrapEligible = interactiveHumanBootstrapEligible(
                 request: request,
                 callerIdentity: callerIdentity
-            ) {
-            guard request.context.requestedCommand == "exec" else {
-                return .denied(
-                    code: .policyDenied,
-                    message: Self.unsupportedAgentJITCommandMessage(for: request.context.requestedCommand)
-                        ?? "Agent secret reads are only allowed through authsia exec with a valid JIT grant."
-                )
-            }
+            )
             do {
                 if let grant = try agentJITGrant(
                     capability: .exec,
@@ -375,6 +368,35 @@ extension XPCRequestHandler {
                 ) {
                     return .allowed(approvedBy: "jit", needsApproval: false, agentJITGrantID: grant.id)
                 }
+            } catch {
+                if !bootstrapEligible {
+                    return .denied(
+                        code: .policyDenied,
+                        message: "Agent exec secret reads require a valid JIT preflight grant for this item scope."
+                    )
+                }
+            }
+            if bootstrapEligible {
+                let needsApproval = !validateSessionAndRequest(
+                    request,
+                    sessionToken: request.sessionToken,
+                    callerIdentity: callerIdentity
+                )
+                let paired = pairedHumanSession(request: request, callerIdentity: callerIdentity)
+                return .allowed(
+                    approvedBy: needsApproval ? "biometric" : (paired == nil ? "session" : "paired-human"),
+                    needsApproval: needsApproval,
+                    agentJITGrantID: nil
+                )
+            }
+            guard request.context.requestedCommand == "exec" else {
+                return .denied(
+                    code: .policyDenied,
+                    message: Self.unsupportedAgentJITCommandMessage(for: request.context.requestedCommand)
+                        ?? "Agent secret reads are only allowed through authsia exec with a valid JIT grant."
+                )
+            }
+            do {
                 if let caller = AgentJITCallerContext.fingerprint(
                     for: request,
                     caller: callerIdentity
@@ -506,12 +528,9 @@ extension XPCRequestHandler {
         activeJITGrants: [AgentJITGrant]? = nil,
         callerUsesAgentJIT: Bool? = nil
     ) -> BridgeListPayload {
-        let callerUsesAgentJIT = callerUsesAgentJIT ?? (
-            shouldUseAgentJIT(request: request, callerIdentity: callerIdentity)
-                && !interactiveHumanBootstrapEligible(
-                    request: request,
-                    callerIdentity: callerIdentity
-                )
+        let callerUsesAgentJIT = callerUsesAgentJIT ?? shouldUseAgentJIT(
+            request: request,
+            callerIdentity: callerIdentity
         )
         let jitScopes = activeJITScopes ?? (
             callerUsesAgentJIT

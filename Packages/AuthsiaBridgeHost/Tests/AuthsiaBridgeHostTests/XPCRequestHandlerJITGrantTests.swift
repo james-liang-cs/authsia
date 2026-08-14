@@ -1548,6 +1548,91 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(approver.requests.first?.prompt.contains("temporary scoped list access"), true)
     }
 
+    func testPreflightKeepsGrantWhenRevalidationDropsOptionalSigningFields() async throws {
+        let store = MemoryAgentJITGrantStore()
+        let approver = JITApprovalTracker(result: true)
+        let unsignedRevalidationIdentity = CallerIdentity(
+            pid: callerIdentity.pid,
+            processName: callerIdentity.processName,
+            bundleIdentifier: callerIdentity.bundleIdentifier,
+            signingTeamId: nil,
+            signingIdentity: nil,
+            parentProcess: callerIdentity.parentProcess,
+            hostProcess: callerIdentity.hostProcess
+        )
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            callerIdentityRevalidationProvider: { _ in unsignedRevalidationIdentity }
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "list",
+            references: [
+                AgentJITPreflightReference(
+                    type: "password",
+                    query: "",
+                    folderPath: "Team/API",
+                    isFolderScoped: true
+                ),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            requestedCommand: "list"
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(response.payload?.grantIDs.count, 1)
+        XCTAssertEqual(store.grants.count, 1)
+        XCTAssertEqual(store.grants.first?.callerFingerprint.signingTeamId, "TEAM")
+        XCTAssertEqual(store.grants.first?.callerFingerprint.signingIdentity, "Developer ID Application")
+    }
+
+    func testListUsesExistingJITGrantForTTYCallerWithoutRuntimeContext() async throws {
+        let grokIdentity = CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: ParentProcessInfo(
+                pid: 41,
+                processName: "grok-macos-aarch64",
+                bundleIdentifier: "xai-grok-pager"
+            )
+        )
+        let context = execContext(requestedCommand: "list")
+        let grant = AgentJITGrant.fixture(
+            callerFingerprint: AgentJITCallerFingerprint(
+                processName: grokIdentity.processName,
+                bundleIdentifier: grokIdentity.bundleIdentifier,
+                signingTeamId: grokIdentity.signingTeamId,
+                signingIdentity: grokIdentity.signingIdentity,
+                parentProcessName: grokIdentity.parentProcess?.processName,
+                parentBundleIdentifier: grokIdentity.parentProcess?.bundleIdentifier,
+                hostProcessName: grokIdentity.hostProcess?.processName,
+                hostBundleIdentifier: grokIdentity.hostProcess?.bundleIdentifier,
+                sessionScope: context.sessionScope,
+                workingDirectory: context.workingDirectory
+            ),
+            folderScope: .folder("Team/API"),
+            capabilities: [.list],
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        let handler = makeHandler(
+            store: MemoryAgentJITGrantStore([grant]),
+            callerIdentity: grokIdentity
+        )
+
+        let response = try await list(handler, requestedCommand: "list")
+
+        XCTAssertNil(response.error)
+        XCTAssertNotNil(response.payload)
+        XCTAssertEqual(response.payload?.passwords.map(\.name).sorted(), ["API", "API Nested", "Shared"])
+    }
+
     func testBroadListPreflightApprovesOnceAndPersistsOneExactItemGrant() async throws {
         let store = MemoryAgentJITGrantStore()
         let approver = JITApprovalTracker(result: true)

@@ -127,16 +127,15 @@ extension XPCRequestHandler {
             guard let bypassApproval = self.resolveAutomationApproval(
                 for: bridgeRequest, itemFolderPath: nil, itemKind: "list", reply: reply
             ) else { return }
+            let jitEligible = !bypassApproval
+                && self.shouldUseAgentJIT(request: bridgeRequest, callerIdentity: callerIdentity)
             let interactiveHumanBootstrap = self.interactiveHumanBootstrapEligible(
                 request: bridgeRequest,
                 callerIdentity: callerIdentity
             )
-            let callerUsesAgentJIT = !bypassApproval
-                && self.shouldUseAgentJIT(request: bridgeRequest, callerIdentity: callerIdentity)
-                && !interactiveHumanBootstrap
             let jitListScopes: [AgentJITFolderScope]
             let jitListGrants: [AgentJITGrant]
-            if !callerUsesAgentJIT {
+            if !jitEligible {
                 jitListScopes = []
                 jitListGrants = []
             } else {
@@ -167,6 +166,10 @@ extension XPCRequestHandler {
                     return
                 }
             }
+            // A TTY unnamed agent can look bootstrap-eligible, but after JIT
+            // approval the grant must still authorize the follow-up list.
+            let callerUsesAgentJIT = jitEligible
+                && !(interactiveHumanBootstrap && jitListScopes.isEmpty && jitListGrants.isEmpty)
             let agentCommandListWithoutJIT = bridgeRequest.context.requestedCommand != "list"
                 && jitListScopes.isEmpty
                 && jitListGrants.isEmpty

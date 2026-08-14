@@ -474,8 +474,20 @@ extension XPCRequestHandler {
                     for: bridgeRequest,
                     caller: freshCallerIdentity
                   ),
-                  freshCaller == caller,
+                  Self.agentJITCallersStillMatch(caller, freshCaller),
                   Self.isCliAccessEnabled else {
+                recordAudit(
+                    command: .agentJITPreflight,
+                    itemId: "revalidation",
+                    itemName: "revalidation",
+                    approvedBy: "denied:revalidation",
+                    caller: callerIdentity,
+                    requestedCommand: bridgeRequest.context.requestedCommand,
+                    fullCommand: bridgeRequest.context.fullCommand,
+                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                    workspaceContext: bridgeRequest.context.workspaceContext,
+                    environmentScope: payload.environmentScope
+                )
                 replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
                 return
             }
@@ -500,7 +512,7 @@ extension XPCRequestHandler {
                         itemEnvironments: resolution.itemEnvironments.isEmpty
                             ? agentJITItemEnvironments(payload.environmentScope)
                             : resolution.itemEnvironments,
-                        caller: freshCaller,
+                        caller: caller,
                         agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                         now: revalidationDate
                     )
@@ -512,36 +524,62 @@ extension XPCRequestHandler {
                     }
                 }
             } catch {
+                recordAudit(
+                    command: .agentJITPreflight,
+                    itemId: "revalidation",
+                    itemName: "revalidation",
+                    approvedBy: "denied:revalidation-reload",
+                    caller: callerIdentity,
+                    requestedCommand: bridgeRequest.context.requestedCommand,
+                    fullCommand: bridgeRequest.context.fullCommand,
+                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                    workspaceContext: bridgeRequest.context.workspaceContext,
+                    environmentScope: payload.environmentScope
+                )
                 replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
                 return
             }
             let freshSnapshot = localAgentJITAuthoritySnapshot(
                 bridgeRequestID: bridgeRequest.id,
                 timing: timing,
-                caller: freshCaller,
+                caller: caller,
                 capabilities: grantCapabilities,
                 environmentScope: payload.environmentScope,
                 pendingResolutions: freshPendingResolutions
             )
-            guard freshSnapshot == approvedSnapshot,
+            guard Self.agentJITAuthorityStillMatches(freshSnapshot, approvedSnapshot),
                   pairedRemoteAuthorityStillMatches(
                     approvedResolutions,
                     bridgeRequestID: bridgeRequest.id,
                     timing: timing,
-                    caller: freshCaller,
+                    caller: caller,
                     capabilities: grantCapabilities,
                     environmentScope: payload.environmentScope,
                     freshResolutions: freshPendingResolutions
                   ) else {
+                recordAudit(
+                    command: .agentJITPreflight,
+                    itemId: "revalidation",
+                    itemName: "revalidation",
+                    approvedBy: "denied:revalidation-scope",
+                    caller: callerIdentity,
+                    requestedCommand: bridgeRequest.context.requestedCommand,
+                    fullCommand: bridgeRequest.context.fullCommand,
+                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                    workspaceContext: bridgeRequest.context.workspaceContext,
+                    environmentScope: payload.environmentScope
+                )
                 replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
                 return
             }
 
+            // Bind the grant to the pre-approval fingerprint so a Touch ID
+            // signing flicker cannot widen later reuse.
             let pendingGrants: [AgentJITGrant]
             if isBroadListBatch, let approved = approvedResolutions.first {
                 pendingGrants = [
                     makeAgentJITGrant(
-                        caller: freshCaller,
+                        caller: caller,
                         scope: .root,
                         capabilities: Set(grantCapabilities),
                         createdAt: timing.issuedAt,
@@ -555,7 +593,7 @@ extension XPCRequestHandler {
             } else {
                 pendingGrants = approvedResolutions.map { approved in
                     makeAgentJITGrant(
-                        caller: freshCaller,
+                        caller: caller,
                         scope: approved.resolution.scope,
                         capabilities: Set(grantCapabilities),
                         createdAt: timing.issuedAt,
@@ -609,6 +647,46 @@ extension XPCRequestHandler {
             payload: AgentJITPreflightResultPayload(grantIDs: grantIDs)
         )
         reply(encodeResponse(response), nil)
+    }
+
+    /// Revalidation may lose optional signing or parent/host fields after Touch ID
+    /// without the caller having changed. Required session and workspace bindings
+    /// must still agree.
+    private static func agentJITCallersStillMatch(
+        _ original: AgentJITCallerFingerprint,
+        _ fresh: AgentJITCallerFingerprint
+    ) -> Bool {
+        original.processName == fresh.processName
+            && optionalRevalidationMatch(original.bundleIdentifier, fresh.bundleIdentifier)
+            && optionalRevalidationMatch(original.signingTeamId, fresh.signingTeamId)
+            && optionalRevalidationMatch(original.signingIdentity, fresh.signingIdentity)
+            && optionalRevalidationMatch(original.parentProcessName, fresh.parentProcessName)
+            && optionalRevalidationMatch(original.parentBundleIdentifier, fresh.parentBundleIdentifier)
+            && optionalRevalidationMatch(original.hostProcessName, fresh.hostProcessName)
+            && optionalRevalidationMatch(original.hostBundleIdentifier, fresh.hostBundleIdentifier)
+            && original.sessionScope == fresh.sessionScope
+            && original.workingDirectory == fresh.workingDirectory
+    }
+
+    private static func optionalRevalidationMatch(_ original: String?, _ fresh: String?) -> Bool {
+        switch (original, fresh) {
+        case (nil, _), (_, nil):
+            return true
+        case let (original?, fresh?):
+            return original == fresh
+        }
+    }
+
+    private static func agentJITAuthorityStillMatches(
+        _ lhs: AgentJITLocalAuthoritySnapshot,
+        _ rhs: AgentJITLocalAuthoritySnapshot
+    ) -> Bool {
+        lhs.bridgeRequestID == rhs.bridgeRequestID
+            && lhs.requestIssuedAtMilliseconds == rhs.requestIssuedAtMilliseconds
+            && lhs.capabilities == rhs.capabilities
+            && lhs.environmentScope == rhs.environmentScope
+            && lhs.grantExpiresAtMilliseconds == rhs.grantExpiresAtMilliseconds
+            && lhs.pendingResolutions == rhs.pendingResolutions
     }
 
     private func localAgentJITAuthoritySnapshot(
