@@ -5,6 +5,7 @@ public enum AuthorityRecordType: String, Codable, Sendable {
     case agentJITGrant
     case automationCredential
     case executionLease
+    case terminalPairing
 }
 
 public struct AuthorityRecord: Codable, Equatable, Identifiable, Sendable {

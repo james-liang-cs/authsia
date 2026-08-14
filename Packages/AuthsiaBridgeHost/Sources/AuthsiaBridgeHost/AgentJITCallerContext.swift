@@ -126,8 +126,14 @@ public enum AgentJITCallerContext {
         now: Date = Date(),
         processStartTime: (Int32) -> UInt64? = { TerminalSessionScope.startTimeSeconds(pid: $0) }
     ) -> TerminalPairing? {
+        // `agentRuntimeContext` is client-declared, so an agent simply omits it.
+        // Host-derived agent evidence is the control that has to hold here, the
+        // same way `terminalPairingEligible` and `terminalPairingsOwnedByCaller`
+        // apply it: a shell-named agent stays inside the shell ancestry prefix
+        // and would otherwise reach the anchor.
         guard request.context.agentRuntimeContext == nil,
               let callerIdentity,
+              !hasAgenticCaller(callerIdentity),
               let controllingTerminal = callerIdentity.controllingTerminal,
               let shellAncestryPrefix = callerIdentity.shellAncestryPrefix,
               let workspaceRoot = terminalPairingWorkspaceRoot(request: request) else {

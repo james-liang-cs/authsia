@@ -5,12 +5,14 @@ import AuthenticatorBridge
 
 final class TerminalPairingStoreTests: XCTestCase {
     private var directory: URL!
-    private var fileURL: URL!
+    private var legacyFileURL: URL!
+    private var authorityStore: TestAuthorityStore!
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("authsia-terminal-pairing-tests-\(UUID().uuidString)", isDirectory: true)
-        fileURL = directory.appendingPathComponent("pairings.json")
+        legacyFileURL = directory.appendingPathComponent("terminal-pairings.json")
+        authorityStore = TestAuthorityStore()
     }
 
     override func tearDownWithError() throws {
@@ -33,7 +35,10 @@ final class TerminalPairingStoreTests: XCTestCase {
         let expired = makePairing(anchorPID: 12, startTime: 200, expiresAt: now)
         let exited = makePairing(anchorPID: 13, startTime: 300, expiresAt: now.addingTimeInterval(60))
         let reused = makePairing(anchorPID: 14, startTime: 400, expiresAt: now.addingTimeInterval(60))
-        let store = TerminalPairingStore(fileURL: fileURL) { pid in
+        let store = TerminalPairingStore(
+            authorityStore: authorityStore,
+            legacyFileURL: legacyFileURL
+        ) { pid in
             switch pid {
             case 11: 100
             case 12: 200
@@ -47,24 +52,63 @@ final class TerminalPairingStoreTests: XCTestCase {
         XCTAssertEqual(try store.loadAll().map(\.id), [valid.id])
     }
 
-    func testCorruptStoreFailsClosed() throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data("not-json".utf8).write(to: fileURL)
-        let store = makeStore(startTime: 100)
+    /// The binding digest covers only the payload, so an authority record whose
+    /// envelope extends the lifetime must fail closed rather than grant the
+    /// longer pairing.
+    func testEnvelopeLifetimeExtensionFailsClosed() throws {
+        let pairing = makePairing()
+        let store = makeStore(startTime: pairing.anchorShellStartTime)
+        try store.save(pairing)
+
+        let record = try XCTUnwrap(authorityStore.allRecords().first)
+        authorityStore.upsert(AuthorityRecord(
+            type: record.type,
+            id: record.id,
+            createdAt: record.createdAt,
+            expiresAt: record.expiresAt.addingTimeInterval(3_600),
+            revokedAt: record.revokedAt,
+            maximumUses: record.maximumUses,
+            consumedUses: record.consumedUses,
+            bindingDigest: record.bindingDigest,
+            displayMetadata: record.displayMetadata,
+            payload: record.payload
+        ))
 
         XCTAssertThrowsError(try store.loadAll()) { error in
             XCTAssertEqual(error as? TerminalPairingStoreError, .corruptedStore)
         }
     }
 
-    private func makeStore(startTime: UInt64) -> TerminalPairingStore {
-        TerminalPairingStore(fileURL: fileURL) { _ in startTime }
+    /// Plaintext pairings from the file-backed store were forgeable by any
+    /// same-user process, so they are quarantined instead of trusted.
+    func testLegacyPlaintextFileIsQuarantinedNotLoaded() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONEncoder().encode([makePairing()]).write(to: legacyFileURL)
+
+        let store = makeStore(startTime: 100)
+
+        XCTAssertEqual(try store.loadAll(), [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFileURL.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: legacyFileURL.appendingPathExtension("legacy").path
+            )
+        )
     }
 
+    private func makeStore(startTime: UInt64) -> TerminalPairingStore {
+        TerminalPairingStore(
+            authorityStore: authorityStore,
+            legacyFileURL: legacyFileURL
+        ) { _ in startTime }
+    }
+
+    /// Whole-second dates: the store encodes payloads as ISO-8601, which drops
+    /// sub-second precision on round trip.
     private func makePairing(
         anchorPID: Int32 = 11,
         startTime: UInt64 = 100,
-        expiresAt: Date = Date().addingTimeInterval(60)
+        expiresAt: Date = Date(timeIntervalSince1970: 2_000)
     ) -> TerminalPairing {
         TerminalPairing(
             id: UUID(),

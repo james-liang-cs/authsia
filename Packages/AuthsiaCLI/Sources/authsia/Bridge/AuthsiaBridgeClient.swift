@@ -212,6 +212,10 @@ final class AuthsiaBridgeClient:
     /// Cached after the first successful security-protocol ping in this process.
     private var hasVerifiedSecurityProtocol = false
 
+    /// One pairing prompt per invocation. A retry that is still told to pair
+    /// surfaces the host error instead of prompting for another code forever.
+    private var hasAttemptedTerminalPairing = false
+
     typealias XPCReplyHandler = (Data?, NSError?) -> Void
     typealias XPCProxyErrorHandler = (Error) -> Void
 
@@ -1807,7 +1811,9 @@ final class AuthsiaBridgeClient:
         }
 
         if request.type != .terminalPairingComplete,
+           !hasAttemptedTerminalPairing,
            let pairingRequestID = Self.pairingRequestID(in: responseData) {
+            hasAttemptedTerminalPairing = true
             let pairingSession = try completeTerminalPairing(
                 pairingRequestID: pairingRequestID,
                 context: request.context

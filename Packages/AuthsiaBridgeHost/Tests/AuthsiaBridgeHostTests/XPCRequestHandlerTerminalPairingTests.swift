@@ -20,7 +20,8 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         let handler = XPCRequestHandler(
             approver: TerminalPairingApprovalTracker(),
             terminalPairingStore: TerminalPairingStore(
-                fileURL: directory.appendingPathComponent("terminal-pairings.json")
+                authorityStore: TestAuthorityStore(),
+                legacyFileURL: directory.appendingPathComponent("terminal-pairings.json")
             ),
             callerIdentityProvider: { caller }
         )
@@ -68,7 +69,8 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         let handler = XPCRequestHandler(
             approver: approver,
             terminalPairingStore: TerminalPairingStore(
-                fileURL: directory.appendingPathComponent("terminal-pairings.json")
+                authorityStore: TestAuthorityStore(),
+                legacyFileURL: directory.appendingPathComponent("terminal-pairings.json")
             ),
             callerIdentityProvider: { caller }
         )
@@ -122,7 +124,8 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         let handler = XPCRequestHandler(
             approver: approver,
             terminalPairingStore: TerminalPairingStore(
-                fileURL: directory.appendingPathComponent("terminal-pairings.json")
+                authorityStore: TestAuthorityStore(),
+                legacyFileURL: directory.appendingPathComponent("terminal-pairings.json")
             ),
             callerIdentityProvider: { caller }
         )
@@ -178,7 +181,8 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         )
         let approver = TerminalPairingApprovalTracker()
         let pairingStore = TerminalPairingStore(
-            fileURL: directory.appendingPathComponent("terminal-pairings.json")
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: directory.appendingPathComponent("terminal-pairings.json")
         )
         let handler = XPCRequestHandler(
             approver: approver,
@@ -450,6 +454,31 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         XCTAssertNotEqual(response.error?.code, .invalidRequest)
     }
 
+    /// `agentRuntimeContext` is client-declared, so the control that has to hold
+    /// is host-derived agent evidence. A shell-named agent stays inside the shell
+    /// ancestry prefix and reaches the paired anchor, so the pairing must not
+    /// authorize it even though every anchor binding matches.
+    func testHostDerivedAgentCannotConsumePairing() async throws {
+        let fixture = try makePairedIDEFixture(
+            command: "/usr/local/bin/authsia get password deploy",
+            agenticParentName: "claude"
+        )
+        defer { fixture.tearDown() }
+
+        XCTAssertNil(
+            fixture.handler.pairedHumanSession(
+                request: fixture.request(type: .getPassword, requestedCommand: "get"),
+                callerIdentity: fixture.caller
+            )
+        )
+        XCTAssertTrue(
+            fixture.handler.shouldUseAgentJIT(
+                request: fixture.request(type: .getPassword, requestedCommand: "get"),
+                callerIdentity: fixture.caller
+            )
+        )
+    }
+
     func testPairedIDEUnlockRequestsLocalApprovalAndReturnsSession() async throws {
         let fixture = try makePairedIDEFixture(command: "/usr/local/bin/authsia unlock")
         defer { fixture.tearDown() }
@@ -467,6 +496,7 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
 
     private func makePairedIDEFixture(
         command: String,
+        agenticParentName: String? = nil,
         listPayload: BridgeListPayload = BridgeListPayload(
             accounts: [],
             passwords: [],
@@ -482,11 +512,16 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
             WorkspaceAuthority.validatedRootPath(directory.path, containing: directory.path)
         )
         let terminal = "ttys-runtime-\(UUID().uuidString)"
-        let caller = try makeIDECaller(terminal: terminal, command: command)
+        let caller = try makeIDECaller(
+            terminal: terminal,
+            command: command,
+            agenticParentName: agenticParentName
+        )
         let shell = try XCTUnwrap(caller.shellAncestryPrefix?.first)
         let startTime = try XCTUnwrap(shell.startTimeSeconds)
         let pairingStore = TerminalPairingStore(
-            fileURL: directory.appendingPathComponent("terminal-pairings.json")
+            authorityStore: TestAuthorityStore(),
+            legacyFileURL: directory.appendingPathComponent("terminal-pairings.json")
         )
         try pairingStore.save(
             TerminalPairing(
@@ -541,7 +576,13 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         )
     }
 
-    private func makeIDECaller(terminal: String, command: String) throws -> CallerIdentity {
+    /// `agenticParentName` models an agent that is itself shell-named, so it stays
+    /// inside `shellAncestryPrefix` and still reaches the paired anchor shell.
+    private func makeIDECaller(
+        terminal: String,
+        command: String,
+        agenticParentName: String? = nil
+    ) throws -> CallerIdentity {
         let shellPID = getpid()
         let shellStart = try XCTUnwrap(TerminalSessionScope.startTimeSeconds(pid: shellPID))
         let shell = ParentProcessInfo(
@@ -556,7 +597,14 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
             bundleIdentifier: "app.authsia.cli",
             signingTeamId: "TEAM",
             signingIdentity: "Developer ID Application",
-            parentProcess: shell,
+            parentProcess: agenticParentName.map {
+                ParentProcessInfo(
+                    pid: shellPID,
+                    processName: $0,
+                    bundleIdentifier: nil,
+                    startTimeSeconds: shellStart
+                )
+            } ?? shell,
             hostProcess: ParentProcessInfo(
                 pid: shellPID,
                 processName: "Code Helper",

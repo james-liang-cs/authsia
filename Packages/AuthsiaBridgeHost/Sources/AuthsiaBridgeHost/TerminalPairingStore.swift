@@ -1,4 +1,5 @@
 #if os(macOS)
+import CryptoKit
 import Foundation
 import AuthenticatorBridge
 
@@ -25,23 +26,33 @@ public nonisolated protocol TerminalPairingStoring: Sendable {
     func revokeAll() throws -> [TerminalPairing]
 }
 
+/// A pairing is a human-attestation grant, so it is held in the same
+/// Keychain-backed authority store as Agent JIT grants rather than a plain
+/// file. A same-user process must not be able to forge `paired-human` trust by
+/// writing JSON it can fully observe about itself.
 public nonisolated final class TerminalPairingStore: TerminalPairingStoring, @unchecked Sendable {
     private static let mutationLock = NSLock()
 
-    private let fileURL: URL
+    private let authorityStore: AuthorityStoring
+    private let legacyFileURL: URL
     private let fileManager: FileManager
     private let processStartTime: @Sendable (Int32) -> UInt64?
 
     public init(
-        fileURL: URL = TerminalPairingStore.defaultFileURL(),
+        authorityStore: AuthorityStoring = KeychainAuthorityStore(),
+        legacyFileURL: URL = TerminalPairingStore.defaultLegacyFileURL(),
         fileManager: FileManager = .default,
         processStartTime: @escaping @Sendable (Int32) -> UInt64? = {
             TerminalSessionScope.startTimeSeconds(pid: $0)
         }
     ) {
-        self.fileURL = fileURL
+        self.authorityStore = authorityStore
+        self.legacyFileURL = legacyFileURL
         self.fileManager = fileManager
         self.processStartTime = processStartTime
+        try? locked {
+            try quarantineLegacyFileUnlocked()
+        }
     }
 
     public func loadAll() throws -> [TerminalPairing] {
@@ -55,8 +66,9 @@ public nonisolated final class TerminalPairingStore: TerminalPairingStoring, @un
                 $0.expiresAt > now
                     && processStartTime($0.anchorShellPID) == $0.anchorShellStartTime
             }
-            if valid != stored {
-                try persistUnlocked(valid)
+            let validIDs = Set(valid.map(\.id))
+            for pairing in stored where !validIDs.contains(pairing.id) {
+                try authorityStore.removeRecord(id: pairing.id, ofType: .terminalPairing)
             }
             return valid
         }
@@ -69,23 +81,16 @@ public nonisolated final class TerminalPairingStore: TerminalPairingStoring, @un
     public func saveAll(_ pairings: [TerminalPairing]) throws {
         guard !pairings.isEmpty else { return }
         try locked {
-            var stored = try loadAllUnlocked()
-            for pairing in pairings {
-                stored.removeAll { $0.id == pairing.id }
-                stored.append(pairing)
-            }
-            try persistUnlocked(stored)
+            try authorityStore.upsert(try pairings.map(Self.record(from:)))
         }
     }
 
     public func revoke(id: UUID) throws -> TerminalPairing {
         try locked {
-            var stored = try loadAllUnlocked()
-            guard let index = stored.firstIndex(where: { $0.id == id }) else {
+            guard let pairing = try loadAllUnlocked().first(where: { $0.id == id }) else {
                 throw TerminalPairingStoreError.notFound(id)
             }
-            let pairing = stored.remove(at: index)
-            try persistUnlocked(stored)
+            try authorityStore.removeRecord(id: id, ofType: .terminalPairing)
             return pairing
         }
     }
@@ -93,7 +98,9 @@ public nonisolated final class TerminalPairingStore: TerminalPairingStoring, @un
     public func revokeAll() throws -> [TerminalPairing] {
         try locked {
             let stored = try loadAllUnlocked()
-            try persistUnlocked([])
+            for pairing in stored {
+                try authorityStore.removeRecord(id: pairing.id, ofType: .terminalPairing)
+            }
             return stored
         }
     }
@@ -105,31 +112,81 @@ public nonisolated final class TerminalPairingStore: TerminalPairingStoring, @un
     }
 
     private func loadAllUnlocked() throws -> [TerminalPairing] {
-        guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
         do {
-            return try Self.decoder.decode([TerminalPairing].self, from: Data(contentsOf: fileURL))
+            return try authorityStore.allRecords()
+                .filter { $0.type == .terminalPairing }
+                .map(Self.pairing(from:))
+        } catch let error as TerminalPairingStoreError {
+            throw error
         } catch {
             throw TerminalPairingStoreError.corruptedStore
         }
     }
 
-    private func persistUnlocked(_ pairings: [TerminalPairing]) throws {
-        try fileManager.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+    /// Pairings predating the authority store lived in a world-readable file that
+    /// any same-user process could rewrite, so they are quarantined rather than
+    /// migrated. Those terminals pair again.
+    private func quarantineLegacyFileUnlocked() throws {
+        guard fileManager.fileExists(atPath: legacyFileURL.path) else { return }
+        let quarantinedURL = legacyFileURL.appendingPathExtension("legacy")
+        if fileManager.fileExists(atPath: quarantinedURL.path) {
+            try fileManager.removeItem(at: legacyFileURL)
+        } else {
+            try fileManager.moveItem(at: legacyFileURL, to: quarantinedURL)
+        }
+    }
+
+    private static func record(from pairing: TerminalPairing) throws -> AuthorityRecord {
+        let payload = try encoder.encode(pairing)
+        // The record dates must equal what `pairing(from:)` decodes back, and the
+        // ISO-8601 payload encoding drops sub-second precision.
+        let stored = try decoder.decode(TerminalPairing.self, from: payload)
+        return AuthorityRecord(
+            type: .terminalPairing,
+            id: stored.id,
+            createdAt: stored.createdAt,
+            expiresAt: stored.expiresAt,
+            revokedAt: nil,
+            maximumUses: .max,
+            consumedUses: 0,
+            bindingDigest: Data(SHA256.hash(data: payload)),
+            displayMetadata: [
+                "terminal": stored.controllingTerminal,
+                "workspaceRoot": stored.workspaceRoot,
+            ],
+            payload: payload
         )
-        try Self.encoder.encode(pairings).write(to: fileURL, options: .atomic)
+    }
+
+    /// The digest covers the payload, so the record fields are cross-checked to
+    /// stop an envelope-level edit from extending a pairing's lifetime.
+    private static func pairing(from record: AuthorityRecord) throws -> TerminalPairing {
+        guard let payload = record.payload,
+              Data(SHA256.hash(data: payload)) == record.bindingDigest,
+              let pairing = try? decoder.decode(TerminalPairing.self, from: payload),
+              pairing.id == record.id,
+              pairing.createdAt == record.createdAt,
+              pairing.expiresAt == record.expiresAt,
+              record.revokedAt == nil else {
+            throw TerminalPairingStoreError.corruptedStore
+        }
+        return pairing
     }
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
 
-    private static let decoder = JSONDecoder()
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
 
-    public static func defaultFileURL() -> URL {
+    public static func defaultLegacyFileURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
