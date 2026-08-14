@@ -808,7 +808,12 @@ extension XPCRequestHandler {
         if let supersededID = pending.supersededID {
             pairingApprover.finishTerminalPairing(id: supersededID)
         }
-        guard await pairingApprover.requestTerminalPairingApproval(pending.request),
+        let approved = await pairingApprover.requestTerminalPairingApproval(pending.request)
+        // Ctrl+C (or any caller exit) during the prompt leaves no process to enter
+        // the code. Dismiss after the local decision, matching Direct CLI.
+        let callerStillPresent = callerIdentityRevalidationProvider(callerIdentity) != nil
+        guard approved,
+              callerStillPresent,
               terminalPairingCoordinator.markLocallyApproved(id: pending.request.id) else {
             terminalPairingCoordinator.cancel(id: pending.request.id)
             pairingApprover.finishTerminalPairing(id: pending.request.id)
@@ -828,6 +833,33 @@ extension XPCRequestHandler {
             pairingRequestID: pending.request.id
         )
         reply(encodeResponse(response), nil)
+        watchTerminalPairingCaller(
+            pairingID: pending.request.id,
+            callerIdentity: callerIdentity,
+            pairingApprover: pairingApprover
+        )
+    }
+
+    @MainActor
+    private func watchTerminalPairingCaller(
+        pairingID: UUID,
+        callerIdentity: CallerIdentity,
+        pairingApprover: TerminalPairingApproving
+    ) {
+        Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard let self else { return }
+                guard self.terminalPairingCoordinator.pendingRequest(id: pairingID) != nil else {
+                    return
+                }
+                guard self.callerIdentityRevalidationProvider(callerIdentity) != nil else {
+                    self.terminalPairingCoordinator.cancel(id: pairingID)
+                    pairingApprover.finishTerminalPairing(id: pairingID)
+                    return
+                }
+            }
+        }
     }
 
     func pairedHumanSession(

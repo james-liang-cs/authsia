@@ -164,6 +164,135 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         XCTAssertEqual(approver.regularApprovalCount, 0)
     }
 
+    func testPairingPromptDismissesWhenCallerExitsAfterLocalApproval() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-terminal-pairing-caller-exit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let caller = try makeIDECaller(
+            terminal: "ttys-caller-exit-\(UUID().uuidString)",
+            command: "/usr/local/bin/authsia get password deploy"
+        )
+        let approver = TerminalPairingApprovalTracker()
+        let handler = XPCRequestHandler(
+            approver: approver,
+            terminalPairingStore: TerminalPairingStore(
+                authorityStore: TestAuthorityStore(),
+                legacyFileURL: directory.appendingPathComponent("terminal-pairings.json")
+            ),
+            callerIdentityProvider: { caller },
+            callerIdentityRevalidationProvider: { _ in nil },
+            auditLogger: BridgeAuditLogger(
+                fileURL: directory.appendingPathComponent("bridge-audit.log"),
+                hmacKeyProvider: { SymmetricKey(data: Data(repeating: 0xA5, count: 32)) }
+            )
+        )
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .getPassword,
+            query: "deploy",
+            options: BridgeOptions(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: true,
+                isPiped: false,
+                isSSH: false,
+                isCI: false,
+                timestamp: Date(),
+                requestedCommand: "get",
+                sessionScope: "tty:/dev/\(caller.controllingTerminal!):sid:\(getpid())",
+                workingDirectory: directory.path,
+                workspaceAuthorityPath: nil
+            )
+        )
+
+        var responseData: Data?
+        await handler.requestTerminalPairing(
+            request: request,
+            callerIdentity: caller,
+            reply: XPCReply { data, _ in responseData = data }
+        )
+        let response = try BridgeCoder.decode(
+            BridgeResponse<String>.self,
+            from: try XCTUnwrap(responseData)
+        )
+        let approvalRequest = try XCTUnwrap(approver.pairingRequest)
+
+        XCTAssertEqual(response.error?.code, .notAuthorized)
+        XCTAssertNil(response.error?.pairingRequestID)
+        XCTAssertEqual(approver.finishedPairingIDs, [approvalRequest.id])
+        XCTAssertNil(handler.terminalPairingCoordinator.pendingRequest(id: approvalRequest.id))
+    }
+
+    func testPairingPromptDismissesWhenCallerExitsWhileWaitingForCode() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-terminal-pairing-code-wait-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let caller = try makeIDECaller(
+            terminal: "ttys-code-wait-\(UUID().uuidString)",
+            command: "/usr/local/bin/authsia get password deploy"
+        )
+        let liveChecks = TerminalPairingCallerLiveCheckBudget(remaining: 1)
+        let approver = TerminalPairingApprovalTracker()
+        let handler = XPCRequestHandler(
+            approver: approver,
+            terminalPairingStore: TerminalPairingStore(
+                authorityStore: TestAuthorityStore(),
+                legacyFileURL: directory.appendingPathComponent("terminal-pairings.json")
+            ),
+            callerIdentityProvider: { caller },
+            callerIdentityRevalidationProvider: { original in
+                liveChecks.consume(live: original)
+            },
+            auditLogger: BridgeAuditLogger(
+                fileURL: directory.appendingPathComponent("bridge-audit.log"),
+                hmacKeyProvider: { SymmetricKey(data: Data(repeating: 0xA5, count: 32)) }
+            )
+        )
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .getPassword,
+            query: "deploy",
+            options: BridgeOptions(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: true,
+                isPiped: false,
+                isSSH: false,
+                isCI: false,
+                timestamp: Date(),
+                requestedCommand: "get",
+                sessionScope: "tty:/dev/\(caller.controllingTerminal!):sid:\(getpid())",
+                workingDirectory: directory.path,
+                workspaceAuthorityPath: nil
+            )
+        )
+
+        var responseData: Data?
+        await handler.requestTerminalPairing(
+            request: request,
+            callerIdentity: caller,
+            reply: XPCReply { data, _ in responseData = data }
+        )
+        let response = try BridgeCoder.decode(
+            BridgeResponse<String>.self,
+            from: try XCTUnwrap(responseData)
+        )
+        let approvalRequest = try XCTUnwrap(approver.pairingRequest)
+        XCTAssertEqual(response.error?.code, .requiresPairing)
+        XCTAssertEqual(response.error?.pairingRequestID, approvalRequest.id)
+        XCTAssertTrue(approver.finishedPairingIDs.isEmpty)
+
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, approver.finishedPairingIDs.isEmpty {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        XCTAssertEqual(approver.finishedPairingIDs, [approvalRequest.id])
+        XCTAssertNil(handler.terminalPairingCoordinator.pendingRequest(id: approvalRequest.id))
+    }
+
     func testApprovedPairingCreatesConfiguredSessionAndSecondReadNeedsNoPrompt() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("authsia-terminal-pairing-handler-\(UUID().uuidString)", isDirectory: true)
@@ -614,6 +743,23 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
             shellAncestryPrefix: [shell],
             hostCommand: command
         )
+    }
+}
+
+private final class TerminalPairingCallerLiveCheckBudget: @unchecked Sendable {
+    private let lock = NSLock()
+    private var remaining: Int
+
+    init(remaining: Int) {
+        self.remaining = remaining
+    }
+
+    func consume(live identity: CallerIdentity) -> CallerIdentity? {
+        lock.withLock {
+            guard remaining > 0 else { return nil }
+            remaining -= 1
+            return identity
+        }
     }
 }
 
