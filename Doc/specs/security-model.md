@@ -524,8 +524,11 @@ When a known coding agent is in the SSH process ancestry — Claude Code, Codex,
 Cursor Agent, GitHub Copilot, Windsurf Agent, or any other name the detector
 treats as a known agent — the approval prompt names that agent, the target
 host, and an allowlisted Git verb (`fetch`, `pull`, `push`, `clone`,
-`ls-remote`, and similar). The prompt does not persist or display remotes,
-URLs, or raw argv. A session-based SSH grant then binds to that agent process
+`ls-remote`, and similar). An Electron extension host or `Helper (Plugin)`
+is labeled as an IDE plugin (for example `A Claude Code plugin`), not as the
+agent, so a background plugin update while the app is idle is not presented
+as an interactive Claude/Codex request. A GUI `.app` binary is not treated as
+the agent. The prompt does not persist or display remotes, URLs, or raw argv. A session-based SSH grant then binds to that agent process
 even if an intermediate Bash/Zsh has a TTY, so one approval covers later Git
 SSH from the same agent process for the SSH session TTL. Human terminals with
 no known agent in the chain still cache on the controlling TTY. IDE-launched

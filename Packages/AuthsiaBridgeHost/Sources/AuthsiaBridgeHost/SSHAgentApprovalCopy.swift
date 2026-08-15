@@ -4,6 +4,44 @@ import AuthenticatorBridge
 /// Prompt copy and argv parsing for SSH signing approvals.
 /// Display-only: does not persist command text and is not a JIT grant.
 public enum SSHAgentApprovalCopy {
+    public struct PromptProcess: Equatable {
+        public let name: String
+        public let path: String?
+        public let arguments: [String]
+
+        public init(name: String, path: String?, arguments: [String] = []) {
+            self.name = name
+            self.path = path
+            self.arguments = arguments
+        }
+    }
+
+    public struct PromptAttribution: Equatable {
+        public let agentPlatform: String?
+        public let displayName: String?
+
+        public init(agentPlatform: String? = nil, displayName: String? = nil) {
+            self.agentPlatform = agentPlatform
+            self.displayName = displayName
+        }
+    }
+
+    /// Who the approval sheet should name. An interactive agent CLI wins. An
+    /// Electron extension host / Helper (Plugin) is labeled as a plugin, even
+    /// when the idle IDE is named `Claude`. A GUI `.app` binary is not treated
+    /// as the agent.
+    public static func promptAttribution(
+        from ancestry: [PromptProcess]
+    ) -> PromptAttribution {
+        if let tool = ancestry.compactMap(agentToolAttribution).first {
+            return tool
+        }
+        if let plugin = ancestry.first(where: isExtensionHostProcess) {
+            return PromptAttribution(displayName: pluginDisplayName(processName: plugin.name))
+        }
+        return PromptAttribution()
+    }
+
     public static func touchIDReason(
         keyName: String,
         requester: SSHAgentRequester
@@ -42,7 +80,9 @@ public enum SSHAgentApprovalCopy {
             lines.append("Parent chain: \(chain)")
         }
 
-        if requester.targetHost != nil, requester.agentDisplayName != nil {
+        if isPluginDisplayName(requester.agentDisplayName) {
+            lines.append("This request came from an IDE plugin or extension host, not an interactive agent command.")
+        } else if requester.targetHost != nil, requester.agentDisplayName != nil {
             lines.append("SSH is required to authenticate this Git remote.")
         }
 
@@ -130,6 +170,62 @@ public enum SSHAgentApprovalCopy {
     public static func isGitExecutable(_ argv0: String) -> Bool {
         let name = (argv0 as NSString).lastPathComponent.lowercased()
         return name == "git"
+    }
+
+    private static func agentToolAttribution(_ process: PromptProcess) -> PromptAttribution? {
+        guard !isAppBundleExecutable(process.path),
+              !isExtensionHostProcess(process) else {
+            return nil
+        }
+        let identity = Array(process.arguments.prefix(1))
+        guard let platform = AgenticProcessDetector.agentPlatform(
+            processName: process.name,
+            bundleIdentifier: nil,
+            arguments: identity
+        ) else {
+            return nil
+        }
+        return PromptAttribution(
+            agentPlatform: platform,
+            displayName: displayName(processName: process.name, platform: platform)
+        )
+    }
+
+    private static func isExtensionHostProcess(_ process: PromptProcess) -> Bool {
+        let loweredName = process.name.lowercased()
+        if loweredName.contains("helper") && loweredName.contains("plugin") {
+            return true
+        }
+        return process.arguments.contains { argument in
+            argument == "--type=extensionHost" || argument.hasPrefix("--type=extensionHost")
+        }
+    }
+
+    private static func isAppBundleExecutable(_ path: String?) -> Bool {
+        guard let path else { return false }
+        return path.contains(".app/Contents/MacOS/") || path.contains(".app/Contents/Helpers/")
+    }
+
+    private static func pluginDisplayName(processName: String) -> String {
+        let lowered = processName.lowercased()
+        if lowered.contains("claude") {
+            return "A Claude Code plugin"
+        }
+        if lowered.contains("cursor") {
+            return "A Cursor plugin"
+        }
+        if lowered.contains("windsurf") {
+            return "A Windsurf plugin"
+        }
+        if lowered.contains("code helper") || lowered.hasPrefix("code ") {
+            return "A VS Code plugin"
+        }
+        return "An IDE plugin"
+    }
+
+    private static func isPluginDisplayName(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return value.localizedCaseInsensitiveContains("plugin")
     }
 
     private static func actorPhrase(_ requester: SSHAgentRequester) -> String {

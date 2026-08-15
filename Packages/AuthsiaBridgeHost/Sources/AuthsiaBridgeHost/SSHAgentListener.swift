@@ -611,17 +611,23 @@ public final class SSHAgentListener: @unchecked Sendable {
         let instigator = chain.first { proc in
             !Self.sshToolingNames.contains(proc.name.lowercased())
         }
-        let knownAgent = Self.outermostKnownAgent(in: chain)
+        let attribution = SSHAgentApprovalCopy.promptAttribution(
+            from: chain.map { process in
+                SSHAgentApprovalCopy.PromptProcess(
+                    name: process.name,
+                    path: process.path,
+                    arguments: Self.kernelProcessArgumentsAndEnvironment(pid: process.pid)?.arguments ?? []
+                )
+            }
+        )
         return RequesterInfo(
             peer: chain.first,
             instigator: instigator,
             ancestry: chain,
             targetHost: resolveTargetHost(fd: fd),
             sessionScope: Self.sessionScope(from: chain),
-            agentPlatform: knownAgent?.platform,
-            agentDisplayName: knownAgent.map {
-                SSHAgentApprovalCopy.displayName(processName: $0.process.name, platform: $0.platform)
-            },
+            agentPlatform: attribution.agentPlatform,
+            agentDisplayName: attribution.displayName,
             sourceOperation: Self.sourceOperation(from: chain)
         )
     }
@@ -686,17 +692,6 @@ public final class SSHAgentListener: @unchecked Sendable {
     private static func identityArguments(for process: ProcessRef) -> [String] {
         let arguments = kernelProcessArgumentsAndEnvironment(pid: process.pid)?.arguments ?? []
         return Array(arguments.prefix(1))
-    }
-
-    private static func outermostKnownAgent(
-        in ancestry: [ProcessRef]
-    ) -> (process: ProcessRef, platform: String)? {
-        for process in ancestry.reversed() {
-            if let platform = knownAgentPlatform(for: process) {
-                return (process, platform)
-            }
-        }
-        return nil
     }
 
     private static func sourceOperation(from ancestry: [ProcessRef]) -> String? {
