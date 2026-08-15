@@ -45,10 +45,9 @@ public struct TerminalPairing: Codable, Equatable, Identifiable, Sendable {
 
 public struct TerminalPairingApprovalRequest: Equatable, Sendable {
     public let id: UUID
+    /// Where the paired command was run. Informational only: a pairing binds
+    /// the terminal, so it stays valid after the shell changes directory.
     public let workspaceRoot: String
-    /// Whether `workspaceRoot` also resolves for its subfolders. The prompt has
-    /// to state the scope the human is approving.
-    public let coversSubfolders: Bool
     public let controllingTerminal: String
     public let anchorShellPID: Int32
     public let fullCommand: String
@@ -58,7 +57,6 @@ public struct TerminalPairingApprovalRequest: Equatable, Sendable {
     public init(
         id: UUID,
         workspaceRoot: String,
-        coversSubfolders: Bool,
         controllingTerminal: String,
         anchorShellPID: Int32,
         fullCommand: String,
@@ -67,7 +65,6 @@ public struct TerminalPairingApprovalRequest: Equatable, Sendable {
     ) {
         self.id = id
         self.workspaceRoot = workspaceRoot
-        self.coversSubfolders = coversSubfolders
         self.controllingTerminal = controllingTerminal
         self.anchorShellPID = anchorShellPID
         self.fullCommand = fullCommand

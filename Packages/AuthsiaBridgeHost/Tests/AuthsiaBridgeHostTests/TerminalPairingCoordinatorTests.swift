@@ -26,11 +26,11 @@ final class TerminalPairingCoordinatorTests: XCTestCase {
         var pending = begin(coordinator, workspace: workspace.path, now: now)
         XCTAssertTrue(coordinator.markLocallyApproved(id: pending.id))
         XCTAssertEqual(
-            complete(coordinator, id: pending.id, code: "NOPE", workspace: workspace, now: now),
+            complete(coordinator, id: pending.id, code: "NOPE", now: now),
             .retryRemaining
         )
         XCTAssertEqual(
-            complete(coordinator, id: pending.id, code: "NOPE", workspace: workspace, now: now),
+            complete(coordinator, id: pending.id, code: "NOPE", now: now),
             .invalid
         )
         XCTAssertNil(coordinator.pendingRequest(id: pending.id))
@@ -42,7 +42,6 @@ final class TerminalPairingCoordinatorTests: XCTestCase {
                 coordinator,
                 id: pending.id,
                 code: "7K9M",
-                workspace: workspace,
                 now: now.addingTimeInterval(61)
             ),
             .invalid
@@ -59,7 +58,6 @@ final class TerminalPairingCoordinatorTests: XCTestCase {
         let first = begin(coordinator, workspace: workspace.path, now: now)
         let secondResult = coordinator.begin(
             workspaceRoot: workspace.path,
-            coversSubfolders: false,
             controllingTerminal: "ttys004",
             anchorShellPID: 41,
             anchorShellStartTime: 100,
@@ -70,14 +68,13 @@ final class TerminalPairingCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.markLocallyApproved(id: secondResult.request.id))
 
         XCTAssertEqual(
-            complete(coordinator, id: first.id, code: "ABCD", workspace: workspace, now: now),
+            complete(coordinator, id: first.id, code: "ABCD", now: now),
             .invalid
         )
         guard case .paired(let pairing) = complete(
             coordinator,
             id: secondResult.request.id,
             code: "7K9M",
-            workspace: workspace,
             now: now
         ) else {
             return XCTFail("expected the replacement pairing to remain valid")
@@ -93,7 +90,6 @@ final class TerminalPairingCoordinatorTests: XCTestCase {
     ) -> TerminalPairingApprovalRequest {
         coordinator.begin(
             workspaceRoot: workspace,
-            coversSubfolders: false,
             controllingTerminal: "ttys004",
             anchorShellPID: 41,
             anchorShellStartTime: 100,
@@ -106,29 +102,11 @@ final class TerminalPairingCoordinatorTests: XCTestCase {
         _ coordinator: TerminalPairingCoordinator,
         id: UUID,
         code: String,
-        workspace: URL,
         now: Date
     ) -> TerminalPairingCompletionResult {
         coordinator.complete(
             id: id,
             code: code,
-            request: BridgeRequest(
-                id: UUID(),
-                type: .terminalPairingComplete,
-                query: "",
-                options: BridgeOptions(field: nil, copy: false),
-                context: BridgeContext(
-                    isTTY: true,
-                    isPiped: false,
-                    isSSH: false,
-                    isCI: false,
-                    timestamp: now,
-                    requestedCommand: "get password deploy",
-                    sessionScope: "tty:/dev/ttys004:sid:40",
-                    workingDirectory: workspace.path,
-                    workspaceAuthorityPath: workspace.path
-                )
-            ),
             callerIdentity: caller,
             pairingTTL: 300,
             now: now,

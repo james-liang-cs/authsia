@@ -30,7 +30,6 @@ final class TerminalPairingCoordinator {
 
     func begin(
         workspaceRoot: String,
-        coversSubfolders: Bool,
         controllingTerminal: String,
         anchorShellPID: Int32,
         anchorShellStartTime: UInt64,
@@ -41,7 +40,6 @@ final class TerminalPairingCoordinator {
         let request = TerminalPairingApprovalRequest(
             id: UUID(),
             workspaceRoot: workspaceRoot,
-            coversSubfolders: coversSubfolders,
             controllingTerminal: controllingTerminal,
             anchorShellPID: anchorShellPID,
             fullCommand: fullCommand,
@@ -71,7 +69,6 @@ final class TerminalPairingCoordinator {
     func complete(
         id: UUID,
         code: String,
-        request: BridgeRequest,
         callerIdentity: CallerIdentity?,
         pairingTTL: TimeInterval,
         now: Date = Date(),
@@ -88,9 +85,7 @@ final class TerminalPairingCoordinator {
                 $0.pid == pending.approvalRequest.anchorShellPID
                     && $0.startTimeSeconds == pending.anchorShellStartTime
               }) == true,
-              processStartTime(pending.approvalRequest.anchorShellPID) == pending.anchorShellStartTime,
-              AgentJITCallerContext.terminalPairingWorkspaceRoot(request: request)
-                == pending.approvalRequest.workspaceRoot else {
+              processStartTime(pending.approvalRequest.anchorShellPID) == pending.anchorShellStartTime else {
             self.pending = nil
             return .invalid
         }

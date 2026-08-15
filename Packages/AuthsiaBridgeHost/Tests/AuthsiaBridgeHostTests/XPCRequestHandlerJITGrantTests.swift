@@ -3215,6 +3215,36 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         ))
     }
 
+    func testListWithActiveJITGrantStillMatchesAfterChangingToASubdirectory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-jit-list-cwd-\(UUID().uuidString)", isDirectory: true)
+        let nested = root.appendingPathComponent("src", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        let grant = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(
+                requestedCommand: "list",
+                workingDirectory: root.path
+            ),
+            folderScope: .folder("Team/API"),
+            capabilities: [.list],
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        let approver = JITApprovalTracker(result: true)
+        let handler = makeHandler(store: MemoryAgentJITGrantStore([grant]), approver: approver)
+        let response = try await list(
+            handler,
+            requestedCommand: "list",
+            agentRuntimeContext: agentRuntimeContext(),
+            workingDirectory: nested.path
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(approver.requests, [])
+        XCTAssertEqual(response.payload?.passwords.map(\.name), ["API", "API Nested", "Shared"])
+    }
+
     func testListPathWithActiveJITGrantSkipsApprovalAndReturnsScopedItems() async throws {
         let caller = callerFingerprint(requestedCommand: "list")
         let grant = AgentJITGrant.fixture(
@@ -3831,14 +3861,16 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         requestedCommand: String,
         automationCredentialID: String? = nil,
         automationCredentialToken: String? = nil,
-        agentRuntimeContext: AgentRuntimeContext? = nil
+        agentRuntimeContext: AgentRuntimeContext? = nil,
+        workingDirectory: String = "/repo"
     ) async throws -> BridgeResponse<BridgeListPayload> {
         let request = makeRequest(
             type: .list,
             requestedCommand: requestedCommand,
             automationCredentialID: automationCredentialID,
             automationCredentialToken: automationCredentialToken,
-            agentRuntimeContext: agentRuntimeContext
+            agentRuntimeContext: agentRuntimeContext,
+            workingDirectory: workingDirectory
         )
         let requestData = try BridgeCoder.encode(request)
         let expectation = XCTestExpectation(description: "list reply")
@@ -3881,7 +3913,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         sessionToken: String? = nil,
         automationCredentialID: String? = nil,
         automationCredentialToken: String? = nil,
-        agentRuntimeContext: AgentRuntimeContext? = nil
+        agentRuntimeContext: AgentRuntimeContext? = nil,
+        workingDirectory: String = "/repo"
     ) -> BridgeRequest {
         BridgeRequest(
             id: UUID(),
@@ -3892,7 +3925,8 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
                 requestedCommand: requestedCommand,
                 automationCredentialID: automationCredentialID,
                 automationCredentialToken: automationCredentialToken,
-                agentRuntimeContext: agentRuntimeContext
+                agentRuntimeContext: agentRuntimeContext,
+                workingDirectory: workingDirectory
             ),
             body: body,
             sessionToken: sessionToken
@@ -3962,8 +3996,11 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
     }
 
-    private func callerFingerprint(requestedCommand: String) -> AgentJITCallerFingerprint {
-        let context = execContext(requestedCommand: requestedCommand)
+    private func callerFingerprint(
+        requestedCommand: String,
+        workingDirectory: String = "/repo"
+    ) -> AgentJITCallerFingerprint {
+        let context = execContext(requestedCommand: requestedCommand, workingDirectory: workingDirectory)
         return AgentJITCallerFingerprint(
             processName: callerIdentity.processName,
             bundleIdentifier: callerIdentity.bundleIdentifier,

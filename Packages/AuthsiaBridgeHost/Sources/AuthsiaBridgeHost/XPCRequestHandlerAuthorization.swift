@@ -851,10 +851,6 @@ extension XPCRequestHandler {
 
         let pending = terminalPairingCoordinator.begin(
             workspaceRoot: workspaceRoot,
-            coversSubfolders: WorkspaceAuthority.pairingCoversSubfolders(
-                workingDirectory: request.context.workingDirectory,
-                authorityPath: request.context.workspaceAuthorityPath
-            ),
             controllingTerminal: controllingTerminal,
             anchorShellPID: anchor.pid,
             anchorShellStartTime: anchorStartTime,

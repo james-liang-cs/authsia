@@ -135,15 +135,15 @@ public enum AgentJITCallerContext {
               let callerIdentity,
               !hasAgenticCaller(callerIdentity),
               let controllingTerminal = callerIdentity.controllingTerminal,
-              let shellAncestryPrefix = callerIdentity.shellAncestryPrefix,
-              let workspaceRoot = terminalPairingWorkspaceRoot(request: request) else {
+              let shellAncestryPrefix = callerIdentity.shellAncestryPrefix else {
             return nil
         }
 
+        // A pairing binds the terminal, not the directory: the human confirmed
+        // this TTY and this live shell, and `cd` changes neither.
         return pairings.first { pairing in
             pairing.expiresAt > now
                 && pairing.controllingTerminal == controllingTerminal
-                && pairing.workspaceRoot == workspaceRoot
                 && processStartTime(pairing.anchorShellPID) == pairing.anchorShellStartTime
                 && shellAncestryPrefix.contains {
                     $0.pid == pairing.anchorShellPID

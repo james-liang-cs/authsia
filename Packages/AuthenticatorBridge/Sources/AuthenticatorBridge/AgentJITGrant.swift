@@ -313,7 +313,7 @@ public struct AgentJITCallerFingerprint: Codable, Equatable, Sendable {
             && optionalMatch(hostProcessName, current.hostProcessName)
             && optionalMatch(hostBundleIdentifier, current.hostBundleIdentifier)
             && requiredMatch(sessionScope, current.sessionScope)
-            && requiredMatch(workingDirectory, current.workingDirectory)
+            && workingDirectoryAllows(current.workingDirectory)
     }
 
     public var displayName: String {
@@ -380,6 +380,23 @@ public struct AgentJITCallerFingerprint: Codable, Equatable, Sendable {
             return true
         case let (stored?, current?):
             return stored == current
+        default:
+            return false
+        }
+    }
+
+    /// Pairing is terminal-scoped and survives `cd`. A JIT grant still names the
+    /// directory that was approved, and covers only that directory and its
+    /// descendants. `$HOME` and `/` cannot be that ancestor.
+    private func workingDirectoryAllows(_ current: String?) -> Bool {
+        switch (workingDirectory, current) {
+        case (nil, nil):
+            return true
+        case let (stored?, current?):
+            if stored == current {
+                return true
+            }
+            return WorkspaceAuthority.validatedRootPath(stored, containing: current) != nil
         default:
             return false
         }

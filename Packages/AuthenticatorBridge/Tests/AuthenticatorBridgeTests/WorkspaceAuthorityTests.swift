@@ -70,14 +70,6 @@ final class WorkspaceAuthorityTests: XCTestCase {
             ),
             root.path
         )
-        XCTAssertTrue(WorkspaceAuthority.pairingCoversSubfolders(
-            workingDirectory: nested.path,
-            authorityPath: root.path
-        ))
-        XCTAssertFalse(WorkspaceAuthority.pairingCoversSubfolders(
-            workingDirectory: nested.path,
-            authorityPath: nil
-        ))
     }
 
     func testRejectsDirectoryOutsideProposedWorkspaceRoot() throws {

@@ -524,6 +524,49 @@ final class AgentJITGrantTests: XCTestCase {
         XCTAssertFalse(stored.matches(differentWorkingDirectory))
     }
 
+    func testFingerprintWorkingDirectoryCoversADescendantButNotHomeOrASibling() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-jit-cwd-\(UUID().uuidString)", isDirectory: true)
+        let nested = root.appendingPathComponent("src", isDirectory: true)
+        let sibling = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-jit-cwd-sibling-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: sibling)
+        }
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        let stored = AgentJITCallerFingerprint.fixture(
+            sessionScope: "tty:/dev/ttys001:sid:10",
+            workingDirectory: root.path
+        )
+        let descendant = AgentJITCallerFingerprint.fixture(
+            sessionScope: "tty:/dev/ttys001:sid:10",
+            workingDirectory: nested.path
+        )
+        let otherTree = AgentJITCallerFingerprint.fixture(
+            sessionScope: "tty:/dev/ttys001:sid:10",
+            workingDirectory: sibling.path
+        )
+        let home = FileManager.default.homeDirectoryForCurrentUser
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        let homeStored = AgentJITCallerFingerprint.fixture(
+            sessionScope: "tty:/dev/ttys001:sid:10",
+            workingDirectory: home.path
+        )
+        let underHome = AgentJITCallerFingerprint.fixture(
+            sessionScope: "tty:/dev/ttys001:sid:10",
+            workingDirectory: home.appendingPathComponent("Library", isDirectory: true).path
+        )
+
+        XCTAssertTrue(stored.matches(descendant))
+        XCTAssertFalse(descendant.matches(stored))
+        XCTAssertFalse(stored.matches(otherTree))
+        XCTAssertTrue(homeStored.matches(homeStored))
+        XCTAssertFalse(homeStored.matches(underHome))
+    }
+
     func testFingerprintEmptyStoredSessionAndWorkingDirectoryMustMatchLiterally() {
         let stored = AgentJITCallerFingerprint.fixture(sessionScope: "", workingDirectory: "")
         let emptyCurrent = AgentJITCallerFingerprint.fixture(sessionScope: "", workingDirectory: "")

@@ -410,7 +410,7 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertTrue(AgentJITCallerContext.hasAgenticCaller(nestedAuthsiaCaller(context: context)))
     }
 
-    func testHomeDirectoryPairingDoesNotAuthorizeADescendantDirectory() {
+    func testHomeDirectoryPairingStillMatchesAfterChangingDirectory() {
         let home = FileManager.default.homeDirectoryForCurrentUser
             .resolvingSymlinksInPath()
             .standardizedFileURL
@@ -435,14 +435,8 @@ final class AgentJITCallerContextTests: XCTestCase {
             AgentJITCallerContext.terminalPairingWorkspaceRoot(request: homeRequest),
             home.path
         )
-        // Pins the nested root: a nil root would fail the pairing match below
-        // for the wrong reason.
-        XCTAssertEqual(
-            AgentJITCallerContext.terminalPairingWorkspaceRoot(request: nestedRequest),
-            nested
-        )
         XCTAssertTrue(hasPairing(homeRequest, caller: pairedIDECaller(), pairing, now))
-        XCTAssertFalse(hasPairing(nestedRequest, caller: pairedIDECaller(), pairing, now))
+        XCTAssertTrue(hasPairing(nestedRequest, caller: pairedIDECaller(), pairing, now))
     }
 
     func testPairedIDECallerUsesHumanPathOnlyForMatchingTTYAnchorAndWorkspace() throws {
@@ -473,7 +467,7 @@ final class AgentJITCallerContextTests: XCTestCase {
         ))
     }
 
-    func testPairingDeniesMissingTTYWrongWorkspaceAndExpiredRecord() throws {
+    func testPairingDeniesMissingTTYAndExpiredRecord() throws {
         let workspace = try makeWorkspace()
         let otherWorkspace = try makeWorkspace()
         defer {
@@ -494,7 +488,7 @@ final class AgentJITCallerContextTests: XCTestCase {
         )
 
         XCTAssertFalse(hasPairing(matchingRequest, caller: pairedIDECaller(controllingTerminal: nil), pairing, now))
-        XCTAssertFalse(hasPairing(wrongWorkspaceRequest, caller: pairedIDECaller(), pairing, now))
+        XCTAssertTrue(hasPairing(wrongWorkspaceRequest, caller: pairedIDECaller(), pairing, now))
         XCTAssertFalse(hasPairing(
             matchingRequest,
             caller: pairedIDECaller(),

@@ -41,10 +41,11 @@ public enum WorkspaceAuthority {
         return root
     }
 
-    /// Pairing binds to a managed workspace when one contains the cwd. Every
-    /// other case — `$HOME`, `/`, a volume root, an authority path that does
-    /// not exist or does not contain the cwd — degrades to the exact current
-    /// directory, which covers no descendant of itself.
+    /// The directory a terminal pairing records for its prompt and audit trail:
+    /// the managed workspace when one contains the cwd, and the exact current
+    /// directory otherwise — `$HOME`, `/`, a volume root, or an authority path
+    /// that does not exist or does not contain the cwd. It does not scope the
+    /// pairing, which binds the terminal and survives a `cd`.
     public static func pairingRootPath(
         workingDirectory: String?,
         authorityPath: String?,
@@ -59,22 +60,6 @@ public enum WorkspaceAuthority {
             return validated
         }
         return exactExistingDirectory(workingDirectory, fileManager: fileManager)
-    }
-
-    /// Whether `pairingRootPath` took the managed-workspace branch, so the root
-    /// it returned also resolves for the cwd's descendants. The pairing prompt
-    /// states that scope, and only the host knows which branch ran.
-    public static func pairingCoversSubfolders(
-        workingDirectory: String?,
-        authorityPath: String?,
-        fileManager: FileManager = .default
-    ) -> Bool {
-        guard let authorityPath else { return false }
-        return validatedRootPath(
-            authorityPath,
-            containing: workingDirectory,
-            fileManager: fileManager
-        ) != nil
     }
 
     public static func matchesWorkingDirectory(

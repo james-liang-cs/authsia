@@ -26,7 +26,6 @@ extension XPCRequestHandler {
             let result = terminalPairingCoordinator.complete(
                 id: payload.pairingRequestID,
                 code: payload.code,
-                request: bridgeRequest,
                 callerIdentity: callerIdentity,
                 pairingTTL: Self.configuredSessionTTL
             )

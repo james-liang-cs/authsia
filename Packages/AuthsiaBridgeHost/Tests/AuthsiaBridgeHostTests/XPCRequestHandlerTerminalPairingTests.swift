@@ -491,7 +491,7 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
                 bypassApproval: false,
                 callerIdentity: caller
             ),
-            .needsPairing
+            .allowed(approvedBy: "paired-human", needsApproval: false, agentJITGrantID: nil)
         )
 
         let statusExpectation = expectation(description: "status includes terminal pairing")
