@@ -111,6 +111,20 @@ struct TerminalSessionScopeTests {
     }
 
     #if os(macOS)
+    @Test("host process identity lookups fail closed and keep stable start time")
+    func hostProcessIdentityLookupsFailClosedAndKeepStableStartTime() throws {
+        let pid = getpid()
+        let first = try #require(TerminalSessionScope.startTimeSeconds(pid: pid))
+        let second = TerminalSessionScope.startTimeSeconds(pid: pid)
+
+        #expect(first == second)
+        #expect(TerminalSessionScope.controllingTerminal(pid: 1) == nil)
+        #expect(TerminalSessionScope.controllingTerminal(pid: 0) == nil)
+        #expect(TerminalSessionScope.startTimeSeconds(pid: 0) == nil)
+        #expect(TerminalSessionScope.controllingTerminal(pid: pid_t.max) == nil)
+        #expect(TerminalSessionScope.startTimeSeconds(pid: pid_t.max) == nil)
+    }
+
     @Test("current terminal identifier prefers concrete controlling terminal over /dev/tty")
     func currentTerminalIdentifierPrefersConcreteControllingTerminal() {
         let identifier = TerminalSessionScope.currentTerminalIdentifier(

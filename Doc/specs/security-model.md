@@ -10,6 +10,7 @@
 - [Direct Bridge Access](#direct-bridge-access)
 - [Caller Classification](#caller-classification)
 - [Human CLI Path](#human-cli-path)
+- [IDE Terminal Pairing](#ide-terminal-pairing)
 - [AI Tool And JIT Path](#ai-tool-and-jit-path)
 - [Local MCP Adapter](#local-mcp-adapter)
 - [SSH-Agent Path](#ssh-agent-path)
@@ -224,7 +225,7 @@ system should not be described as protecting against compromised trusted code.
 
 ## Caller Classification
 
-Every secret-bearing request is routed to exactly one of three actors before any
+Every protected CLI request is routed to exactly one of three actors before any
 gate runs: **automation**, **agent**, or **human**. Classification decides which
 authority a request may use, so it happens before approval, not after.
 
@@ -235,8 +236,9 @@ authority a request may use, so it happens before approval, not after.
 | Automation | Automation credential ID/token in the request context or `AUTHSIA_*` credential environment key | Yes as a claim; useless without a stored, active, machine-matched credential |
 | Agent | Explicit agent runtime marker: platform key plus a truthy invokes-Authsia key | Yes — treated as a self-declaration that only ever *adds* restriction |
 | Agent | Agentic ancestry: process name, argv[0], or bundle identifier matching a known agent (`claude`, `codex`, `cursor-agent`, `github-copilot`, `windsurf-agent`), or a Copilot extension path in argv | No — read from the process tree by the bridge |
-| Agent | IDE / automation-suspect ancestry: editor helper process names, `.app` bundle paths in argv, `--type=extensionHost`, or IDE bundle identifiers | No — read from the process tree by the bridge |
-| Human | Trusted terminal ancestry (Terminal, iTerm2, Ghostty, Warp) with a shell parent, plus the server-current session token for that terminal scope | No — ancestry is observed; the token is server-held |
+| Agent | IDE / automation-suspect ancestry: editor helper process names, `.app` bundle paths in argv, `--type=extensionHost`, or IDE bundle identifiers; this selects the restricted path unless an exact paired-human binding validates | No — read from the process tree by the bridge |
+| Human | Trusted terminal ancestry (Terminal, iTerm2, Ghostty, Warp) with a shell parent; a server-current token authorizes prompt-free reuse but does not establish the actor | No — ancestry is observed; the token is server-held |
+| Human | Paired IDE terminal with host-derived TTY, live shell PID/start time, shell-only ancestry, and validated managed-workspace root or exact current directory; a server-current token authorizes prompt-free reuse | No — the binding is derived and rechecked by the bridge |
 
 Identity is read from the **process tree**, not from anything the caller says
 about itself. `argv[0]` counts even as a bare word, because a PATH symlink hides
@@ -249,50 +251,77 @@ makes a plain command agentic.
 
 ```mermaid
 flowchart TB
-    start["Secret-bearing CLI request"]
+    start["Protected CLI request"]
     autoCred{"Valid automation credential?"}
-    marker{"Explicit agent runtime marker?"}
-    agentic{"Agentic ancestry?<br/>known agent name, argv[0], bundle"}
+    agentEvidence{"Explicit agent runtime marker<br/>or agentic ancestry?"}
+    paired{"Valid paired IDE binding<br/>for this request?"}
     ide{"IDE / automation-suspect ancestry?<br/>editor helper, extension host"}
+    pairable{"Eligible pairing bootstrap?<br/>ordinary command, stdin TTY,<br/>live shell + valid scope"}
     chrome{"Chrome native host caller?"}
-    trusted{"Trusted terminal ancestry<br/>AND server-current session token?"}
+    trusted{"Supported signed terminal app<br/>with shell ancestry?"}
+    session{"Server-current session token<br/>for this terminal scope?"}
+    otherTTY{"Other interactive stdin TTY<br/>with no agent evidence?"}
 
     automation["AUTOMATION<br/>machine ID, allowedCommands,<br/>scope, expiry"]
-    agentJIT["AGENT<br/>JIT preflight, scoped grant,<br/>exec + scoped list only"]
-    humanFlow["HUMAN<br/>approval or terminal-scoped session"]
-    bootstrap["HUMAN (bootstrap)<br/>stdin TTY, no agent evidence:<br/>approval before any metadata"]
+    agentJIT["AGENT / RESTRICTED<br/>JIT or command-specific gate;<br/>unsupported direct reads denied"]
+    pairedHuman["HUMAN — PAIRED IDE<br/>normal session authority;<br/>pairing rechecked per request"]
+    pairingBootstrap["HUMAN — PAIRING BOOTSTRAP<br/>local approval + short code;<br/>nothing released first"]
+    humanSession["HUMAN — SESSION<br/>prompt-free within scope + TTL"]
+    humanApproval["HUMAN — APPROVAL<br/>authenticate, then mint session"]
+    oneRequest["HUMAN — ONE REQUEST<br/>biometric approval;<br/>no reusable session"]
 
     start --> autoCred
     autoCred -->|yes| automation
-    autoCred -->|no| marker
-    marker -->|yes| agentJIT
-    marker -->|no| agentic
-    agentic -->|yes| agentJIT
-    agentic -->|no| ide
-    ide -->|yes| agentJIT
+    autoCred -->|no| agentEvidence
+    agentEvidence -->|yes| agentJIT
+    agentEvidence -->|no| paired
+    paired -->|yes| pairedHuman
+    paired -->|no| ide
+    ide -->|yes| pairable
+    pairable -->|yes| pairingBootstrap
+    pairingBootstrap --> pairedHuman
+    pairable -->|no| agentJIT
     ide -->|no| chrome
-    chrome -->|yes| humanFlow
+    chrome -->|yes| humanApproval
     chrome -->|no| trusted
-    trusted -->|yes| humanFlow
-    trusted -->|"no, but stdin TTY<br/>and no agent evidence"| bootstrap
-    trusted -->|"no"| agentJIT
-    bootstrap --> humanFlow
+    trusted -->|yes| session
+    session -->|yes| humanSession
+    session -->|no| humanApproval
+    humanApproval --> humanSession
+    trusted -->|no| otherTTY
+    otherTTY -->|yes| oneRequest
+    otherTTY -->|no| agentJIT
 
     classDef humanPath fill:#e8f4ff,stroke:#1a5fb4,color:#0b2f55;
     classDef agentPath fill:#fff4e5,stroke:#b06000,color:#3f2600;
     classDef autoPath fill:#f3e8ff,stroke:#6b21a8,color:#2e1065;
     classDef gate fill:#f5f5f5,stroke:#666,color:#111;
 
-    class humanFlow,bootstrap humanPath;
+    class pairedHuman,pairingBootstrap,humanSession,humanApproval,oneRequest humanPath;
     class agentJIT agentPath;
     class automation autoPath;
-    class autoCred,marker,agentic,ide,chrome,trusted gate;
+    class autoCred,agentEvidence,paired,ide,pairable,chrome,trusted,session,otherTTY gate;
 ```
 
 The default at the bottom of the chain is the agent path: a caller that is
-neither recognizable automation nor a trusted terminal with a live session is
-treated as an agent and must obtain a JIT grant. Classification fails toward
-more restriction, not less.
+neither recognizable automation nor an established human path is treated as an
+agent/restricted caller. JIT is available only for supported capabilities and
+commands; management and export keep their command-specific high-friction
+policy, while unsupported direct secret reads are denied. Classification fails
+toward more restriction, not less.
+
+### Terminal And IDE Outcomes
+
+| Origin | Decisive evidence | Classification and gate |
+| --- | --- | --- |
+| Terminal.app, iTerm2, Ghostty, or Warp | Supported signed host plus shell ancestry | Human; reuse a valid same-scope session or authenticate and mint one |
+| VS Code, Cursor, Windsurf, or another IDE-integrated terminal | Exact live pairing matches TTY, shell anchor, and managed-workspace root or current directory | Paired human; direct `list` and ordinary human commands may reuse the normal session |
+| Eligible unpaired IDE-integrated terminal | No agent evidence; stdin TTY; live shell anchor; valid pairing scope; pairing-supported ordinary command | Pairing bootstrap; local authentication and app-to-terminal code occur before release |
+| Unpaired IDE direct `list`, `exec`, or a command pairing cannot authorize | IDE / automation-suspect ancestry without a valid pairing | Agent/restricted; JIT for supported list/exec, command-specific biometric gates for management/export, and denial for unsupported direct reads |
+| Any terminal or IDE with explicit agent runtime or agentic ancestry | Runtime marker or host-observed known-agent process | Agent; pairing and human session evidence cannot override it |
+| Unknown terminal host with interactive stdin and no agent evidence | TTY only admits the narrow bootstrap; host is not trusted for reuse | Human for one biometrically approved request; no reusable session |
+| Chrome native host | Private marker plus verified native-host ancestry | Dedicated human/autofill approval or session path |
+| CI or non-interactive SSH without a valid automation credential | No established human path | Agent/restricted default; separate SSH-agent policy still governs SSH signing |
 
 ### Both Sides Must Agree
 
@@ -300,20 +329,24 @@ Classification runs twice, from different vantage points:
 
 - The **CLI** decides whether to run a JIT preflight
   (`Exec.shouldRunJITPreflight`), using its own process ancestry and
-  environment.
+  environment. Before direct `list` preflight, it asks the bridge whether the
+  exact current caller owns a valid terminal pairing.
 - The **bridge host** decides whether a grant is required
   (`XPCRequestHandler.isAgentJITCaller`), using the XPC peer's ancestry.
 
 These must reach the same verdict for the same caller. If the host demands a
-grant the CLI never sought, the request fails with no grant obtainable and no
-way for the user to satisfy the error. If the CLI seeks a grant the host does
-not require, the user sees an approval prompt that authorizes nothing.
+list grant the CLI's local detector did not expect — including an unrecognized
+agent such as Grok — the CLI still runs list JIT preflight. If the CLI still
+preflights a caller the host does not treat as an Agent JIT caller, the host
+returns empty grants without opening approval or writing an `agentJITPreflight`
+audit record.
 
-Because the two run in different processes, they read different evidence:
-the CLI has argv for the whole ancestry, and the host has code-signing identity
-and bundle identifiers. Any classification rule added to one side needs the
-matching rule on the other, and any signal available to only one side must not
-become the sole basis for a decision.
+Because the two run in different processes, they read different evidence: the
+CLI has argv for the whole ancestry, while the host has code-signing identity,
+bundle identifiers, and the authoritative pairing store. Any classification
+rule added to one side needs the matching rule on the other. A bridge-reported
+pairing may suppress unnecessary client-side list preflight; local state alone
+must never claim paired-human authority.
 
 ### What The Terminal Does And Does Not Decide
 
@@ -330,6 +363,8 @@ other means:
 - to admit the narrow biometric bootstrap, which is available only when there is
   no agent evidence at all and which releases no metadata or secret before
   approval
+- as the host-derived endpoint of an IDE terminal pairing whose live shell
+  anchor and workspace are revalidated on every request
 
 Redirected stdout does not affect routing. `TerminalContext.isInteractiveSession`
 is a separate stdin-and-stdout check for terminal user interfaces, not an
@@ -350,16 +385,38 @@ Center can show active human sessions when `Include human sessions` is enabled,
 and revoking one has the same authorization effect as `authsia lock` for that
 scope.
 
+## IDE Terminal Pairing
+
+An automation-suspect IDE terminal cannot become human merely by presenting a
+TTY or client-supplied session scope. Its first eligible ordinary secret request
+opens a local panel showing host-derived workspace, controlling terminal,
+anchor shell PID, full command, and a short code. After Touch ID or Mac-password
+approval, the human enters the app-displayed code in that terminal. Pairing
+creates the normal configured-duration CLI session.
+
+Every request rechecks the host-derived TTY, exact anchor PID/start time,
+shell-only ancestry, the validated managed-workspace root when one exists or
+the exact current directory otherwise, expiry, and absence of agent runtime
+evidence. Pairing never authorizes `access` or `export`, and is local-only.
+
+Pairing establishes which terminal a human confirmed once; it is not proof of
+human identity. The primary accepted risk is terminal injection: an IDE API can
+type a visible command into a paired panel and reuse the session until expiry.
+Lifecycle and use are audited; `authsia lock`, Access
+Center revocation, anchor exit, or TTL expiry ends authority. Existing macOS
+screen-recording permission and same-user native TTY theft remain outside this
+defense.
+
 ## AI Tool And JIT Path
 
 Coding agents are treated as a separate actor from the human who owns the
 terminal. See [Caller Classification](#caller-classification) for how a request
 is routed to this path. When no explicit automation credential is supplied,
 confirmed `agentRuntimeContext` selects JIT; automation credentials are
-evaluated through their separate authorization path. An ancestry-only agent or
-IDE helper invocation selects JIT on ancestry alone, regardless of the
-terminal, because the bridge host requires a grant from those callers either
-way.
+evaluated through their separate authorization path. Agentic ancestry always
+selects JIT. IDE-helper ancestry selects JIT unless the bridge validates an
+exact paired-human binding for that request; pairing never overrides explicit
+runtime or agent-process evidence.
 
 An IDE or agent name in the ancestry is not enough to establish an ongoing
 human session. That path requires stdin TTY plus the server-current session
@@ -386,6 +443,13 @@ When JIT is required:
    new folder paths and active scopes. No broad prompt names items or secrets.
 7. The bridge stores short-lived grants bound to the caller fingerprint,
    terminal/session scope, working directory, TTL, and folder-tree/root scope.
+   After local biometric approval, optional signing or parent/host fields may
+   be missing on the second read; process name, session scope, and working
+   directory must still match. The saved grant binds the pre-approval
+   fingerprint so later reuse cannot widen if signing evidence flickered. A
+   vault or grant-store reload failure fails closed. After a grant exists,
+   follow-up list or exec uses it even if the same TTY also looks eligible
+   for a one-request human bootstrap.
 8. Final secret reads must match an active grant.
 
 Agent attribution improves Access Center and audit readability, but it is not

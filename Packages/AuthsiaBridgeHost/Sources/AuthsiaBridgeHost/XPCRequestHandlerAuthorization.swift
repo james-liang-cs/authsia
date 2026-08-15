@@ -18,6 +18,7 @@ extension XPCRequestHandler {
         requestedCommand: String? = nil,
         fullCommand: String? = nil,
         agentJITGrantID: UUID? = nil,
+        terminalPairingID: UUID? = nil,
         agentRuntimeContext: AgentRuntimeContext? = nil,
         workspaceContext: WorkspaceRuntimeContext? = nil,
         environmentScope: EnvironmentAccessScope? = nil
@@ -36,6 +37,7 @@ extension XPCRequestHandler {
             requestedCommand: requestedCommand,
             fullCommand: fullCommand,
             agentJITGrantID: agentJITGrantID,
+            terminalPairingID: terminalPairingID,
             agentRuntimeContext: agentRuntimeContext,
             workspaceContext: workspaceContext,
             environmentScope: environmentScope ?? grantEnvironmentScope
@@ -118,12 +120,19 @@ extension XPCRequestHandler {
         if request.context.hasAutomationCredential {
             return .allowed(approvedBy: "automation", needsApproval: false, agentJITGrantID: nil)
         }
-        if Self.interactiveHumanBootstrapEligible(request: request, callerIdentity: callerIdentity)
-            && !Self.hasValidatedInteractiveHumanSession(request: request, callerIdentity: callerIdentity) {
+        if terminalPairingEligible(request: request, callerIdentity: callerIdentity) {
+            return .needsPairing
+        }
+        if interactiveHumanBootstrapEligible(request: request, callerIdentity: callerIdentity)
+            && !hasValidatedInteractiveHumanSession(request: request, callerIdentity: callerIdentity) {
             return .allowed(approvedBy: "biometric", needsApproval: true, agentJITGrantID: nil)
         }
-        guard Self.isAgentJITCaller(request: request, callerIdentity: callerIdentity) else {
-            return .allowed(approvedBy: "session", needsApproval: false, agentJITGrantID: nil)
+        guard shouldUseAgentJIT(request: request, callerIdentity: callerIdentity) else {
+            let approvedBy = pairedHumanSession(
+                request: request,
+                callerIdentity: callerIdentity
+            ) == nil ? "session" : "paired-human"
+            return .allowed(approvedBy: approvedBy, needsApproval: false, agentJITGrantID: nil)
         }
         guard request.context.requestedCommand == "exec" else {
             return .denied(
@@ -140,6 +149,7 @@ extension XPCRequestHandler {
 
     enum SecretReadApprovalDecision: Equatable {
         case allowed(approvedBy: String, needsApproval: Bool, agentJITGrantID: UUID?)
+        case needsPairing
         case denied(code: BridgeErrorCode, message: String)
     }
 
@@ -158,7 +168,13 @@ extension XPCRequestHandler {
         }
     }
 
-    static func isAgentJITCaller(request: BridgeRequest, callerIdentity: CallerIdentity?) -> Bool {
+    static func isAgentJITCaller(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?,
+        pairings: [TerminalPairing] = [],
+        now: Date = Date(),
+        processStartTime: (Int32) -> UInt64? = { TerminalSessionScope.startTimeSeconds(pid: $0) }
+    ) -> Bool {
         // Unforgeable agent evidence must win over transport classification. A caller
         // cannot escape JIT policy by adding the private Chrome marker or imitating
         // the native host process name.
@@ -167,6 +183,16 @@ extension XPCRequestHandler {
         }
         if AgentJITCallerContext.hasAgenticCaller(callerIdentity) {
             return true
+        }
+        if pairingMayAuthorize(request.type),
+           AgentJITCallerContext.hasPairedHumanSession(
+                request: request,
+                callerIdentity: callerIdentity,
+                pairings: pairings,
+                now: now,
+                processStartTime: processStartTime
+           ) {
+            return false
         }
         if AgentJITCallerContext.hasAutomationSuspectCaller(callerIdentity) {
             return true
@@ -184,6 +210,15 @@ extension XPCRequestHandler {
         return !AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
     }
 
+    private static func pairingMayAuthorize(_ type: BridgeRequestType) -> Bool {
+        switch type {
+        case .exportAccounts, .createAccess, .listAccess, .revokeAccess, .validateAccess:
+            return false
+        default:
+            return true
+        }
+    }
+
     static func isChromeNativeHostCaller(
         request: BridgeRequest,
         callerIdentity: CallerIdentity?
@@ -194,9 +229,12 @@ extension XPCRequestHandler {
             && isChromeNativeHostCallerIdentity(callerIdentity)
     }
 
-    private static func hasValidatedInteractiveHumanSession(
+    static func hasValidatedInteractiveHumanSession(
         request: BridgeRequest,
-        callerIdentity: CallerIdentity?
+        callerIdentity: CallerIdentity?,
+        pairings: [TerminalPairing] = [],
+        now: Date = Date(),
+        processStartTime: (Int32) -> UInt64? = { TerminalSessionScope.startTimeSeconds(pid: $0) }
     ) -> Bool {
         guard request.context.isTTY,
               let sessionToken = request.sessionToken,
@@ -205,27 +243,45 @@ extension XPCRequestHandler {
               let currentSession = sharedSessionManager.currentSession(scope: request.context.sessionScope) else {
             return false
         }
-        return AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
+        let trustedOrPaired = AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
+            || AgentJITCallerContext.hasPairedHumanSession(
+                request: request,
+                callerIdentity: callerIdentity,
+                pairings: pairings,
+                now: now,
+                processStartTime: processStartTime
+            )
+        return trustedOrPaired
             && currentSession.sessionToken == sessionToken
             && sharedSessionManager.hasOrigin(origin, scope: request.context.sessionScope)
     }
 
     static func interactiveHumanBootstrapEligible(
         request: BridgeRequest,
-        callerIdentity: CallerIdentity? = nil
+        callerIdentity: CallerIdentity? = nil,
+        pairings: [TerminalPairing] = [],
+        now: Date = Date(),
+        processStartTime: (Int32) -> UInt64? = { TerminalSessionScope.startTimeSeconds(pid: $0) }
     ) -> Bool {
-        request.context.isTTY
+        let paired = AgentJITCallerContext.hasPairedHumanSession(
+            request: request,
+            callerIdentity: callerIdentity,
+            pairings: pairings,
+            now: now,
+            processStartTime: processStartTime
+        )
+        return request.context.isTTY
             && request.context.agentRuntimeContext == nil
             && !AgentJITCallerContext.hasAgenticCaller(callerIdentity)
-            && !AgentJITCallerContext.hasAutomationSuspectCaller(callerIdentity)
+            && (!AgentJITCallerContext.hasAutomationSuspectCaller(callerIdentity) || paired)
     }
 
-    static func unsupportedAgentJITBridgeCommandDenial(
+    func unsupportedAgentJITBridgeCommandDenial(
         for request: BridgeRequest,
         callerIdentity: CallerIdentity?
     ) -> BridgeErrorPayload? {
-        guard Self.isAgentJITCaller(request: request, callerIdentity: callerIdentity),
-              !Self.interactiveHumanBootstrapEligible(
+        guard shouldUseAgentJIT(request: request, callerIdentity: callerIdentity),
+              !interactiveHumanBootstrapEligible(
                 request: request,
                 callerIdentity: callerIdentity
               ) else {
@@ -292,18 +348,15 @@ extension XPCRequestHandler {
             return .allowed(approvedBy: "automation", needsApproval: false, agentJITGrantID: nil)
         }
 
-        if Self.isAgentJITCaller(request: request, callerIdentity: callerIdentity)
-            && !Self.interactiveHumanBootstrapEligible(
+        if terminalPairingEligible(request: request, callerIdentity: callerIdentity) {
+            return .needsPairing
+        }
+
+        if shouldUseAgentJIT(request: request, callerIdentity: callerIdentity) {
+            let bootstrapEligible = interactiveHumanBootstrapEligible(
                 request: request,
                 callerIdentity: callerIdentity
-            ) {
-            guard request.context.requestedCommand == "exec" else {
-                return .denied(
-                    code: .policyDenied,
-                    message: Self.unsupportedAgentJITCommandMessage(for: request.context.requestedCommand)
-                        ?? "Agent secret reads are only allowed through authsia exec with a valid JIT grant."
-                )
-            }
+            )
             do {
                 if let grant = try agentJITGrant(
                     capability: .exec,
@@ -315,6 +368,35 @@ extension XPCRequestHandler {
                 ) {
                     return .allowed(approvedBy: "jit", needsApproval: false, agentJITGrantID: grant.id)
                 }
+            } catch {
+                if !bootstrapEligible {
+                    return .denied(
+                        code: .policyDenied,
+                        message: "Agent exec secret reads require a valid JIT preflight grant for this item scope."
+                    )
+                }
+            }
+            if bootstrapEligible {
+                let needsApproval = !validateSessionAndRequest(
+                    request,
+                    sessionToken: request.sessionToken,
+                    callerIdentity: callerIdentity
+                )
+                let paired = pairedHumanSession(request: request, callerIdentity: callerIdentity)
+                return .allowed(
+                    approvedBy: needsApproval ? "biometric" : (paired == nil ? "session" : "paired-human"),
+                    needsApproval: needsApproval,
+                    agentJITGrantID: nil
+                )
+            }
+            guard request.context.requestedCommand == "exec" else {
+                return .denied(
+                    code: .policyDenied,
+                    message: Self.unsupportedAgentJITCommandMessage(for: request.context.requestedCommand)
+                        ?? "Agent secret reads are only allowed through authsia exec with a valid JIT grant."
+                )
+            }
+            do {
                 if let caller = AgentJITCallerContext.fingerprint(
                     for: request,
                     caller: callerIdentity
@@ -357,8 +439,9 @@ extension XPCRequestHandler {
         }
 
         let needsApproval = !validateSessionAndRequest(request, sessionToken: request.sessionToken, callerIdentity: callerIdentity)
+        let paired = pairedHumanSession(request: request, callerIdentity: callerIdentity)
         return .allowed(
-            approvedBy: needsApproval ? "biometric" : "session",
+            approvedBy: needsApproval ? "biometric" : (paired == nil ? "session" : "paired-human"),
             needsApproval: needsApproval,
             agentJITGrantID: nil
         )
@@ -445,12 +528,9 @@ extension XPCRequestHandler {
         activeJITGrants: [AgentJITGrant]? = nil,
         callerUsesAgentJIT: Bool? = nil
     ) -> BridgeListPayload {
-        let callerUsesAgentJIT = callerUsesAgentJIT ?? (
-            Self.isAgentJITCaller(request: request, callerIdentity: callerIdentity)
-                && !Self.interactiveHumanBootstrapEligible(
-                    request: request,
-                    callerIdentity: callerIdentity
-                )
+        let callerUsesAgentJIT = callerUsesAgentJIT ?? shouldUseAgentJIT(
+            request: request,
+            callerIdentity: callerIdentity
         )
         let jitScopes = activeJITScopes ?? (
             callerUsesAgentJIT
@@ -633,6 +713,7 @@ extension XPCRequestHandler {
     ) -> (token: String?, expiresAt: Date?, failed: Bool) {
         let mayIssueReusableSession =
             AgentJITCallerContext.isTrustedHumanTerminal(callerIdentity)
+            || hasPairedHumanSession(request: request, callerIdentity: callerIdentity)
             || Self.isChromeNativeHostCaller(request: request, callerIdentity: callerIdentity)
         guard mayIssueReusableSession else {
             return (nil, nil, false)
@@ -650,6 +731,278 @@ extension XPCRequestHandler {
             return (nil, nil, true)
         }
         return (session.sessionToken, session.expiresAt, false)
+    }
+
+    /// Resolves the valid pairings once per request, reusing the first `now` so
+    /// every check in one decision agrees. A miss simply re-resolves, so an
+    /// interleaved request degrades to the uncached cost rather than reading a
+    /// value that is not its own.
+    func resolvedTerminalPairings(
+        for request: BridgeRequest
+    ) -> (now: Date, pairings: [TerminalPairing]) {
+        terminalPairingMemoLock.lock()
+        if let memo = terminalPairingMemo, memo.requestID == request.id {
+            defer { terminalPairingMemoLock.unlock() }
+            return (memo.now, memo.pairings)
+        }
+        terminalPairingMemoLock.unlock()
+
+        let now = Date()
+        guard let result = try? terminalPairingStore.loadAllPruningInvalid(now: now) else {
+            return (now, [])
+        }
+        for pairing in result.pruned {
+            recordAudit(
+                command: .terminalPairingRevoke,
+                itemId: pairing.id.uuidString,
+                approvedBy: pairing.expiresAt <= now
+                    ? "paired-human-expired"
+                    : "paired-human-anchor-ended",
+                caller: nil,
+                terminalPairingID: pairing.id
+            )
+        }
+        terminalPairingMemoLock.lock()
+        terminalPairingMemo = (request.id, now, result.valid)
+        terminalPairingMemoLock.unlock()
+        return (now, result.valid)
+    }
+
+    /// Idle expiry rather than absolute: a terminal in active use keeps its
+    /// pairing, so the code is entered once per shell instead of once per
+    /// session TTL. Renewing only past half-life bounds this to one write per
+    /// half TTL, which matters because the write is a Keychain round trip.
+    private func renewingTerminalPairing(
+        _ pairing: TerminalPairing,
+        requestID: UUID,
+        now: Date
+    ) -> TerminalPairing {
+        let ttl = Self.configuredSessionTTL
+        guard pairing.expiresAt.timeIntervalSince(now) < ttl / 2 else { return pairing }
+        // Whole seconds: the store round-trips deadlines as ISO-8601, so an
+        // unrounded deadline would leave the returned pairing disagreeing with
+        // the persisted one by a fraction of a second.
+        let renewed = pairing.renewed(
+            expiresAt: Date(
+                timeIntervalSince1970: (now.timeIntervalSince1970 + ttl).rounded(.down)
+            )
+        )
+        do {
+            try terminalPairingStore.save(renewed)
+        } catch {
+            return pairing
+        }
+        terminalPairingMemoLock.lock()
+        if let memo = terminalPairingMemo, memo.requestID == requestID {
+            terminalPairingMemo = (
+                memo.requestID,
+                memo.now,
+                memo.pairings.map { $0.id == renewed.id ? renewed : $0 }
+            )
+        }
+        terminalPairingMemoLock.unlock()
+        return renewed
+    }
+
+    func terminalPairingEligible(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> Bool {
+        guard request.context.isTTY,
+              !request.context.hasAutomationCredential,
+              request.context.agentRuntimeContext == nil,
+              request.context.requestedCommand != "exec",
+              let callerIdentity,
+              callerIdentity.controllingTerminal != nil,
+              callerIdentity.hostCommand?.isEmpty == false,
+              let anchor = callerIdentity.shellAncestryPrefix?.first,
+              anchor.startTimeSeconds != nil,
+              AgentJITCallerContext.terminalPairingWorkspaceRoot(request: request) != nil,
+              !AgentJITCallerContext.hasAgenticCaller(callerIdentity),
+              AgentJITCallerContext.hasAutomationSuspectCaller(callerIdentity),
+              !hasPairedHumanSession(request: request, callerIdentity: callerIdentity) else {
+            return false
+        }
+        return AgentJITCallerContext.trustedShellProcessNames.contains(anchor.processName.lowercased())
+    }
+
+    @MainActor
+    func requestTerminalPairing(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?,
+        reply: XPCReply
+    ) async {
+        guard terminalPairingEligible(request: request, callerIdentity: callerIdentity),
+              let callerIdentity,
+              let controllingTerminal = callerIdentity.controllingTerminal,
+              let anchor = callerIdentity.shellAncestryPrefix?.first,
+              let anchorStartTime = anchor.startTimeSeconds,
+              let workspaceRoot = AgentJITCallerContext.terminalPairingWorkspaceRoot(request: request),
+              let fullCommand = callerIdentity.hostCommand,
+              let pairingApprover = approver as? TerminalPairingApproving else {
+            replyError(
+                id: request.id,
+                code: .policyDenied,
+                message: "This terminal is not eligible for pairing.",
+                reply: reply
+            )
+            return
+        }
+
+        let pending = terminalPairingCoordinator.begin(
+            workspaceRoot: workspaceRoot,
+            controllingTerminal: controllingTerminal,
+            anchorShellPID: anchor.pid,
+            anchorShellStartTime: anchorStartTime,
+            fullCommand: fullCommand
+        )
+        if let supersededID = pending.supersededID {
+            pairingApprover.finishTerminalPairing(id: supersededID)
+        }
+        let approved = await pairingApprover.requestTerminalPairingApproval(pending.request)
+        // Ctrl+C (or any caller exit) during the prompt leaves no process to enter
+        // the code. Dismiss after the local decision, matching Direct CLI.
+        let callerStillPresent = callerIdentityRevalidationProvider(callerIdentity) != nil
+        guard approved,
+              callerStillPresent,
+              terminalPairingCoordinator.markLocallyApproved(id: pending.request.id) else {
+            terminalPairingCoordinator.cancel(id: pending.request.id)
+            pairingApprover.finishTerminalPairing(id: pending.request.id)
+            replyError(
+                id: request.id,
+                code: .notAuthorized,
+                message: "Terminal pairing was not approved.",
+                reply: reply
+            )
+            return
+        }
+
+        let response: BridgeResponse<String> = BridgeResponseBuilder.error(
+            id: request.id,
+            code: .requiresPairing,
+            message: "Enter the pairing code shown in the Authsia app.",
+            pairingRequestID: pending.request.id
+        )
+        reply(encodeResponse(response), nil)
+        watchTerminalPairingCaller(
+            pairingID: pending.request.id,
+            callerIdentity: callerIdentity,
+            pairingApprover: pairingApprover
+        )
+    }
+
+    @MainActor
+    private func watchTerminalPairingCaller(
+        pairingID: UUID,
+        callerIdentity: CallerIdentity,
+        pairingApprover: TerminalPairingApproving
+    ) {
+        Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard let self else { return }
+                guard self.terminalPairingCoordinator.pendingRequest(id: pairingID) != nil else {
+                    return
+                }
+                guard self.callerIdentityRevalidationProvider(callerIdentity) != nil else {
+                    self.terminalPairingCoordinator.cancel(id: pairingID)
+                    pairingApprover.finishTerminalPairing(id: pairingID)
+                    return
+                }
+            }
+        }
+    }
+
+    func pairedHumanSession(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> TerminalPairing? {
+        let resolved = resolvedTerminalPairings(for: request)
+        guard let pairing = AgentJITCallerContext.pairedHumanSession(
+            request: request,
+            callerIdentity: callerIdentity,
+            pairings: resolved.pairings,
+            now: resolved.now
+        ) else {
+            return nil
+        }
+        return renewingTerminalPairing(pairing, requestID: request.id, now: resolved.now)
+    }
+
+    func hasPairedHumanSession(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> Bool {
+        pairedHumanSession(request: request, callerIdentity: callerIdentity) != nil
+    }
+
+    func terminalPairingsOwnedByCaller(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> [TerminalPairing] {
+        guard request.context.agentRuntimeContext == nil,
+              let callerIdentity,
+              let controllingTerminal = callerIdentity.controllingTerminal,
+              let shellAncestryPrefix = callerIdentity.shellAncestryPrefix,
+              !AgentJITCallerContext.hasAgenticCaller(callerIdentity) else {
+            return []
+        }
+        return resolvedTerminalPairings(for: request).pairings.filter { pairing in
+            pairing.controllingTerminal == controllingTerminal
+                && shellAncestryPrefix.contains {
+                    $0.pid == pairing.anchorShellPID
+                        && $0.startTimeSeconds == pairing.anchorShellStartTime
+                }
+        }
+    }
+
+    func pairedHumanAuditAttribution(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> (approvedBy: String, pairingID: UUID?) {
+        guard let pairing = pairedHumanSession(
+            request: request,
+            callerIdentity: callerIdentity
+        ) else {
+            return ("session", nil)
+        }
+        return ("paired-human", pairing.id)
+    }
+
+    func shouldUseAgentJIT(request: BridgeRequest, callerIdentity: CallerIdentity?) -> Bool {
+        let resolved = resolvedTerminalPairings(for: request)
+        return Self.isAgentJITCaller(
+            request: request,
+            callerIdentity: callerIdentity,
+            pairings: resolved.pairings,
+            now: resolved.now
+        )
+    }
+
+    func interactiveHumanBootstrapEligible(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> Bool {
+        let resolved = resolvedTerminalPairings(for: request)
+        return Self.interactiveHumanBootstrapEligible(
+            request: request,
+            callerIdentity: callerIdentity,
+            pairings: resolved.pairings,
+            now: resolved.now
+        )
+    }
+
+    func hasValidatedInteractiveHumanSession(
+        request: BridgeRequest,
+        callerIdentity: CallerIdentity?
+    ) -> Bool {
+        let resolved = resolvedTerminalPairings(for: request)
+        return Self.hasValidatedInteractiveHumanSession(
+            request: request,
+            callerIdentity: callerIdentity,
+            pairings: resolved.pairings,
+            now: resolved.now
+        )
     }
 
     func makeNSError(code: BridgeErrorCode, message: String) -> NSError {

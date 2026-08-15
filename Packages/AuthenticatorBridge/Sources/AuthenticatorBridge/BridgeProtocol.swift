@@ -23,6 +23,7 @@ import Foundation
     func listAccessCredentials(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func revokeAccessCredential(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func validateAccessCredential(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func completeTerminalPairing(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
 }
 
 @objc public protocol AuthsiaBridgeApprovalCallbackProtocol {

@@ -3,7 +3,7 @@
 ## Table of Contents
 
 - [Scope &amp; Test Assumptions](#scope-test-assumptions)
-- [Global Commands (Unlock, List, Scrape, Revert)](#global-commands-unlock-list-scrape-revert)
+- [Global Commands (Unlock, Lock, List, Scrape, Revert)](#global-commands-unlock-lock-list-scrape-revert)
 - [OTP](#otp)
 - [Load Runtime Environment Variables](#load-runtime-environment-variables)
 - [Exec (Scoped Secret Injection)](#exec-scoped-secret-injection)
@@ -39,11 +39,12 @@ Assumptions:
 Sample item names used below (adjust as needed): GitHub (OTP), Demo Password, Demo Cert, Kube Config,
 Work SSH.
 
-## Global Commands (Unlock, List, Scrape, Revert)
+## Global Commands (Unlock, Lock, List, Scrape, Revert)
 
 | Step | Activity | Test Payload | Command | Notes |
 |------|---------|--------------|---------|-------|
 | 1 | Start session | N/A | `authsia unlock` | Avoids repeated approval prompts until the session expires |
+| 1a | End session and IDE pairing | N/A | `authsia lock` | Revokes this terminal's pairing and clears the cached normal CLI session |
 | 2 | List OTP items | N/A | `authsia list otp --format table` | Non-secret list |
 | 3 | List passwords | N/A | `authsia list passwords` | Scraped items default to current machine |
 | 4 | List passwords (all machines) | N/A | `authsia list passwords --all-machines --format table` | Table includes `Machine` for scraped rows |
@@ -66,6 +67,15 @@ Work SSH.
 | 21 | Revert path-based credential file | `~/.zshrc` | `authsia scrape --revert ~/.zshrc` | Original export line restored |
 
 ## OTP
+
+In an eligible unpaired IDE terminal, the first ordinary secret request opens
+pairing automatically. Approve the host-derived command in the app, then enter
+the app-displayed four-character code at the CLI prompt. Pairing refuses
+non-TTY stdin and creates the normal configured-duration session; it does not
+authorize `access` or `export`. Direct `authsia list` reuses a pairing owned by
+the current caller; the bridge does not open Agent JIT approval for that
+caller. Explicit agent runtime or agent-process evidence still routes list
+through Agent JIT.
 
 OTP items are created in the app UI. Use an existing OTP item (for example, GitHub).
 
@@ -384,8 +394,9 @@ System health commands.
 
 | Step | Activity | Test Payload | Command | Notes |
 |------|---------|--------------|---------|-------|
-| 1 | Status table | N/A | `authsia status` | Shows bridge, session, shell, SSH status |
-| 2 | Status JSON | N/A | `authsia status --format json` | Machine-readable status |
+| 1 | Status table | N/A | `authsia status` | Shows bridge, session, current terminal/workspace pairing, shell, and SSH status |
+| 2 | Status JSON | N/A | `authsia status --format json` | Machine-readable status including `terminalPairing` |
+| 2a | End session and pairing | N/A | `authsia lock` | Ends the current pairing and paired CLI session |
 | 3 | Setup status | N/A | `authsia setup --status` | Shows first-run readiness checklist without changing files |
 | 4 | Repair shell integration | N/A | `authsia setup --repair` | Reinstalls Authsia-managed shell integration, then prints status |
 | 5 | Cleanup managed setup | N/A | `authsia setup --uninstall-clean` | Removes only Authsia-managed shell integration blocks and user symlink |

@@ -556,7 +556,9 @@ and note references only. OTP and SSH references are rejected in that JIT path; 
 built-in SSH-agent flow. Direct agent commands that intentionally emit plaintext (`get`, `read`,
 `load`, and `inject`) are not authorized by JIT. Direct agent `authsia list` for passwords,
 API keys, certificates, notes, and SSH metadata runs through JIT preflight and returns only the approved
-named-folder subtrees or root-only scope.
+named-folder subtrees or root-only scope. When the host already requires a list
+grant, the CLI still preflights even if its local detector does not name the
+agent.
 
 Within a managed Authsia workspace, an active agent JIT grant follows the same
 agent session across descendant directories of the canonical workspace root.
@@ -1464,7 +1466,7 @@ passthrough instead of blocking on `exec`'s secret-input guard. Known read-only 
 probes that agent and IDE harnesses spawn automatically — `docker context ls`/`inspect`, `docker`
 `version`/`info`/`ps`/`images`, `npm`/`pnpm`/`yarn` `view`/`info`/`ls`/`list`/`outdated`,
 `config get`/`list`, `npm ping`, `pip`/`pip3` `list`/`show`, `kubectl`/`terraform`/`tofu`/`go`
-`version`, `cargo` `metadata`/`tree`, `gcloud` `version`/`config list`/`config get-value`, and bare
+`version`, `kubectl config current-context`/`get-contexts`, `cargo` `metadata`/`tree`, `gcloud` `version`/`config list`/`config get-value`, and bare
 `--version`/`--help`
 invocations — also pass through without injecting secrets, forwarding automation credential markers,
 or firing a JIT preflight, so launching an agent tool does not request approval until a command
@@ -2022,7 +2024,9 @@ authsia ssh git-signing --principal user@example.com --public-key ~/.ssh/deploy.
 ### `authsia status` — System health
 
 Displays bridge connectivity, this terminal's interactive session state, shell integration status,
-guarded-terminal state, SSH agent status, and this terminal's session-based SSH approval status. CLI and SSH approval
+guarded-terminal state, SSH agent status, and this terminal's session-based SSH approval status.
+A signed terminal reports the Direct CLI session and omits pairing; an IDE-integrated terminal
+reports pairing and omits the Direct CLI session line. CLI and SSH approval
 session state comes from the current terminal scope only; sessions held by other terminals or apps
 are not reported and do not make this terminal report as unlocked.
 `status` reports the current human terminal scope even when an automation credential environment

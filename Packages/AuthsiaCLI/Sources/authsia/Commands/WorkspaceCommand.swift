@@ -1437,8 +1437,17 @@ struct Workspace: AsyncParsableCommand {
                 return subcommand == "config" && (configCommand == "get" || configCommand == "list")
             case "pip", "pip3":
                 return ["list", "show"].contains(subcommand)
-            case "kubectl", "terraform", "tofu", "go":
+            case "terraform", "tofu", "go":
                 return subcommand == "version"
+            case "kubectl":
+                if subcommand == "version" {
+                    return true
+                }
+                // Warp and other terminals probe the active context on tab open.
+                // That read does not consume workspace secrets.
+                let configCommand = tokens.dropFirst().first
+                return subcommand == "config"
+                    && (configCommand == "current-context" || configCommand == "get-contexts")
             case "cargo":
                 return ["metadata", "tree"].contains(subcommand)
             case "gcloud":

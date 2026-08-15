@@ -6,6 +6,13 @@ import AuthenticatorBridge
 @Suite("Status command")
 struct StatusCommandTests {
 
+    @Test("pair is not a top-level CLI command")
+    func pairIsNotATopLevelCommand() {
+        #expect(throws: (any Error).self) {
+            _ = try Authsia.parseAsRoot(["pair", "status"])
+        }
+    }
+
     @Test("buildSnapshot reports connected session shell and ssh state")
     func buildSnapshotReportsAllCoreStates() {
         let expiresAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -101,6 +108,7 @@ struct StatusCommandTests {
 
         #expect(output.contains("Bridge"))
         #expect(output.contains("Session"))
+        #expect(!output.contains("Terminal Pairing"))
         #expect(output.contains("Shell Integration"))
         #expect(output.contains("SSH Agent"))
         #expect(output.contains("Connected"))
@@ -229,10 +237,11 @@ struct StatusCommandTests {
         let payload = try JSONDecoder().decode(StatusJSONPayload.self, from: data)
 
         #expect(payload.bridgeConnected)
-        #expect(payload.sessionActive)
+        #expect(payload.sessionActive == true)
         #expect(!payload.shellIntegrationEnabled)
         #expect(payload.sshAgentRunning)
-        #expect(payload.session.status == "active")
+        #expect(payload.session?.status == "active")
+        #expect(payload.terminalPairing == nil)
         #expect(payload.sshSessionActive)
         #expect(payload.sshSession.status == "active")
         #expect(payload.sshSession.remainingSeconds == 110)
@@ -240,6 +249,60 @@ struct StatusCommandTests {
         #expect(payload.sshSession.currentTerminal)
         #expect(payload.terminalScope == "tty:/dev/ttys001:sid:1001")
         #expect(payload.guardedTerminal.state == "inactive")
+    }
+
+    @Test("table and JSON status include the current terminal pairing")
+    func renderStatusIncludesTerminalPairing() throws {
+        let expiresAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let pairing = TerminalPairing(
+            id: UUID(),
+            controllingTerminal: "ttys004",
+            anchorShellPID: 41,
+            anchorShellStartTime: 100,
+            workspaceRoot: "/repo/project",
+            createdAt: Date(timeIntervalSince1970: 1_699_999_000),
+            expiresAt: expiresAt
+        )
+        let snapshot = StatusSnapshot(
+            bridgeConnected: true,
+            sessionActive: true,
+            sessionExpiresAt: expiresAt,
+            terminalPairing: pairing,
+            shellIntegrationEnabled: true,
+            sshAgentRunning: false,
+            reportsPairingAuthority: true
+        )
+        let currentDate = Date(timeIntervalSince1970: 1_699_999_900)
+
+        let table = Status.renderTable(snapshot: snapshot, currentDate: currentDate)
+        let json = Status.renderJSON(snapshot: snapshot, currentDate: currentDate)
+        let payload = try JSONDecoder().decode(StatusJSONPayload.self, from: Data(json.utf8))
+
+        #expect(table.contains("Terminal Pairing: Active"))
+        #expect(table.contains("/dev/ttys004"))
+        #expect(table.contains("/repo/project"))
+        #expect(!table.contains("\nSession:"))
+        #expect(payload.sessionActive == nil)
+        #expect(payload.session == nil)
+        #expect(payload.terminalPairing?.status == "active")
+        #expect(payload.terminalPairing?.terminal == "/dev/ttys004")
+        #expect(payload.terminalPairing?.workspaceRoot == "/repo/project")
+        #expect(payload.terminalPairing?.remainingSeconds == 100)
+    }
+
+    @Test("IDE ancestry reports pairing and omits the Direct CLI session line")
+    func ideAncestryReportsPairingAuthority() {
+        #expect(Status.reportsPairingAuthority(processAncestry: [
+            AgenticProcessReference(processName: "authsia", bundleIdentifier: "authsia"),
+            AgenticProcessReference(processName: "zsh", bundleIdentifier: nil),
+            AgenticProcessReference(processName: "Code Helper", bundleIdentifier: "com.microsoft.VSCode.helper"),
+            AgenticProcessReference(processName: "Code", bundleIdentifier: "com.microsoft.VSCode"),
+        ]))
+        #expect(!Status.reportsPairingAuthority(processAncestry: [
+            AgenticProcessReference(processName: "authsia", bundleIdentifier: "authsia"),
+            AgenticProcessReference(processName: "zsh", bundleIdentifier: nil),
+            AgenticProcessReference(processName: "Terminal", bundleIdentifier: "com.apple.Terminal"),
+        ]))
     }
 
     @Test("guarded terminal status counts the shims backing the current shell")
@@ -378,15 +441,23 @@ struct StatusCommandTests {
 
 private struct StatusJSONPayload: Decodable {
     let bridgeConnected: Bool
-    let sessionActive: Bool
+    let sessionActive: Bool?
     let shellIntegrationEnabled: Bool
     let sshAgentRunning: Bool
-    let session: StatusJSONSession
+    let session: StatusJSONSession?
     let sshSessionActive: Bool
     let sshSession: StatusJSONSSHSession
     let terminalScope: String?
     let workspace: StatusJSONWorkspace?
     let guardedTerminal: StatusJSONGuardedTerminal
+    let terminalPairing: StatusJSONTerminalPairing?
+}
+
+private struct StatusJSONTerminalPairing: Decodable {
+    let status: String
+    let terminal: String?
+    let workspaceRoot: String?
+    let remainingSeconds: Int?
 }
 
 private struct StatusJSONGuardedTerminal: Decodable {

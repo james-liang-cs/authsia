@@ -5,6 +5,13 @@ import AuthenticatorBridge
 
 @Suite("Bridge client error messaging")
 struct BridgeClientErrorTests {
+    @Test("terminal pairing refuses non-TTY stdin")
+    func terminalPairingRefusesNonTTYInput() {
+        #expect(throws: CLIError.self) {
+            try TerminalPairingInput.requireInteractive(isTTY: false)
+        }
+    }
+
     @Test("policy denied surfaces server message when available")
     func policyDeniedSurfacesServerMessage() {
         let error = BridgeClientError.bridgeError(
@@ -240,6 +247,19 @@ struct BridgeClientErrorTests {
         #expect(message?.contains("CLI Access") == true)
     }
 
+    @Test("an earlier Direct CLI wait hides the later JIT wait")
+    func earlierDirectCLIWaitHidesLaterJITWait() {
+        let jitAfterList = AuthsiaBridgeClient.approvalPromptMessage(
+            for: .agentJITPreflight,
+            context: Self.context(requestedCommand: "list"),
+            hasSessionToken: false,
+            stderrIsTTY: true,
+            hasAlreadyShown: true
+        )
+
+        #expect(jitAfterList == nil)
+    }
+
     @Test("approval prompt identifies agent JIT requests")
     func approvalPromptIdentifiesAgentJITRequests() {
         let message = AuthsiaBridgeClient.approvalPromptMessage(
@@ -292,6 +312,28 @@ struct BridgeClientErrorTests {
 
         #expect(message?.contains("Waiting for Authsia Access Credential approval") == true)
         #expect(message?.contains("scoped access credential") == true)
+    }
+
+    @Test("structured unlock error is not collapsed to invalidResponse")
+    func structuredUnlockErrorIsNotCollapsedToInvalidResponse() {
+        let response = BridgeResponse<UnlockPayload>(
+            id: UUID(),
+            payload: nil,
+            error: BridgeErrorPayload(
+                code: .policyDenied,
+                message: "Reusable CLI sessions require a signed, supported terminal host."
+            )
+        )
+
+        do {
+            _ = try AuthsiaBridgeClient.requirePayload(response)
+            Issue.record("expected the Bridge policy error")
+        } catch let error as BridgeClientError {
+            #expect(error.localizedDescription.contains("signed, supported terminal host"))
+            #expect(error.localizedDescription.contains("invalid response") == false)
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
     }
 
     @Test("approval prompt is skipped for active sessions")

@@ -410,6 +410,151 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertTrue(AgentJITCallerContext.hasAgenticCaller(nestedAuthsiaCaller(context: context)))
     }
 
+    func testPairedIDECallerUsesHumanPathOnlyForMatchingTTYAnchorAndWorkspace() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let now = Date(timeIntervalSince1970: 10_000)
+        let pairing = terminalPairing(workspace: workspace.path, expiresAt: now.addingTimeInterval(60))
+        let request = makeRequest(
+            sessionScope: "caller-controlled-value",
+            workingDirectory: workspace.path,
+            workspaceAuthorityPath: workspace.path
+        )
+        let caller = pairedIDECaller()
+
+        XCTAssertTrue(AgentJITCallerContext.hasPairedHumanSession(
+            request: request,
+            callerIdentity: caller,
+            pairings: [pairing],
+            now: now,
+            processStartTime: { _ in 100 }
+        ))
+        XCTAssertFalse(XPCRequestHandler.isAgentJITCaller(
+            request: request,
+            callerIdentity: caller,
+            pairings: [pairing],
+            now: now,
+            processStartTime: { _ in 100 }
+        ))
+    }
+
+    func testPairingDeniesMissingTTYWrongWorkspaceAndExpiredRecord() throws {
+        let workspace = try makeWorkspace()
+        let otherWorkspace = try makeWorkspace()
+        defer {
+            try? FileManager.default.removeItem(at: workspace)
+            try? FileManager.default.removeItem(at: otherWorkspace)
+        }
+        let now = Date(timeIntervalSince1970: 10_000)
+        let pairing = terminalPairing(workspace: workspace.path, expiresAt: now.addingTimeInterval(60))
+        let matchingRequest = makeRequest(
+            sessionScope: "tty:/dev/ttys999:sid:1",
+            workingDirectory: workspace.path,
+            workspaceAuthorityPath: workspace.path
+        )
+        let wrongWorkspaceRequest = makeRequest(
+            sessionScope: nil,
+            workingDirectory: otherWorkspace.path,
+            workspaceAuthorityPath: otherWorkspace.path
+        )
+
+        XCTAssertFalse(hasPairing(matchingRequest, caller: pairedIDECaller(controllingTerminal: nil), pairing, now))
+        XCTAssertFalse(hasPairing(wrongWorkspaceRequest, caller: pairedIDECaller(), pairing, now))
+        XCTAssertFalse(hasPairing(
+            matchingRequest,
+            caller: pairedIDECaller(),
+            terminalPairing(workspace: workspace.path, expiresAt: now),
+            now
+        ))
+    }
+
+    func testPairingDeniesAgentInChainExitedOrReusedAnchorAndRuntimeEvidence() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let now = Date(timeIntervalSince1970: 10_000)
+        let pairing = terminalPairing(workspace: workspace.path, expiresAt: now.addingTimeInterval(60))
+        let request = makeRequest(
+            sessionScope: nil,
+            workingDirectory: workspace.path,
+            workspaceAuthorityPath: workspace.path
+        )
+        let agentBetweenCallerAndAnchor = pairedIDECaller(
+            shellPrefix: [ParentProcessInfo(
+                pid: 42,
+                processName: "zsh",
+                bundleIdentifier: nil,
+                startTimeSeconds: 200
+            )]
+        )
+
+        XCTAssertFalse(hasPairing(request, caller: agentBetweenCallerAndAnchor, pairing, now))
+        XCTAssertFalse(AgentJITCallerContext.hasPairedHumanSession(
+            request: request,
+            callerIdentity: pairedIDECaller(),
+            pairings: [pairing],
+            now: now,
+            processStartTime: { _ in nil }
+        ))
+        XCTAssertFalse(AgentJITCallerContext.hasPairedHumanSession(
+            request: request,
+            callerIdentity: pairedIDECaller(),
+            pairings: [pairing],
+            now: now,
+            processStartTime: { _ in 101 }
+        ))
+
+        let runtimeRequest = BridgeRequest(
+            id: request.id,
+            type: request.type,
+            query: request.query,
+            options: request.options,
+            context: BridgeContext(
+                isTTY: true,
+                isPiped: false,
+                isSSH: false,
+                isCI: false,
+                timestamp: now,
+                requestedCommand: "get",
+                workingDirectory: workspace.path,
+                workspaceAuthorityPath: workspace.path,
+                agentRuntimeContext: AgentRuntimeContext(
+                    platform: "codex",
+                    sessionID: "session-99"
+                )
+            )
+        )
+        XCTAssertFalse(hasPairing(runtimeRequest, caller: pairedIDECaller(), pairing, now))
+    }
+
+    func testPairingDoesNotAuthorizeAccessOrExport() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let now = Date(timeIntervalSince1970: 10_000)
+        let pairing = terminalPairing(workspace: workspace.path, expiresAt: now.addingTimeInterval(60))
+        let base = makeRequest(
+            sessionScope: nil,
+            workingDirectory: workspace.path,
+            workspaceAuthorityPath: workspace.path
+        )
+
+        for type in [BridgeRequestType.createAccess, .exportAccounts] {
+            let request = BridgeRequest(
+                id: base.id,
+                type: type,
+                query: base.query,
+                options: base.options,
+                context: base.context
+            )
+            XCTAssertTrue(XPCRequestHandler.isAgentJITCaller(
+                request: request,
+                callerIdentity: pairedIDECaller(),
+                pairings: [pairing],
+                now: now,
+                processStartTime: { _ in 100 }
+            ))
+        }
+    }
+
     private func makeRequest(
         sessionScope: String?,
         workingDirectory: String?,
@@ -431,6 +576,67 @@ final class AgentJITCallerContextTests: XCTestCase {
                 workingDirectory: workingDirectory,
                 workspaceAuthorityPath: workspaceAuthorityPath
             )
+        )
+    }
+
+    private func makeWorkspace() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-pairing-workspace-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    private func terminalPairing(workspace: String, expiresAt: Date) -> TerminalPairing {
+        TerminalPairing(
+            id: UUID(),
+            controllingTerminal: "ttys004",
+            anchorShellPID: 41,
+            anchorShellStartTime: 100,
+            workspaceRoot: workspace,
+            createdAt: Date(timeIntervalSince1970: 9_000),
+            expiresAt: expiresAt
+        )
+    }
+
+    private func hasPairing(
+        _ request: BridgeRequest,
+        caller: CallerIdentity,
+        _ pairing: TerminalPairing,
+        _ now: Date
+    ) -> Bool {
+        AgentJITCallerContext.hasPairedHumanSession(
+            request: request,
+            callerIdentity: caller,
+            pairings: [pairing],
+            now: now,
+            processStartTime: { _ in 100 }
+        )
+    }
+
+    private func pairedIDECaller(
+        controllingTerminal: String? = "ttys004",
+        shellPrefix: [ParentProcessInfo]? = nil
+    ) -> CallerIdentity {
+        let anchor = ParentProcessInfo(
+            pid: 41,
+            processName: "zsh",
+            bundleIdentifier: nil,
+            startTimeSeconds: 100
+        )
+        return CallerIdentity(
+            pid: 42,
+            processName: "authsia",
+            bundleIdentifier: "com.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application",
+            parentProcess: anchor,
+            hostProcess: ParentProcessInfo(
+                pid: 40,
+                processName: "Code Helper",
+                bundleIdentifier: "com.microsoft.VSCode"
+            ),
+            controllingTerminal: controllingTerminal,
+            shellAncestryPrefix: shellPrefix ?? [anchor]
         )
     }
 

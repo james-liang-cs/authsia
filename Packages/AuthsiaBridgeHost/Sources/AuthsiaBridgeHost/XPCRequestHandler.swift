@@ -60,6 +60,13 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     let authorityStore: AuthorityStoring
     let agentJITGrantStore: AgentJITGrantStoring
     let agentJITGrantAuthorizer: AgentJITGrantAuthorizer
+    let terminalPairingStore: TerminalPairingStoring
+    let terminalPairingCoordinator: TerminalPairingCoordinator
+    /// One pairing resolution per request. A single decision consults pairings
+    /// four or five times, and each resolution is a Keychain read; this also
+    /// pins one `now` so those checks cannot disagree mid-request.
+    let terminalPairingMemoLock = NSLock()
+    var terminalPairingMemo: (requestID: UUID, now: Date, pairings: [TerminalPairing])?
     let callerIdentityProvider: CallerIdentityProvider
     let callerIdentityRevalidationProvider: CallerIdentityRevalidationProvider
     let remoteJITApprovalRequestBuilder: RemoteJITApprovalRequestBuilding?
@@ -218,6 +225,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         },
         authorityStore: AuthorityStoring = KeychainAuthorityStore(),
         agentJITGrantStore: AgentJITGrantStoring? = nil,
+        terminalPairingStore: TerminalPairingStoring = TerminalPairingStore(),
         callerIdentityProvider: @escaping CallerIdentityProvider = {
             CallerIdentityExtractor.extract(from: NSXPCConnection.current())
         },
@@ -256,6 +264,8 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
             ?? AgentJITGrantStore(authorityStore: authorityStore)
         self.agentJITGrantStore = resolvedAgentJITGrantStore
         self.agentJITGrantAuthorizer = AgentJITGrantAuthorizer(store: resolvedAgentJITGrantStore)
+        self.terminalPairingStore = terminalPairingStore
+        self.terminalPairingCoordinator = TerminalPairingCoordinator()
         self.callerIdentityProvider = callerIdentityProvider
         self.callerIdentityRevalidationProvider = callerIdentityRevalidationProvider
         self.remoteJITApprovalRequestBuilder = remoteJITApprovalRequestBuilder

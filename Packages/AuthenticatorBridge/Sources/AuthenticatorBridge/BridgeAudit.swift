@@ -11,6 +11,13 @@ public struct CallerIdentity: Codable, Equatable {
     /// The host application above the parent process, when the CLI was launched
     /// through an editor or IDE helper (for example, Claude via VS Code).
     public let hostProcess: ParentProcessInfo?
+    /// Host-derived controlling terminal name, for example `ttys004`.
+    public let controllingTerminal: String?
+    /// Maximal shell-only prefix of the host-observed ancestry. This is used for
+    /// live authorization only and is intentionally omitted from audit encoding.
+    public let shellAncestryPrefix: [ParentProcessInfo]?
+    /// Host-observed argv rendered for a local approval panel. Never persisted.
+    public let hostCommand: String?
 
     public init(
         pid: Int32,
@@ -19,7 +26,10 @@ public struct CallerIdentity: Codable, Equatable {
         signingTeamId: String?,
         signingIdentity: String?,
         parentProcess: ParentProcessInfo? = nil,
-        hostProcess: ParentProcessInfo? = nil
+        hostProcess: ParentProcessInfo? = nil,
+        controllingTerminal: String? = nil,
+        shellAncestryPrefix: [ParentProcessInfo]? = nil,
+        hostCommand: String? = nil
     ) {
         self.pid = pid
         self.processName = processName
@@ -28,6 +38,46 @@ public struct CallerIdentity: Codable, Equatable {
         self.signingIdentity = signingIdentity
         self.parentProcess = parentProcess
         self.hostProcess = hostProcess
+        self.controllingTerminal = controllingTerminal
+        self.shellAncestryPrefix = shellAncestryPrefix
+        self.hostCommand = hostCommand
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pid
+        case processName
+        case bundleIdentifier
+        case signingTeamId
+        case signingIdentity
+        case parentProcess
+        case hostProcess
+        case controllingTerminal
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pid = try container.decode(Int32.self, forKey: .pid)
+        processName = try container.decode(String.self, forKey: .processName)
+        bundleIdentifier = try container.decodeIfPresent(String.self, forKey: .bundleIdentifier)
+        signingTeamId = try container.decodeIfPresent(String.self, forKey: .signingTeamId)
+        signingIdentity = try container.decodeIfPresent(String.self, forKey: .signingIdentity)
+        parentProcess = try container.decodeIfPresent(ParentProcessInfo.self, forKey: .parentProcess)
+        hostProcess = try container.decodeIfPresent(ParentProcessInfo.self, forKey: .hostProcess)
+        controllingTerminal = try container.decodeIfPresent(String.self, forKey: .controllingTerminal)
+        shellAncestryPrefix = nil
+        hostCommand = nil
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(pid, forKey: .pid)
+        try container.encode(processName, forKey: .processName)
+        try container.encodeIfPresent(bundleIdentifier, forKey: .bundleIdentifier)
+        try container.encodeIfPresent(signingTeamId, forKey: .signingTeamId)
+        try container.encodeIfPresent(signingIdentity, forKey: .signingIdentity)
+        try container.encodeIfPresent(parentProcess, forKey: .parentProcess)
+        try container.encodeIfPresent(hostProcess, forKey: .hostProcess)
+        try container.encodeIfPresent(controllingTerminal, forKey: .controllingTerminal)
     }
 }
 
@@ -43,6 +93,7 @@ public struct ParentProcessInfo: Codable, Equatable {
     /// recognised by its extension path, and Electron helpers by the `.app` bundle in
     /// argv[0] — so `AgenticProcessDetector` cannot classify this process without it.
     public let arguments: [String]?
+    public let startTimeSeconds: UInt64?
 
     public init(
         pid: Int32,
@@ -52,7 +103,8 @@ public struct ParentProcessInfo: Codable, Equatable {
         signingIdentity: String? = nil,
         isPlatformBinary: Bool? = nil,
         executablePath: String? = nil,
-        arguments: [String]? = nil
+        arguments: [String]? = nil,
+        startTimeSeconds: UInt64? = nil
     ) {
         self.pid = pid
         self.processName = processName
@@ -62,6 +114,7 @@ public struct ParentProcessInfo: Codable, Equatable {
         self.isPlatformBinary = isPlatformBinary
         self.executablePath = executablePath
         self.arguments = arguments
+        self.startTimeSeconds = startTimeSeconds
     }
 }
 
@@ -118,6 +171,7 @@ public struct BridgeAuditRecord: Codable, Equatable, @unchecked Sendable {
     /// Redacted, shell-quoted CLI invocation suitable for menu copy actions and audit inspection.
     public let fullCommand: String?
     public let agentJITGrantID: UUID?
+    public let terminalPairingID: UUID?
     public let agentRuntimeContext: AgentRuntimeContext?
     public let workspaceContext: WorkspaceRuntimeContext?
     public let environmentScope: EnvironmentAccessScope?
@@ -133,6 +187,7 @@ public struct BridgeAuditRecord: Codable, Equatable, @unchecked Sendable {
         requestedCommand: String? = nil,
         fullCommand: String? = nil,
         agentJITGrantID: UUID? = nil,
+        terminalPairingID: UUID? = nil,
         agentRuntimeContext: AgentRuntimeContext? = nil,
         workspaceContext: WorkspaceRuntimeContext? = nil,
         environmentScope: EnvironmentAccessScope? = nil,
@@ -147,6 +202,7 @@ public struct BridgeAuditRecord: Codable, Equatable, @unchecked Sendable {
         self.requestedCommand = requestedCommand
         self.fullCommand = fullCommand
         self.agentJITGrantID = agentJITGrantID
+        self.terminalPairingID = terminalPairingID
         self.agentRuntimeContext = agentRuntimeContext
         self.workspaceContext = workspaceContext
         self.environmentScope = environmentScope

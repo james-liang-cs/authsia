@@ -6,7 +6,7 @@ import AuthenticatorBridge
 struct Status: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "status",
-        abstract: "Show app, session, shell, SSH agent, and SSH approval status",
+        abstract: "Show app, session, pairing, shell, SSH agent, and SSH approval status",
         discussion: """
             Displays the current Authsia runtime state.
 
@@ -37,11 +37,13 @@ struct Status: ParsableCommand {
             localSessionExpiresAt: SessionCache.loadExpiresAt(keychainAccount: SessionCache.humanScopedKeychainAccount()),
             bridgeSessionActive: statusPayload?.sessionActive,
             bridgeSessionExpiresAt: statusPayload?.sessionExpiresAt,
+            terminalPairing: statusPayload?.terminalPairing,
             isBridgeConnected: pingPayload != nil,
             sshSessionStatus: sshSessionStatus,
             currentDate: now,
             terminalScope: humanSessionScope,
-            workspaceContext: WorkspaceRuntimeContextResolver.resolve()
+            workspaceContext: WorkspaceRuntimeContextResolver.resolve(),
+            reportsPairingAuthority: Self.reportsPairingAuthority()
         )
         print(Self.render(snapshot: snapshot, format: format, currentDate: now, verbose: verbose))
     }
@@ -65,11 +67,13 @@ struct Status: ParsableCommand {
         localSessionExpiresAt: Date?,
         bridgeSessionActive: Bool?,
         bridgeSessionExpiresAt: Date?,
+        terminalPairing: TerminalPairing? = nil,
         isBridgeConnected: Bool,
         sshSessionStatus: SSHAgentSessionStatus = .inactive,
         currentDate: Date,
         terminalScope: String? = nil,
-        workspaceContext: WorkspaceRuntimeContext? = nil
+        workspaceContext: WorkspaceRuntimeContext? = nil,
+        reportsPairingAuthority: Bool = false
     ) -> StatusSnapshot {
         let sessionState = resolveSessionState(
             localSessionExpiresAt: localSessionExpiresAt,
@@ -81,6 +85,7 @@ struct Status: ParsableCommand {
             bridgeConnected: isBridgeConnected,
             sessionActive: sessionState.active,
             sessionExpiresAt: sessionState.expiresAt,
+            terminalPairing: terminalPairing,
             shellIntegrationEnabled: environment["AUTHSIA_SHELL_INTEGRATION"] == "1",
             sshAgentRunning: SSHAgentLoader.isAgentRunning(environment: environment),
             sshSessionActive: sshSessionStatus.active,
@@ -89,8 +94,15 @@ struct Status: ParsableCommand {
             sshSessionCurrentTerminal: sshSessionStatus.currentTerminal,
             terminalScope: terminalScope,
             workspaceContext: workspaceContext,
-            guardedTerminal: resolveGuardedTerminalStatus(environment: environment)
+            guardedTerminal: resolveGuardedTerminalStatus(environment: environment),
+            reportsPairingAuthority: reportsPairingAuthority
         )
+    }
+
+    static func reportsPairingAuthority(
+        processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry()
+    ) -> Bool {
+        AgenticProcessDetector.containsAutomationSuspectProcess(processAncestry)
     }
 
     /// Reports what the *current shell* actually has, not what a guarded shell was meant
@@ -172,7 +184,11 @@ struct Status: ParsableCommand {
         var lines: [String] = []
         lines.append("Authsia Status")
         lines.append("Bridge: \(snapshot.bridgeConnected ? "Connected" : "Disconnected")")
-        lines.append("Session: \(sessionStatusText(snapshot: snapshot, currentDate: currentDate))")
+        if snapshot.reportsPairingAuthority {
+            lines.append("Terminal Pairing: \(terminalPairingStatusText(snapshot: snapshot, currentDate: currentDate))")
+        } else {
+            lines.append("Session: \(sessionStatusText(snapshot: snapshot, currentDate: currentDate))")
+        }
         lines.append("Shell Integration: \(snapshot.shellIntegrationEnabled ? "Enabled" : "Disabled")")
         lines.append("Guarded Terminal: \(guardedTerminalStatusText(snapshot.guardedTerminal))")
         if verbose {
@@ -198,18 +214,25 @@ struct Status: ParsableCommand {
     static func renderJSON(snapshot: StatusSnapshot, currentDate: Date) -> String {
         let payload = StatusJSONPayload(
             bridgeConnected: snapshot.bridgeConnected,
-            sessionActive: snapshot.sessionActive,
-            sessionExpiresAt: snapshot.sessionExpiresAt.map { ISO8601DateFormatter().string(from: $0) },
+            sessionActive: snapshot.reportsPairingAuthority ? nil : snapshot.sessionActive,
+            sessionExpiresAt: snapshot.reportsPairingAuthority
+                ? nil
+                : snapshot.sessionExpiresAt.map { ISO8601DateFormatter().string(from: $0) },
             shellIntegrationEnabled: snapshot.shellIntegrationEnabled,
             sshAgentRunning: snapshot.sshAgentRunning,
             sshSessionActive: snapshot.sshSessionActive,
             sshSessionExpiresAt: snapshot.sshSessionExpiresAt.map { ISO8601DateFormatter().string(from: $0) },
-            session: StatusJSONSession(
-                status: snapshot.sessionActive ? "active" : "inactive",
-                remainingSeconds: snapshot.sessionExpiresAt.map {
-                    max(Int($0.timeIntervalSince(currentDate)), 0)
-                }
-            ),
+            session: snapshot.reportsPairingAuthority
+                ? nil
+                : StatusJSONSession(
+                    status: snapshot.sessionActive ? "active" : "inactive",
+                    remainingSeconds: snapshot.sessionExpiresAt.map {
+                        max(Int($0.timeIntervalSince(currentDate)), 0)
+                    }
+                ),
+            terminalPairing: snapshot.reportsPairingAuthority
+                ? terminalPairingJSON(snapshot: snapshot, currentDate: currentDate)
+                : nil,
             sshSession: StatusJSONSSHSession(
                 status: snapshot.sshSessionActive ? "active" : "inactive",
                 remainingSeconds: snapshot.sshSessionExpiresAt.map {
@@ -241,6 +264,42 @@ struct Status: ParsableCommand {
         guard let expiresAt = snapshot.sessionExpiresAt else { return "Active" }
         let remaining = Int(expiresAt.timeIntervalSince(currentDate))
         return remaining > 0 ? "Active (\(remaining)s remaining)" : "Inactive"
+    }
+
+    private static func terminalPairingStatusText(snapshot: StatusSnapshot, currentDate: Date) -> String {
+        guard let pairing = snapshot.terminalPairing, pairing.expiresAt > currentDate else {
+            return "Inactive"
+        }
+        let terminal = pairing.controllingTerminal.hasPrefix("/dev/")
+            ? pairing.controllingTerminal
+            : "/dev/\(pairing.controllingTerminal)"
+        let remaining = max(Int(pairing.expiresAt.timeIntervalSince(currentDate)), 0)
+        return "Active (\(terminal), \(pairing.workspaceRoot), \(remaining)s remaining)"
+    }
+
+    private static func terminalPairingJSON(
+        snapshot: StatusSnapshot,
+        currentDate: Date
+    ) -> StatusJSONTerminalPairing {
+        guard let pairing = snapshot.terminalPairing, pairing.expiresAt > currentDate else {
+            return StatusJSONTerminalPairing(
+                status: "inactive",
+                terminal: nil,
+                workspaceRoot: nil,
+                expiresAt: nil,
+                remainingSeconds: nil
+            )
+        }
+        let terminal = pairing.controllingTerminal.hasPrefix("/dev/")
+            ? pairing.controllingTerminal
+            : "/dev/\(pairing.controllingTerminal)"
+        return StatusJSONTerminalPairing(
+            status: "active",
+            terminal: terminal,
+            workspaceRoot: pairing.workspaceRoot,
+            expiresAt: ISO8601DateFormatter().string(from: pairing.expiresAt),
+            remainingSeconds: max(Int(pairing.expiresAt.timeIntervalSince(currentDate)), 0)
+        )
     }
 
     private static func guardedTerminalStatusText(_ status: GuardedTerminalStatus) -> String {
@@ -333,6 +392,7 @@ struct StatusSnapshot {
     let bridgeConnected: Bool
     let sessionActive: Bool
     let sessionExpiresAt: Date?
+    let terminalPairing: TerminalPairing?
     let shellIntegrationEnabled: Bool
     let sshAgentRunning: Bool
     let sshSessionActive: Bool
@@ -342,11 +402,13 @@ struct StatusSnapshot {
     let terminalScope: String?
     let workspaceContext: WorkspaceRuntimeContext?
     let guardedTerminal: GuardedTerminalStatus
+    let reportsPairingAuthority: Bool
 
     init(
         bridgeConnected: Bool,
         sessionActive: Bool,
         sessionExpiresAt: Date?,
+        terminalPairing: TerminalPairing? = nil,
         shellIntegrationEnabled: Bool,
         sshAgentRunning: Bool,
         sshSessionActive: Bool = false,
@@ -355,11 +417,13 @@ struct StatusSnapshot {
         sshSessionCurrentTerminal: Bool = true,
         terminalScope: String? = nil,
         workspaceContext: WorkspaceRuntimeContext? = nil,
-        guardedTerminal: GuardedTerminalStatus = GuardedTerminalStatus(state: .inactive)
+        guardedTerminal: GuardedTerminalStatus = GuardedTerminalStatus(state: .inactive),
+        reportsPairingAuthority: Bool = false
     ) {
         self.bridgeConnected = bridgeConnected
         self.sessionActive = sessionActive
         self.sessionExpiresAt = sessionExpiresAt
+        self.terminalPairing = terminalPairing
         self.shellIntegrationEnabled = shellIntegrationEnabled
         self.sshAgentRunning = sshAgentRunning
         self.sshSessionActive = sshSessionActive
@@ -369,22 +433,65 @@ struct StatusSnapshot {
         self.terminalScope = terminalScope
         self.workspaceContext = workspaceContext
         self.guardedTerminal = guardedTerminal
+        self.reportsPairingAuthority = reportsPairingAuthority
     }
 }
 
-private struct StatusJSONPayload: Codable {
+private struct StatusJSONPayload: Encodable {
     let bridgeConnected: Bool
-    let sessionActive: Bool
+    let sessionActive: Bool?
     let sessionExpiresAt: String?
     let shellIntegrationEnabled: Bool
     let sshAgentRunning: Bool
     let sshSessionActive: Bool
     let sshSessionExpiresAt: String?
-    let session: StatusJSONSession
+    let session: StatusJSONSession?
+    let terminalPairing: StatusJSONTerminalPairing?
     let sshSession: StatusJSONSSHSession
     let terminalScope: String?
     let workspace: WorkspaceRuntimeContext?
     let guardedTerminal: GuardedTerminalStatus
+
+    enum CodingKeys: String, CodingKey {
+        case bridgeConnected
+        case sessionActive
+        case sessionExpiresAt
+        case shellIntegrationEnabled
+        case sshAgentRunning
+        case sshSessionActive
+        case sshSessionExpiresAt
+        case session
+        case terminalPairing
+        case sshSession
+        case terminalScope
+        case workspace
+        case guardedTerminal
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(bridgeConnected, forKey: .bridgeConnected)
+        try container.encodeIfPresent(sessionActive, forKey: .sessionActive)
+        try container.encodeIfPresent(sessionExpiresAt, forKey: .sessionExpiresAt)
+        try container.encode(shellIntegrationEnabled, forKey: .shellIntegrationEnabled)
+        try container.encode(sshAgentRunning, forKey: .sshAgentRunning)
+        try container.encode(sshSessionActive, forKey: .sshSessionActive)
+        try container.encodeIfPresent(sshSessionExpiresAt, forKey: .sshSessionExpiresAt)
+        try container.encodeIfPresent(session, forKey: .session)
+        try container.encodeIfPresent(terminalPairing, forKey: .terminalPairing)
+        try container.encode(sshSession, forKey: .sshSession)
+        try container.encodeIfPresent(terminalScope, forKey: .terminalScope)
+        try container.encodeIfPresent(workspace, forKey: .workspace)
+        try container.encode(guardedTerminal, forKey: .guardedTerminal)
+    }
+}
+
+private struct StatusJSONTerminalPairing: Codable {
+    let status: String
+    let terminal: String?
+    let workspaceRoot: String?
+    let expiresAt: String?
+    let remainingSeconds: Int?
 }
 
 private struct StatusJSONSession: Codable {

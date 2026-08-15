@@ -453,6 +453,148 @@ struct AgentJITPreflightTests {
         #expect(client.payloads.count == 2)
     }
 
+    @Test("unrecognized agent ancestry does not locally enable list preflight")
+    func unrecognizedAgentAncestryDoesNotLocallyEnableListPreflight() {
+        #expect(!Exec.shouldRunJITPreflight(
+            environment: [:],
+            processAncestry: Self.grokBuildAncestry
+        ))
+    }
+
+    @Test("host grant requirement preflights list even for unrecognized agent ancestry")
+    func hostGrantRequirementPreflightsUnrecognizedAgentList() throws {
+        let client = RecordingJITPreflightClient()
+
+        try List.runJITPreflight(
+            scope: .apiKeys,
+            folder: nil,
+            parentEnvironment: [:],
+            processAncestry: Self.grokBuildAncestry,
+            honorHostGrantRequirement: true,
+            client: client
+        )
+
+        #expect(client.payloads == [
+            AgentJITPreflightPayload(
+                requestedCommand: "list",
+                references: [
+                    AgentJITPreflightReference(
+                        type: "api-key",
+                        query: "",
+                        folderPath: nil,
+                        isFolderScoped: false
+                    ),
+                ]
+            ),
+        ])
+    }
+
+    @Test("unrecognized agent list still skips preflight without a host grant requirement")
+    func unrecognizedAgentListSkipsPreflightWithoutHostGrantRequirement() throws {
+        let client = RecordingJITPreflightClient()
+
+        try List.runJITPreflight(
+            scope: .apiKeys,
+            folder: nil,
+            parentEnvironment: [:],
+            processAncestry: Self.grokBuildAncestry,
+            client: client
+        )
+
+        #expect(client.payloads == [])
+    }
+
+    @Test("paired VS Code terminal skips list JIT preflight")
+    func pairedVSCodeTerminalSkipsListJITPreflight() throws {
+        let client = RecordingJITPreflightClient()
+
+        #expect(Exec.shouldRunJITPreflight(
+            environment: [:],
+            processAncestry: Self.vsCodeHumanShellAncestry
+        ))
+
+        try List.runJITPreflight(
+            scope: .passwords,
+            folder: nil,
+            parentEnvironment: [:],
+            processAncestry: Self.vsCodeHumanShellAncestry,
+            hasCurrentTerminalPairing: { true },
+            client: client
+        )
+
+        #expect(client.payloads == [])
+    }
+
+    @Test("successful list does not open JIT preflight")
+    func successfulListDoesNotOpenJITPreflight() throws {
+        var preflightCount = 0
+        let expected = emptyListPayload()
+        let payload = try List.loadAfterHostDecision(
+            list: { expected },
+            preflight: { preflightCount += 1 }
+        )
+        #expect(payload == expected)
+        #expect(preflightCount == 0)
+    }
+
+    @Test("list JIT preflight runs only after the host requires a grant")
+    func listJITPreflightRunsOnlyAfterHostRequiresGrant() throws {
+        var listAttempts = 0
+        var preflightCount = 0
+        let expected = emptyListPayload()
+        let payload = try List.loadAfterHostDecision(
+            list: {
+                listAttempts += 1
+                if listAttempts == 1 {
+                    throw BridgeClientError.bridgeError(
+                        code: "policyDenied",
+                        message: "Agent list requests require a valid JIT preflight grant for a supported Vault scope.",
+                        query: nil
+                    )
+                }
+                return expected
+            },
+            preflight: { preflightCount += 1 }
+        )
+        #expect(payload == expected)
+        #expect(listAttempts == 2)
+        #expect(preflightCount == 1)
+    }
+
+    @Test("non-grant list failures do not open JIT preflight")
+    func nonGrantListFailuresDoNotOpenJITPreflight() {
+        var preflightCount = 0
+        #expect(throws: BridgeClientError.self) {
+            _ = try List.loadAfterHostDecision(
+                list: {
+                    throw BridgeClientError.bridgeError(
+                        code: "policyDenied",
+                        message: "CLI access is disabled",
+                        query: nil
+                    )
+                },
+                preflight: { preflightCount += 1 }
+            )
+        }
+        #expect(preflightCount == 0)
+    }
+
+    private func emptyListPayload() -> BridgeListPayload {
+        BridgeListPayload(
+            accounts: [],
+            passwords: [],
+            certificates: [],
+            notes: [],
+            sshKeys: []
+        )
+    }
+
+    private static let grokBuildAncestry = [
+        AgenticProcessReference(processName: "authsia", bundleIdentifier: "authsia"),
+        AgenticProcessReference(processName: "zsh", bundleIdentifier: nil),
+        AgenticProcessReference(processName: "grok", bundleIdentifier: nil),
+    ]
+
     private static let humanTerminalAncestry = [
         AgenticProcessReference(processName: "authsia", bundleIdentifier: "com.authsia.cli"),
         AgenticProcessReference(processName: "zsh", bundleIdentifier: nil),
@@ -486,6 +628,17 @@ struct AgentJITPreflightTests {
                 "--type=extensionHost",
             ]
         ),
+    ]
+
+    private static let vsCodeHumanShellAncestry = [
+        AgenticProcessReference(processName: "authsia", bundleIdentifier: "app.authsia.cli"),
+        AgenticProcessReference(processName: "zsh", bundleIdentifier: nil),
+        AgenticProcessReference(
+            processName: "Code Helper",
+            bundleIdentifier: "com.microsoft.VSCode.helper",
+            arguments: ["Code Helper", "--type=utility", "--utility-sub-type=node.mojom.NodeService"]
+        ),
+        AgenticProcessReference(processName: "Code", bundleIdentifier: "com.microsoft.VSCode"),
     ]
 }
 

@@ -9,6 +9,7 @@
   - [Findings and attempted fixes](#findings-and-attempted-fixes)
   - [Blockers and residual risks](#blockers-and-residual-risks)
 - [Why This Exists](#why-this-exists)
+- [IDE Terminal Pairing](#ide-terminal-pairing)
 - [Current Exfiltration Coverage](#current-exfiltration-coverage)
 - [When JIT Runs](#when-jit-runs)
 - [Process Detection](#process-detection)
@@ -281,14 +282,43 @@ JIT grants split those cases:
   authorization path. An ancestry-only invocation without an stdin TTY also
   uses JIT.
 - An ancestry-only IDE terminal becomes an ongoing human session only when stdin
-  is a TTY and the request carries the server-current token for the same
-  terminal scope. TTY alone is not authorization or a classifier override.
-- A first stdin-TTY request without confirmed agent runtime context may use a
-  narrow biometric bootstrap. It returns no metadata or secret before approval,
-  then mints the normal scoped terminal session. Active JIT grants do not
-  authorize this bootstrap or the human list path.
+  is a TTY and either a valid paired-terminal anchor plus the server-current
+  token, or trusted terminal ancestry plus that token, is present. TTY alone is
+  not authorization or a classifier override.
+- The first ordinary secret request from an eligible unpaired IDE terminal
+  opens local terminal pairing. The app shows host-derived request facts and a
+  code; after local authentication, the human types that code in the terminal.
+  No metadata or secret is returned before pairing completes.
+- Pairing creates the normal configured-duration CLI session. Confirmed agent
+  runtime context or an agent in the ancestry still selects JIT even when it
+  inherits the paired TTY or session token.
 - Background or unattended automation should use explicit automation credentials
   instead of JIT.
+
+## IDE Terminal Pairing
+
+Pairing is a local co-presence claim about one terminal, not proof of human
+identity. The bridge derives the controlling TTY and process start times from
+the caller, anchors the record to the nearest shell-only ancestry prefix, and
+binds it to the validated managed-workspace root when one exists, otherwise the
+exact current directory. Every request rechecks the TTY, shell PID and start
+time, shell-only ancestry, pairing scope, expiry, and absence of agent runtime
+evidence.
+
+The four-character app-to-terminal code expires after 60 seconds and permits
+one retry. A newer request replaces any pending request. `authsia status`
+inspects the current terminal and workspace pairing; `authsia lock` ends the
+pairing and its normal CLI session. `access` and
+`export` remain biometric-only.
+
+The primary accepted risk is terminal injection. An IDE API such as VS Code's
+`terminal.sendText` can type a visible command into a paired panel and reuse the
+session without another prompt until expiry. Pairing grant, use, expiry, and
+revocation are audited with the pairing ID and controlling terminal. An
+injected request can also raise a pairing prompt, so the panel shows the full
+host-observed command. Screen-reading with an existing macOS permission and
+same-user native TTY theft remain outside this defense. Pairing is defense in
+depth, not cryptographic human attestation.
 
 ## Current Exfiltration Coverage
 
@@ -379,7 +409,11 @@ The CLI starts JIT preflight when all of these are true:
 2. No `AUTHSIA_ACCESS_CREDENTIAL` is present in the parent environment.
 3. The invocation has an explicit confirmed agent marker, or the process
    ancestry contains a known coding agent or automation-suspect IDE
-   helper/extension host and stdin is not a TTY.
+   helper/extension host. A Bridge-validated paired-human session skips list
+   JIT preflight; the host also returns empty grants without opening approval
+   when the CLI still preflights that caller. When the host already requires a
+   list grant, the CLI still preflights even if its local detector does not
+   name the agent.
 4. The command has secret inputs through a type scope, an env file, or
    `authsia://` references, or it is a Vault metadata list for passwords,
    API keys, certificates, notes, or SSH keys.
@@ -470,7 +504,13 @@ authorization.
    duration, reuse policy, and exact item metadata.
 6. A multiple-item decision persists atomically; denial or storage failure
    creates no partial grant.
-7. Approved grants are saved in authenticated Bridge-owned authority and
+7. After local biometric approval, the Bridge revalidates the caller and
+   approved item set before saving. Optional signing or parent/host fields may
+   be missing on that second read after Touch ID; process name, session scope,
+   and working directory must still match. The saved grant binds to the
+   pre-approval fingerprint so later reuse cannot widen if signing evidence
+   flickered. A vault or grant-store reload failure still fails closed.
+   Approved grants are then saved in authenticated Bridge-owned authority and
    returned to the CLI.
 8. The `exec` internal metadata list can use the grant's `list` capability only
    within the displayed exact-item or explicit folder scope.
@@ -486,13 +526,16 @@ Agent exec secret reads require a valid JIT preflight grant for this item scope.
 For direct agent `authsia list passwords`, `authsia list api-keys`,
 `authsia list certs`, `authsia list notes`, or `authsia list ssh`, the CLI sends `agentJITPreflight`
 with `requestedCommand=list` before loading metadata. These approvals create
-list-only grants. A broad unscoped list keeps its per-folder approval
+list-only grants. A paired human IDE terminal is not an agent caller: the host
+returns empty preflight grants without approval or an `agentJITPreflight` audit
+record. A broad unscoped list keeps its per-folder approval
 descriptors through local or paired-iPhone approval and live revalidation, then
 persists the approved batch as one exact-item grant containing every resolved
 item identity. This preserves the signed remote approval contract while
 avoiding one Access Center grant per folder. If no matching list grant exists,
 the bridge fails closed instead of falling back to the normal list approval
-prompt:
+prompt. After a grant exists, the follow-up list or exec uses it even if the
+same TTY caller also looks eligible for a one-request human bootstrap:
 
 ```text
 Agent list requests require a valid JIT preflight grant for a supported Vault scope.
@@ -921,6 +964,8 @@ The bridge records:
 - caller identity when available
 - optional hook-provided agent attribution when available
 - selected environment scope (`Default environment` or one named environment) for environment-scoped approvals and reads
+- terminal-pairing grant, use, expiry, and revocation with pairing ID and
+  host-derived controlling terminal; the pairing code is never recorded
 
 Audit records must never include secret values.
 

@@ -84,6 +84,41 @@ final class BridgeAuditLoggerTests: XCTestCase {
         XCTAssertTrue(try logger.verifyIntegrity())
     }
 
+    func testPairingAttributionChainsWithPrePairingRecords() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let logger = makeLogger(fileURL: tempDir.appendingPathComponent("bridge_audit.log"))
+        let pairingID = UUID()
+
+        try logger.record(BridgeAuditRecord(
+            command: .getPassword,
+            itemId: "before-pairing",
+            approvedBy: "session",
+            timestamp: Date(timeIntervalSince1970: 10_000)
+        ))
+        try logger.record(BridgeAuditRecord(
+            command: .getPassword,
+            itemId: "after-pairing",
+            approvedBy: "paired-human",
+            timestamp: Date(timeIntervalSince1970: 10_001),
+            caller: CallerIdentity(
+                pid: 42,
+                processName: "authsia",
+                bundleIdentifier: "app.authsia.cli",
+                signingTeamId: "TEAM",
+                signingIdentity: "Developer ID Application",
+                controllingTerminal: "ttys004"
+            ),
+            terminalPairingID: pairingID
+        ))
+
+        XCTAssertTrue(try logger.verifyIntegrity())
+        let records = try logger.loadRecords()
+        XCTAssertEqual(records.map(\.terminalPairingID), [nil, pairingID])
+        XCTAssertEqual(records.last?.caller?.controllingTerminal, "ttys004")
+    }
+
     func testMultipleLoggerInstancesShareSingleChain() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)

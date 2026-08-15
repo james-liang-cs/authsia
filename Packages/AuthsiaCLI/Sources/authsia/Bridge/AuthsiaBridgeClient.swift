@@ -3,6 +3,14 @@ import Darwin
 import AuthenticatorBridge
 import AuthenticatorCore
 
+enum TerminalPairingInput {
+    static func requireInteractive(isTTY: Bool) throws {
+        guard isTTY else {
+            throw CLIError.unsupported(message: "Terminal pairing requires interactive stdin.")
+        }
+    }
+}
+
 // MARK: - Bridge Client Error
 
 enum BridgeClientError: LocalizedError {
@@ -95,6 +103,8 @@ enum BridgeClientError: LocalizedError {
                 return serverMessage
             }
             return Self.cliUnavailableMessage
+        case "requiresPairing":
+            return serverMessage ?? "Enter the pairing code shown in the Authsia app."
         case "invalidRequest":
             if let serverMessage, !serverMessage.isEmpty {
                 return serverMessage
@@ -111,7 +121,8 @@ extension BridgeRequestType {
         switch self {
         case .ping, .status, .lock, .workspaceMetadata, .chromeAutofillMatches, .auditVerify, .sshAgentSign,
              .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll,
-             .listAccess, .revokeAccess, .validateAccess:
+             .listAccess, .revokeAccess, .validateAccess,
+             .terminalPairingComplete, .terminalPairingRevoke:
             return false
         case .unlock,
              .list,
@@ -151,7 +162,8 @@ extension BridgeRequestType {
         switch self {
         case .list, .workspaceMetadata,
              .getOTP, .getPassword, .getAPIKey, .getCertificate, .getNote, .getSSH,
-             .createAccess, .validateAccess, .directCLIPreflight, .agentJITPreflight:
+             .createAccess, .validateAccess, .directCLIPreflight, .agentJITPreflight,
+             .terminalPairingComplete:
             return true
         default:
             return false
@@ -199,6 +211,10 @@ final class AuthsiaBridgeClient:
 
     /// Cached after the first successful security-protocol ping in this process.
     private var hasVerifiedSecurityProtocol = false
+
+    /// One pairing prompt per invocation. A retry that is still told to pair
+    /// surfaces the host error instead of prompting for another code forever.
+    private var hasAttemptedTerminalPairing = false
 
     typealias XPCReplyHandler = (Data?, NSError?) -> Void
     typealias XPCProxyErrorHandler = (Error) -> Void
@@ -344,9 +360,7 @@ final class AuthsiaBridgeClient:
             context: currentContext()
         )
         let response: BridgeResponse<UnlockPayload> = try sendRequest(request)
-        guard let payload = response.payload else {
-            throw BridgeClientError.invalidResponse
-        }
+        let payload = try Self.requirePayload(response)
         // Store the session token in memory and persist to disk for subsequent CLI invocations
         sessionToken = payload.sessionToken
         SessionCache.save(token: payload.sessionToken, expiresAt: payload.expiresAt, requestedCommand: Self.requestedCommand)
@@ -1402,7 +1416,12 @@ final class AuthsiaBridgeClient:
     @TaskLocal private static var requestedCommand: String?
     @TaskLocal private static var includeAutomationCredential: Bool?
     @TaskLocal private static var approvalPromptState: ApprovalPromptState?
+    @TaskLocal private static var suppressApprovalPrompt = false
     private static let approvalPromptShownKey = "authsia.approvalPromptShown"
+
+    func withoutApprovalPrompt<R>(_ body: () throws -> R) rethrows -> R {
+        try Self.$suppressApprovalPrompt.withValue(true, operation: body)
+    }
 
     func withRequestedCommand<R>(_ command: CapabilityCommand, _ body: () throws -> R) rethrows -> R {
         try withRequestedCommand(command.rawValue, includeAutomationCredential: true, body)
@@ -1638,6 +1657,7 @@ final class AuthsiaBridgeClient:
     }
 
     private static func maybeWriteApprovalPrompt(for request: BridgeRequest) {
+        guard !suppressApprovalPrompt else { return }
         let threadDictionary = Thread.current.threadDictionary
         let state = approvalPromptState
         let hasAlreadyShown = state?.hasShown ?? (threadDictionary[approvalPromptShownKey] as? Bool == true)
@@ -1659,6 +1679,23 @@ final class AuthsiaBridgeClient:
     }
 
     // MARK: - XPC Request Handling
+
+    static func requirePayload<T: Codable>(
+        _ response: BridgeResponse<T>,
+        query: String? = nil
+    ) throws -> T {
+        if let error = response.error {
+            throw BridgeClientError.bridgeError(
+                code: error.code.rawValue,
+                message: error.message,
+                query: query
+            )
+        }
+        guard let payload = response.payload else {
+            throw BridgeClientError.invalidResponse
+        }
+        return payload
+    }
 
     func sendRequest<T: Codable>(_ request: BridgeRequest) throws -> T {
         if Self.needsSecurityProtocolCheck(
@@ -1762,10 +1799,96 @@ final class AuthsiaBridgeClient:
                 service.revokeAccessCredential(requestData, replyHandler)
             case .validateAccess:
                 service.validateAccessCredential(requestData, replyHandler)
+            case .terminalPairingComplete:
+                service.completeTerminalPairing(requestData, replyHandler)
+            case .terminalPairingRevoke:
+                proxyErrorHandler(BridgeClientError.bridgeError(
+                    code: BridgeErrorCode.invalidRequest.rawValue,
+                    message: "Terminal pairing revocation is performed by authsia lock.",
+                    query: nil
+                ))
             }
         }
 
+        if request.type != .terminalPairingComplete,
+           !hasAttemptedTerminalPairing,
+           let pairingRequestID = Self.pairingRequestID(in: responseData) {
+            hasAttemptedTerminalPairing = true
+            let pairingSession = try completeTerminalPairing(
+                pairingRequestID: pairingRequestID,
+                context: request.context
+            )
+            let retryRequest = BridgeRequest(
+                id: UUID(),
+                type: request.type,
+                query: request.query,
+                options: request.options,
+                context: request.context,
+                body: request.body,
+                sessionToken: pairingSession.sessionToken
+            )
+            return try executeXPCRequest(retryRequest)
+        }
+
         return try BridgeCoder.decode(T.self, from: responseData)
+    }
+
+    private func completeTerminalPairing(
+        pairingRequestID: UUID,
+        context: BridgeContext
+    ) throws -> TerminalPairingSessionPayload {
+        try TerminalPairingInput.requireInteractive(isTTY: isatty(STDIN_FILENO) != 0)
+
+        for attempt in 0..<2 {
+            StandardError.writeLine(
+                attempt == 0
+                    ? "Pairing code (see Authsia app):"
+                    : "Code did not match. Pairing code (one attempt remaining):"
+            )
+            guard let code = readLine() else {
+                throw CLIError.unsupported(message: "Terminal pairing was cancelled.")
+            }
+            let completion = TerminalPairingCompletionRequest(
+                pairingRequestID: pairingRequestID,
+                code: code
+            )
+            let completionRequest = BridgeRequest(
+                id: UUID(),
+                type: .terminalPairingComplete,
+                query: "",
+                options: BridgeOptions(field: nil, copy: false),
+                context: context,
+                body: try BridgeCoder.encode(completion)
+            )
+            let response: BridgeResponse<TerminalPairingSessionPayload> = try executeXPCRequest(
+                completionRequest
+            )
+            if response.error?.code == .requiresPairing {
+                continue
+            }
+            if let error = response.error {
+                throw BridgeClientError.bridgeError(
+                    code: error.code.rawValue,
+                    message: error.message,
+                    query: nil
+                )
+            }
+            guard let payload = response.payload else { throw BridgeClientError.invalidResponse }
+            cacheSessionToken(from: response)
+            StandardError.writeLine(
+                "Paired terminal until \(payload.expiresAt.formatted(date: .omitted, time: .standard))."
+            )
+            return payload
+        }
+        throw CLIError.unsupported(message: "Terminal pairing failed after two attempts.")
+    }
+
+    private static func pairingRequestID(in responseData: Data) -> UUID? {
+        guard let response = try? BridgeCoder.decode(BridgeResponse<String>.self, from: responseData),
+              response.error?.code == .requiresPairing else {
+            return nil
+        }
+        return response.error?.pairingRequestID
     }
 
     static func xpcWaitTimeout(
