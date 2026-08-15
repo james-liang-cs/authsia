@@ -26,6 +26,21 @@ public struct TerminalPairing: Codable, Equatable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.expiresAt = expiresAt
     }
+
+    /// Same attestation, later idle deadline. The anchor bindings are unchanged,
+    /// so this extends an in-use pairing without re-establishing which terminal
+    /// this is.
+    public func renewed(expiresAt: Date) -> TerminalPairing {
+        TerminalPairing(
+            id: id,
+            controllingTerminal: controllingTerminal,
+            anchorShellPID: anchorShellPID,
+            anchorShellStartTime: anchorShellStartTime,
+            workspaceRoot: workspaceRoot,
+            createdAt: createdAt,
+            expiresAt: expiresAt
+        )
+    }
 }
 
 public struct TerminalPairingApprovalRequest: Equatable, Sendable {

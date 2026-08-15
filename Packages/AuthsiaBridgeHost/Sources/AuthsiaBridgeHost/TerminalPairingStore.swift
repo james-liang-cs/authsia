@@ -17,9 +17,21 @@ public enum TerminalPairingStoreError: LocalizedError, Equatable {
     }
 }
 
+/// Reports what a prune dropped alongside what survived, so the caller can audit
+/// the drop without a second read that another request could race.
+public struct TerminalPairingPruneResult: Equatable, Sendable {
+    public let valid: [TerminalPairing]
+    public let pruned: [TerminalPairing]
+
+    public init(valid: [TerminalPairing], pruned: [TerminalPairing]) {
+        self.valid = valid
+        self.pruned = pruned
+    }
+}
+
 public nonisolated protocol TerminalPairingStoring: Sendable {
     func loadAll() throws -> [TerminalPairing]
-    func loadAllPruningInvalid(now: Date) throws -> [TerminalPairing]
+    func loadAllPruningInvalid(now: Date) throws -> TerminalPairingPruneResult
     func save(_ pairing: TerminalPairing) throws
     func saveAll(_ pairings: [TerminalPairing]) throws
     func revoke(id: UUID) throws -> TerminalPairing
@@ -59,7 +71,7 @@ public nonisolated final class TerminalPairingStore: TerminalPairingStoring, @un
         try locked { try loadAllUnlocked() }
     }
 
-    public func loadAllPruningInvalid(now: Date = Date()) throws -> [TerminalPairing] {
+    public func loadAllPruningInvalid(now: Date = Date()) throws -> TerminalPairingPruneResult {
         try locked {
             let stored = try loadAllUnlocked()
             let valid = stored.filter {
@@ -67,10 +79,11 @@ public nonisolated final class TerminalPairingStore: TerminalPairingStoring, @un
                     && processStartTime($0.anchorShellPID) == $0.anchorShellStartTime
             }
             let validIDs = Set(valid.map(\.id))
-            for pairing in stored where !validIDs.contains(pairing.id) {
+            let pruned = stored.filter { !validIDs.contains($0.id) }
+            for pairing in pruned {
                 try authorityStore.removeRecord(id: pairing.id, ofType: .terminalPairing)
             }
-            return valid
+            return TerminalPairingPruneResult(valid: valid, pruned: pruned)
         }
     }
 

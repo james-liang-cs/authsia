@@ -733,13 +733,25 @@ extension XPCRequestHandler {
         return (session.sessionToken, session.expiresAt, false)
     }
 
-    func validTerminalPairings(now: Date = Date()) -> [TerminalPairing] {
-        guard let stored = try? terminalPairingStore.loadAll(),
-              let valid = try? terminalPairingStore.loadAllPruningInvalid(now: now) else {
-            return []
+    /// Resolves the valid pairings once per request, reusing the first `now` so
+    /// every check in one decision agrees. A miss simply re-resolves, so an
+    /// interleaved request degrades to the uncached cost rather than reading a
+    /// value that is not its own.
+    func resolvedTerminalPairings(
+        for request: BridgeRequest
+    ) -> (now: Date, pairings: [TerminalPairing]) {
+        terminalPairingMemoLock.lock()
+        if let memo = terminalPairingMemo, memo.requestID == request.id {
+            defer { terminalPairingMemoLock.unlock() }
+            return (memo.now, memo.pairings)
         }
-        let validIDs = Set(valid.map(\.id))
-        for pairing in stored where !validIDs.contains(pairing.id) {
+        terminalPairingMemoLock.unlock()
+
+        let now = Date()
+        guard let result = try? terminalPairingStore.loadAllPruningInvalid(now: now) else {
+            return (now, [])
+        }
+        for pairing in result.pruned {
             recordAudit(
                 command: .terminalPairingRevoke,
                 itemId: pairing.id.uuidString,
@@ -750,7 +762,46 @@ extension XPCRequestHandler {
                 terminalPairingID: pairing.id
             )
         }
-        return valid
+        terminalPairingMemoLock.lock()
+        terminalPairingMemo = (request.id, now, result.valid)
+        terminalPairingMemoLock.unlock()
+        return (now, result.valid)
+    }
+
+    /// Idle expiry rather than absolute: a terminal in active use keeps its
+    /// pairing, so the code is entered once per shell instead of once per
+    /// session TTL. Renewing only past half-life bounds this to one write per
+    /// half TTL, which matters because the write is a Keychain round trip.
+    private func renewingTerminalPairing(
+        _ pairing: TerminalPairing,
+        requestID: UUID,
+        now: Date
+    ) -> TerminalPairing {
+        let ttl = Self.configuredSessionTTL
+        guard pairing.expiresAt.timeIntervalSince(now) < ttl / 2 else { return pairing }
+        // Whole seconds: the store round-trips deadlines as ISO-8601, so an
+        // unrounded deadline would leave the returned pairing disagreeing with
+        // the persisted one by a fraction of a second.
+        let renewed = pairing.renewed(
+            expiresAt: Date(
+                timeIntervalSince1970: (now.timeIntervalSince1970 + ttl).rounded(.down)
+            )
+        )
+        do {
+            try terminalPairingStore.save(renewed)
+        } catch {
+            return pairing
+        }
+        terminalPairingMemoLock.lock()
+        if let memo = terminalPairingMemo, memo.requestID == requestID {
+            terminalPairingMemo = (
+                memo.requestID,
+                memo.now,
+                memo.pairings.map { $0.id == renewed.id ? renewed : $0 }
+            )
+        }
+        terminalPairingMemoLock.unlock()
+        return renewed
     }
 
     func terminalPairingEligible(
@@ -864,29 +915,30 @@ extension XPCRequestHandler {
 
     func pairedHumanSession(
         request: BridgeRequest,
-        callerIdentity: CallerIdentity?,
-        now: Date = Date()
+        callerIdentity: CallerIdentity?
     ) -> TerminalPairing? {
-        AgentJITCallerContext.pairedHumanSession(
+        let resolved = resolvedTerminalPairings(for: request)
+        guard let pairing = AgentJITCallerContext.pairedHumanSession(
             request: request,
             callerIdentity: callerIdentity,
-            pairings: validTerminalPairings(now: now),
-            now: now
-        )
+            pairings: resolved.pairings,
+            now: resolved.now
+        ) else {
+            return nil
+        }
+        return renewingTerminalPairing(pairing, requestID: request.id, now: resolved.now)
     }
 
     func hasPairedHumanSession(
         request: BridgeRequest,
-        callerIdentity: CallerIdentity?,
-        now: Date = Date()
+        callerIdentity: CallerIdentity?
     ) -> Bool {
-        pairedHumanSession(request: request, callerIdentity: callerIdentity, now: now) != nil
+        pairedHumanSession(request: request, callerIdentity: callerIdentity) != nil
     }
 
     func terminalPairingsOwnedByCaller(
         request: BridgeRequest,
-        callerIdentity: CallerIdentity?,
-        now: Date = Date()
+        callerIdentity: CallerIdentity?
     ) -> [TerminalPairing] {
         guard request.context.agentRuntimeContext == nil,
               let callerIdentity,
@@ -895,7 +947,7 @@ extension XPCRequestHandler {
               !AgentJITCallerContext.hasAgenticCaller(callerIdentity) else {
             return []
         }
-        return validTerminalPairings(now: now).filter { pairing in
+        return resolvedTerminalPairings(for: request).pairings.filter { pairing in
             pairing.controllingTerminal == controllingTerminal
                 && shellAncestryPrefix.contains {
                     $0.pid == pairing.anchorShellPID
@@ -918,12 +970,12 @@ extension XPCRequestHandler {
     }
 
     func shouldUseAgentJIT(request: BridgeRequest, callerIdentity: CallerIdentity?) -> Bool {
-        let now = Date()
+        let resolved = resolvedTerminalPairings(for: request)
         return Self.isAgentJITCaller(
             request: request,
             callerIdentity: callerIdentity,
-            pairings: validTerminalPairings(now: now),
-            now: now
+            pairings: resolved.pairings,
+            now: resolved.now
         )
     }
 
@@ -931,12 +983,12 @@ extension XPCRequestHandler {
         request: BridgeRequest,
         callerIdentity: CallerIdentity?
     ) -> Bool {
-        let now = Date()
+        let resolved = resolvedTerminalPairings(for: request)
         return Self.interactiveHumanBootstrapEligible(
             request: request,
             callerIdentity: callerIdentity,
-            pairings: validTerminalPairings(now: now),
-            now: now
+            pairings: resolved.pairings,
+            now: resolved.now
         )
     }
 
@@ -944,12 +996,12 @@ extension XPCRequestHandler {
         request: BridgeRequest,
         callerIdentity: CallerIdentity?
     ) -> Bool {
-        let now = Date()
+        let resolved = resolvedTerminalPairings(for: request)
         return Self.hasValidatedInteractiveHumanSession(
             request: request,
             callerIdentity: callerIdentity,
-            pairings: validTerminalPairings(now: now),
-            now: now
+            pairings: resolved.pairings,
+            now: resolved.now
         )
     }
 

@@ -48,8 +48,32 @@ final class TerminalPairingStoreTests: XCTestCase {
         }
         try store.saveAll([valid, expired, exited, reused])
 
-        XCTAssertEqual(try store.loadAllPruningInvalid(now: now).map(\.id), [valid.id])
+        let result = try store.loadAllPruningInvalid(now: now)
+        XCTAssertEqual(result.valid.map(\.id), [valid.id])
+        // The prune reports its own drops, so the audit needs no second read that
+        // a concurrent request could also see and double-log.
+        XCTAssertEqual(Set(result.pruned.map(\.id)), [expired.id, exited.id, reused.id])
         XCTAssertEqual(try store.loadAll().map(\.id), [valid.id])
+        XCTAssertEqual(try store.loadAllPruningInvalid(now: now).pruned, [])
+    }
+
+    func testRenewedPairingKeepsAnchorBindingsAndExtendsExpiry() throws {
+        let pairing = makePairing()
+        let store = makeStore(startTime: pairing.anchorShellStartTime)
+        try store.save(pairing)
+
+        let renewed = pairing.renewed(expiresAt: pairing.expiresAt.addingTimeInterval(1_800))
+        try store.save(renewed)
+
+        let stored = try XCTUnwrap(try store.loadAll().first)
+        XCTAssertEqual(try store.loadAll().count, 1)
+        XCTAssertEqual(stored.id, pairing.id)
+        XCTAssertEqual(stored.controllingTerminal, pairing.controllingTerminal)
+        XCTAssertEqual(stored.anchorShellPID, pairing.anchorShellPID)
+        XCTAssertEqual(stored.anchorShellStartTime, pairing.anchorShellStartTime)
+        XCTAssertEqual(stored.workspaceRoot, pairing.workspaceRoot)
+        XCTAssertEqual(stored.createdAt, pairing.createdAt)
+        XCTAssertEqual(stored.expiresAt, renewed.expiresAt)
     }
 
     /// The binding digest covers only the payload, so an authority record whose

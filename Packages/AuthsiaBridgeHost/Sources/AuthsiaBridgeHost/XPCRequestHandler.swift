@@ -62,6 +62,11 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     let agentJITGrantAuthorizer: AgentJITGrantAuthorizer
     let terminalPairingStore: TerminalPairingStoring
     let terminalPairingCoordinator: TerminalPairingCoordinator
+    /// One pairing resolution per request. A single decision consults pairings
+    /// four or five times, and each resolution is a Keychain read; this also
+    /// pins one `now` so those checks cannot disagree mid-request.
+    let terminalPairingMemoLock = NSLock()
+    var terminalPairingMemo: (requestID: UUID, now: Date, pairings: [TerminalPairing])?
     let callerIdentityProvider: CallerIdentityProvider
     let callerIdentityRevalidationProvider: CallerIdentityRevalidationProvider
     let remoteJITApprovalRequestBuilder: RemoteJITApprovalRequestBuilding?

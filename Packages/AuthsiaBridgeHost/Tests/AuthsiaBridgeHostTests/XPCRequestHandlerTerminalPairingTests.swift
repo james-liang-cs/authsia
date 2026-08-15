@@ -608,6 +608,57 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         )
     }
 
+    /// Pairing expiry is idle-based, so a terminal still in use never falls back
+    /// to the code prompt: use past half-life extends it by a full session TTL.
+    func testActiveUseRenewsPairingInsteadOfRequiringAnotherCode() throws {
+        let ttl = XPCRequestHandler.configuredSessionTTL
+        let fixture = try makePairedIDEFixture(
+            command: "/usr/local/bin/authsia get password deploy",
+            pairingExpiresIn: ttl / 4
+        )
+        defer { fixture.tearDown() }
+        let request = fixture.request(type: .getPassword, requestedCommand: "get")
+        let originalExpiry = try XCTUnwrap(fixture.pairingStore.loadAll().first).expiresAt
+
+        let renewed = try XCTUnwrap(
+            fixture.handler.pairedHumanSession(request: request, callerIdentity: fixture.caller)
+        )
+
+        XCTAssertGreaterThan(renewed.expiresAt, originalExpiry)
+        XCTAssertEqual(try fixture.pairingStore.loadAll().first?.expiresAt, renewed.expiresAt)
+        XCTAssertFalse(
+            fixture.handler.terminalPairingEligible(
+                request: request,
+                callerIdentity: fixture.caller
+            )
+        )
+    }
+
+    /// Past renewal the pairing is well clear of half-life, so a later request
+    /// must not write again. The write is a Keychain round trip on a read path.
+    func testRenewedPairingDoesNotWriteAgainWhileWellWithinTTL() throws {
+        let fixture = try makePairedIDEFixture(
+            command: "/usr/local/bin/authsia get password deploy",
+            pairingExpiresIn: XPCRequestHandler.configuredSessionTTL / 4
+        )
+        defer { fixture.tearDown() }
+
+        let first = try XCTUnwrap(
+            fixture.handler.pairedHumanSession(
+                request: fixture.request(type: .getPassword, requestedCommand: "get"),
+                callerIdentity: fixture.caller
+            )
+        )
+        let second = try XCTUnwrap(
+            fixture.handler.pairedHumanSession(
+                request: fixture.request(type: .getPassword, requestedCommand: "get"),
+                callerIdentity: fixture.caller
+            )
+        )
+
+        XCTAssertEqual(first.expiresAt, second.expiresAt)
+    }
+
     func testPairedIDEUnlockRequestsLocalApprovalAndReturnsSession() async throws {
         let fixture = try makePairedIDEFixture(command: "/usr/local/bin/authsia unlock")
         defer { fixture.tearDown() }
@@ -626,6 +677,7 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
     private func makePairedIDEFixture(
         command: String,
         agenticParentName: String? = nil,
+        pairingExpiresIn: TimeInterval = 3_600,
         listPayload: BridgeListPayload = BridgeListPayload(
             accounts: [],
             passwords: [],
@@ -660,7 +712,7 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
                 anchorShellStartTime: startTime,
                 workspaceRoot: workspaceRoot,
                 createdAt: Date(),
-                expiresAt: Date().addingTimeInterval(3_600)
+                expiresAt: Date().addingTimeInterval(pairingExpiresIn)
             )
         )
         let approver = TerminalPairingApprovalTracker()
@@ -681,6 +733,7 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
             caller: caller,
             approver: approver,
             handler: handler,
+            pairingStore: pairingStore,
             auditURL: auditURL,
             workingDirectory: directory.path,
             sessionScope: "tty:/dev/\(terminal):sid:\(shell.pid)"
@@ -798,6 +851,7 @@ private struct PairedIDEFixture {
     let caller: CallerIdentity
     let approver: TerminalPairingApprovalTracker
     let handler: XPCRequestHandler
+    let pairingStore: TerminalPairingStore
     let auditURL: URL
     let workingDirectory: String
     let sessionScope: String
