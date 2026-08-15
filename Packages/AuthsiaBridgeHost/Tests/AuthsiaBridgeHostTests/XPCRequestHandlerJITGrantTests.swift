@@ -75,6 +75,28 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         )
     )
 
+    private let codexAppCallerIdentity = CallerIdentity(
+        pid: 42,
+        processName: "authsia",
+        bundleIdentifier: "authsia",
+        signingTeamId: "TEAM",
+        signingIdentity: "Developer ID Application",
+        parentProcess: ParentProcessInfo(
+            pid: 55,
+            processName: "codex",
+            bundleIdentifier: "codex",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application"
+        ),
+        hostProcess: ParentProcessInfo(
+            pid: 50,
+            processName: "ChatGPT",
+            bundleIdentifier: "com.openai.codex",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID Application"
+        )
+    )
+
     private let chromeNativeHostCallerIdentity = CallerIdentity(
         pid: 42,
         processName: "authsia",
@@ -767,7 +789,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         }
     }
 
-    func testFreshListAuthorityChangesFailBeforeBatchSave() async throws {
+    func testFreshListFlickerDoesNotVoidApprovedItemSet() async throws {
         let original = listPayload()
         let api = try XCTUnwrap(original.passwords.first { $0.name == "API" })
         let retyped = BridgeListPayload(
@@ -822,8 +844,9 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
                 requestedCommand: "list"
             )
 
-            XCTAssertEqual(response.error?.code, .notAuthorized)
-            XCTAssertEqual(store.saveAllCallCount, 0)
+            XCTAssertNil(response.error)
+            XCTAssertEqual(response.payload?.grantIDs.count, 1)
+            XCTAssertEqual(store.saveAllCallCount, 1)
         }
     }
 
@@ -1706,6 +1729,74 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(approver.requests.count, 1)
         XCTAssertEqual(store.grants.count, 1)
         XCTAssertEqual(second.payload?.grantIDs, first.payload?.grantIDs)
+    }
+
+    func testCodexBroadListSurvivesPostApprovalVaultFlicker() async throws {
+        let original = listPayload()
+        let extra = apiKey("API Key Extra", folderPath: "Team/API")
+        let originalWithSiblings = BridgeListPayload(
+            accounts: original.accounts,
+            passwords: original.passwords,
+            apiKeys: original.apiKeys + [extra],
+            certificates: original.certificates,
+            notes: original.notes,
+            sshKeys: original.sshKeys
+        )
+        let enabledAPIKeys = originalWithSiblings.apiKeys.filter(\.isCliEnabled)
+        XCTAssertGreaterThan(enabledAPIKeys.filter { $0.folderPath == "Team/API" }.count, 1)
+        let flickered = BridgeListPayload(
+            accounts: original.accounts,
+            passwords: original.passwords,
+            apiKeys: Array(originalWithSiblings.apiKeys.reversed()),
+            certificates: original.certificates,
+            notes: original.notes,
+            sshKeys: original.sshKeys
+        )
+        let provider = ListProviderSequence([.success(originalWithSiblings), .success(flickered)])
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            callerIdentity: codexAppCallerIdentity,
+            listProvider: provider.callAsFunction,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "list",
+            references: [
+                AgentJITPreflightReference(
+                    type: "api-key",
+                    query: "",
+                    folderPath: nil,
+                    isFolderScoped: false
+                ),
+            ]
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            requestedCommand: "list",
+            context: BridgeContext(
+                isTTY: false,
+                isPiped: true,
+                isSSH: false,
+                isCI: false,
+                timestamp: now,
+                requestedCommand: "list",
+                sessionScope: "agent:codex:sid:29549",
+                workingDirectory: "/tmp/demo",
+                agentRuntimeContext: AgentRuntimeContext(platform: "codex")
+            )
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(response.payload?.grantIDs.count, 1)
+        let grant = try XCTUnwrap(store.grants.first)
+        XCTAssertEqual(grant.folderScope, .root)
+        XCTAssertEqual(
+            Set(grant.requestedItems.map(\.id)),
+            Set(enabledAPIKeys.map(\.id.uuidString))
+        )
     }
 
     func testListPreflightSupportsSSHMetadataScope() async throws {

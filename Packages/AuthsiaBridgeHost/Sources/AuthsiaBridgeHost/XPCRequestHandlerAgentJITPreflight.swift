@@ -492,18 +492,17 @@ extension XPCRequestHandler {
                 return
             }
 
-            let freshScopes: [AgentJITScopeResolution]
             var freshPendingResolutions: [AgentJITScopeResolution] = []
             do {
-                freshScopes = try AgentJITPreflightResolver().resolvedScopes(
-                    from: payload,
-                    list: currentListPayload()
-                )
+                // Reload so a vault or grant-store outage still fails closed.
+                // Do not re-resolve items: a second list after Touch ID can
+                // reorder or drop metadata and void the just-approved set.
+                _ = try currentListPayload()
                 _ = try agentJITGrantStore.loadAll()
                 let revalidationDate = Date(
                     timeIntervalSince1970: Double(revalidationMilliseconds) / 1_000
                 )
-                for resolution in freshScopes {
+                for resolution in scopes {
                     let requestedIdentities = Set(resolution.requestedItems.compactMap(\.itemIdentity))
                     let activeGrant = try agentJITGrantAuthorizer.activeGrant(
                         capability: capability,
