@@ -221,10 +221,47 @@ final class SSHAgentListenerAuthorizationTests: XCTestCase {
         let scope = SSHAgentListener.sessionScope(
             from: makeAncestry([(10, "ssh"), (11, "git"), (12, "zsh"), (13, "Cursor")]),
             terminalScope: { $0 == 12 ? "tty:/dev/ttys004:sid:12" : nil },
-            agentPlatform: { $0.name == "Cursor" ? "cursor" : nil }
+            knownAgentPlatform: { _ in nil },
+            automationHostPlatform: { $0.name == "Cursor" ? "cursor" : nil }
         )
 
         XCTAssertEqual(scope, "tty:/dev/ttys004:sid:12")
+    }
+
+    func testSessionScopePrefersKnownAgentOverTerminal() {
+        let scope = SSHAgentListener.sessionScope(
+            from: makeAncestry([
+                (10, "ssh"),
+                (11, "git"),
+                (12, "zsh"),
+                (13, "claude"),
+                (14, "Cursor"),
+            ]),
+            terminalScope: { $0 == 12 ? "tty:/dev/ttys004:sid:12" : nil },
+            knownAgentPlatform: { $0.name == "claude" ? "claude-code" : nil },
+            automationHostPlatform: { $0.name == "Cursor" ? "cursor" : nil }
+        )
+
+        XCTAssertEqual(scope, "agent:claude-code:pid:13")
+    }
+
+    func testSessionScopePrefersOutermostKnownAgentOverTerminal() {
+        let cases: [(String, String, String)] = [
+            ("codex", "codex", "agent:codex:pid:13"),
+            ("cursor-agent", "cursor", "agent:cursor:pid:13"),
+            ("github-copilot", "copilot", "agent:copilot:pid:13"),
+            ("windsurf-agent", "devin", "agent:devin:pid:13"),
+        ]
+
+        for (processName, platform, expected) in cases {
+            let scope = SSHAgentListener.sessionScope(
+                from: makeAncestry([(10, "ssh"), (11, "git"), (12, "zsh"), (13, processName)]),
+                terminalScope: { $0 == 12 ? "tty:/dev/ttys009:sid:12" : nil },
+                knownAgentPlatform: { $0.name == processName ? platform : nil },
+                automationHostPlatform: { _ in nil }
+            )
+            XCTAssertEqual(scope, expected, processName)
+        }
     }
 
     func testSessionScopeFallsBackToOutermostAgentHostWhenNoAncestorOwnsTerminal() {
@@ -236,7 +273,8 @@ final class SSHAgentListenerAuthorizationTests: XCTestCase {
                 (13, "Cursor"),
             ]),
             terminalScope: { _ in nil },
-            agentPlatform: { process in
+            knownAgentPlatform: { _ in nil },
+            automationHostPlatform: { process in
                 switch process.name {
                 case "Cursor": return "cursor"
                 case "Cursor Helper (Plugin)": return "cursor-helper"
@@ -252,7 +290,8 @@ final class SSHAgentListenerAuthorizationTests: XCTestCase {
         let scope = SSHAgentListener.sessionScope(
             from: makeAncestry([(10, "ssh"), (11, "git"), (12, "zsh")]),
             terminalScope: { _ in nil },
-            agentPlatform: { _ in nil }
+            knownAgentPlatform: { _ in nil },
+            automationHostPlatform: { _ in nil }
         )
 
         XCTAssertNil(scope)
@@ -262,7 +301,8 @@ final class SSHAgentListenerAuthorizationTests: XCTestCase {
         let scope = SSHAgentListener.sessionScope(
             from: makeAncestry([(10, "ssh"), (11, "Cursor")]),
             terminalScope: { _ in nil },
-            agentPlatform: { $0.name == "Cursor" ? "cursor" : nil }
+            knownAgentPlatform: { _ in nil },
+            automationHostPlatform: { $0.name == "Cursor" ? "cursor" : nil }
         )
 
         XCTAssertEqual(TerminalSessionScope.agentScopedProcessIdentifier(from: scope), 11)

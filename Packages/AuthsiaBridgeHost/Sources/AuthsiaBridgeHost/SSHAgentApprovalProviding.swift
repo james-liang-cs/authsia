@@ -39,19 +39,32 @@ public struct SSHAgentRequester: Equatable {
     public let ancestry: [SSHAgentProcessRef]
     public let targetHost: String?
     public let sessionScope: String?
+    /// Known coding-agent platform (`claude-code`, `codex`, `cursor`, `copilot`).
+    /// Display-only plus session binding. Not a JIT grant and not persisted command text.
+    public let agentPlatform: String?
+    /// Human label for that agent (`Claude Code`, `Codex`, `Cursor Agent`).
+    public let agentDisplayName: String?
+    /// Allowlisted Git verb, e.g. `git fetch`. Never a remote URL or full argv.
+    public let sourceOperation: String?
 
     public init(
         peer: SSHAgentProcessRef?,
         instigator: SSHAgentProcessRef?,
         ancestry: [SSHAgentProcessRef],
         targetHost: String?,
-        sessionScope: String?
+        sessionScope: String?,
+        agentPlatform: String? = nil,
+        agentDisplayName: String? = nil,
+        sourceOperation: String? = nil
     ) {
         self.peer = peer
         self.instigator = instigator
         self.ancestry = ancestry
         self.targetHost = targetHost
         self.sessionScope = sessionScope
+        self.agentPlatform = agentPlatform
+        self.agentDisplayName = agentDisplayName
+        self.sourceOperation = sourceOperation
     }
 }
 

@@ -372,7 +372,10 @@ public final class SSHAgentListener: @unchecked Sendable {
                 instigator: requester.instigator?.auditRef,
                 ancestry: requester.ancestry.map(\.auditRef),
                 targetHost: requester.targetHost,
-                sessionScope: requester.sessionScope
+                sessionScope: requester.sessionScope,
+                agentPlatform: requester.agentPlatform,
+                agentDisplayName: requester.agentDisplayName,
+                sourceOperation: requester.sourceOperation
             )
         )
         guard let authorized = authorizedSignature(
@@ -593,18 +596,33 @@ public final class SSHAgentListener: @unchecked Sendable {
     /// the first non-ssh-tooling ancestor (the user's actual instigator), and the parent chain.
     private func resolveRequesterInfo(fd: Int32) -> RequesterInfo {
         guard let peerPID = peerProcessID(fd: fd) else {
-            return RequesterInfo(peer: nil, instigator: nil, ancestry: [], targetHost: nil, sessionScope: nil)
+            return RequesterInfo(
+                peer: nil,
+                instigator: nil,
+                ancestry: [],
+                targetHost: nil,
+                sessionScope: nil,
+                agentPlatform: nil,
+                agentDisplayName: nil,
+                sourceOperation: nil
+            )
         }
         let chain = Self.walkAncestors(pid: peerPID)
         let instigator = chain.first { proc in
             !Self.sshToolingNames.contains(proc.name.lowercased())
         }
+        let knownAgent = Self.outermostKnownAgent(in: chain)
         return RequesterInfo(
             peer: chain.first,
             instigator: instigator,
             ancestry: chain,
             targetHost: resolveTargetHost(fd: fd),
-            sessionScope: Self.sessionScope(from: chain)
+            sessionScope: Self.sessionScope(from: chain),
+            agentPlatform: knownAgent?.platform,
+            agentDisplayName: knownAgent.map {
+                SSHAgentApprovalCopy.displayName(processName: $0.process.name, platform: $0.platform)
+            },
+            sourceOperation: Self.sourceOperation(from: chain)
         )
     }
 
@@ -612,41 +630,83 @@ public final class SSHAgentListener: @unchecked Sendable {
         TerminalSessionScope.process(pid: Int32(pid))
     }
 
-    /// Resolves the scope an approval is cached against. A controlling terminal is the
-    /// preferred anchor, but IDE-launched tooling has none anywhere in its chain — an
-    /// editor's built-in Git runs as `ssh → git → <IDE helper> → <IDE>`, with no shell.
-    /// Without a fallback those requesters get a nil scope, which means no caching at
-    /// all and a prompt on every signature, so bind them to the outermost automation
-    /// host instead: it outlives the per-command processes below it.
+    /// Resolves the scope an approval is cached against.
+    ///
+    /// A known coding agent (`claude`, `codex`, `cursor-agent`, Copilot, Windsurf
+    /// agent) outranks a controlling TTY: agent-spawned Bash tools each get a new
+    /// shell PID/TTY, and binding to that TTY re-prompts on every `git fetch`.
+    /// Human IDE terminals have no known agent in the chain, so they still cache
+    /// on the TTY.
+    ///
+    /// IDE-launched Git with no TTY (`ssh → git → <IDE helper> → <IDE>`) falls
+    /// back to the outermost automation host so those requesters are not
+    /// prompted on every signature.
     static func sessionScope(
         from ancestry: [ProcessRef],
         terminalScope: (pid_t) -> String? = { sessionScope(pid: $0) },
-        agentPlatform: (ProcessRef) -> String? = { agentPlatform(for: $0) }
+        knownAgentPlatform: (ProcessRef) -> String? = { knownAgentPlatform(for: $0) },
+        automationHostPlatform: (ProcessRef) -> String? = { automationHostPlatform(for: $0) }
     ) -> String? {
+        for process in ancestry.reversed() {
+            if let platform = knownAgentPlatform(process) {
+                return "agent:\(platform):pid:\(process.pid)"
+            }
+        }
         for process in ancestry {
             if let scope = terminalScope(process.pid) {
                 return scope
             }
         }
         for process in ancestry.reversed() {
-            if let platform = agentPlatform(process) {
+            if let platform = automationHostPlatform(process) {
                 return "agent:\(platform):pid:\(process.pid)"
             }
         }
         return nil
     }
 
-    private static func agentPlatform(for process: ProcessRef) -> String? {
-        let arguments = kernelProcessArgumentsAndEnvironment(pid: process.pid)?.arguments ?? []
-        return AgenticProcessDetector.agentPlatform(
+    private static func knownAgentPlatform(for process: ProcessRef) -> String? {
+        AgenticProcessDetector.agentPlatform(
             processName: process.name,
             bundleIdentifier: nil,
-            arguments: arguments
-        ) ?? AgenticProcessDetector.automationSuspectPlatform(
-            processName: process.name,
-            bundleIdentifier: nil,
-            arguments: arguments
+            arguments: identityArguments(for: process)
         )
+    }
+
+    private static func automationHostPlatform(for process: ProcessRef) -> String? {
+        AgenticProcessDetector.automationSuspectPlatform(
+            processName: process.name,
+            bundleIdentifier: nil,
+            arguments: identityArguments(for: process)
+        )
+    }
+
+    /// argv[0] only. Later Git operands can be real paths whose last component is
+    /// `claude` or `codex`; those must not classify the Git process as an agent.
+    private static func identityArguments(for process: ProcessRef) -> [String] {
+        let arguments = kernelProcessArgumentsAndEnvironment(pid: process.pid)?.arguments ?? []
+        return Array(arguments.prefix(1))
+    }
+
+    private static func outermostKnownAgent(
+        in ancestry: [ProcessRef]
+    ) -> (process: ProcessRef, platform: String)? {
+        for process in ancestry.reversed() {
+            if let platform = knownAgentPlatform(for: process) {
+                return (process, platform)
+            }
+        }
+        return nil
+    }
+
+    private static func sourceOperation(from ancestry: [ProcessRef]) -> String? {
+        for process in ancestry {
+            let arguments = kernelProcessArgumentsAndEnvironment(pid: process.pid)?.arguments ?? []
+            if let operation = SSHAgentApprovalCopy.gitOperation(fromArguments: arguments) {
+                return operation
+            }
+        }
+        return nil
     }
 
     private static func processName(pid: pid_t) -> String? {
@@ -716,6 +776,9 @@ public final class SSHAgentListener: @unchecked Sendable {
         let ancestry: [ProcessRef]
         let targetHost: String?
         let sessionScope: String?
+        let agentPlatform: String?
+        let agentDisplayName: String?
+        let sourceOperation: String?
 
         var auditInfo: SSHAgentAuditInfo {
             SSHAgentAuditInfo(
