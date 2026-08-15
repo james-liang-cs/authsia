@@ -70,7 +70,11 @@ async function testValidHostForwardsNativeResponse() {
 
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(calls[0].host, 'com.authsia.nativehost');
-  assert.deepStrictEqual(calls[0].message, { type: 'getCredentials', host: 'login.example.com' });
+  assert.deepStrictEqual(calls[0].message, {
+    type: 'getCredentials',
+    host: 'login.example.com',
+    currentURL: 'https://login.example.com/',
+  });
   assert.strictEqual(result.keepOpen, true);
   assert.deepStrictEqual(result.response, nativeResponse);
 }
@@ -149,10 +153,10 @@ async function testSenderHostMismatchRejected() {
   assert.deepStrictEqual(result.response, { ok: false, error: 'senderMismatch' });
 }
 
-async function testSenderPathMismatchRejected() {
+async function testSenderPathMismatchUsesAttestedURL() {
   const { onMessageHandler, calls } = loadServiceWorker({
     sendNativeMessageImpl(_host, _message, callback) {
-      callback({ ok: true });
+      callback({ ok: true, credentials: [] });
     },
   });
 
@@ -162,8 +166,59 @@ async function testSenderPathMismatchRejected() {
     currentURL: 'https://example.com/admin/login',
   }, { url: 'https://example.com/public/login' });
 
-  assert.strictEqual(calls.length, 0, 'a forged same-origin path must not reach the native host');
-  assert.deepStrictEqual(result.response, { ok: false, error: 'senderMismatch' });
+  assert.strictEqual(result.response.ok, true);
+  assert.deepStrictEqual(calls[0].message, {
+    type: 'listCredentials',
+    host: 'example.com',
+    currentURL: 'https://example.com/public/login',
+  });
+}
+
+async function testGoogleStyleQueryDriftUsesSenderURL() {
+  const { onMessageHandler, calls } = loadServiceWorker({
+    sendNativeMessageImpl(_host, _message, callback) {
+      callback({ ok: true, credentials: [] });
+    },
+  });
+  const senderURL = 'https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fmail.google.com%2Fmail%2F&flowName=GlifWebSignIn&ifkv=sender';
+  const pageURL = 'https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fmail.google.com%2Fmail%2F&flowName=GlifWebSignIn&ifkv=page';
+
+  const result = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_LIST_CREDENTIALS',
+    host: 'accounts.google.com',
+    currentURL: pageURL,
+    kind: 'password',
+  }, { url: senderURL });
+
+  assert.strictEqual(result.response.ok, true, 'query-string drift on Gaia must not look like a dead native host');
+  assert.deepStrictEqual(calls[0].message, {
+    type: 'listCredentials',
+    host: 'accounts.google.com',
+    currentURL: senderURL,
+    kind: 'password',
+  });
+}
+
+async function testMissingSenderURLAttestsOriginAndOmitsClaimedPath() {
+  const { onMessageHandler, calls } = loadServiceWorker({
+    sendNativeMessageImpl(_host, _message, callback) {
+      callback({ ok: true, credentials: [] });
+    },
+  });
+
+  const result = await invokeHandler(onMessageHandler, {
+    type: 'AUTHsia_LIST_CREDENTIALS',
+    host: 'accounts.google.com',
+    currentURL: 'https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fmail.google.com%2Fmail%2F',
+    kind: 'password',
+  }, { origin: 'https://accounts.google.com' });
+
+  assert.strictEqual(result.response.ok, true);
+  assert.deepStrictEqual(
+    calls[0].message,
+    { type: 'listCredentials', host: 'accounts.google.com', kind: 'password' },
+    'without an attested frame URL, do not forward a page-claimed path'
+  );
 }
 
 async function testSubframeIsAttestedAgainstItsOwnURL() {
@@ -303,7 +358,9 @@ async function run() {
   await testInvalidCredentialKindRejected();
   await testInvalidHostRejected();
   await testSenderHostMismatchRejected();
-  await testSenderPathMismatchRejected();
+  await testSenderPathMismatchUsesAttestedURL();
+  await testGoogleStyleQueryDriftUsesSenderURL();
+  await testMissingSenderURLAttestsOriginAndOmitsClaimedPath();
   await testSubframeIsAttestedAgainstItsOwnURL();
   await testPlainHttpSenderRejectedBeforeNativeMessage();
   await testLoopbackHttpSendersAllowed();

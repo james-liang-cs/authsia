@@ -48,33 +48,64 @@ function isLoopbackHostname(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1';
 }
 
+function hostnameFromHTTPOrigin(origin) {
+  if (typeof origin !== 'string' || !origin) {
+    return null;
+  }
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null;
+    }
+    return url.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function rejectInsecureSender(protocol, hostname) {
+  return protocol === 'http:' && !isLoopbackHostname(hostname)
+    ? { error: 'insecureContext' }
+    : null;
+}
+
 function attestPageRequest(message, sender) {
   const host = sanitizeHost(message.host);
-  const senderURL = comparableURL(sender && sender.url);
   if (!host) {
     return { error: 'invalidHost' };
   }
-  if (!senderURL) {
-    return { error: 'senderMismatch' };
-  }
 
-  const parsedSenderURL = new URL(senderURL);
-  if (parsedSenderURL.hostname.toLowerCase() !== host) {
-    return { error: 'senderMismatch' };
-  }
-  if (parsedSenderURL.protocol === 'http:' && !isLoopbackHostname(parsedSenderURL.hostname)) {
-    return { error: 'insecureContext' };
-  }
-
-  let currentURL = null;
-  if (message.currentURL !== undefined) {
-    currentURL = comparableURL(message.currentURL);
-    if (!currentURL || currentURL !== senderURL) {
-      return { error: 'senderMismatch' };
+  // Chrome attests the frame. Prefer sender.url; some sign-in pages (notably
+  // Gaia) omit it or let it drift from location.href after replaceState.
+  // A page-claimed path is never trusted over the attested frame URL.
+  const senderURL = comparableURL(sender && sender.url);
+  let senderHost = null;
+  let senderProtocol = null;
+  if (senderURL) {
+    const parsedSenderURL = new URL(senderURL);
+    senderHost = parsedSenderURL.hostname.toLowerCase();
+    senderProtocol = parsedSenderURL.protocol;
+  } else {
+    senderHost = hostnameFromHTTPOrigin(sender && sender.origin);
+    if (senderHost && sender && sender.origin) {
+      try {
+        senderProtocol = new URL(sender.origin).protocol;
+      } catch {
+        senderProtocol = null;
+      }
     }
   }
 
-  return { host, currentURL };
+  if (!senderHost || senderHost !== host) {
+    return { error: 'senderMismatch' };
+  }
+
+  const insecure = rejectInsecureSender(senderProtocol, senderHost);
+  if (insecure) {
+    return insecure;
+  }
+
+  return { host, currentURL: senderURL };
 }
 
 function credentialKind(message) {
