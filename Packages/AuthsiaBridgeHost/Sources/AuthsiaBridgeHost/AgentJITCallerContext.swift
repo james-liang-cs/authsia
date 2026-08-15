@@ -96,9 +96,9 @@ public enum AgentJITCallerContext {
         fileManager: FileManager = .default
     ) -> String? {
         guard let workingDirectory = request.context.workingDirectory else { return nil }
-        return WorkspaceAuthority.validatedRootPath(
-            request.context.workspaceAuthorityPath ?? workingDirectory,
-            containing: workingDirectory,
+        return WorkspaceAuthority.pairingRootPath(
+            workingDirectory: workingDirectory,
+            authorityPath: request.context.workspaceAuthorityPath,
             fileManager: fileManager
         )
     }

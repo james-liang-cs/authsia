@@ -14,6 +14,72 @@ final class WorkspaceAuthorityTests: XCTestCase {
         ))
     }
 
+    func testPairingRootFallsBackToExactHomeOrFilesystemRoot() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        XCTAssertEqual(
+            WorkspaceAuthority.pairingRootPath(workingDirectory: home, authorityPath: nil),
+            home
+        )
+        XCTAssertEqual(
+            WorkspaceAuthority.pairingRootPath(workingDirectory: "/", authorityPath: nil),
+            "/"
+        )
+        XCTAssertNil(
+            WorkspaceAuthority.validatedRootPath(home, containing: home)
+        )
+        XCTAssertNil(
+            WorkspaceAuthority.validatedRootPath("/", containing: "/")
+        )
+    }
+
+    func testPairingRootAtHomeDoesNotCoverADescendant() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        let nested = home.appendingPathComponent("Library", isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+
+        XCTAssertEqual(
+            WorkspaceAuthority.pairingRootPath(
+                workingDirectory: nested,
+                authorityPath: home.path
+            ),
+            nested
+        )
+        XCTAssertNotEqual(nested, home.path)
+    }
+
+    func testPairingRootPrefersManagedRootOverTheExactSubdirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-pairing-managed-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        let nested = root.appendingPathComponent("service/envs/prod", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        XCTAssertEqual(
+            WorkspaceAuthority.pairingRootPath(
+                workingDirectory: nested.path,
+                authorityPath: root.path
+            ),
+            root.path
+        )
+        XCTAssertTrue(WorkspaceAuthority.pairingCoversSubfolders(
+            workingDirectory: nested.path,
+            authorityPath: root.path
+        ))
+        XCTAssertFalse(WorkspaceAuthority.pairingCoversSubfolders(
+            workingDirectory: nested.path,
+            authorityPath: nil
+        ))
+    }
+
     func testRejectsDirectoryOutsideProposedWorkspaceRoot() throws {
         let container = FileManager.default.temporaryDirectory
             .appendingPathComponent("authsia-workspace-authority-\(UUID().uuidString)", isDirectory: true)

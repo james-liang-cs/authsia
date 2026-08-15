@@ -55,6 +55,65 @@ final class XPCRequestHandlerTerminalPairingTests: XCTestCase {
         )
     }
 
+    /// Home and `/` are rejected as managed-workspace roots so they cannot
+    /// cover descendants. Pairing still has to bind to the exact current
+    /// directory, or a VS Code TTY at `$HOME` falls through to Agent JIT.
+    func testDirectListFromHomeDirectoryRequestsPairingNotJIT() async throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        let caller = try makeIDECaller(
+            terminal: "ttys-home-list-\(UUID().uuidString)",
+            command: "/usr/local/bin/authsia list passwords"
+        )
+        let approver = TerminalPairingApprovalTracker()
+        let handler = XPCRequestHandler(
+            approver: approver,
+            terminalPairingStore: TerminalPairingStore(
+                authorityStore: TestAuthorityStore(),
+                legacyFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("authsia-terminal-pairing-home-\(UUID().uuidString).json")
+            ),
+            callerIdentityProvider: { caller }
+        )
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .list,
+            query: "",
+            options: BridgeOptions(field: nil, copy: false),
+            context: BridgeContext(
+                isTTY: true,
+                isPiped: false,
+                isSSH: false,
+                isCI: false,
+                timestamp: Date(),
+                requestedCommand: "list",
+                sessionScope: "tty:/dev/\(caller.controllingTerminal!):sid:\(getpid())",
+                workingDirectory: home,
+                workspaceAuthorityPath: nil
+            )
+        )
+        let replyExpectation = expectation(description: "home list pairing reply")
+        var responseData: Data?
+
+        handler.list(try BridgeCoder.encode(request)) { data, _ in
+            responseData = data
+            replyExpectation.fulfill()
+        }
+        await fulfillment(of: [replyExpectation], timeout: 2)
+
+        let response = try BridgeCoder.decode(
+            BridgeResponse<String>.self,
+            from: try XCTUnwrap(responseData)
+        )
+        XCTAssertEqual(response.error?.code, .requiresPairing)
+        XCTAssertEqual(response.error?.pairingRequestID, approver.pairingRequest?.id)
+        XCTAssertEqual(approver.regularApprovalCount, 0)
+        XCTAssertFalse(approver.regularApprovalCommands.contains(.agentJITPreflight))
+        XCTAssertEqual(approver.pairingRequest?.workspaceRoot, home)
+    }
+
     func testDirectListInUnmanagedVSCodeDirectoryRequestsPairing() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("authsia-terminal-pairing-direct-list-\(UUID().uuidString)", isDirectory: true)

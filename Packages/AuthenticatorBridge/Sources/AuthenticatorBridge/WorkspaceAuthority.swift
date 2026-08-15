@@ -41,6 +41,42 @@ public enum WorkspaceAuthority {
         return root
     }
 
+    /// Pairing binds to a managed workspace when one contains the cwd. Every
+    /// other case — `$HOME`, `/`, a volume root, an authority path that does
+    /// not exist or does not contain the cwd — degrades to the exact current
+    /// directory, which covers no descendant of itself.
+    public static func pairingRootPath(
+        workingDirectory: String?,
+        authorityPath: String?,
+        fileManager: FileManager = .default
+    ) -> String? {
+        guard let workingDirectory else { return nil }
+        if let validated = validatedRootPath(
+            authorityPath ?? workingDirectory,
+            containing: workingDirectory,
+            fileManager: fileManager
+        ) {
+            return validated
+        }
+        return exactExistingDirectory(workingDirectory, fileManager: fileManager)
+    }
+
+    /// Whether `pairingRootPath` took the managed-workspace branch, so the root
+    /// it returned also resolves for the cwd's descendants. The pairing prompt
+    /// states that scope, and only the host knows which branch ran.
+    public static func pairingCoversSubfolders(
+        workingDirectory: String?,
+        authorityPath: String?,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        guard let authorityPath else { return false }
+        return validatedRootPath(
+            authorityPath,
+            containing: workingDirectory,
+            fileManager: fileManager
+        ) != nil
+    }
+
     public static func matchesWorkingDirectory(
         _ workingDirectory: String?,
         authorityPath: String?,
@@ -64,6 +100,17 @@ public enum WorkspaceAuthority {
             containing: directory,
             fileManager: fileManager
         ) != nil
+    }
+
+    private static func exactExistingDirectory(_ path: String, fileManager: FileManager) -> String? {
+        guard path.hasPrefix("/") else { return nil }
+        let directory = canonicalPath(path)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+        return directory
     }
 
     private static func canonicalPath(_ path: String) -> String {

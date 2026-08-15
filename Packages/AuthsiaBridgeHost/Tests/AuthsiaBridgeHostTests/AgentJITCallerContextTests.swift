@@ -410,6 +410,41 @@ final class AgentJITCallerContextTests: XCTestCase {
         XCTAssertTrue(AgentJITCallerContext.hasAgenticCaller(nestedAuthsiaCaller(context: context)))
     }
 
+    func testHomeDirectoryPairingDoesNotAuthorizeADescendantDirectory() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        let nested = home.appendingPathComponent("Library", isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        let now = Date(timeIntervalSince1970: 10_000)
+        let pairing = terminalPairing(workspace: home.path, expiresAt: now.addingTimeInterval(60))
+        let homeRequest = makeRequest(
+            sessionScope: nil,
+            workingDirectory: home.path,
+            workspaceAuthorityPath: nil
+        )
+        let nestedRequest = makeRequest(
+            sessionScope: nil,
+            workingDirectory: nested,
+            workspaceAuthorityPath: home.path
+        )
+
+        XCTAssertEqual(
+            AgentJITCallerContext.terminalPairingWorkspaceRoot(request: homeRequest),
+            home.path
+        )
+        // Pins the nested root: a nil root would fail the pairing match below
+        // for the wrong reason.
+        XCTAssertEqual(
+            AgentJITCallerContext.terminalPairingWorkspaceRoot(request: nestedRequest),
+            nested
+        )
+        XCTAssertTrue(hasPairing(homeRequest, caller: pairedIDECaller(), pairing, now))
+        XCTAssertFalse(hasPairing(nestedRequest, caller: pairedIDECaller(), pairing, now))
+    }
+
     func testPairedIDECallerUsesHumanPathOnlyForMatchingTTYAnchorAndWorkspace() throws {
         let workspace = try makeWorkspace()
         defer { try? FileManager.default.removeItem(at: workspace) }

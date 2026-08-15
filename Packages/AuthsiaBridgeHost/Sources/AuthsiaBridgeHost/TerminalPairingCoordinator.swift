@@ -30,6 +30,7 @@ final class TerminalPairingCoordinator {
 
     func begin(
         workspaceRoot: String,
+        coversSubfolders: Bool,
         controllingTerminal: String,
         anchorShellPID: Int32,
         anchorShellStartTime: UInt64,
@@ -40,6 +41,7 @@ final class TerminalPairingCoordinator {
         let request = TerminalPairingApprovalRequest(
             id: UUID(),
             workspaceRoot: workspaceRoot,
+            coversSubfolders: coversSubfolders,
             controllingTerminal: controllingTerminal,
             anchorShellPID: anchorShellPID,
             fullCommand: fullCommand,

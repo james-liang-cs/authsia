@@ -59,6 +59,7 @@ final class TerminalPairingCoordinatorTests: XCTestCase {
         let first = begin(coordinator, workspace: workspace.path, now: now)
         let secondResult = coordinator.begin(
             workspaceRoot: workspace.path,
+            coversSubfolders: false,
             controllingTerminal: "ttys004",
             anchorShellPID: 41,
             anchorShellStartTime: 100,
@@ -92,6 +93,7 @@ final class TerminalPairingCoordinatorTests: XCTestCase {
     ) -> TerminalPairingApprovalRequest {
         coordinator.begin(
             workspaceRoot: workspace,
+            coversSubfolders: false,
             controllingTerminal: "ttys004",
             anchorShellPID: 41,
             anchorShellStartTime: 100,
