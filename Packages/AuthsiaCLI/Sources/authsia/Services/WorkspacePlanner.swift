@@ -1154,7 +1154,7 @@ enum WorkspaceStatusReporter {
                 ("Status", summary.healthSummary),
                 ("Health", summary.healthDetail),
                 ("Managed env files", summary.managedEnvFilesText),
-                ("Workspace env bindings", summary.envBindingsText),
+                ("Workspace env bindings", summaryCount(status.envBindings.count, noun: "binding")),
                 ("Agent rules", summary.agentRulesText),
                 ("Active environment", status.activeEnvironment ?? "Default environment"),
                 (
@@ -1221,6 +1221,17 @@ enum WorkspaceStatusReporter {
             to: &lines
         )
         return lines.joined(separator: "\n")
+    }
+
+    private static func summaryCount(_ count: Int, noun: String) -> String {
+        switch count {
+        case 0:
+            return "none"
+        case 1:
+            return "1 \(noun)"
+        default:
+            return "\(count) \(noun)s"
+        }
     }
 
     private static func envBindingsTable(_ status: WorkspaceStatus) -> String {

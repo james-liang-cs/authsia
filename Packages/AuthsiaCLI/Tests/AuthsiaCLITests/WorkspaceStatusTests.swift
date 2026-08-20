@@ -331,7 +331,8 @@ struct WorkspaceStatusTests {
         #expect(rendered.contains("Needs attention"))
         #expect(rendered.contains("1 missing Authsia reference - 2 authsia:// refs"))
         #expect(rendered.contains("none"))
-        #expect(rendered.contains("API_KEY, HF_TOKEN"))
+        #expect(rendered.contains("2 bindings"))
+        #expect(!rendered.contains("API_KEY, HF_TOKEN"))
         #expect(rendered.contains("API_KEY"))
         #expect(rendered.contains("HF_TOKEN"))
         #expect(rendered.contains("authsia ref"))
@@ -339,6 +340,40 @@ struct WorkspaceStatusTests {
         #expect(rendered.contains("authsia workspace env add HF_TOKEN"))
         #expect(!rendered.contains("replace the URI in .env"))
         #expect(!rendered.contains("authsia://password/API_KEY"))
+    }
+
+    @Test("status summary counts env bindings instead of listing names in one cell")
+    func statusSummaryCountsEnvBindingsInsteadOfJoiningNames() {
+        let names = [
+            "API_KEY", "APP_STORE_ISSUER_ID", "APP_STORE_KEY_ID", "APP_STORE_PRIVATE_KEY",
+            "AWS_ACCESS_KEY_ID", "AWS_REGION", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+            "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID", "DATABASE_URL",
+            "ELASTIC_APM_SECRET_TOKEN", "ELASTIC_APM_SERVER_CA_CERT_FILE", "ELASTIC_APM_SERVER_URL",
+            "ENCRYPTION_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN", "JIRA_CONFLUENCE_TOKEN",
+            "JWT_SECRET", "R2_ACCESS_KEY_ID", "R2_BUCKET", "R2_ENDPOINT", "R2_SECRET_ACCESS_KEY",
+            "REDIS_URL", "S3_THREAT_INTEL_CACHE_KEY",
+        ]
+        let status = WorkspaceStatus(
+            config: WorkspaceConfig(
+                workspace: WorkspaceConfig.Workspace(name: "demo", authsiaFolder: "Workspaces/demo"),
+                managedEnvFiles: [],
+                agents: nil
+            ),
+            envFiles: [],
+            envBindings: names.map(WorkspaceStatus.EnvBinding.init(name:)),
+            agentRules: [],
+            missingReferences: [],
+            unverifiedReferences: []
+        )
+        let rendered = WorkspaceStatusReporter.renderTable(status)
+        let joined = names.joined(separator: ", ")
+
+        #expect(rendered.contains("26 bindings"))
+        #expect(!rendered.contains(joined))
+        #expect(rendered.contains("API_KEY"))
+        #expect(rendered.contains("S3_THREAT_INTEL_CACHE_KEY"))
+        let summaryWidth = rendered.split(separator: "\n").prefix(4).map(\.count).max() ?? 0
+        #expect(summaryWidth < joined.count)
     }
 
     @Test("same-name vault items only conflict when environment tiers overlap")
