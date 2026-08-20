@@ -509,7 +509,7 @@ struct WorkspaceRunPlannerTests {
             parentEnvironment: ["PATH": "/usr/bin"]
         )
 
-        #expect(directOutput.contains("Execution: direct passthrough (no workspace secrets detected)"))
+        #expect(directOutput.contains("direct passthrough (no workspace secrets detected)"))
 
         try "PLAIN=value\n".write(
             to: root.appendingPathComponent(".env"),
@@ -533,7 +533,7 @@ struct WorkspaceRunPlannerTests {
         )
 
         #expect(plainEnvOutput.contains(
-            "Execution: authsia exec (workspace env files active; no Authsia references detected)"
+            "authsia exec (workspace env files active; no Authsia references detected)"
         ))
 
         try "API_KEY=authsia://password/API_KEY/password?folder=Workspaces%2Fapi\n".write(
@@ -552,7 +552,7 @@ struct WorkspaceRunPlannerTests {
         )
 
         #expect(mediatedOutput.contains(
-            "Execution: authsia exec (Authsia references require approval/JIT unless already authorized)"
+            "authsia exec (Authsia references require approval/JIT unless already authorized)"
         ))
     }
 
@@ -581,10 +581,10 @@ struct WorkspaceRunPlannerTests {
         let output = Workspace.Run.renderDryRun(plan, parentEnvironment: ["PATH": "/usr/bin"])
 
         #expect(output.contains("Env bindings:"))
-        #expect(output.contains("- HF_TOKEN"))
+        #expect(output.contains("HF_TOKEN"))
         #expect(!output.contains("authsia://password/HF_TOKEN"))
         #expect(output.contains(
-            "Execution: authsia exec (Authsia references require approval/JIT unless already authorized)"
+            "authsia exec (Authsia references require approval/JIT unless already authorized)"
         ))
     }
 
@@ -1027,7 +1027,7 @@ struct WorkspaceRunPlannerTests {
             processAncestry: Self.humanShimAncestry
         )
         #expect(output.contains(
-            "Execution: direct passthrough (command references no workspace binding; secrets not injected)"
+            "direct passthrough (command references no workspace binding; secrets not injected)"
         ))
     }
 
@@ -1310,7 +1310,7 @@ struct WorkspaceRunPlannerTests {
         )
 
         #expect(output.contains(
-            "Execution: direct passthrough (guarded shim under agent; literal env kept, Authsia refs not resolved)"
+            "direct passthrough (guarded shim under agent; literal env kept, Authsia refs not resolved)"
         ))
     }
 
@@ -1338,7 +1338,7 @@ struct WorkspaceRunPlannerTests {
         let output = Workspace.Run.renderDryRun(plan, parentEnvironment: ["PATH": "/usr/bin"])
 
         #expect(output.contains(
-            "Execution: direct passthrough (read-only probe; workspace secrets not injected)"
+            "direct passthrough (read-only probe; workspace secrets not injected)"
         ))
     }
 }

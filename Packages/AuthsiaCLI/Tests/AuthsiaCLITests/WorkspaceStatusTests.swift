@@ -78,11 +78,15 @@ struct WorkspaceStatusTests {
         #expect(status.envFiles.first?.authsiaReferenceCount == 1)
         #expect(status.envFiles.last?.isMissing == true)
         #expect(status.agentRules.first?.isInstalled == true)
-        #expect(rendered.contains("Workspace: api"))
-        #expect(rendered.contains("Status: Needs attention"))
-        #expect(rendered.contains("Health: 1 missing env file - 1 authsia:// ref"))
-        #expect(rendered.contains("Managed env files: .env, .env.local"))
-        #expect(rendered.contains("Agent rules: Codex installed"))
+        #expect(rendered.contains("| Field"))
+        #expect(rendered.contains("| Value"))
+        #expect(rendered.contains("| Path"))
+        #expect(rendered.contains("| State"))
+        #expect(rendered.contains("api"))
+        #expect(rendered.contains("Needs attention"))
+        #expect(rendered.contains("1 missing env file - 1 authsia:// ref"))
+        #expect(rendered.contains(".env, .env.local"))
+        #expect(rendered.contains("Codex installed"))
         #expect(rendered.contains("authsia workspace run --"))
         #expect(rendered.contains("authsia lock"))
         #expect(rendered.contains("Access Center"))
@@ -128,10 +132,10 @@ struct WorkspaceStatusTests {
         )
         let rendered = WorkspaceStatusReporter.renderTable(status)
 
-        #expect(rendered.contains("Active environment: Production"))
-        #expect(rendered.contains("Available environments: Production"))
-        #expect(rendered.contains("Effective environment items: 0 default-environment, 1 tagged"))
-        #expect(rendered.contains("API_KEY: Production · effective"))
+        #expect(rendered.contains("Production"))
+        #expect(rendered.contains("0 default-environment, 1 tagged"))
+        #expect(rendered.contains("API_KEY"))
+        #expect(rendered.contains("effective"))
     }
 
     @Test("schema v2 status keeps local active environment when vault metadata is unavailable")
@@ -153,7 +157,7 @@ struct WorkspaceStatusTests {
         )
 
         #expect(status.activeEnvironment == "Production")
-        #expect(WorkspaceStatusReporter.renderTable(status).contains("Active environment: Production"))
+        #expect(WorkspaceStatusReporter.renderTable(status).contains("Production"))
     }
 
     @Test("status includes managed env scopes in environment health")
@@ -207,7 +211,7 @@ struct WorkspaceStatusTests {
         #expect(status.availableEnvironments == ["Production"])
         #expect(status.environmentIssueCount == 0)
         #expect(status.selectionHealth == "healthy")
-        #expect(WorkspaceStatusReporter.renderTable(status).contains("Status: Ready"))
+        #expect(WorkspaceStatusReporter.renderTable(status).contains("Ready"))
     }
 
     @Test("status health blocks on managed env environment conflicts")
@@ -257,7 +261,7 @@ struct WorkspaceStatusTests {
         #expect(status.environmentIssueCount == 1)
         #expect(status.conflictCount == 1)
         #expect(status.selectionHealth == "needsAttention")
-        #expect(rendered.contains("Status: Needs attention"))
+        #expect(rendered.contains("Needs attention"))
         #expect(rendered.contains("1 environment resolution issue"))
     }
 
@@ -324,13 +328,14 @@ struct WorkspaceStatusTests {
 
         #expect(status.envBindings.map(\.name) == ["API_KEY", "HF_TOKEN"])
         #expect(status.missingReferences.map(\.item) == ["HF_TOKEN"])
-        #expect(rendered.contains("Status: Needs attention"))
-        #expect(rendered.contains("Health: 1 missing Authsia reference - 2 authsia:// refs"))
-        #expect(rendered.contains("Managed env files: none"))
-        #expect(rendered.contains("Workspace env bindings: API_KEY, HF_TOKEN"))
-        #expect(rendered.contains("- API_KEY: authsia ref"))
-        #expect(rendered.contains("- HF_TOKEN: authsia ref"))
-        #expect(rendered.contains(".authsia/workspace.json: env binding HF_TOKEN"))
+        #expect(rendered.contains("Needs attention"))
+        #expect(rendered.contains("1 missing Authsia reference - 2 authsia:// refs"))
+        #expect(rendered.contains("none"))
+        #expect(rendered.contains("API_KEY, HF_TOKEN"))
+        #expect(rendered.contains("API_KEY"))
+        #expect(rendered.contains("HF_TOKEN"))
+        #expect(rendered.contains("authsia ref"))
+        #expect(rendered.contains(".authsia/workspace.json"))
         #expect(rendered.contains("authsia workspace env add HF_TOKEN"))
         #expect(!rendered.contains("replace the URI in .env"))
         #expect(!rendered.contains("authsia://password/API_KEY"))
@@ -438,10 +443,11 @@ struct WorkspaceStatusTests {
         let rendered = WorkspaceStatusReporter.renderTable(status)
 
         #expect(status.missingReferences.map(\.item) == ["Runbook"])
-        #expect(rendered.contains("Status: Needs attention"))
+        #expect(rendered.contains("Needs attention"))
         #expect(rendered.contains("1 missing Authsia reference"))
         #expect(rendered.contains("Missing Authsia references:"))
-        #expect(rendered.contains("note Runbook in folder Workspaces/api"))
+        #expect(rendered.contains("Runbook"))
+        #expect(rendered.contains("note"))
         #expect(rendered.contains("replace the URI in .env with the raw value"))
         #expect(rendered.contains("then run `authsia workspace update --env-file .env`"))
         #expect(rendered.contains("Or edit the env file to point at an existing Authsia item"))
@@ -547,7 +553,8 @@ struct WorkspaceStatusTests {
 
         #expect(status.unverifiedReferences.map(\.item) == ["API_KEY"])
         #expect(rendered.contains("Unverified Authsia references:"))
-        #expect(rendered.contains("password API_KEY in folder Workspaces/api"))
+        #expect(rendered.contains("password"))
+        #expect(rendered.contains("API_KEY"))
         #expect(rendered.contains("Open Authsia or run `authsia list passwords`, then rerun this command"))
         #expect(rendered.contains("If Authsia reports it cannot read the Keychain, open Authsia once"))
         #expect(rendered.contains("If an item is missing, restore the raw value"))

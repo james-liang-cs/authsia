@@ -1166,8 +1166,8 @@ struct WorkspaceInitPlannerTests {
 
         #expect(plan.envFiles.map(\.relativePath) == [".env", "apps/api/.env", "packages/web/.env.local"])
         #expect(plan.config.managedEnvFiles == [".env", "apps/api/.env", "packages/web/.env.local"])
-        #expect(rendered.contains("- [2] apps/api/.env:"))
-        #expect(rendered.contains("- [3] packages/web/.env.local:"))
+        #expect(rendered.contains("apps/api/.env"))
+        #expect(rendered.contains("packages/web/.env.local"))
         #expect(!rendered.contains("node_modules"))
         #expect(!rendered.contains("services/worker/config/deep"))
         #expect(!rendered.contains("tok_live"))
@@ -1340,11 +1340,15 @@ struct WorkspaceInitPlannerTests {
 
         let rendered = Workspace.Init.renderPlan(plan)
 
-        #expect(rendered.contains("- [1] .env: 1 selected secret(s), 0 review item(s)"))
-        #expect(rendered.contains("- [2] .env.local: 0 selected secret(s), 0 review item(s)"))
-        #expect(rendered.contains("[1.1] [x] API_KEY  type=password  confidence=high"))
-        #expect(rendered.contains("store: Workspaces/project/API_KEY"))
-        #expect(rendered.contains("reference: API_KEY=authsia://password/API_KEY/password?folder=Workspaces%2Fproject"))
+        #expect(rendered.contains(".env"))
+        #expect(rendered.contains(".env.local"))
+        #expect(rendered.contains("[1.1]"))
+        #expect(rendered.contains("[x]"))
+        #expect(rendered.contains("API_KEY"))
+        #expect(rendered.contains("password"))
+        #expect(rendered.contains("high"))
+        #expect(rendered.contains("Workspaces/project/API_KEY"))
+        #expect(rendered.contains("API_KEY=authsia://password/API_KEY/password?folder=Workspaces%2Fproject"))
         #expect(!rendered.contains("sk_live"))
     }
 
@@ -1366,7 +1370,7 @@ struct WorkspaceInitPlannerTests {
 
         let rendered = Workspace.Init.renderPlan(plan)
 
-        #expect(rendered.contains("- none found"))
+        #expect(rendered.contains("none found"))
         #expect(rendered.contains("To add secrets later:"))
         #expect(rendered.contains("Clipboard path: copy a secret"))
         #expect(rendered.contains("Save to workspace on to bind it during save"))
@@ -1412,9 +1416,11 @@ struct WorkspaceInitPlannerTests {
         let rendered = Workspace.Init.renderSecretReview(envFile, fileIndex: 1)
         let instructions = Workspace.Init.secretReviewInstructions
 
-        #expect(rendered.contains("[1.1] [!] API_KEY  type=password  confidence=high"))
-        #expect(rendered.contains("existing: password API_KEY in folder Workspaces/project"))
-        #expect(rendered.contains("reference: API_KEY=authsia://password/API_KEY/password?folder=Workspaces%2Fproject"))
+        #expect(rendered.contains("[1.1]"))
+        #expect(rendered.contains("[!]"))
+        #expect(rendered.contains("API_KEY"))
+        #expect(rendered.contains("password API_KEY in folder Workspaces/project"))
+        #expect(rendered.contains("API_KEY=authsia://password/API_KEY/password?folder=Workspaces%2Fproject"))
         #expect(instructions.contains("Enter=confirm detected secrets"))
         #expect(instructions.contains("a=select all"))
         #expect(instructions.contains("c=clear all"))

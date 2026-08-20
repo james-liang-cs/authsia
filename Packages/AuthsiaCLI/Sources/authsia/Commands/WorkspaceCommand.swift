@@ -255,44 +255,76 @@ struct Workspace: AsyncParsableCommand {
 
         static func renderPlan(_ plan: WorkspaceInitPlan) -> String {
             var lines: [String] = [
-                "Authsia workspace: \(plan.config.workspace.name)",
-                "Folder: \(plan.config.workspace.authsiaFolder)",
-                "",
-                "Env files:",
+                WorkspaceOutputFormatter.keyValue([
+                    ("Workspace", plan.config.workspace.name),
+                    ("Authsia folder", plan.config.workspace.authsiaFolder),
+                ]),
             ]
             if plan.envFiles.isEmpty {
-                lines.append("- none found")
-                lines.append("")
-                lines.append(contentsOf: noEnvSecretGuidanceLines)
+                WorkspaceOutputFormatter.append(
+                    WorkspaceOutputFormatter.section(
+                        "Env files:",
+                        headers: ["#", "Path", "Selected", "Review"],
+                        rows: [],
+                        empty: "none found"
+                    ),
+                    to: &lines
+                )
+                WorkspaceOutputFormatter.append(
+                    noEnvSecretGuidanceLines.joined(separator: "\n"),
+                    to: &lines
+                )
             } else {
+                WorkspaceOutputFormatter.append(
+                    WorkspaceOutputFormatter.section(
+                        "Env files:",
+                        headers: ["#", "Path", "Selected", "Review"],
+                        rows: plan.envFiles.enumerated().map { index, envFile in
+                            let selected = envFile.secrets.filter(\.selectedByDefault).count
+                            let ignored = max(0, envFile.secrets.count - selected)
+                            return [
+                                String(index + 1),
+                                envFile.relativePath,
+                                String(selected),
+                                String(ignored),
+                            ]
+                        },
+                        empty: "none found"
+                    ),
+                    to: &lines
+                )
                 for (index, envFile) in plan.envFiles.enumerated() {
-                    let selected = envFile.secrets.filter(\.selectedByDefault).count
-                    let ignored = max(0, envFile.secrets.count - selected)
-                    lines.append(
-                        "- [\(index + 1)] \(envFile.relativePath): " +
-                        "\(selected) selected secret(s), \(ignored) review item(s)"
-                    )
                     let review = renderSecretReview(
                         envFile,
                         fileIndex: index + 1,
                         folderPath: plan.config.workspace.authsiaFolder
                     )
                     if !review.isEmpty {
-                        lines.append(contentsOf: review.components(separatedBy: "\n"))
+                        WorkspaceOutputFormatter.append(review, to: &lines)
                     }
                 }
             }
             if !plan.agents.isEmpty {
-                lines.append("")
-                lines.append("Agent rules:")
-                for agent in plan.agents {
-                    lines.append("- \(agent.title)")
-                }
+                WorkspaceOutputFormatter.append(
+                    WorkspaceOutputFormatter.section(
+                        "Agent rules:",
+                        headers: ["Tool"],
+                        rows: plan.agents.map { [$0.title] },
+                        empty: "none"
+                    ),
+                    to: &lines
+                )
             }
             if !plan.removedEnvFiles.isEmpty {
-                lines.append("")
-                lines.append("Removed managed env files:")
-                lines.append(contentsOf: plan.removedEnvFiles.map { "- \($0)" })
+                WorkspaceOutputFormatter.append(
+                    WorkspaceOutputFormatter.section(
+                        "Removed managed env files:",
+                        headers: ["Path"],
+                        rows: plan.removedEnvFiles.map { [$0] },
+                        empty: "none"
+                    ),
+                    to: &lines
+                )
             }
             WorkspaceStatusReporter.appendMissingReferenceGuidance(plan.missingReferences, to: &lines)
             WorkspaceStatusReporter.appendUnverifiedReferenceGuidance(plan.unverifiedReferences, to: &lines)
@@ -305,23 +337,29 @@ struct Workspace: AsyncParsableCommand {
             selectedIDs: Set<UUID>? = nil,
             folderPath: String? = nil
         ) -> String {
-            var lines: [String] = []
-            for (index, secret) in envFile.secrets.enumerated() {
+            guard !envFile.secrets.isEmpty else { return "" }
+            let rows = envFile.secrets.enumerated().map { index, secret -> [String] in
                 let selected = selectedIDs?.contains(secret.secret.id) ?? secret.selectedByDefault
                 let marker = secret.conflict == nil ? (selected ? "[x]" : "[ ]") : "[!]"
                 let type = secret.secret.type.rawValue.lowercased()
                 let storeTarget = folderPath.map { "\($0)/\(secret.secret.authsiaKey)" } ?? secret.secret.authsiaKey
-                lines.append(
-                    "  [\(fileIndex).\(index + 1)] \(marker) \(secret.secret.key)  " +
-                    "type=\(type)  confidence=\(secret.secret.confidence.rawValue)"
-                )
-                if let conflict = secret.conflict {
-                    lines.append("      existing: \(conflict.displayLine)")
-                }
-                lines.append("      store: \(storeTarget)")
-                lines.append("      reference: \(secret.replacementLine)")
+                return [
+                    "[\(fileIndex).\(index + 1)]",
+                    marker,
+                    secret.secret.key,
+                    type,
+                    secret.secret.confidence.rawValue,
+                    storeTarget,
+                    secret.replacementLine,
+                    secret.conflict?.displayLine ?? "",
+                ]
             }
-            return lines.joined(separator: "\n")
+            return WorkspaceOutputFormatter.section(
+                "\(envFile.relativePath) secrets:",
+                headers: ["ID", "Sel", "Key", "Type", "Confidence", "Store", "Reference", "Conflict"],
+                rows: rows,
+                empty: "none"
+            )
         }
 
         fileprivate static func promptForEnvFiles(_ envFiles: [WorkspaceEnvFilePlan]) -> [WorkspaceEnvFilePlan] {
@@ -343,7 +381,6 @@ struct Workspace: AsyncParsableCommand {
             guard !envFile.secrets.isEmpty else { return [] }
             let selected = defaultInteractiveSecretIDs(envFile)
             print("")
-            print(envFile.relativePath)
             print(renderSecretReview(envFile, fileIndex: fileIndex, selectedIDs: selected))
             print("\(secretReviewInstructions): ", terminator: "")
             let answer = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1580,10 +1617,14 @@ struct Workspace: AsyncParsableCommand {
                 parentEnvironment: parentEnvironment,
                 processAncestry: processAncestry
             )
-            return [
-                WorkspaceRunPlan.renderDryRun(plan),
-                "Execution: \(description)",
-            ].joined(separator: "\n")
+            var lines = [WorkspaceRunPlan.renderDryRun(plan)]
+            WorkspaceOutputFormatter.append(
+                WorkspaceOutputFormatter.keyValue([
+                    ("Execution", description),
+                ]),
+                to: &lines
+            )
+            return lines.joined(separator: "\n")
         }
 
         private static func executionDescription(
@@ -1883,14 +1924,18 @@ struct Workspace: AsyncParsableCommand {
         }
 
         static func renderList(_ config: WorkspaceConfig) -> String {
-            var lines = ["Workspace env bindings:"]
             if config.envBindings.isEmpty {
-                lines.append("No workspace env bindings configured.")
-                lines.append("Bind one with authsia workspace env add <NAME> <authsia://...>.")
-            } else {
-                lines.append(contentsOf: config.envBindings.map { "\($0.name)=\($0.reference)" })
+                return [
+                    "No workspace env bindings configured.",
+                    "Bind one with authsia workspace env add <NAME> <authsia://...>.",
+                ].joined(separator: "\n")
             }
-            return lines.joined(separator: "\n")
+            return WorkspaceOutputFormatter.section(
+                "Workspace env bindings:",
+                headers: ["Name", "Reference"],
+                rows: config.envBindings.map { [$0.name, $0.reference] },
+                empty: "No workspace env bindings configured."
+            )
         }
 
         static func renderList(
@@ -1903,15 +1948,21 @@ struct Workspace: AsyncParsableCommand {
             case .named(let name): activeEnvironment = name
             }
             var lines = [
-                "Workspace env bindings:",
-                "Active environment: \(activeEnvironment)",
+                WorkspaceOutputFormatter.keyValue([
+                    ("Active environment", activeEnvironment),
+                ]),
             ]
             guard !config.envBindings.isEmpty else {
-                lines.append("No workspace env bindings configured.")
-                lines.append("Bind one with authsia workspace env add <NAME> <authsia://...>.")
+                WorkspaceOutputFormatter.append(
+                    [
+                        "No workspace env bindings configured.",
+                        "Bind one with authsia workspace env add <NAME> <authsia://...>.",
+                    ].joined(separator: "\n"),
+                    to: &lines
+                )
                 return lines.joined(separator: "\n")
             }
-            for (index, binding) in config.envBindings.enumerated() {
+            let rows = config.envBindings.enumerated().map { index, binding -> [String] in
                 let id = "binding-\(index)"
                 let matchesBinding: (WorkspaceEnvironmentCandidate) -> Bool = {
                     $0.id == id || $0.id.hasPrefix(id + "#")
@@ -1923,8 +1974,17 @@ struct Workspace: AsyncParsableCommand {
                     $0.environments.isEmpty ? "Default environment" : $0.environments.joined(separator: ", ")
                 } ?? "Unresolved"
                 let state = evaluation.resolution.effective.contains(where: matchesBinding) ? "effective" : "inactive"
-                lines.append("\(binding.name): \(environments) · \(state) · \(binding.reference)")
+                return [binding.name, environments, state, binding.reference]
             }
+            WorkspaceOutputFormatter.append(
+                WorkspaceOutputFormatter.section(
+                    "Workspace env bindings:",
+                    headers: ["Name", "Environments", "State", "Reference"],
+                    rows: rows,
+                    empty: "No workspace env bindings configured."
+                ),
+                to: &lines
+            )
             return lines.joined(separator: "\n")
         }
 
@@ -2000,15 +2060,22 @@ struct Workspace: AsyncParsableCommand {
         }
 
         static func renderValidation(_ result: ValidationResult) -> String {
-            var lines: [String] = []
-            appendValidationSection("Valid workspace env bindings:", result.valid, to: &lines)
-            appendValidationSection("Missing Authsia references:", result.missing, to: &lines)
-            appendValidationSection("Unverified Authsia references:", result.unverified, to: &lines)
-            if lines.isEmpty {
-                lines.append("No workspace env bindings configured.")
-                lines.append("Bind one with authsia workspace env add <NAME> <authsia://...>.")
+            var rows: [[String]] = []
+            rows.append(contentsOf: result.valid.map { ["valid", $0.name, $0.displayLine] })
+            rows.append(contentsOf: result.missing.map { ["missing", $0.name, $0.displayLine] })
+            rows.append(contentsOf: result.unverified.map { ["unverified", $0.name, $0.displayLine] })
+            if rows.isEmpty {
+                return [
+                    "No workspace env bindings configured.",
+                    "Bind one with authsia workspace env add <NAME> <authsia://...>.",
+                ].joined(separator: "\n")
             }
-            return lines.joined(separator: "\n")
+            return WorkspaceOutputFormatter.section(
+                "Workspace env bindings:",
+                headers: ["Status", "Name", "Detail"],
+                rows: rows,
+                empty: "No workspace env bindings configured."
+            )
         }
 
         private static func workspaceRoot() throws -> URL {
@@ -2052,16 +2119,6 @@ struct Workspace: AsyncParsableCommand {
             return AuthsiaReference(itemType: itemType, query: reference.item, folderPath: reference.folder)
         }
 
-        private static func appendValidationSection(
-            _ title: String,
-            _ values: [EnvBindingStatus],
-            to lines: inout [String]
-        ) {
-            guard !values.isEmpty else { return }
-            if !lines.isEmpty { lines.append("") }
-            lines.append(title)
-            lines.append(contentsOf: values.map { "- \($0.name): \($0.displayLine)" })
-        }
     }
 
     struct Status: AsyncParsableCommand {
@@ -2379,23 +2436,38 @@ struct Workspace: AsyncParsableCommand {
 
         static func renderDryRun(_ plan: WorkspaceSyncPlan) -> String {
             var lines = [
-                "Workspace sync: \(plan.authsiaFolder)",
-                "Satisfied: \(plan.satisfied.count)",
-                "Missing locally: \(plan.missing.count)",
-                "Local extras: \(plan.extras.count)",
-                "Config mismatches: \(plan.mismatches.count)",
+                WorkspaceOutputFormatter.keyValue([
+                    ("Authsia folder", plan.authsiaFolder),
+                    ("Satisfied", String(plan.satisfied.count)),
+                    ("Missing locally", String(plan.missing.count)),
+                    ("Local extras", String(plan.extras.count)),
+                    ("Config mismatches", String(plan.mismatches.count)),
+                ]),
             ]
-            appendRows("Missing locally", plan.missing, to: &lines)
-            appendRows("Local extras", plan.extras, to: &lines)
-            appendRows("Config mismatches", plan.mismatches, to: &lines)
+            let drift = plan.missing + plan.extras + plan.mismatches
+            WorkspaceOutputFormatter.append(
+                WorkspaceOutputFormatter.section(
+                    "Drift:",
+                    headers: ["Status", "Env", "Type", "Item"],
+                    rows: drift.map { row in
+                        [syncStatusLabel(row.status), row.envName, row.itemType, row.itemName]
+                    },
+                    empty: "none"
+                ),
+                to: &lines
+            )
             return lines.joined(separator: "\n")
         }
 
-        private static func appendRows(_ title: String, _ rows: [WorkspaceSyncRow], to lines: inout [String]) {
-            guard !rows.isEmpty else { return }
-            lines.append("")
-            lines.append("\(title):")
-            lines.append(contentsOf: rows.map { "- \($0.envName): \($0.itemType) \($0.itemName)" })
+        private static func syncStatusLabel(_ status: WorkspaceSyncStatus) -> String {
+            switch status {
+            case .satisfied: return "satisfied"
+            case .missingLocally: return "missing locally"
+            case .localExtra: return "local extra"
+            case .configMismatch: return "config mismatch"
+            case .unverified: return "unverified"
+            case .external: return "external"
+            }
         }
     }
 
@@ -2547,27 +2619,29 @@ struct Workspace: AsyncParsableCommand {
 
         static func renderDryRun(_ plan: WorkspaceGuardedTerminalPlan) -> String {
             [
-                "Guarded terminal: \(plan.workspaceRoot.lastPathComponent)",
-                "Shim directory: \(plan.shimDirectory.path)",
-                "Tools: \(plan.tools.joined(separator: ", "))",
-                "Parent shell receives no plaintext secrets.",
+                WorkspaceOutputFormatter.keyValue([
+                    ("Guarded terminal", plan.workspaceRoot.lastPathComponent),
+                    ("Shim directory", plan.shimDirectory.path),
+                    ("Tools", plan.tools.joined(separator: ", ")),
+                    ("Parent shell", "receives no plaintext secrets"),
+                ]),
             ].joined(separator: "\n")
         }
 
         static func renderInstallResult(_ result: WorkspaceGuardedTerminalInstallResult) -> String {
-            var lines = [
-                "Guarded terminal shims ready.",
-                "Shim directory: \(result.shimDirectory.path)",
-                "Installed: \(result.installedTools.isEmpty ? "none" : result.installedTools.joined(separator: ", "))",
-                "Skipped: \(result.skippedTools.isEmpty ? "none" : result.skippedTools.joined(separator: ", "))",
+            var pairs: [(String, String)] = [
+                ("Status", "Guarded terminal shims ready"),
+                ("Shim directory", result.shimDirectory.path),
+                ("Installed", result.installedTools.isEmpty ? "none" : result.installedTools.joined(separator: ", ")),
+                ("Skipped", result.skippedTools.isEmpty ? "none" : result.skippedTools.joined(separator: ", ")),
             ]
             if !result.installedAgentLaunchers.isEmpty {
-                lines.append(
-                    "Agent launchers (start unguarded): " +
+                pairs.append((
+                    "Agent launchers (start unguarded)",
                     result.installedAgentLaunchers.joined(separator: ", ")
-                )
+                ))
             }
-            return lines.joined(separator: "\n")
+            return WorkspaceOutputFormatter.keyValue(pairs)
         }
 
         static func renderShellExports(
@@ -3024,17 +3098,19 @@ struct WorkspaceAgentLaunchPlan: Equatable {
     }
 
     static func render(_ plan: WorkspaceAgentLaunchPlan) -> String {
-        var lines = [
-            "Agentic workspace launch: \(plan.tool.title)",
-            "Command: \(plan.launchCommand)",
+        var pairs: [(String, String)] = [
+            ("Tool", plan.tool.title),
         ]
         if let appName = plan.tool.applicationName {
-            lines.append("App: \(appName)")
+            pairs.append(("App", appName))
         }
-        lines.append(
+        var lines = [WorkspaceOutputFormatter.keyValue(pairs)]
+        WorkspaceOutputFormatter.append("Command:\n\(plan.launchCommand)", to: &lines)
+        WorkspaceOutputFormatter.append(
             "Secret handling: Authsia injects no managed secrets. Launch from a guarded terminal " +
             "(authsia workspace guard) so ambient shell secrets are not inherited; use " +
-            "authsia workspace run -- <command> or authsia exec for JIT/automation-controlled secret access."
+            "authsia workspace run -- <command> or authsia exec for JIT/automation-controlled secret access.",
+            to: &lines
         )
         return lines.joined(separator: "\n")
     }

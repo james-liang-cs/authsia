@@ -102,7 +102,7 @@ struct WorkspaceUpdatePlannerTests {
         #expect(plan.envFiles.map(\.relativePath) == [".env"])
         #expect(plan.removedEnvFiles == [".env.local"])
         #expect(rendered.contains("Removed managed env files:"))
-        #expect(rendered.contains("- .env.local"))
+        #expect(rendered.contains(".env.local"))
     }
 
     @Test("native update can replace existing agent rules with exact selection")
@@ -168,7 +168,7 @@ struct WorkspaceUpdatePlannerTests {
         #expect(secretPlan.conflict?.item == "DB_PASSWORD")
         #expect(secretPlan.selectedByDefault == false)
         #expect(selectedSecrets.isEmpty)
-        #expect(rendered.contains("existing: password DB_PASSWORD in folder Workspaces/api"))
+        #expect(rendered.contains("password DB_PASSWORD in folder Workspaces/api"))
         #expect(!rendered.contains("plain_password_conflict"))
     }
 
@@ -297,7 +297,8 @@ struct WorkspaceUpdatePlannerTests {
 
         #expect(plan.unverifiedReferences.map(\.item) == ["API_KEY"])
         #expect(rendered.contains("Unverified Authsia references:"))
-        #expect(rendered.contains("password API_KEY in folder Workspaces/api"))
+        #expect(rendered.contains("password"))
+        #expect(rendered.contains("API_KEY"))
         #expect(rendered.contains("Open Authsia or run `authsia list passwords`, then rerun this command"))
         #expect(rendered.contains("If Authsia reports it cannot read the Keychain, open Authsia once"))
         #expect(rendered.contains("If an item is missing, restore the raw value"))

@@ -263,8 +263,9 @@ struct WorkspaceAgentLaunchTests {
             WorkspaceAgentLaunchPlan(workspaceRoot: root, tool: .codex)
         )
 
-        #expect(rendered.contains("Agentic workspace launch: Codex"))
-        #expect(rendered.contains("Command: cd '/tmp/My Project' && __authsia_guard_env="))
+        #expect(rendered.contains("Codex"))
+        #expect(rendered.contains("Command:"))
+        #expect(rendered.contains("cd '/tmp/My Project' && __authsia_guard_env="))
         #expect(rendered.contains("authsia workspace guard --print-env"))
         #expect(rendered.contains("/usr/bin/awk"))
         #expect(rendered.contains("entry !~ /^authsia-guard-/"))

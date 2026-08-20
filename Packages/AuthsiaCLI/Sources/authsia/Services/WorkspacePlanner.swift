@@ -622,58 +622,74 @@ enum WorkspaceResetPlanner {
 
     static func renderDryRun(_ plan: WorkspaceResetPlan) -> String {
         var lines: [String] = [
-            "Authsia workspace reset: \(plan.config.workspace.name)",
-            "Folder: \(plan.config.workspace.authsiaFolder)",
-            "",
-            "Remove workspace config: \(WorkspaceConfigStore.relativeConfigPath)",
-            "",
-            "Managed env files:",
+            WorkspaceOutputFormatter.keyValue([
+                ("Workspace", plan.config.workspace.name),
+                ("Authsia folder", plan.config.workspace.authsiaFolder),
+                ("Remove workspace config", WorkspaceConfigStore.relativeConfigPath),
+            ]),
         ]
-        if plan.envFiles.isEmpty {
-            lines.append("- none configured")
-        } else {
-            for envFile in plan.envFiles {
-                if envFile.isMissing {
-                    lines.append("- \(envFile.relativePath): missing")
-                } else {
-                    lines.append("- \(envFile.relativePath): keep file, \(envFile.authsiaReferenceCount) authsia refs")
-                }
-            }
-        }
+        WorkspaceOutputFormatter.append(
+            WorkspaceOutputFormatter.section(
+                "Managed env files:",
+                headers: ["Path", "State", "Authsia refs"],
+                rows: plan.envFiles.map { envFile in
+                    [
+                        envFile.relativePath,
+                        envFile.isMissing ? "missing" : "keep file",
+                        String(envFile.authsiaReferenceCount),
+                    ]
+                },
+                empty: "none configured"
+            ),
+            to: &lines
+        )
+        WorkspaceOutputFormatter.append(
+            agentRemovalTable(plan.agentRemoval),
+            to: &lines
+        )
 
-        lines.append("")
-        lines.append("Agent rule artifacts:")
-        appendAgentRemoval(plan.agentRemoval, to: &lines)
-
-        lines.append("")
-        lines.append("Env file restore:")
         let restoreCandidates = plan.envFiles.filter { !$0.isMissing && $0.authsiaReferenceCount > 0 }
-        if restoreCandidates.isEmpty {
-            lines.append("- No authsia:// refs found in managed env files.")
-        } else {
-            for envFile in restoreCandidates {
-                if let restoreError = envFile.restoreError {
-                    lines.append("- \(envFile.relativePath): restore unavailable (\(restoreError))")
-                } else {
-                    lines.append("- \(envFile.relativePath): restore from Authsia scrape backup")
-                }
-                if let diff = envFile.restorePreviewDiff {
-                    lines.append(contentsOf: diff.split(separator: "\n", omittingEmptySubsequences: false).map {
-                        "  \($0)"
-                    })
-                }
-            }
+        WorkspaceOutputFormatter.append(
+            WorkspaceOutputFormatter.section(
+                "Env file restore:",
+                headers: ["Path", "Restore"],
+                rows: restoreCandidates.map { envFile in
+                    [
+                        envFile.relativePath,
+                        envFile.restoreError.map { "unavailable (\($0))" } ?? "Authsia scrape backup",
+                    ]
+                },
+                empty: "No authsia:// refs found in managed env files."
+            ),
+            to: &lines
+        )
+        for envFile in restoreCandidates {
+            guard let diff = envFile.restorePreviewDiff else { continue }
+            WorkspaceOutputFormatter.append(
+                "\(envFile.relativePath) preview:\n" +
+                diff.split(separator: "\n", omittingEmptySubsequences: false)
+                    .map { "  \($0)" }
+                    .joined(separator: "\n"),
+                to: &lines
+            )
         }
 
         let orphaned = plan.orphanedEnvFiles
         if !orphaned.isEmpty {
-            lines.append("")
-            lines.append("WARNING: reset will leave these env files with unusable authsia:// references")
-            lines.append("because no Authsia scrape backup is available to restore plaintext values:")
-            for envFile in orphaned {
-                lines.append("- \(envFile.relativePath)")
-            }
-            lines.append("Restore the values manually or re-create them after reset.")
+            WorkspaceOutputFormatter.append(
+                [
+                    "WARNING: reset will leave these env files with unusable authsia:// references",
+                    "because no Authsia scrape backup is available to restore plaintext values:",
+                    WorkspaceOutputFormatter.section(
+                        "Orphaned env files:",
+                        headers: ["Path"],
+                        rows: orphaned.map { [$0.relativePath] },
+                        empty: "none"
+                    ),
+                    "Restore the values manually or re-create them after reset.",
+                ].joined(separator: "\n"),
+                to: &lines
+            )
         }
         return lines.joined(separator: "\n")
     }
@@ -704,22 +720,21 @@ enum WorkspaceResetPlanner {
     }
 
     static func renderApplyResult(_ result: WorkspaceResetResult) -> String {
-        var lines: [String] = []
-        appendSection("Restored env files:", values: result.restoredEnvFiles, to: &lines)
-        appendSection("Warnings:", values: result.warnings, to: &lines)
-        appendSection("Removed:", values: result.removed, to: &lines)
-        appendSection("Updated:", values: result.updated, to: &lines)
-        if !result.manualSteps.isEmpty {
-            if !lines.isEmpty { lines.append("") }
-            lines.append("Manual steps:")
-            for step in result.manualSteps {
-                lines.append("  \(step.path) \(step.reason)")
-            }
+        var rows: [[String]] = []
+        rows.append(contentsOf: result.restoredEnvFiles.map { ["Restored", $0] })
+        rows.append(contentsOf: result.warnings.map { ["Warning", $0] })
+        rows.append(contentsOf: result.removed.map { ["Removed", $0] })
+        rows.append(contentsOf: result.updated.map { ["Updated", $0] })
+        rows.append(contentsOf: result.manualSteps.map { ["Manual", "\($0.path) \($0.reason)"] })
+        if rows.isEmpty {
+            return "No workspace metadata artifacts needed removal."
         }
-        if lines.isEmpty {
-            lines.append("No workspace metadata artifacts needed removal.")
-        }
-        return lines.joined(separator: "\n")
+        return WorkspaceOutputFormatter.section(
+            "Reset result:",
+            headers: ["Action", "Detail"],
+            rows: rows,
+            empty: "No workspace metadata artifacts needed removal."
+        )
     }
 
     private static func restoreManagedEnvFiles(
@@ -761,27 +776,20 @@ enum WorkspaceResetPlanner {
         result.warnings.append("\(envFile.relativePath): restore unavailable (\(error.localizedDescription))")
     }
 
-    private static func appendAgentRemoval(_ result: AgentRuleRemovalResult, to lines: inout [String]) {
-        appendSection(result.dryRun ? "- would remove" : "- removed", values: result.removed, to: &lines)
-        appendSection(result.dryRun ? "- would update" : "- updated", values: result.updated, to: &lines)
-        appendSection("- unchanged", values: result.unchanged, to: &lines)
-        if !result.manualSteps.isEmpty {
-            for step in result.manualSteps {
-                lines.append("- manual: \(step.path) \(step.reason)")
-            }
-        }
-        if result.removed.isEmpty,
-           result.updated.isEmpty,
-           result.unchanged.isEmpty,
-           result.manualSteps.isEmpty {
-            lines.append("- none found")
-        }
-    }
-
-    private static func appendSection(_ title: String, values: [String], to lines: inout [String]) {
-        guard !values.isEmpty else { return }
-        lines.append(title)
-        lines.append(contentsOf: values.map { "  \($0)" })
+    private static func agentRemovalTable(_ result: AgentRuleRemovalResult) -> String {
+        var rows: [[String]] = []
+        let removeLabel = result.dryRun ? "would remove" : "removed"
+        let updateLabel = result.dryRun ? "would update" : "updated"
+        rows.append(contentsOf: result.removed.map { [removeLabel, $0] })
+        rows.append(contentsOf: result.updated.map { [updateLabel, $0] })
+        rows.append(contentsOf: result.unchanged.map { ["unchanged", $0] })
+        rows.append(contentsOf: result.manualSteps.map { ["manual", "\($0.path) \($0.reason)"] })
+        return WorkspaceOutputFormatter.section(
+            "Agent rule artifacts:",
+            headers: ["Change", "Path"],
+            rows: rows,
+            empty: "none found"
+        )
     }
 }
 
@@ -876,30 +884,38 @@ struct WorkspaceRunPlan: Equatable {
     }
 
     static func renderDryRun(_ plan: WorkspaceRunPlan) -> String {
-        var lines = [
-            "Workspace: \(plan.config.workspace.name)",
-            "Authsia folder: \(plan.config.workspace.authsiaFolder)",
-            "Env files:",
+        var summary: [(String, String)] = [
+            ("Workspace", plan.config.workspace.name),
+            ("Authsia folder", plan.config.workspace.authsiaFolder),
         ]
-        if plan.envFiles.isEmpty {
-            lines.append("- none")
-        } else {
-            lines.append(contentsOf: plan.envFiles.map { "- \($0)" })
-        }
-        lines.append("")
         if plan.config.schemaVersion >= 2 {
-            lines.append("Environment: \(plan.activeEnvironment ?? "Default environment")")
-        }
-        lines.append("Env bindings:")
-        if plan.envBindings.isEmpty {
-            lines.append("- none")
-        } else {
-            lines.append(contentsOf: plan.envBindings.keys.sorted().map { "- \($0)" })
+            summary.append(("Environment", plan.activeEnvironment ?? "Default environment"))
         }
         if !plan.commandArgs.isEmpty {
-            let label = plan.usesShell ? "Shell command" : "Command"
-            lines.append("\(label): \(plan.commandArgs.joined(separator: " "))")
+            summary.append((
+                plan.usesShell ? "Shell command" : "Command",
+                plan.commandArgs.joined(separator: " ")
+            ))
         }
+        var lines = [WorkspaceOutputFormatter.keyValue(summary)]
+        WorkspaceOutputFormatter.append(
+            WorkspaceOutputFormatter.section(
+                "Env files:",
+                headers: ["Path"],
+                rows: plan.envFiles.map { [$0] },
+                empty: "none"
+            ),
+            to: &lines
+        )
+        WorkspaceOutputFormatter.append(
+            WorkspaceOutputFormatter.section(
+                "Env bindings:",
+                headers: ["Name"],
+                rows: plan.envBindings.keys.sorted().map { [$0] },
+                empty: "none"
+            ),
+            to: &lines
+        )
         return lines.joined(separator: "\n")
     }
 }
@@ -1132,67 +1148,113 @@ enum WorkspaceStatusReporter {
             environmentIssueCount: status.environmentIssueCount
         )
         var lines: [String] = [
-            "Workspace: \(status.config.workspace.name)",
-            "Authsia folder: \(status.config.workspace.authsiaFolder)",
-            "Status: \(summary.healthSummary)",
-            "Health: \(summary.healthDetail)",
-            "Managed env files: \(summary.managedEnvFilesText)",
-            "Workspace env bindings: \(summary.envBindingsText)",
-            "Agent rules: \(summary.agentRulesText)",
-            "Active environment: \(status.activeEnvironment ?? "Default environment")",
-            "Available environments: \(status.availableEnvironments.isEmpty ? "none" : status.availableEnvironments.joined(separator: ", "))",
-            "Effective environment items: \(status.effectiveDefaultEnvironmentCount) default-environment, \(status.effectiveTaggedCount) tagged",
-            "Environment overrides: \(status.overrideCount)",
-            "Environment conflicts: \(status.conflictCount)",
-            "Environment selection: \(status.selectionHealth)",
-            "",
-            "Managed env files:",
+            WorkspaceOutputFormatter.keyValue([
+                ("Workspace", status.config.workspace.name),
+                ("Authsia folder", status.config.workspace.authsiaFolder),
+                ("Status", summary.healthSummary),
+                ("Health", summary.healthDetail),
+                ("Managed env files", summary.managedEnvFilesText),
+                ("Workspace env bindings", summary.envBindingsText),
+                ("Agent rules", summary.agentRulesText),
+                ("Active environment", status.activeEnvironment ?? "Default environment"),
+                (
+                    "Available environments",
+                    status.availableEnvironments.isEmpty
+                        ? "none"
+                        : status.availableEnvironments.joined(separator: ", ")
+                ),
+                (
+                    "Effective environment items",
+                    "\(status.effectiveDefaultEnvironmentCount) default-environment, \(status.effectiveTaggedCount) tagged"
+                ),
+                ("Environment overrides", String(status.overrideCount)),
+                ("Environment conflicts", String(status.conflictCount)),
+                ("Environment selection", status.selectionHealth),
+            ]),
         ]
-        if status.envFiles.isEmpty {
-            lines.append("- none")
-        } else {
-            for envFile in status.envFiles {
-                let state = envFile.isMissing ? "missing" : "\(envFile.authsiaReferenceCount) authsia refs"
-                lines.append("- \(envFile.relativePath): \(state)")
-            }
-        }
 
-        lines.append("")
-        lines.append("Workspace env bindings:")
-        if status.envBindings.isEmpty {
-            lines.append("- none")
-        } else {
-            if status.environmentBindings.isEmpty {
-                for binding in status.envBindings {
-                    lines.append("- \(binding.name): authsia ref")
-                }
-            } else {
-                for binding in status.environmentBindings {
-                    let environments = binding.environments.isEmpty ? "Default environment" : binding.environments.joined(separator: ", ")
-                    lines.append("- \(binding.variableName): \(environments) · \(binding.state) · \(binding.reference)")
-                }
-            }
-        }
-
-        lines.append("")
-        lines.append("Agent rules:")
-        if status.agentRules.isEmpty {
-            lines.append("- none configured")
-        } else {
-            for rule in status.agentRules {
-                lines.append("- \(rule.name): \(rule.isInstalled ? "installed" : "missing")")
-            }
-        }
+        WorkspaceOutputFormatter.append(
+            WorkspaceOutputFormatter.section(
+                "Managed env files:",
+                headers: ["Path", "State", "Authsia refs"],
+                rows: status.envFiles.map { envFile in
+                    [
+                        envFile.relativePath,
+                        envFile.isMissing ? "missing" : "present",
+                        String(envFile.authsiaReferenceCount),
+                    ]
+                },
+                empty: "none"
+            ),
+            to: &lines
+        )
+        WorkspaceOutputFormatter.append(envBindingsTable(status), to: &lines)
+        WorkspaceOutputFormatter.append(
+            WorkspaceOutputFormatter.section(
+                "Agent rules:",
+                headers: ["Tool", "State"],
+                rows: status.agentRules.map { rule in
+                    [
+                        AgentTool(argument: rule.name)?.title ?? rule.name,
+                        rule.isInstalled ? "installed" : "missing",
+                    ]
+                },
+                empty: "none configured"
+            ),
+            to: &lines
+        )
 
         appendMissingReferenceGuidance(status.missingReferences, to: &lines)
         appendUnverifiedReferenceGuidance(status.unverifiedReferences, to: &lines)
 
-        lines.append("")
-        lines.append("Actions:")
-        lines.append("- Run securely: authsia workspace run -- <command>")
-        lines.append("- End current terminal session: authsia lock")
-        lines.append("- Revoke all access: Access Center or menu bar")
+        WorkspaceOutputFormatter.append(
+            WorkspaceOutputFormatter.section(
+                "Actions:",
+                headers: ["Action", "How"],
+                rows: [
+                    ["Run securely", "authsia workspace run -- <command>"],
+                    ["End current terminal session", "authsia lock"],
+                    ["Revoke all access", "Access Center or menu bar"],
+                ],
+                empty: "none"
+            ),
+            to: &lines
+        )
         return lines.joined(separator: "\n")
+    }
+
+    private static func envBindingsTable(_ status: WorkspaceStatus) -> String {
+        if status.envBindings.isEmpty {
+            return WorkspaceOutputFormatter.section(
+                "Workspace env bindings:",
+                headers: ["Name", "Environments", "State", "Reference"],
+                rows: [],
+                empty: "none"
+            )
+        }
+        if status.environmentBindings.isEmpty {
+            return WorkspaceOutputFormatter.section(
+                "Workspace env bindings:",
+                headers: ["Name", "State"],
+                rows: status.envBindings.map { [$0.name, "authsia ref"] },
+                empty: "none"
+            )
+        }
+        return WorkspaceOutputFormatter.section(
+            "Workspace env bindings:",
+            headers: ["Name", "Environments", "State", "Reference"],
+            rows: status.environmentBindings.map { binding in
+                [
+                    binding.variableName,
+                    binding.environments.isEmpty
+                        ? "Default environment"
+                        : binding.environments.joined(separator: ", "),
+                    binding.state,
+                    binding.reference,
+                ]
+            },
+            empty: "none"
+        )
     }
 
     static func appendMissingReferenceGuidance(
@@ -1200,11 +1262,10 @@ enum WorkspaceStatusReporter {
         to lines: inout [String]
     ) {
         guard !missingReferences.isEmpty else { return }
-        lines.append("")
-        lines.append("Missing Authsia references:")
-        for reference in missingReferences {
-            lines.append("- \(reference.displayLine)")
-        }
+        WorkspaceOutputFormatter.append(
+            referenceTable("Missing Authsia references:", missingReferences),
+            to: &lines
+        )
         lines.append("")
         lines.append("What to do:")
         let fileReferences = missingReferences.filter { $0.envBindingName == nil }
@@ -1236,11 +1297,10 @@ enum WorkspaceStatusReporter {
         to lines: inout [String]
     ) {
         guard !unverifiedReferences.isEmpty else { return }
-        lines.append("")
-        lines.append("Unverified Authsia references:")
-        for reference in unverifiedReferences {
-            lines.append("- \(reference.displayLine)")
-        }
+        WorkspaceOutputFormatter.append(
+            referenceTable("Unverified Authsia references:", unverifiedReferences),
+            to: &lines
+        )
         lines.append("")
         lines.append("What to do:")
         let listCommands = scopedListCommands(for: unverifiedReferences)
@@ -1275,6 +1335,26 @@ enum WorkspaceStatusReporter {
                 "`authsia workspace env remove <NAME>`."
             )
         }
+    }
+
+    private static func referenceTable(
+        _ title: String,
+        _ references: [WorkspaceMissingReference]
+    ) -> String {
+        WorkspaceOutputFormatter.section(
+            title,
+            headers: ["Source", "Binding", "Type", "Item", "Folder"],
+            rows: references.map { reference in
+                [
+                    reference.relativePath,
+                    reference.envBindingName ?? "",
+                    reference.itemType,
+                    reference.item,
+                    reference.folderPath ?? "",
+                ]
+            },
+            empty: "none"
+        )
     }
 
     private static func scopedListCommands(for references: [WorkspaceMissingReference]) -> [String] {
