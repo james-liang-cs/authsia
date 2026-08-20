@@ -1681,9 +1681,8 @@ struct Workspace: AsyncParsableCommand {
                   authsia workspace env add API_KEY authsia://api-key/API_KEY/key
                   authsia workspace env remove API_KEY
                   authsia workspace env validate
-                  authsia workspace env available
-                  authsia workspace env use Production
                   authsia workspace env show
+                  authsia workspace env use Production
                   authsia workspace env clear
                 """,
             subcommands: [
@@ -1691,9 +1690,8 @@ struct Workspace: AsyncParsableCommand {
                 Add.self,
                 Remove.self,
                 Validate.self,
-                authsia.Env.WorkspaceAvailable.self,
-                authsia.Env.WorkspaceUse.self,
                 authsia.Env.WorkspaceShow.self,
+                authsia.Env.WorkspaceUse.self,
                 authsia.Env.WorkspaceClear.self,
             ]
         )

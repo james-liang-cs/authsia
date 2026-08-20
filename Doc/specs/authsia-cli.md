@@ -146,8 +146,8 @@ Key properties:
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
 | `authsia env profile add` | Add a global environment scope profile | `authsia env profile add --name prod --folder Production --folder Shared` |
 | `authsia env profile list/show/use/clear` | Manage global profiles regardless of the current directory | `authsia env profile use prod` |
-| `authsia workspace env available` | List selectable tags for the current workspace | `authsia workspace env available --format table` |
-| `authsia workspace env show/use/clear` | Manage the current workspace's machine-local environment selection | `authsia workspace env use Production` |
+| `authsia workspace env show` | Show the active workspace environment and selectable tags | `authsia workspace env show --format table` |
+| `authsia workspace env use/clear` | Persist or clear the current workspace's machine-local environment selection | `authsia workspace env use Production` |
 | `authsia ssh adopt` | Adopt existing SSH private keys into Authsia, replace disk keys with stubs, and enable shell integration in the user's shell startup file without creating duplicate backup notes | `authsia ssh adopt --path ~/.ssh --dry-run` |
 | `authsia ssh adopt --revert <path>` | Restore a private key file from a legacy SSH adoption backup | `authsia ssh adopt --revert ~/.ssh/id_ed25519` |
 | `authsia ssh adopt --revert-all` | Restore all private key files with legacy SSH adoption backups on the current machine | `authsia ssh adopt --revert-all` |
@@ -1883,13 +1883,12 @@ authsia env profile clear
 Workspace environment selection uses explicit workspace commands:
 
 ```bash
-authsia workspace env available
 authsia workspace env show
 authsia workspace env use Production
 authsia workspace env clear
 ```
 
-`available` reads non-secret metadata only from CLI-enabled passwords and API
+`show` reads non-secret metadata only from CLI-enabled passwords and API
 keys in the configured workspace vault-folder tree. `use` applies the same
 exact configured references, managed env files, environment precedence, and
 blocking checks as `authsia workspace run`; validation failure leaves the

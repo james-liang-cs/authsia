@@ -20,10 +20,13 @@ struct EnvCommandTests {
 
     @Test("workspace environment selection uses the workspace command namespace")
     func workspaceEnvironmentSelectionUsesWorkspaceCommandNamespace() throws {
-        _ = try Authsia.parseAsRoot(["workspace", "env", "available"])
         _ = try Authsia.parseAsRoot(["workspace", "env", "show"])
         _ = try Authsia.parseAsRoot(["workspace", "env", "use", "Production"])
         _ = try Authsia.parseAsRoot(["workspace", "env", "clear"])
+
+        #expect(throws: (any Error).self) {
+            _ = try Authsia.parseAsRoot(["workspace", "env", "available"])
+        }
     }
 
     @Test("workspace environments include tags referenced only by managed env files")
@@ -165,6 +168,38 @@ struct EnvCommandTests {
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
         )
         #expect(Set(output[0].keys) == ["name", "isActive", "referencedItemCount"])
+    }
+
+    @Test("workspace env show includes the active environment and selectable tags")
+    func workspaceEnvShowIncludesActiveEnvironmentAndSelectableTags() throws {
+        let items = [
+            Env.WorkspaceListItem(name: "Dev", isActive: false, referencedItemCount: 2),
+            Env.WorkspaceListItem(name: "Prod", isActive: true, referencedItemCount: 1),
+        ]
+
+        let table = try Env.renderWorkspaceShow(active: "Prod", items: items, format: .table)
+        #expect(table.hasPrefix("Active workspace environment: Prod.\n\n"))
+        #expect(table.contains("Name"))
+        #expect(table.contains("Dev"))
+        #expect(table.contains("Prod"))
+        #expect(table.contains("yes"))
+        #expect(table.contains("no"))
+
+        let json = try Env.renderWorkspaceShow(active: "Prod", items: items, format: .json)
+        let output = try #require(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
+        )
+        #expect(output.map { $0["name"] as? String } == ["Dev", "Prod"])
+        #expect(output.map { $0["isActive"] as? Bool } == [false, true])
+    }
+
+    @Test("workspace env show reports default when no environment is selected")
+    func workspaceEnvShowReportsDefaultWhenNoEnvironmentIsSelected() throws {
+        let table = try Env.renderWorkspaceShow(active: nil, items: [], format: .table)
+        #expect(table.hasPrefix("Active workspace environment: Default environment.\n\n"))
+        #expect(table.contains("No tagged workspace items found."))
+        #expect(Env.activeWorkspaceEnvironmentMessage(nil) == "Active workspace environment: Default environment.")
+        #expect(Env.activeWorkspaceEnvironmentMessage("Prod") == "Active workspace environment: Prod.")
     }
 
     @Test("workspace env selection uses scoped workspace metadata")

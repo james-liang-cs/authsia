@@ -146,7 +146,7 @@ struct WorkspaceConfigTests {
                     "authsia workspace env list",
                     "authsia workspace env add API_KEY authsia://api-key/API_KEY/key",
                     "authsia workspace env validate",
-                    "authsia workspace env available",
+                    "authsia workspace env show",
                     "authsia workspace env use Production",
                 ]
             ),
@@ -196,11 +196,6 @@ struct WorkspaceConfigTests {
                 "workspace env validate",
                 Workspace.Env.Validate.helpMessage(columns: 160),
                 ["authsia workspace env validate"]
-            ),
-            (
-                "workspace env available",
-                Env.WorkspaceAvailable.helpMessage(columns: 160),
-                ["authsia workspace env available"]
             ),
             (
                 "workspace env show",

@@ -284,12 +284,42 @@ struct Env: ParsableCommand {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             return String(decoding: try encoder.encode(items), as: UTF8.self)
         case .table:
-            if items.isEmpty { return "No tagged workspace items found. Default environment is active." }
+            if items.isEmpty { return "No tagged workspace items found." }
             return TableFormatter.renderTable(
                 headers: ["Name", "Active", "References"],
                 rows: items.map { [$0.name, $0.isActive ? "yes" : "no", String($0.referencedItemCount)] }
             )
         }
+    }
+
+    private static func renderWorkspaceShow(root: URL, format: OutputFormat) async throws -> String {
+        let list = try await renderWorkspaceList(root: root, format: format)
+        switch format {
+        case .json:
+            return list
+        case .table:
+            let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
+            return activeWorkspaceEnvironmentMessage(active) + "\n\n" + list
+        }
+    }
+
+    static func renderWorkspaceShow(
+        active: String?,
+        items: [WorkspaceListItem],
+        format: OutputFormat
+    ) throws -> String {
+        switch format {
+        case .json:
+            return try renderWorkspaceList(items: items, format: .json)
+        case .table:
+            return activeWorkspaceEnvironmentMessage(active) + "\n\n" +
+                (try renderWorkspaceList(items: items, format: .table))
+        }
+    }
+
+    static func activeWorkspaceEnvironmentMessage(_ active: String?) -> String {
+        active.map { "Active workspace environment: \($0)." } ??
+            "Active workspace environment: Default environment."
     }
 
     private static func validateWorkspaceEnvironment(_ name: String, root: URL) async throws -> String {
@@ -321,14 +351,14 @@ struct Env: ParsableCommand {
     ) throws -> String {
         let normalized = VaultEnvironmentTags.normalize([name]).first ?? ""
         guard !normalized.isEmpty else {
-            throw ValidationError("Environment name cannot be empty. Run `authsia workspace env available`.")
+            throw ValidationError("Environment name cannot be empty. Run `authsia workspace env show`.")
         }
         guard let canonicalName = status.availableEnvironments.first(where: {
             VaultEnvironmentTags.contains(normalized, in: [$0])
         }) else {
             throw ValidationError(
                 "Environment '\(normalized)' is not referenced by this workspace. " +
-                    "Run `authsia workspace env available`."
+                    "Run `authsia workspace env show`."
             )
         }
         guard status.missingReferences.isEmpty,
@@ -374,13 +404,13 @@ struct Env: ParsableCommand {
         return candidates.filter { VaultEnvironmentTags.contains(name, in: $0.environments) }.count
     }
 
-    struct WorkspaceAvailable: AsyncParsableCommand {
+    struct WorkspaceShow: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            commandName: "available",
-            abstract: "List selectable workspace environments",
+            commandName: "show",
+            abstract: "Show the active workspace environment and selectable tags",
             discussion: """
                 Examples:
-                  authsia workspace env available
+                  authsia workspace env show
                 """
         )
 
@@ -389,27 +419,7 @@ struct Env: ParsableCommand {
 
         func run() async throws {
             let root = try Env.workspaceRoot()
-            print(try await Env.renderWorkspaceList(root: root, format: format))
-        }
-    }
-
-    struct WorkspaceShow: ParsableCommand {
-        static let configuration = CommandConfiguration(
-            commandName: "show",
-            abstract: "Show the active workspace environment",
-            discussion: """
-                Examples:
-                  authsia workspace env show
-                """
-        )
-
-        func run() throws {
-            let root = try Env.workspaceRoot()
-            let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
-            print(
-                active.map { "Active workspace environment: \($0)." } ??
-                    "Active workspace environment: Default environment."
-            )
+            print(try await Env.renderWorkspaceShow(root: root, format: format))
         }
     }
 

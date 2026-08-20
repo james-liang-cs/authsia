@@ -7,7 +7,7 @@ import Foundation
 struct BridgeContextTests {
     @Test("workspace environment metadata commands use explicit CLI paths")
     func workspaceEnvironmentMetadataCommandsUseExplicitCLIPaths() {
-        #expect(BridgeContext.workspaceEnvListRequestedCommand == "workspace env available")
+        #expect(BridgeContext.workspaceEnvListRequestedCommand == "workspace env show")
         #expect(BridgeContext.workspaceEnvUseRequestedCommand == "workspace env use")
     }
 
