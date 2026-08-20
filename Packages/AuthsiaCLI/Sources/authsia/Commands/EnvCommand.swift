@@ -334,7 +334,7 @@ struct Env: ParsableCommand {
         }
     }
 
-    private static func renderWorkspaceShow(root: URL, format: OutputFormat) async throws -> String {
+    static func renderWorkspaceEnvironments(root: URL, format: OutputFormat) async throws -> String {
         let list = try await renderWorkspaceList(root: root, format: format)
         switch format {
         case .json:
@@ -345,7 +345,7 @@ struct Env: ParsableCommand {
         }
     }
 
-    static func renderWorkspaceShow(
+    static func renderWorkspaceEnvironments(
         active: String?,
         items: [WorkspaceListItem],
         format: OutputFormat
@@ -394,14 +394,14 @@ struct Env: ParsableCommand {
     ) throws -> String {
         let normalized = VaultEnvironmentTags.normalize([name]).first ?? ""
         guard !normalized.isEmpty else {
-            throw ValidationError("Environment name cannot be empty. Run `authsia workspace env show`.")
+            throw ValidationError("Environment name cannot be empty. Run `authsia workspace env list`.")
         }
         guard let canonicalName = status.availableEnvironments.first(where: {
             VaultEnvironmentTags.contains(normalized, in: [$0])
         }) else {
             throw ValidationError(
                 "Environment '\(normalized)' is not referenced by this workspace. " +
-                    "Run `authsia workspace env show`."
+                    "Run `authsia workspace env list`."
             )
         }
         guard status.missingReferences.isEmpty,
@@ -448,25 +448,6 @@ struct Env: ParsableCommand {
             return candidates.filter(\.environments.isEmpty).count
         }
         return candidates.filter { VaultEnvironmentTags.contains(name, in: $0.environments) }.count
-    }
-
-    struct WorkspaceShow: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(
-            commandName: "show",
-            abstract: "Show the active workspace environment, Default, and selectable tags",
-            discussion: """
-                Examples:
-                  authsia workspace env show
-                """
-        )
-
-        @Option(name: .long, help: "Output format: table (default), json")
-        var format: OutputFormat = .table
-
-        func run() async throws {
-            let root = try Env.workspaceRoot()
-            print(try await Env.renderWorkspaceShow(root: root, format: format))
-        }
     }
 
     struct WorkspaceUse: AsyncParsableCommand {

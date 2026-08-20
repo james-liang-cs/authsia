@@ -347,11 +347,31 @@ struct WorkspaceEnvBindingTests {
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
         let envStart = try #require(source.range(of: "struct Env: ParsableCommand"))
         let start = try #require(source.range(
-            of: "struct List: ParsableCommand",
+            of: "struct List: AsyncParsableCommand",
             range: envStart.lowerBound..<source.endIndex
         ))
         let end = try #require(source.range(
             of: "struct Add: ParsableCommand",
+            range: start.upperBound..<source.endIndex
+        ))
+        let implementation = source[start.lowerBound..<end.lowerBound]
+
+        #expect(implementation.contains("authsia.Env.renderWorkspaceEnvironments("))
+        #expect(implementation.contains("Env.renderBindingList(workspaceRoot: root)"))
+        #expect(!implementation.contains("AuthsiaBridgeClient.shared.list()"))
+    }
+
+    @Test("workspace env binding list uses exact scoped metadata")
+    func workspaceEnvBindingListUsesExactScopedMetadata() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/authsia/Commands/WorkspaceCommand.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try #require(source.range(of: "static func renderBindingList"))
+        let end = try #require(source.range(
+            of: "static func renderList(",
             range: start.upperBound..<source.endIndex
         ))
         let implementation = source[start.lowerBound..<end.lowerBound]

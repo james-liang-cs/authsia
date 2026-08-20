@@ -20,10 +20,13 @@ struct EnvCommandTests {
 
     @Test("workspace environment selection uses the workspace command namespace")
     func workspaceEnvironmentSelectionUsesWorkspaceCommandNamespace() throws {
-        _ = try Authsia.parseAsRoot(["workspace", "env", "show"])
+        _ = try Authsia.parseAsRoot(["workspace", "env", "list"])
         _ = try Authsia.parseAsRoot(["workspace", "env", "use", "Production"])
         _ = try Authsia.parseAsRoot(["workspace", "env", "clear"])
 
+        #expect(throws: (any Error).self) {
+            _ = try Authsia.parseAsRoot(["workspace", "env", "show"])
+        }
         #expect(throws: (any Error).self) {
             _ = try Authsia.parseAsRoot(["workspace", "env", "available"])
         }
@@ -170,14 +173,14 @@ struct EnvCommandTests {
         #expect(Set(output[0].keys) == ["name", "isActive", "referencedItemCount"])
     }
 
-    @Test("workspace env show includes the active environment and selectable tags")
-    func workspaceEnvShowIncludesActiveEnvironmentAndSelectableTags() throws {
+    @Test("workspace env list includes the active environment and selectable tags")
+    func workspaceEnvListIncludesActiveEnvironmentAndSelectableTags() throws {
         let items = [
             Env.WorkspaceListItem(name: "Dev", isActive: false, referencedItemCount: 2),
             Env.WorkspaceListItem(name: "Prod", isActive: true, referencedItemCount: 1),
         ]
 
-        let table = try Env.renderWorkspaceShow(active: "Prod", items: items, format: .table)
+        let table = try Env.renderWorkspaceEnvironments(active: "Prod", items: items, format: .table)
         #expect(table.hasPrefix("Active workspace environment: Prod.\n\n"))
         #expect(table.contains("Name"))
         #expect(table.contains("Default"))
@@ -187,7 +190,7 @@ struct EnvCommandTests {
         #expect(table.contains("no"))
         #expect(!table.contains("No tagged workspace items found."))
 
-        let json = try Env.renderWorkspaceShow(active: "Prod", items: items, format: .json)
+        let json = try Env.renderWorkspaceEnvironments(active: "Prod", items: items, format: .json)
         let output = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
         )
@@ -195,9 +198,9 @@ struct EnvCommandTests {
         #expect(output.map { $0["isActive"] as? Bool } == [false, false, true])
     }
 
-    @Test("workspace env show reports default when no environment is selected")
-    func workspaceEnvShowReportsDefaultWhenNoEnvironmentIsSelected() throws {
-        let table = try Env.renderWorkspaceShow(active: nil, items: [], format: .table)
+    @Test("workspace env list reports default when no environment is selected")
+    func workspaceEnvListReportsDefaultWhenNoEnvironmentIsSelected() throws {
+        let table = try Env.renderWorkspaceEnvironments(active: nil, items: [], format: .table)
         #expect(table.hasPrefix("Active workspace environment: Default environment.\n\n"))
         #expect(table.contains("Default"))
         #expect(table.contains("yes"))
@@ -205,12 +208,42 @@ struct EnvCommandTests {
         #expect(Env.activeWorkspaceEnvironmentMessage(nil) == "Active workspace environment: Default environment.")
         #expect(Env.activeWorkspaceEnvironmentMessage("Prod") == "Active workspace environment: Prod.")
 
-        let json = try Env.renderWorkspaceShow(active: nil, items: [], format: .json)
+        let json = try Env.renderWorkspaceEnvironments(active: nil, items: [], format: .json)
         let output = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
         )
         #expect(output.map { $0["name"] as? String } == ["Default"])
         #expect(output.map { $0["isActive"] as? Bool } == [true])
+    }
+
+    @Test("workspace env list table appends bindings after selectable environments")
+    func workspaceEnvListTableAppendsBindingsAfterSelectableEnvironments() throws {
+        let environments = try Env.renderWorkspaceEnvironments(
+            active: "Prod",
+            items: [Env.WorkspaceListItem(name: "Prod", isActive: true, referencedItemCount: 1)],
+            format: .table
+        )
+        let bindings = Workspace.Env.renderList(
+            WorkspaceConfig(
+                schemaVersion: 2,
+                workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+                managedEnvFiles: [],
+                agents: nil,
+                envBindings: [
+                    WorkspaceConfig.EnvBinding(
+                        name: "API_KEY",
+                        reference: "authsia://api-key/API_KEY/key?folder=Workspaces%2Fapi"
+                    ),
+                ]
+            )
+        )
+        let combined = environments + "\n\n" + bindings
+
+        #expect(combined.hasPrefix("Active workspace environment: Prod.\n\n"))
+        #expect(combined.contains("Default"))
+        #expect(combined.contains("Workspace env bindings:"))
+        #expect(combined.contains("API_KEY"))
+        #expect(!combined.contains("Active environment"))
     }
 
     @Test("workspace env use accepts default aliases without treating them as tags")

@@ -114,7 +114,7 @@ public struct BridgeContext: Codable, Equatable {
     /// process would re-prompt for approval on every list/get.
     public static let chromeNativeHostSessionScope = "chrome-native-host"
     public static let workspaceStatusRequestedCommand = "workspace status"
-    public static let workspaceEnvListRequestedCommand = "workspace env show"
+    public static let workspaceEnvListRequestedCommand = "workspace env list"
     public static let workspaceEnvUseRequestedCommand = "workspace env use"
     public static let workspaceEnvBindingsListRequestedCommand = "workspace env list"
     public static let workspaceSyncPreviewRequestedCommand = "workspace sync preview"

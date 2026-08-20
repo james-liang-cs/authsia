@@ -68,7 +68,7 @@ the same boundary:
 
 ```bash
 authsia workspace init
-authsia workspace env show
+authsia workspace env list
 authsia workspace run -- npm test
 ```
 

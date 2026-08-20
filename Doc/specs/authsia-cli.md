@@ -146,7 +146,7 @@ Key properties:
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
 | `authsia env profile add` | Add a global environment scope profile | `authsia env profile add --name prod --folder Production --folder Shared` |
 | `authsia env profile list/show/use/clear` | Manage global profiles regardless of the current directory | `authsia env profile use prod` |
-| `authsia workspace env show` | Show the active workspace environment, Default, and selectable tags | `authsia workspace env show --format table` |
+| `authsia workspace env list` | Show Default, selectable tags, and workspace env bindings | `authsia workspace env list --format table` |
 | `authsia workspace env use/clear` | Persist a named tag, or return to Default with `use Default` or `clear` | `authsia workspace env use Default` |
 | `authsia ssh adopt` | Adopt existing SSH private keys into Authsia, replace disk keys with stubs, and enable shell integration in the user's shell startup file without creating duplicate backup notes | `authsia ssh adopt --path ~/.ssh --dry-run` |
 | `authsia ssh adopt --revert <path>` | Restore a private key file from a legacy SSH adoption backup | `authsia ssh adopt --revert ~/.ssh/id_ed25519` |
@@ -1649,7 +1649,7 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace sync --apply-json <path>` | Apply config-safe sync selections such as repair, add-to-config, and skip | `authsia workspace sync --apply-json /tmp/authsia-workspace-sync-selection.json` |
 | `workspace sync --folder <path> --apply-json <path>` | Link an imported vault workspace folder by applying config-safe selections | `authsia workspace sync --folder Workspaces/api --apply-json /tmp/authsia-workspace-sync-selection.json` |
 | `workspace env add <NAME> <authsia://...>` | Add or update a commit-safe workspace env binding | `authsia workspace env add API_KEY 'authsia://api-key/API_KEY/key?folder=Workspaces%2Fapi'` |
-| `workspace env list` | List bindings with active environment, item environment properties, and effective/inactive state using exact scoped metadata | `authsia workspace env list` |
+| `workspace env list` | List Default and selectable tags, then bindings with item environment properties and effective/inactive state. `--format json` lists `Default` first, then those tags | `authsia workspace env list` |
 | `workspace env remove <NAME> [authsia://...]` | Remove one workspace env binding; a repeated schema-v2 name requires its exact reference | `authsia workspace env remove API_KEY 'authsia://api-key/API_KEY/key'` |
 | `workspace env validate` | Validate the stored environment across exact bindings and all managed env-file scopes; missing or unverified refs, stale selections, conflicts, missing environment values, and disabled CLI access fail without returning values | `authsia workspace env validate` |
 | `workspace run -- <command>` | Validate exact active workspace refs through exact-reference metadata, then run the command; secret-bearing env refs use `exec` | `authsia workspace run -- npm dev` |
@@ -1883,15 +1883,16 @@ authsia env profile clear
 Workspace environment selection uses explicit workspace commands:
 
 ```bash
-authsia workspace env show
+authsia workspace env list
 authsia workspace env use Production
 authsia workspace env use Default
 authsia workspace env clear
 ```
 
-`show` reads non-secret metadata only from CLI-enabled passwords and API
-keys in the configured workspace vault-folder tree, and always lists `Default`
-before named tags. Named `use` applies the same exact configured references,
+`list` reads non-secret metadata only from CLI-enabled passwords and API
+keys in the configured workspace vault-folder tree, always lists `Default`
+before named tags, then prints env bindings. `--format json` is the selectable
+environment array. Named `use` applies the same exact configured references,
 managed env files, environment precedence, and blocking checks as
 `authsia workspace run`; validation failure leaves the previous selection
 unchanged. `use Default` and `clear` return to Default-environment resolution

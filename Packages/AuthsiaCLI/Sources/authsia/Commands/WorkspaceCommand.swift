@@ -1681,7 +1681,6 @@ struct Workspace: AsyncParsableCommand {
                   authsia workspace env add API_KEY authsia://api-key/API_KEY/key
                   authsia workspace env remove API_KEY
                   authsia workspace env validate
-                  authsia workspace env show
                   authsia workspace env use Production
                   authsia workspace env use Default
                   authsia workspace env clear
@@ -1691,7 +1690,6 @@ struct Workspace: AsyncParsableCommand {
                 Add.self,
                 Remove.self,
                 Validate.self,
-                authsia.Env.WorkspaceShow.self,
                 authsia.Env.WorkspaceUse.self,
                 authsia.Env.WorkspaceClear.self,
             ]
@@ -1708,35 +1706,32 @@ struct Workspace: AsyncParsableCommand {
             let unverified: [EnvBindingStatus]
         }
 
-        struct List: ParsableCommand {
+        struct List: AsyncParsableCommand {
             static let configuration = CommandConfiguration(
                 commandName: "list",
-                abstract: "List workspace env bindings",
+                abstract: "List workspace environments and env bindings",
                 discussion: """
                     Examples:
                       authsia workspace env list
+                      authsia workspace env list --format json
                     """
             )
 
-            func run() throws {
+            @Option(name: .long, help: "Output format: table (default), json")
+            var format: OutputFormat = .table
+
+            func run() async throws {
                 let root = try Env.workspaceRoot()
-                let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
-                let plan = try WorkspaceRunPlan.build(
-                    startingAt: root,
-                    extraEnvFiles: [],
-                    commandArgs: ["/usr/bin/true"]
+                let environments = try await authsia.Env.renderWorkspaceEnvironments(
+                    root: root,
+                    format: format
                 )
-                let payload = try AuthsiaBridgeClient.shared.workspaceMetadata(
-                    try Workspace.Run.validationMetadataRequest(for: plan),
-                    requestedCommand: BridgeContext.workspaceEnvBindingsListRequestedCommand
-                )
-                let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
-                let evaluation = WorkspaceEnvironmentEvaluation.evaluate(
-                    config: config,
-                    payload: payload,
-                    selection: active.map(WorkspaceEnvironmentSelection.named) ?? .defaultOnly
-                )
-                print(Env.renderList(config, evaluation: evaluation))
+                switch format {
+                case .json:
+                    print(environments)
+                case .table:
+                    print(environments + "\n\n" + (try Env.renderBindingList(workspaceRoot: root)))
+                }
             }
         }
 
@@ -1937,29 +1932,35 @@ struct Workspace: AsyncParsableCommand {
             )
         }
 
+        static func renderBindingList(workspaceRoot root: URL) throws -> String {
+            let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+            let plan = try WorkspaceRunPlan.build(
+                startingAt: root,
+                extraEnvFiles: [],
+                commandArgs: ["/usr/bin/true"]
+            )
+            let payload = try AuthsiaBridgeClient.shared.workspaceMetadata(
+                try Workspace.Run.validationMetadataRequest(for: plan),
+                requestedCommand: BridgeContext.workspaceEnvBindingsListRequestedCommand
+            )
+            let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
+            let evaluation = WorkspaceEnvironmentEvaluation.evaluate(
+                config: config,
+                payload: payload,
+                selection: active.map(WorkspaceEnvironmentSelection.named) ?? .defaultOnly
+            )
+            return renderList(config, evaluation: evaluation)
+        }
+
         static func renderList(
             _ config: WorkspaceConfig,
             evaluation: WorkspaceEnvironmentEvaluation
         ) -> String {
-            let activeEnvironment: String
-            switch evaluation.resolution.selection {
-            case .defaultOnly: activeEnvironment = "Default environment"
-            case .named(let name): activeEnvironment = name
-            }
-            var lines = [
-                WorkspaceOutputFormatter.keyValue([
-                    ("Active environment", activeEnvironment),
-                ]),
-            ]
             guard !config.envBindings.isEmpty else {
-                WorkspaceOutputFormatter.append(
-                    [
-                        "No workspace env bindings configured.",
-                        "Bind one with authsia workspace env add <NAME> <authsia://...>.",
-                    ].joined(separator: "\n"),
-                    to: &lines
-                )
-                return lines.joined(separator: "\n")
+                return [
+                    "No workspace env bindings configured.",
+                    "Bind one with authsia workspace env add <NAME> <authsia://...>.",
+                ].joined(separator: "\n")
             }
             let rows = config.envBindings.enumerated().map { index, binding -> [String] in
                 let id = "binding-\(index)"
@@ -1975,16 +1976,12 @@ struct Workspace: AsyncParsableCommand {
                 let state = evaluation.resolution.effective.contains(where: matchesBinding) ? "effective" : "inactive"
                 return [binding.name, environments, state, binding.reference]
             }
-            WorkspaceOutputFormatter.append(
-                WorkspaceOutputFormatter.section(
-                    "Workspace env bindings:",
-                    headers: ["Name", "Environments", "State", "Reference"],
-                    rows: rows,
-                    empty: "No workspace env bindings configured."
-                ),
-                to: &lines
+            return WorkspaceOutputFormatter.section(
+                "Workspace env bindings:",
+                headers: ["Name", "Environments", "State", "Reference"],
+                rows: rows,
+                empty: "No workspace env bindings configured."
             )
-            return lines.joined(separator: "\n")
         }
 
         static func validateBindings(_ config: WorkspaceConfig, vaultIndex: WorkspaceVaultIndex?) -> ValidationResult {
