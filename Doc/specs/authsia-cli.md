@@ -2126,7 +2126,15 @@ The app provides the native first-run flow. On first launch it guides the user t
 4. Enable the Authsia SSH agent
 5. Create the first password folder path
 6. Create the first vault password, including per-item CLI access and auto-destroy
-7. Run doctor and show "Authsia is ready"
+7. Try `get` / `load` / `exec` on the starter password
+8. Explain Direct CLI, agent JIT, and automation-token approval
+9. Teach Workspace UI setup, `authsia workspace run --dry-run -- <command>`,
+   environment list/use/Default, and `authsia agent init`. `Open Workspace`
+   continues the guide; Finish lands in Workspace Center
+10. Optional MCP: enable integrations, explain secret-free tools and JIT, and
+    print `authsia mcp configure --client <name>`
+11. Access Center, menu bar, and shortcuts
+12. Show "Authsia is ready"
 
 The CLI command is the terminal repair/status entrypoint for the pieces the CLI can safely manage.
 
