@@ -588,6 +588,31 @@ struct WorkspaceRunPlannerTests {
         ))
     }
 
+    @Test("workspace run dry-run names the active environment as a table field")
+    func workspaceRunDryRunNamesActiveEnvironmentAsTableField() {
+        let plan = WorkspaceRunPlan(
+            workspaceRoot: URL(fileURLWithPath: "/tmp/authsia-dry-run-environment", isDirectory: true),
+            config: WorkspaceConfig(
+                schemaVersion: 2,
+                workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+                managedEnvFiles: [],
+                agents: nil
+            ),
+            envFiles: [],
+            managedEnvFileCount: 0,
+            envBindings: [:],
+            activeEnvironment: "Production",
+            defaultOnly: false,
+            commandArgs: ["/usr/bin/true"],
+            usesShell: false
+        )
+        let output = WorkspaceRunPlan.renderDryRun(plan)
+        let environmentRow = output.split(separator: "\n").contains { line in
+            line.hasPrefix("| Environment") && line.contains("| Production")
+        }
+        #expect(environmentRow)
+    }
+
     @Test("workspace run configures exec defaults for delegated runs")
     func workspaceRunConfiguresExecDefaultsForDelegatedRuns() throws {
         let root = try makeWorkspaceRoot()
