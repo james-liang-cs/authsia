@@ -1,99 +1,52 @@
-# Authsia Security Core
+# Authsia
 
-Authsia's public security core contains the code that mediates local CLI,
-agent, browser, and SSH access to an Authsia vault. It is licensed under
-Apache-2.0 so developers can inspect, test, and contribute to the authorization
-boundary.
+**Runtime security for AI coding agents.**
 
-The SwiftUI application, approval presentation, product assets, signing
-credentials, and private release infrastructure are not part of this
-repository. See [OPEN_SOURCE.md](OPEN_SOURCE.md) for the exact boundary and
-[TRUST.md](TRUST.md) for claim-to-code verification paths.
+Agents can run commands. They don’t inherit your secrets until you say so.
+Authsia keeps credentials in your Mac Keychain and lets coding agents request
+scoped, time-boxed access only when you approve.
 
-## Products
+[Website](https://authsia.clarionstack.com) · Local Keychain · Scoped JIT · Revoke anytime
 
-- `AuthenticatorCore`: parsing and vault-domain models.
-- `AuthenticatorData`: Keychain-backed persistence and repositories.
-- `AuthenticatorBridge`: IPC, grant, policy, audit, and session models.
-- `AuthsiaBridgeHost`: XPC caller validation, request authorization, and SSH
-  agent runtime.
-- `authsia`: the macOS command-line client.
-- `AuthsiaNativeHost`: the standalone Chrome native-messaging host under
-  `Tools/AuthsiaNativeHost`.
-
-The reusable root package targets macOS 15+ and iOS 17+. Host and CLI behavior
-is macOS-only. The standalone native host retains its macOS 13+ package floor.
-
-## Build and test
-
-Use Xcode 26 or a compatible Swift 6.2 toolchain:
+## Install
 
 ```bash
-swift package resolve
-swift test
-swift build -c release --product authsia
-swift test --package-path Tools/AuthsiaNativeHost
-swift build -c release --package-path Tools/AuthsiaNativeHost --product AuthsiaNativeHost
-Tools/AuthsiaChromeExtension/scripts/run-tests.sh
+brew install --cask james-liang-cs/authsia/authsia
 ```
 
-These source builds do not install or sign the private Authsia app. For
-security reports, follow [SECURITY.md](SECURITY.md) and never include a real
-secret in an issue or reproduction.
+Launch Authsia once, then enable **CLI Access** in Authsia > Settings > Security.
 
-## Local MCP server
-
-MCP integrations are disabled by default. Enable **MCP Integrations** in the
-Authsia app under **Settings > Developer Access** before connecting a client.
-Client configuration does not enable this app-level control.
-
-Print a user-global local MCP configuration for a supported client:
+If `/Applications/Authsia.app` is already installed from the DMG, let Homebrew
+adopt it:
 
 ```bash
-authsia mcp configure --client codex
-authsia mcp configure --client claude
-authsia mcp configure --client cursor
-authsia mcp configure --client vscode
+brew install --cask --adopt james-liang-cs/authsia/authsia
 ```
 
-The command prints configuration for the exact Authsia binary; it does not edit
-client files. For Codex, Claude Code, and VS Code, it also prints a direct MCP
-installation command; other clients retain manual configuration guidance.
-The generated Codex manual configuration forwards optional local
-`REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` TLS trust settings without forwarding
-credentials or other ambient variables. Use that manual entry on a network with
-a custom CA; Codex's direct installer cannot forward local environment names.
-`authsia mcp serve` runs the same local stdio server directly and
-is included in CLI help and shell completion. One global client configuration
-can serve every repository: workspace-dependent tools accept the active
-repository's validated absolute path as `workspaceRoot`, with Cursor's safe
-launch hint or the client working directory as compatibility fallbacks. An
-explicit `--workspace` remains available and authoritative. Claude Code and
-Codex CLI retain their existing working-directory behavior. Otherwise status remains available while
-workspace-dependent tools fail closed. The local `stdio` server exposes six
-constrained tools for status, workspace inspection, scoped metadata listing,
-mediated execution, grant status, and grant revocation. It never exposes a
-raw-secret or global-audit tool. See the
-[Local Authsia MCP Server specification](Doc/specs/authsia-mcp.md) for the tool,
-JIT authorization, audit-correlation, and Access Center contracts.
-
-## Release artifacts and verification
-
-Each `v<app-version>` source tag publishes a source archive, public macOS CLI,
-SPDX 2.3 JSON SBOM, and SHA-256 checksums. GitHub artifact attestations bind the
-public CLI and SBOM to the tag workflow that built them.
-
-The private macOS app release publishes a separate provenance JSON file. Use
-[`scripts/verify-release.sh`](scripts/verify-release.sh) with the DMG and that
-provenance file to check the outer hash before mounting, Apple Developer ID
-authority, Team ID `33M8QU65SP`, notarization, Gatekeeper, bundled CLI hash,
-public source tag/SHA, and SBOM hash:
+Then check readiness:
 
 ```bash
-scripts/verify-release.sh Authsia-<version>.dmg Authsia-<version>.provenance.json
-gh attestation verify authsia-v<version>-macos-<architecture> \
-  --repo james-liang-cs/authsia
+authsia status
 ```
 
-This repository attests its public artifacts only. It does not claim that the
-private Authsia application is reproducibly built from public source.
+Download, CLI guide, and product docs: [authsia.clarionstack.com](https://authsia.clarionstack.com).
+
+## What it does
+
+- **Approve each secret use.** Access Center shows who is asking, the scope, and how long access lasts. Approve, deny, or revoke without changing project files.
+- **Keep the parent shell clean.** Authsia resolves commit-safe refs and injects credentials into approved child processes only.
+- **Wire a workspace.** Bind environments, run guarded terminals, and launch agents through the Authsia CLI.
+- **Connect local agents.** MCP for Codex, Claude Code, Cursor, and VS Code — no raw-secret tools.
+- **Cover the last mile.** Chrome autofill and SSH agent signing stay on your Mac.
+
+## This repository
+
+This is the Apache-2.0 public security core: vault domain, Keychain data,
+Bridge host authorization, CLI, SSH runtime, Chrome native host, and extension.
+Inspect the authorization boundary here. The SwiftUI app, approval presentation,
+and private release infrastructure are not in this repository.
+
+- [OPEN_SOURCE.md](OPEN_SOURCE.md) — public / private boundary
+- [TRUST.md](TRUST.md) — claim-to-code verification
+- [SECURITY.md](SECURITY.md) — vulnerability reports (never include a real secret)
+- [CONTRIBUTING.md](CONTRIBUTING.md) — build, test, and contribution rules
