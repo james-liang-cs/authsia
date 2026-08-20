@@ -148,6 +148,7 @@ struct WorkspaceConfigTests {
                     "authsia workspace env validate",
                     "authsia workspace env show",
                     "authsia workspace env use Production",
+                    "authsia workspace env use Default",
                 ]
             ),
         ]
@@ -205,7 +206,10 @@ struct WorkspaceConfigTests {
             (
                 "workspace env use",
                 Env.WorkspaceUse.helpMessage(columns: 160),
-                ["authsia workspace env use Production"]
+                [
+                    "authsia workspace env use Production",
+                    "authsia workspace env use Default",
+                ]
             ),
             (
                 "workspace env clear",

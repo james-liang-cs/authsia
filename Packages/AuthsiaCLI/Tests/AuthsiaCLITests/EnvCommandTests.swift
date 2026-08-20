@@ -180,26 +180,64 @@ struct EnvCommandTests {
         let table = try Env.renderWorkspaceShow(active: "Prod", items: items, format: .table)
         #expect(table.hasPrefix("Active workspace environment: Prod.\n\n"))
         #expect(table.contains("Name"))
+        #expect(table.contains("Default"))
         #expect(table.contains("Dev"))
         #expect(table.contains("Prod"))
         #expect(table.contains("yes"))
         #expect(table.contains("no"))
+        #expect(!table.contains("No tagged workspace items found."))
 
         let json = try Env.renderWorkspaceShow(active: "Prod", items: items, format: .json)
         let output = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
         )
-        #expect(output.map { $0["name"] as? String } == ["Dev", "Prod"])
-        #expect(output.map { $0["isActive"] as? Bool } == [false, true])
+        #expect(output.map { $0["name"] as? String } == ["Default", "Dev", "Prod"])
+        #expect(output.map { $0["isActive"] as? Bool } == [false, false, true])
     }
 
     @Test("workspace env show reports default when no environment is selected")
     func workspaceEnvShowReportsDefaultWhenNoEnvironmentIsSelected() throws {
         let table = try Env.renderWorkspaceShow(active: nil, items: [], format: .table)
         #expect(table.hasPrefix("Active workspace environment: Default environment.\n\n"))
-        #expect(table.contains("No tagged workspace items found."))
+        #expect(table.contains("Default"))
+        #expect(table.contains("yes"))
+        #expect(!table.contains("No tagged workspace items found."))
         #expect(Env.activeWorkspaceEnvironmentMessage(nil) == "Active workspace environment: Default environment.")
         #expect(Env.activeWorkspaceEnvironmentMessage("Prod") == "Active workspace environment: Prod.")
+
+        let json = try Env.renderWorkspaceShow(active: nil, items: [], format: .json)
+        let output = try #require(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
+        )
+        #expect(output.map { $0["name"] as? String } == ["Default"])
+        #expect(output.map { $0["isActive"] as? Bool } == [true])
+    }
+
+    @Test("workspace env use accepts default aliases without treating them as tags")
+    func workspaceEnvUseAcceptsDefaultAliasesWithoutTreatingThemAsTags() throws {
+        #expect(Env.isDefaultWorkspaceEnvironmentName("default"))
+        #expect(Env.isDefaultWorkspaceEnvironmentName("Default"))
+        #expect(Env.isDefaultWorkspaceEnvironmentName("DEFAULT"))
+        #expect(Env.isDefaultWorkspaceEnvironmentName(" Default environment "))
+        #expect(!Env.isDefaultWorkspaceEnvironmentName("Defaultish"))
+        #expect(!Env.isDefaultWorkspaceEnvironmentName("Production"))
+        #expect(!Env.isDefaultWorkspaceEnvironmentName(""))
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("env-default-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let store = WorkspaceEnvironmentSelectionStore(
+            fileURL: directory.appendingPathComponent("workspace-environments.json")
+        )
+        try store.setActiveEnvironment("Prod", for: root)
+
+        let message = try Env.selectDefaultWorkspaceEnvironment(for: root, store: store)
+
+        #expect(message == "Active workspace environment set to Default.")
+        #expect(try store.activeEnvironment(for: root) == nil)
     }
 
     @Test("workspace env selection uses scoped workspace metadata")
@@ -249,6 +287,9 @@ struct EnvCommandTests {
         #expect(
             try Env.validatedWorkspaceEnvironmentName("production", status: status) == "Production"
         )
+        #expect(throws: (any Error).self) {
+            _ = try Env.validatedWorkspaceEnvironmentName("Default", status: status)
+        }
 
         status.environmentIssueCount = 1
         #expect(throws: (any Error).self) {

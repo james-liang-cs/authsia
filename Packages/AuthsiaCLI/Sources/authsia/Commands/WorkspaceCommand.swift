@@ -1683,6 +1683,7 @@ struct Workspace: AsyncParsableCommand {
                   authsia workspace env validate
                   authsia workspace env show
                   authsia workspace env use Production
+                  authsia workspace env use Default
                   authsia workspace env clear
                 """,
             subcommands: [

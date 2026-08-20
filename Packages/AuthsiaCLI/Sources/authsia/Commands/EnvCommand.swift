@@ -244,10 +244,42 @@ struct Env: ParsableCommand {
         return TableFormatter.renderTable(headers: headers, rows: rows)
     }
 
+    static let defaultWorkspaceEnvironmentName = "Default"
+
     struct WorkspaceListItem: Codable {
         let name: String
         let isActive: Bool
         let referencedItemCount: Int
+    }
+
+    static func isDefaultWorkspaceEnvironmentName(_ name: String) -> Bool {
+        VaultEnvironmentTags.contains(
+            name,
+            in: [defaultWorkspaceEnvironmentName, "Default environment"]
+        )
+    }
+
+    static func includingDefaultWorkspaceEnvironment(
+        active: String?,
+        tagged: [WorkspaceListItem],
+        defaultReferencedItemCount: Int? = nil
+    ) -> [WorkspaceListItem] {
+        let existingDefault = tagged.first { isDefaultWorkspaceEnvironmentName($0.name) }
+        let tagged = tagged.filter { !isDefaultWorkspaceEnvironmentName($0.name) }
+        let defaultItem = WorkspaceListItem(
+            name: defaultWorkspaceEnvironmentName,
+            isActive: active == nil,
+            referencedItemCount: defaultReferencedItemCount ?? existingDefault?.referencedItemCount ?? 0
+        )
+        return [defaultItem] + tagged
+    }
+
+    static func selectDefaultWorkspaceEnvironment(
+        for root: URL,
+        store: WorkspaceEnvironmentSelectionStore = WorkspaceEnvironmentSelectionStore()
+    ) throws -> String {
+        try store.clearActiveEnvironment(for: root)
+        return "Active workspace environment set to Default."
     }
 
     private static func renderWorkspaceList(root: URL, format: OutputFormat) async throws -> String {
@@ -267,13 +299,23 @@ struct Env: ParsableCommand {
             selection: .defaultOnly
         )
         let active = try WorkspaceEnvironmentSelectionStore().activeEnvironment(for: root)
-        let items = workspaceEnvironmentNames(payload).map { name in
-            WorkspaceListItem(
-                name: name,
-                isActive: active.map { VaultEnvironmentTags.contains($0, in: [name]) } ?? false,
-                referencedItemCount: referencedItemCount(name, evaluation: evaluation)
+        let tagged = workspaceEnvironmentNames(payload)
+            .filter { !isDefaultWorkspaceEnvironmentName($0) }
+            .map { name in
+                WorkspaceListItem(
+                    name: name,
+                    isActive: active.map { VaultEnvironmentTags.contains($0, in: [name]) } ?? false,
+                    referencedItemCount: referencedItemCount(name, evaluation: evaluation)
+                )
+            }
+        let items = includingDefaultWorkspaceEnvironment(
+            active: active,
+            tagged: tagged,
+            defaultReferencedItemCount: referencedItemCount(
+                defaultWorkspaceEnvironmentName,
+                evaluation: evaluation
             )
-        }
+        )
         return try renderWorkspaceList(items: items, format: format)
     }
 
@@ -308,6 +350,7 @@ struct Env: ParsableCommand {
         items: [WorkspaceListItem],
         format: OutputFormat
     ) throws -> String {
+        let items = includingDefaultWorkspaceEnvironment(active: active, tagged: items)
         switch format {
         case .json:
             return try renderWorkspaceList(items: items, format: .json)
@@ -401,13 +444,16 @@ struct Env: ParsableCommand {
         let candidates = evaluation.resolution.effective +
             evaluation.resolution.overridden +
             evaluation.resolution.inactive
+        if isDefaultWorkspaceEnvironmentName(name) {
+            return candidates.filter(\.environments.isEmpty).count
+        }
         return candidates.filter { VaultEnvironmentTags.contains(name, in: $0.environments) }.count
     }
 
     struct WorkspaceShow: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "show",
-            abstract: "Show the active workspace environment and selectable tags",
+            abstract: "Show the active workspace environment, Default, and selectable tags",
             discussion: """
                 Examples:
                   authsia workspace env show
@@ -430,6 +476,7 @@ struct Env: ParsableCommand {
             discussion: """
                 Examples:
                   authsia workspace env use Production
+                  authsia workspace env use Default
                 """
         )
 
@@ -438,6 +485,10 @@ struct Env: ParsableCommand {
 
         func run() async throws {
             let root = try Env.workspaceRoot()
+            if Env.isDefaultWorkspaceEnvironmentName(name) {
+                print(try Env.selectDefaultWorkspaceEnvironment(for: root))
+                return
+            }
             let normalized = try await Env.validateWorkspaceEnvironment(name, root: root)
             try WorkspaceEnvironmentSelectionStore().setActiveEnvironment(normalized, for: root)
             print("Active workspace environment set to \(normalized).")
