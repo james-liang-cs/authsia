@@ -57,6 +57,7 @@ final class AgentGoalSecretGuardTests: XCTestCase {
         Fix checkout without printing $API_KEY
 
         Workspace preflight: run authsia workspace status first, then use authsia workspace run --dry-run -- <command> before secret-bearing commands.
+        Workspace environment: list with authsia workspace env list; persist with authsia workspace env use <name>; return to Default with authsia workspace env use Default or clear. One run: authsia workspace run --environment <name> -- <command> or --default-only.
         Secret handling: use Authsia JIT or automation token per command through authsia workspace run -- <command> or authsia exec; do not paste plaintext secrets.
         """)
     }

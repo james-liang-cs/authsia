@@ -43,6 +43,8 @@ struct AgentRuleInstallerTests {
             #expect(rules.contains("check the complete subcommand's `--help`"))
             #expect(rules.contains("Never use bare `authsia get`, `authsia read`, `authsia load`, `authsia inject`, or `authsia code`"))
             #expect(!rules.contains("`authsia workspace run -- <command> <args>`"))
+            #expect(!rules.contains("`authsia workspace env list`"))
+            #expect(!rules.contains("`authsia workspace env use <name>`"))
             #expect(rules.contains("AUTHSIA_AGENT_PLATFORM=codex"))
             #expect(!rules.contains("use the full command's `-h` help"))
             #expect(!rules.contains("Authsia Command History"))
@@ -112,6 +114,11 @@ struct AgentRuleInstallerTests {
         let sharedRules = try read(".authsia/agent-rules.md", in: root)
         for rules in [agentsRules, sharedRules] {
             #expect(rules.contains("`authsia workspace run -- <command> <args>`"))
+            #expect(rules.contains("`authsia workspace env list`"))
+            #expect(rules.contains("`authsia workspace env use <name>`"))
+            #expect(rules.contains("`authsia workspace env use Default`"))
+            #expect(rules.contains("`--environment <name>`"))
+            #expect(rules.contains("`--default-only`"))
             #expect(rules.contains(fallback))
             #expect(!rules.contains("`authsia_exec`"))
         }

@@ -1100,6 +1100,12 @@ struct AgentCommandTests {
         #expect(!agents.contains("do not call `authsia_list` to enumerate the vault"))
         #expect(agents.contains("`authsia_exec`"))
         #expect(agents.contains("`authsia workspace run -- <command> <args>`"))
+        #expect(agents.contains("`authsia workspace env list`"))
+        #expect(agents.contains("`authsia workspace env use <name>`"))
+        #expect(agents.contains("`authsia workspace env use Default`"))
+        #expect(agents.contains("`authsia workspace env clear`"))
+        #expect(agents.contains("`--environment <name>`"))
+        #expect(agents.contains("`--default-only`"))
         #expect(!agents.contains("`authsia exec <type> <query> [options] -- <command> <args>`"))
         #expect(agents.contains("In CLI fallback mode, if `.authsia/workspace.json` exists, list declared `authsia://` refs from that file or `authsia workspace status`, including env bindings that point at another vault folder"))
         #expect(agents.contains("`authsia list <type> --folder <declared-folder> ...`"))
@@ -1124,7 +1130,37 @@ struct AgentCommandTests {
             #expect(rules.contains("pass its name as `environment`"))
             #expect(rules.contains("exact-tagged and `All` items"))
             #expect(rules.contains("`defaultOnly`"))
+            #expect(rules.contains("`authsia workspace env list`"))
+            #expect(rules.contains("`authsia workspace env use <name>`"))
+            #expect(rules.contains("`authsia workspace env use Default`"))
+            #expect(rules.contains("`authsia workspace env clear`"))
+            #expect(rules.contains("`--environment <name>`"))
+            #expect(rules.contains("`--default-only`"))
         }
+    }
+
+    @Test("previous workspace rules without environment selection remain recognized")
+    func previousWorkspaceRulesWithoutEnvironmentSelectionRemainRecognized() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("{}", to: ".authsia/workspace.json", in: root)
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        let current = try read(".authsia/agent-rules.md", in: root)
+        let previous = current
+            .replacingOccurrences(
+                of: "- List workspace environments with `authsia workspace env list`. Persist a named tag with `authsia workspace env use <name>`; return to Default with `authsia workspace env use Default` or `authsia workspace env clear`.\n",
+                with: ""
+            )
+            .replacingOccurrences(
+                of: "- This project is an Authsia workspace. In CLI fallback mode, run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox. Add `--environment <name>` or `--default-only` for one run; omit both to use the saved selection.",
+                with: "- This project is an Authsia workspace. In CLI fallback mode, run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox."
+            )
+
+        #expect(previous != current)
+        #expect(!previous.contains("`authsia workspace env list`"))
+        #expect(!previous.contains("`--environment <name>`"))
+        try write(previous, to: ".authsia/agent-rules.md", in: root)
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
     }
 
     @Test("previous MCP-first shared rules remain recognized")

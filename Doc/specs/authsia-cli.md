@@ -1114,7 +1114,12 @@ natural-language requests. For
 that point at another vault folder, rather than enumerating this workspace
 folder or any other folder with `authsia_list`. Named workspace requests pass `environment` to inspection,
 list, or execution. List and execution preserve exact-tagged plus `All`
-eligibility; `authsia_exec` uses `defaultOnly` for the Default scope. Rules also pass
+eligibility; `authsia_exec` uses `defaultOnly` for the Default scope. When
+workspace config is present, rules also tell agents to list environments with
+`authsia workspace env list`, persist a named tag with
+`authsia workspace env use <name>`, return to Default with `use Default` or
+`clear`, and pass `--environment` or `--default-only` on CLI `workspace run`
+for one-shot injection. Rules also pass
 `authsia_exec` arguments directly without a shell command string and use the
 normal terminal for commands that need no managed values. They retain a
 compact, attributed CLI
@@ -1190,7 +1195,8 @@ those declared folders as written and must not call `authsia_list` to enumerate
 this workspace folder or any other folder. Scoped list remains available only
 when there is no workspace config, or for vault metadata that is not already
 declared there. The attributed CLI fallback uses `authsia
-workspace run -- <command> <args>` in an Authsia workspace and `authsia exec
+workspace run -- <command> <args>` in an Authsia workspace, with optional
+`--environment` or `--default-only` for one run, and `authsia exec
 <type> <query> [options] -- <command> <args>` outside one. With MCP disabled,
 those same attributed commands are the primary path and no MCP tools are named.
 In a workspace, the CLI-only rules direct agents to fall back to attributed

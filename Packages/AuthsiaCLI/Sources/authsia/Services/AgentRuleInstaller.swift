@@ -101,6 +101,16 @@ struct AgentRuleRemovalResult: Equatable {
 enum AgentRuleInstaller {
     private static let cliOnlyWorkspaceExecFallbackLine =
         "- If `authsia workspace run` fails, fall back to `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
+    private static let workspaceEnvironmentSelectionLine =
+        "- List workspace environments with `authsia workspace env list`. Persist a named tag with `authsia workspace env use <name>`; return to Default with `authsia workspace env use Default` or `authsia workspace env clear`."
+    private static let previousMCPWorkspaceRunFallbackLine =
+        "- This project is an Authsia workspace. In CLI fallback mode, run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox."
+    private static let mcpWorkspaceRunFallbackLine =
+        "- This project is an Authsia workspace. In CLI fallback mode, run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox. Add `--environment <name>` or `--default-only` for one run; omit both to use the saved selection."
+    private static let previousCLIOnlyWorkspaceRunLine =
+        "- This project is an Authsia workspace. Run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox."
+    private static let cliOnlyWorkspaceRunLine =
+        "- This project is an Authsia workspace. Run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox. Add `--environment <name>` or `--default-only` for one run; omit both to use the saved selection."
     private static let previousMCPToolUsageLine =
         "- Use `authsia_status` when server readiness is unknown, `authsia_workspace_inspect` for commit-safe workspace metadata, and `authsia_list` for scoped CLI-enabled Vault item metadata."
     private static let previousWorkspaceInventoryLine =
@@ -984,24 +994,23 @@ enum AgentRuleInstaller {
             ? "- If the Authsia MCP tools are unavailable, \(selectedAgents[0].title) may use the CLI fallback; every Authsia CLI command must start with:"
             : "- If the Authsia MCP tools are unavailable, use the matching CLI fallback marker:"
         let executionFallback = includeWorkspaceGuidance
-            ? "- This project is an Authsia workspace. In CLI fallback mode, run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox."
+            ? mcpWorkspaceRunFallbackLine
             : "- Outside an Authsia workspace, run secret-dependent commands in CLI fallback mode with `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
         let mcpSelection = includeWorkspaceGuidance
             ? "- When a task needs secrets managed by this workspace and Authsia MCP tools are available, use the Authsia MCP tools. The user may ask in natural language; construct the tool input yourself."
             : "- When a task needs secrets managed by Authsia and Authsia MCP tools are available for the active workspace, use the Authsia MCP tools. The user may ask in natural language; construct the tool input yourself."
-        let mcpGuidance: String
+        var mcpLines = [mcpSelection]
         if includeMCPWorkspaceInputs {
             let workspaceInput = includeWorkspaceGuidance
                 ? "- For `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, and `authsia_exec`, pass this repository's absolute path as `workspaceRoot`."
                 : "- In an IDE-hosted session, pass the active repository's absolute path as `workspaceRoot` to `authsia_status`, `authsia_workspace_inspect`, `authsia_list`, and `authsia_exec`."
-            mcpGuidance = """
-            \(mcpSelection)
-            \(workspaceInput)
-            - When the user requests a named workspace environment, pass its name as `environment` to `authsia_workspace_inspect`, `authsia_list`, or `authsia_exec`. For list and execution, exact-tagged and `All` items remain eligible. Use `defaultOnly` on `authsia_exec` for the Default scope, and never combine it with `environment`.
-            """
-        } else {
-            mcpGuidance = mcpSelection
+            mcpLines.append(workspaceInput)
+            mcpLines.append("- When the user requests a named workspace environment, pass its name as `environment` to `authsia_workspace_inspect`, `authsia_list`, or `authsia_exec`. For list and execution, exact-tagged and `All` items remain eligible. Use `defaultOnly` on `authsia_exec` for the Default scope, and never combine it with `environment`.")
         }
+        if includeWorkspaceGuidance {
+            mcpLines.append(workspaceEnvironmentSelectionLine)
+        }
+        let mcpGuidance = mcpLines.joined(separator: "\n")
         return """
     ## Authsia Secret Handling
 
@@ -1043,7 +1052,8 @@ enum AgentRuleInstaller {
             : "- Every Authsia CLI command must start with the matching marker:"
         let execution = includeWorkspaceGuidance
             ? """
-            - This project is an Authsia workspace. Run secret-dependent commands with `authsia workspace run -- <command> <args>` outside the sandbox.
+            \(cliOnlyWorkspaceRunLine)
+            \(workspaceEnvironmentSelectionLine)
             \(cliOnlyWorkspaceExecFallbackLine)
             """
             : "- Outside an Authsia workspace, run secret-dependent commands with `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
@@ -1814,7 +1824,30 @@ enum AgentRuleInstaller {
                 ),
             ])
         }
-        return withLegacyPlatformAliases(withPreviousInventoryGuidance(variants), agents: agents)
+        return withLegacyPlatformAliases(
+            withPreviousInventoryGuidance(withPreviousEnvironmentGuidance(variants)),
+            agents: agents
+        )
+    }
+
+    private static func withPreviousEnvironmentGuidance(_ variants: [String]) -> [String] {
+        var result = variants
+        for variant in variants {
+            let previous = variant
+                .replacingOccurrences(of: "\n\(workspaceEnvironmentSelectionLine)", with: "")
+                .replacingOccurrences(
+                    of: mcpWorkspaceRunFallbackLine,
+                    with: previousMCPWorkspaceRunFallbackLine
+                )
+                .replacingOccurrences(
+                    of: cliOnlyWorkspaceRunLine,
+                    with: previousCLIOnlyWorkspaceRunLine
+                )
+            if previous != variant {
+                result.append(previous)
+            }
+        }
+        return result
     }
 
     private static func withPreviousInventoryGuidance(_ variants: [String]) -> [String] {
