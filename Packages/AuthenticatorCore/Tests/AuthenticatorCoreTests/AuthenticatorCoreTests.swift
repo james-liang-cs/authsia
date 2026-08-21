@@ -174,6 +174,35 @@ final class AuthenticatorCoreTests: XCTestCase {
         XCTAssertEqual(tags, ["development", "Production"])
         XCTAssertTrue(VaultEnvironmentTags.contains("production", in: tags))
         XCTAssertFalse(VaultEnvironmentTags.contains("staging", in: tags))
+        XCTAssertTrue(VaultEnvironmentTags.areEqual([" Production "], ["production"]))
+        XCTAssertFalse(VaultEnvironmentTags.areEqual(["Production"], ["Production", "Staging"]))
+    }
+
+    func testEnvironmentBulkMutationHandlesMixedDefaultAllAndNamedTags() {
+        XCTAssertEqual(VaultEnvironmentTags.applying(.setDefault, to: ["Production", "Staging"]), [])
+        XCTAssertEqual(VaultEnvironmentTags.applying(.setAll, to: ["Production"]), ["All"])
+        XCTAssertEqual(VaultEnvironmentTags.applying(.setNamed(" Staging "), to: []), ["Staging"])
+        XCTAssertEqual(
+            VaultEnvironmentTags.applying(.replace(["Production", "all"]), to: ["Staging"]),
+            ["All"]
+        )
+
+        XCTAssertEqual(VaultEnvironmentTags.applying(.add("Production"), to: []), ["Production"])
+        XCTAssertEqual(VaultEnvironmentTags.applying(.add("Production"), to: ["All"]), ["Production"])
+        XCTAssertEqual(
+            VaultEnvironmentTags.applying(.add("Staging"), to: ["Production"]),
+            ["Production", "Staging"]
+        )
+        XCTAssertEqual(VaultEnvironmentTags.applying(.add("all"), to: ["Production"]), ["All"])
+        XCTAssertEqual(VaultEnvironmentTags.applying(.add("   "), to: ["Production"]), ["Production"])
+
+        XCTAssertEqual(VaultEnvironmentTags.applying(.remove("Production"), to: ["Production"]), [])
+        XCTAssertEqual(
+            VaultEnvironmentTags.applying(.remove("staging"), to: ["Production", "Staging"]),
+            ["Production"]
+        )
+        XCTAssertEqual(VaultEnvironmentTags.applying(.remove("All"), to: ["All"]), [])
+        XCTAssertEqual(VaultEnvironmentTags.applying(.remove("Development"), to: ["Production"]), ["Production"])
     }
 
     func testVaultItemsNormalizeAndRoundTripEnvironmentTags() throws {

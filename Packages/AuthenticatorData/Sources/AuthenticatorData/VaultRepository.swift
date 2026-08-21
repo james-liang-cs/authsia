@@ -1467,7 +1467,7 @@ public class VaultRepository {
         let noteCount = setNoteCLIAccess(true) { ids.contains($0.id) }
         let sshKeyCount = setSSHKeyCLIAccess(true) { ids.contains($0.id) }
 
-        return try persistCLIAccessChanges(
+        return try persistMetadataChanges(
             passwordCount: passwordCount,
             apiKeyCount: apiKeyCount,
             certificateCount: certificateCount,
@@ -1487,7 +1487,7 @@ public class VaultRepository {
         let noteCount = setNoteCLIAccess(false) { ids.contains($0.id) }
         let sshKeyCount = setSSHKeyCLIAccess(false) { ids.contains($0.id) }
 
-        return try persistCLIAccessChanges(
+        return try persistMetadataChanges(
             passwordCount: passwordCount,
             apiKeyCount: apiKeyCount,
             certificateCount: certificateCount,
@@ -1518,7 +1518,7 @@ public class VaultRepository {
             ? setSSHKeyCLIAccess(true) { isPath($0.folderPath, withinFolder: normalizedPath) }
             : 0
 
-        return try persistCLIAccessChanges(
+        return try persistMetadataChanges(
             passwordCount: passwordCount,
             apiKeyCount: apiKeyCount,
             certificateCount: certificateCount,
@@ -1549,7 +1549,31 @@ public class VaultRepository {
             ? setSSHKeyCLIAccess(false) { isPath($0.folderPath, withinFolder: normalizedPath) }
             : 0
 
-        return try persistCLIAccessChanges(
+        return try persistMetadataChanges(
+            passwordCount: passwordCount,
+            apiKeyCount: apiKeyCount,
+            certificateCount: certificateCount,
+            noteCount: noteCount,
+            sshKeyCount: sshKeyCount
+        )
+    }
+
+    @discardableResult
+    public func updateEnvironments(
+        forItemIDs ids: Set<UUID>,
+        mutation: VaultEnvironmentBulkMutation
+    ) throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        try prepareForMutation()
+        let modifiedAt = Date()
+
+        let passwordCount = setPasswordEnvironments(mutation, modifiedAt: modifiedAt) { ids.contains($0.id) }
+        let apiKeyCount = setAPIKeyEnvironments(mutation, modifiedAt: modifiedAt) { ids.contains($0.id) }
+        let certificateCount = setCertificateEnvironments(mutation, modifiedAt: modifiedAt) { ids.contains($0.id) }
+        let noteCount = setNoteEnvironments(mutation, modifiedAt: modifiedAt) { ids.contains($0.id) }
+        let sshKeyCount = setSSHKeyEnvironments(mutation, modifiedAt: modifiedAt) { ids.contains($0.id) }
+
+        return try persistMetadataChanges(
             passwordCount: passwordCount,
             apiKeyCount: apiKeyCount,
             certificateCount: certificateCount,
@@ -2256,7 +2280,87 @@ public class VaultRepository {
         return count
     }
 
-    private func persistCLIAccessChanges(
+    private func setPasswordEnvironments(
+        _ mutation: VaultEnvironmentBulkMutation,
+        modifiedAt: Date,
+        matching shouldUpdate: (PasswordMetadata) -> Bool
+    ) -> Int {
+        var count = 0
+        for index in passwords.indices where shouldUpdate(passwords[index]) {
+            let updated = VaultEnvironmentTags.applying(mutation, to: passwords[index].environments)
+            guard updated != passwords[index].environments else { continue }
+            passwords[index].environments = updated
+            passwords[index].modifiedAt = modifiedAt
+            count += 1
+        }
+        return count
+    }
+
+    private func setAPIKeyEnvironments(
+        _ mutation: VaultEnvironmentBulkMutation,
+        modifiedAt: Date,
+        matching shouldUpdate: (APIKeyMetadata) -> Bool
+    ) -> Int {
+        var count = 0
+        for index in apiKeys.indices where shouldUpdate(apiKeys[index]) {
+            let updated = VaultEnvironmentTags.applying(mutation, to: apiKeys[index].environments)
+            guard updated != apiKeys[index].environments else { continue }
+            apiKeys[index].environments = updated
+            apiKeys[index].modifiedAt = modifiedAt
+            count += 1
+        }
+        return count
+    }
+
+    private func setCertificateEnvironments(
+        _ mutation: VaultEnvironmentBulkMutation,
+        modifiedAt: Date,
+        matching shouldUpdate: (CertificateMetadata) -> Bool
+    ) -> Int {
+        var count = 0
+        for index in certificates.indices where shouldUpdate(certificates[index]) {
+            let updated = VaultEnvironmentTags.applying(mutation, to: certificates[index].environments)
+            guard updated != certificates[index].environments else { continue }
+            certificates[index].environments = updated
+            certificates[index].modifiedAt = modifiedAt
+            count += 1
+        }
+        return count
+    }
+
+    private func setNoteEnvironments(
+        _ mutation: VaultEnvironmentBulkMutation,
+        modifiedAt: Date,
+        matching shouldUpdate: (SecureNoteMetadata) -> Bool
+    ) -> Int {
+        var count = 0
+        for index in notes.indices where shouldUpdate(notes[index]) {
+            let updated = VaultEnvironmentTags.applying(mutation, to: notes[index].environments)
+            guard updated != notes[index].environments else { continue }
+            notes[index].environments = updated
+            notes[index].modifiedAt = modifiedAt
+            count += 1
+        }
+        return count
+    }
+
+    private func setSSHKeyEnvironments(
+        _ mutation: VaultEnvironmentBulkMutation,
+        modifiedAt: Date,
+        matching shouldUpdate: (SSHKeyMetadata) -> Bool
+    ) -> Int {
+        var count = 0
+        for index in sshKeys.indices where shouldUpdate(sshKeys[index]) {
+            let updated = VaultEnvironmentTags.applying(mutation, to: sshKeys[index].environments)
+            guard updated != sshKeys[index].environments else { continue }
+            sshKeys[index].environments = updated
+            sshKeys[index].modifiedAt = modifiedAt
+            count += 1
+        }
+        return count
+    }
+
+    private func persistMetadataChanges(
         passwordCount: Int,
         apiKeyCount: Int,
         certificateCount: Int,

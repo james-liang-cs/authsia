@@ -33,8 +33,54 @@ public enum VaultEnvironmentTags {
         contains(all, in: values)
     }
 
+    public static func areEqual(_ lhs: [String], _ rhs: [String]) -> Bool {
+        let left = canonical(lhs)
+        let right = canonical(rhs)
+        guard left.count == right.count else { return false }
+        return left.allSatisfy { contains($0, in: right) }
+    }
+
     public static func selectableEnvironments(_ values: [String]) -> [String] {
         normalize(values).filter { !contains(all, in: [$0]) }
+    }
+
+    public static func canonical(_ values: [String]) -> [String] {
+        let normalized = normalize(values)
+        return containsAll(in: normalized) ? [all] : normalized
+    }
+
+    public static func applying(_ mutation: VaultEnvironmentBulkMutation, to environments: [String]) -> [String] {
+        switch mutation {
+        case .replace(let values):
+            return canonical(values)
+        case .add(let name):
+            guard let tag = normalize([name]).first else {
+                return canonical(environments)
+            }
+            if containsAll(in: [tag]) {
+                return [all]
+            }
+            let current = canonical(environments)
+            if current.isEmpty || containsAll(in: current) {
+                return [tag]
+            }
+            return canonical(current + [tag])
+        case .remove(let name):
+            return canonical(environments).filter { !contains(name, in: [$0]) }
+        }
+    }
+}
+
+public enum VaultEnvironmentBulkMutation: Equatable, Sendable {
+    case replace([String])
+    case add(String)
+    case remove(String)
+
+    public static var setDefault: Self { .replace([]) }
+    public static var setAll: Self { .replace([VaultEnvironmentTags.all]) }
+
+    public static func setNamed(_ name: String) -> Self {
+        .replace([name])
     }
 }
 

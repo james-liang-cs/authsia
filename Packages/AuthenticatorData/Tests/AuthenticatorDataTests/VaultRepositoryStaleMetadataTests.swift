@@ -1237,6 +1237,68 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         XCTAssertNotNil(keychain.passwords[startOfTodayID])
     }
 
+    func testUpdateEnvironmentsForSelectedItemIDsHandlesMixedTagsWithoutTouchingOthers() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let defaultID = UUID()
+        let productionID = UUID()
+        let stagingID = UUID()
+        let allID = UUID()
+        let unrelatedID = UUID()
+        let snapshotStore = RecordingVaultCLIMetadataSnapshotStore()
+        let metadataStore = FakeVaultMetadataStore()
+        let repository = VaultRepository(
+            keychainStore: FakeVaultKeychainStore(),
+            metadataStore: metadataStore,
+            cliMetadataSnapshotStore: snapshotStore
+        )
+        try repository.rebuildMetadata(
+            passwords: [
+                makePasswordMetadata(id: defaultID, environments: []),
+                makePasswordMetadata(id: productionID, environments: ["Production"]),
+                makePasswordMetadata(id: unrelatedID, environments: ["Development"]),
+            ],
+            apiKeys: [makeAPIKeyMetadata(id: stagingID, environments: ["Staging"])],
+            certificates: [],
+            notes: [makeNoteMetadata(id: allID, environments: ["All"])],
+            sshKeys: [],
+            folders: [:]
+        )
+
+        let selected = Set([defaultID, productionID, stagingID, allID])
+        let added = try repository.updateEnvironments(forItemIDs: selected, mutation: .add("Production"))
+
+        XCTAssertEqual(added, 3)
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == defaultID })?.environments, ["Production"])
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == productionID })?.environments, ["Production"])
+        XCTAssertEqual(repository.apiKeys.first(where: { $0.id == stagingID })?.environments, ["Production", "Staging"])
+        XCTAssertEqual(repository.notes.first(where: { $0.id == allID })?.environments, ["Production"])
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == unrelatedID })?.environments, ["Development"])
+        XCTAssertGreaterThan(
+            repository.passwords.first(where: { $0.id == defaultID })?.modifiedAt ?? now,
+            now
+        )
+        XCTAssertEqual(
+            snapshotStore.savedSnapshots.last?.passwords.first(where: { $0.id == defaultID })?.environments,
+            ["Production"]
+        )
+        XCTAssertEqual(
+            snapshotStore.savedSnapshots.last?.apiKeys.first(where: { $0.id == stagingID })?.environments,
+            ["Production", "Staging"]
+        )
+
+        let replaced = try repository.updateEnvironments(forItemIDs: selected, mutation: .setNamed("QA"))
+        XCTAssertEqual(replaced, 4)
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == defaultID })?.environments, ["QA"])
+        XCTAssertEqual(repository.apiKeys.first(where: { $0.id == stagingID })?.environments, ["QA"])
+        XCTAssertEqual(repository.notes.first(where: { $0.id == allID })?.environments, ["QA"])
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == unrelatedID })?.environments, ["Development"])
+
+        let cleared = try repository.updateEnvironments(forItemIDs: selected, mutation: .setDefault)
+        XCTAssertEqual(cleared, 4)
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == defaultID })?.environments, [])
+        XCTAssertEqual(repository.notes.first(where: { $0.id == allID })?.environments, [])
+    }
+
     func testEnableCLIAccessForSelectedItemIDsUpdatesOnlyThoseItems() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let passwordID = UUID()
@@ -1738,7 +1800,8 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         isCliEnabled: Bool = true,
         expiresAt: Date? = nil,
         autoDestroyOnExpiry: Bool = false,
-        modifiedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+        modifiedAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
+        environments: [String] = []
     ) -> PasswordMetadata {
         PasswordMetadata(
             id: id,
@@ -1753,7 +1816,28 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
             isCliEnabled: isCliEnabled,
             isScraped: false,
             expiresAt: expiresAt,
-            autoDestroyOnExpiry: autoDestroyOnExpiry
+            autoDestroyOnExpiry: autoDestroyOnExpiry,
+            environments: environments
+        )
+    }
+
+    private func makeAPIKeyMetadata(
+        id: UUID,
+        folderPath: String? = nil,
+        environments: [String] = []
+    ) -> APIKeyMetadata {
+        APIKeyMetadata(
+            id: id,
+            name: "API Key",
+            website: nil,
+            notes: nil,
+            folderPath: folderPath,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            modifiedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: false,
+            environments: environments
         )
     }
 
@@ -1782,7 +1866,8 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         id: UUID,
         title: String = "Note",
         folderPath: String? = nil,
-        isCliEnabled: Bool = true
+        isCliEnabled: Bool = true,
+        environments: [String] = []
     ) -> SecureNoteMetadata {
         SecureNoteMetadata(
             id: id,
@@ -1792,7 +1877,8 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
             modifiedAt: Date(timeIntervalSince1970: 1_700_000_000),
             isFavorite: false,
             isCliEnabled: isCliEnabled,
-            isScraped: false
+            isScraped: false,
+            environments: environments
         )
     }
 
