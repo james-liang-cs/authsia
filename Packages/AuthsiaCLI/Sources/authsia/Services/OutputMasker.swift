@@ -322,21 +322,31 @@ struct OutputMasker {
         }
 
         private func pendingWhitespaceFlexibleHexPrefixCount(hex: String) -> Int {
-            var longest = 0
-            var candidateCount = pending.count
-
-            while candidateCount > longest {
-                let start = pending.index(pending.endIndex, offsetBy: -candidateCount)
-                let suffix = pending[start...]
-                guard suffix.first?.isHexDigit == true else {
-                    candidateCount -= 1
+            // Only a bounded tail of `pending` can open a whitespace-flexible hex match:
+            // every non-whitespace character has to match `hex` in order, so the search
+            // stops at the first character that cannot (and once the tail already holds
+            // as many hex digits as `hex` itself, since a longer suffix could only be a
+            // complete match rather than the partial one we hold back for).
+            var reversedTail: [Character] = []
+            var hexDigitCount = 0
+            for character in pending.reversed() {
+                if character.isWhitespace {
+                    reversedTail.append(character)
                     continue
                 }
+                guard character.isHexDigit, hexDigitCount < hex.count else { break }
+                hexDigitCount += 1
+                reversedTail.append(character)
+            }
 
+            let tail = Array(reversedTail.reversed())
+
+            // Longest candidate first, so the first match is the longest one.
+            for start in tail.indices where tail[start].isHexDigit {
                 var hexIndex = hex.startIndex
                 var matchesThroughEnd = true
                 var sawHexDigit = false
-                for character in suffix {
+                for character in tail[start...] {
                     if character.isWhitespace {
                         continue
                     }
@@ -349,13 +359,11 @@ struct OutputMasker {
                 }
 
                 if matchesThroughEnd, sawHexDigit, hexIndex < hex.endIndex {
-                    longest = candidateCount
-                    break
+                    return tail.count - start
                 }
-                candidateCount -= 1
             }
 
-            return longest
+            return 0
         }
 
         private func adjustedEmitCountAvoidingSplitSecrets(_ initialEmitCount: Int) -> Int {

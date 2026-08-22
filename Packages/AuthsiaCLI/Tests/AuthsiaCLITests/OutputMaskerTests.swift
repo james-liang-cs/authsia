@@ -301,4 +301,55 @@ struct OutputMaskerTests {
 
         #expect(stream.mask(data, policy: .maskedCompatibility) == .success(data))
     }
+
+    @Test("streaming a large buffer stays linear in the buffer size")
+    func streamLargeBufferStaysLinear() {
+        // Holding back a possible split hex secret used to rescan every suffix of the
+        // pending buffer, making a large read quadratic: this took ~66s before the fix.
+        let masker = OutputMasker(secrets: [
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "hunter2-p@ssw0rd",
+        ])
+        var line = ""
+        while line.utf8.count < 256 * 1024 {
+            line += "  { \"id\": \"i-0a1b2c3d4e5f6\", \"vol\": \"deadbeefcafe\" },\n"
+        }
+        let data = Data(line.utf8)
+
+        let started = DispatchTime.now().uptimeNanoseconds
+        var stream = masker.makeStream()
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + 64 * 1024, data.count)
+            _ = stream.mask(data.subdata(in: offset..<end))
+            offset = end
+        }
+        _ = stream.flush()
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
+
+        #expect(elapsed < 10)
+    }
+
+    @Test("chunked streaming matches one-shot masking at every chunk size")
+    func streamChunkingMatchesOneShot() {
+        let masker = OutputMasker(secrets: ["deadbeefcafe", "hunter2"])
+        let text = "vol deadbeef cafe id dead\nbeefcafe pw hunter2 tail deadbee"
+        let data = Data(text.utf8)
+        let expected = masker.mask(data)
+
+        for chunkSize in [1, 2, 3, 7, 16, 64] {
+            var stream = masker.makeStream()
+            var output = Data()
+            var offset = 0
+            while offset < data.count {
+                let end = min(offset + chunkSize, data.count)
+                output += stream.mask(data.subdata(in: offset..<end))
+                offset = end
+            }
+            output += stream.flush()
+
+            #expect(output == expected, "chunk size \(chunkSize)")
+        }
+    }
 }
