@@ -91,13 +91,7 @@ enum VaultItemQueryResolver {
         let scoped = candidates(type: type, payload: payload).filter { candidate in
             normalizedFolder.map { candidate.folderPath == $0 } ?? true
         }
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let idMatch = scoped.first(where: { $0.id.uuidString.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-            return [idMatch]
-        }
-        let exactCaseMatches = scoped.filter { $0.name == trimmed }
-        if !exactCaseMatches.isEmpty { return exactCaseMatches }
-        return scoped.filter { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }
+        return VaultItemNameMatcher.matches(query: query, in: scoped, id: \.id, name: \.name)
     }
 
     private static func candidates(type: VaultItemQueryType, payload: BridgeListPayload) -> [Candidate] {
