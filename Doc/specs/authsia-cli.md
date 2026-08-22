@@ -178,6 +178,7 @@ Each item shows whether CLI access is enabled or disabled.
 - Scraped passwords, API keys, certs, notes, and adopted SSH keys default to items created on the current machine.
 - Current-machine matching uses the stored machine ID, with a machine-name fallback for local machine ID regeneration.
 - Legacy scraped items without machine metadata remain visible by default.
+- When scraped items are omitted because they are not from this machine, stderr reports the count and recorded machine name; JSON and table stdout stay unchanged. Pass `--all-machines` to include them.
 - Use `--all-machines` to include scraped items created on other machines that share the same synced vault.
 
 **List output fields by type:**

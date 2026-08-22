@@ -421,4 +421,97 @@ struct ScrapedItemMachineSupportTests {
 
         #expect(names.sorted() == ["SAME_MACHINE_REGENERATED_ID"])
     }
+
+    private func makeAPIKey(
+        name: String,
+        isScraped: Bool,
+        folderPath: String? = "Workspaces/demo",
+        scrapeMachineName: String? = nil,
+        scrapeMachineId: String? = nil
+    ) -> BridgeAPIKey {
+        BridgeAPIKey(
+            id: UUID(),
+            name: name,
+            website: nil,
+            folderPath: folderPath,
+            isFavorite: false,
+            isCliEnabled: true,
+            isScraped: isScraped,
+            createdAt: now,
+            updatedAt: now,
+            scrapeMachineName: scrapeMachineName,
+            scrapeMachineId: scrapeMachineId
+        )
+    }
+
+    @Test("list api-keys warns when warp-attributed scrapes are omitted after machine id regeneration")
+    func listAPIKeysWarnsWhenWarpAttributedScrapesAreOmitted() throws {
+        let localKeys = (1...7).map { makeAPIKey(name: "LOCAL_\($0)", isScraped: false) }
+        let warpKeys = (1...17).map {
+            makeAPIKey(
+                name: "WARP_\($0)",
+                isScraped: true,
+                scrapeMachineName: "connectivity-check.warp-svc",
+                scrapeMachineId: "OLD-ID"
+            )
+        }
+
+        let listing = try List.renderAPIKeysListing(
+            localKeys + warpKeys,
+            favoritesOnly: false,
+            folder: "Workspaces/demo",
+            format: .json,
+            allMachines: false,
+            currentMachineId: "NEW-ID",
+            currentMachineName: "jamess-mac-mini"
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let items = try decoder.decode(
+            [OutputFormatter.APIKeyListItem].self,
+            from: Data(listing.output.utf8)
+        )
+
+        #expect(items.map { $0.name }.sorted() == localKeys.map { $0.name })
+        #expect(listing.omissionWarning ==
+            "warning: omitted 17 scraped items not from this machine (connectivity-check.warp-svc); pass --all-machines to include them"
+        )
+    }
+
+    @Test("list api-keys suppression of omission warning with all-machines")
+    func listAPIKeysAllMachinesSuppressesOmissionWarning() throws {
+        let listing = try List.renderAPIKeysListing(
+            [
+                makeAPIKey(name: "LOCAL_ONLY", isScraped: false),
+                makeAPIKey(
+                    name: "WARP_SCRAPE",
+                    isScraped: true,
+                    scrapeMachineName: "connectivity-check.warp-svc",
+                    scrapeMachineId: "OLD-ID"
+                ),
+            ],
+            favoritesOnly: false,
+            folder: "Workspaces/demo",
+            format: .json,
+            allMachines: true,
+            currentMachineId: "NEW-ID",
+            currentMachineName: "jamess-mac-mini"
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let items = try decoder.decode(
+            [OutputFormatter.APIKeyListItem].self,
+            from: Data(listing.output.utf8)
+        )
+
+        #expect(items.map { $0.name }.sorted() == ["LOCAL_ONLY", "WARP_SCRAPE"])
+        #expect(listing.omissionWarning == nil)
+    }
+
+    @Test("omission warning is nil when nothing was withheld")
+    func omissionWarningNilWhenNothingWithheld() {
+        #expect(ScrapedItemMachineSupport.omissionWarning(omittedCount: 0, machineLabels: []) == nil)
+    }
 }

@@ -9,6 +9,8 @@ struct List: ParsableCommand {
         discussion: """
             Lists all items of the given type. No sensitive data is returned.
             Each item shows whether CLI access is enabled (on/off).
+            Scraped items default to this machine. When other-machine scrapes
+            are omitted, stderr reports the count; pass --all-machines to include them.
 
             Examples:
               authsia list otp                       List OTP items as JSON
@@ -231,8 +233,8 @@ struct List: ParsableCommand {
                 )
             )
         case .apiKeys:
-            print(
-                try Self.renderAPIKeys(
+            printListing(
+                try Self.renderAPIKeysListing(
                     payload.apiKeys,
                     favoritesOnly: favorites,
                     cliEnabledOnly: cliEnabledOnly,
@@ -245,8 +247,8 @@ struct List: ParsableCommand {
                 )
             )
         case .passwords:
-            print(
-                try Self.renderPasswords(
+            printListing(
+                try Self.renderPasswordsListing(
                     payload.passwords,
                     favoritesOnly: favorites,
                     cliEnabledOnly: cliEnabledOnly,
@@ -259,8 +261,8 @@ struct List: ParsableCommand {
                 )
             )
         case .certs:
-            print(
-                try Self.renderCertificates(
+            printListing(
+                try Self.renderCertificatesListing(
                     payload.certificates,
                     favoritesOnly: favorites,
                     cliEnabledOnly: cliEnabledOnly,
@@ -273,8 +275,8 @@ struct List: ParsableCommand {
                 )
             )
         case .notes:
-            print(
-                try Self.renderNotes(
+            printListing(
+                try Self.renderNotesListing(
                     payload.notes,
                     favoritesOnly: favorites,
                     cliEnabledOnly: cliEnabledOnly,
@@ -287,8 +289,8 @@ struct List: ParsableCommand {
                 )
             )
         case .ssh:
-            print(
-                try Self.renderSSHKeys(
+            printListing(
+                try Self.renderSSHKeysListing(
                     payload.sshKeys,
                     favoritesOnly: favorites,
                     cliEnabledOnly: cliEnabledOnly,
@@ -300,6 +302,18 @@ struct List: ParsableCommand {
                     currentMachineName: currentMachineName
                 )
             )
+        }
+    }
+
+    struct RenderedList: Equatable {
+        let output: String
+        let omissionWarning: String?
+    }
+
+    private func printListing(_ listing: RenderedList) {
+        print(listing.output)
+        if !chromeNativeHost, let omissionWarning = listing.omissionWarning {
+            StandardError.writeLine(omissionWarning)
         }
     }
 
@@ -327,21 +341,46 @@ struct List: ParsableCommand {
         currentMachineId: String = MachineIdentity.load().machineId,
         currentMachineName: String? = MachineIdentity.load().displayName
     ) throws -> String {
-        let filtered = passwords.filter {
-            (!favoritesOnly || $0.isFavorite) &&
-            (!cliEnabledOnly || $0.isCliEnabled) &&
-            Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
-            ScrapedItemMachineSupport.shouldInclude(
-                isScraped: $0.isScraped,
-                scrapeMachineName: $0.scrapeMachineName,
-                scrapeMachineId: $0.scrapeMachineId,
-                currentMachineId: currentMachineId,
-                currentMachineName: currentMachineName,
-                allMachines: allMachines
-            ) &&
-            folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
-        }
-        return try OutputFormatter.formatPasswords(filtered, format: format)
+        try renderPasswordsListing(
+            passwords,
+            favoritesOnly: favoritesOnly,
+            cliEnabledOnly: cliEnabledOnly,
+            environment: environment,
+            folder: folder,
+            format: format,
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName
+        ).output
+    }
+
+    static func renderPasswordsListing(
+        _ passwords: [BridgePassword],
+        favoritesOnly: Bool,
+        cliEnabledOnly: Bool = false,
+        environment: String? = nil,
+        folder: String? = nil,
+        format: OutputFormat,
+        allMachines: Bool = false,
+        currentMachineId: String = MachineIdentity.load().machineId,
+        currentMachineName: String? = MachineIdentity.load().displayName
+    ) throws -> RenderedList {
+        try renderedList(
+            passwords.filter {
+                (!favoritesOnly || $0.isFavorite) &&
+                (!cliEnabledOnly || $0.isCliEnabled) &&
+                Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
+                folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
+            },
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName,
+            format: format,
+            formatItems: OutputFormatter.formatPasswords,
+            isScraped: \.isScraped,
+            scrapeMachineName: \.scrapeMachineName,
+            scrapeMachineId: \.scrapeMachineId
+        )
     }
 
     static func renderAPIKeys(
@@ -355,21 +394,46 @@ struct List: ParsableCommand {
         currentMachineId: String = MachineIdentity.load().machineId,
         currentMachineName: String? = MachineIdentity.load().displayName
     ) throws -> String {
-        let filtered = apiKeys.filter {
-            (!favoritesOnly || $0.isFavorite) &&
-            (!cliEnabledOnly || $0.isCliEnabled) &&
-            Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
-            ScrapedItemMachineSupport.shouldInclude(
-                isScraped: $0.isScraped,
-                scrapeMachineName: $0.scrapeMachineName,
-                scrapeMachineId: $0.scrapeMachineId,
-                currentMachineId: currentMachineId,
-                currentMachineName: currentMachineName,
-                allMachines: allMachines
-            ) &&
-            folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
-        }
-        return try OutputFormatter.formatAPIKeys(filtered, format: format)
+        try renderAPIKeysListing(
+            apiKeys,
+            favoritesOnly: favoritesOnly,
+            cliEnabledOnly: cliEnabledOnly,
+            environment: environment,
+            folder: folder,
+            format: format,
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName
+        ).output
+    }
+
+    static func renderAPIKeysListing(
+        _ apiKeys: [BridgeAPIKey],
+        favoritesOnly: Bool,
+        cliEnabledOnly: Bool = false,
+        environment: String? = nil,
+        folder: String? = nil,
+        format: OutputFormat,
+        allMachines: Bool = false,
+        currentMachineId: String = MachineIdentity.load().machineId,
+        currentMachineName: String? = MachineIdentity.load().displayName
+    ) throws -> RenderedList {
+        try renderedList(
+            apiKeys.filter {
+                (!favoritesOnly || $0.isFavorite) &&
+                (!cliEnabledOnly || $0.isCliEnabled) &&
+                Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
+                folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
+            },
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName,
+            format: format,
+            formatItems: OutputFormatter.formatAPIKeys,
+            isScraped: \.isScraped,
+            scrapeMachineName: \.scrapeMachineName,
+            scrapeMachineId: \.scrapeMachineId
+        )
     }
 
     static func renderCertificates(
@@ -383,21 +447,46 @@ struct List: ParsableCommand {
         currentMachineId: String = MachineIdentity.load().machineId,
         currentMachineName: String? = MachineIdentity.load().displayName
     ) throws -> String {
-        let filtered = certificates.filter {
-            (!favoritesOnly || $0.isFavorite) &&
-            (!cliEnabledOnly || $0.isCliEnabled) &&
-            Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
-            ScrapedItemMachineSupport.shouldInclude(
-                isScraped: $0.isScraped,
-                scrapeMachineName: $0.scrapeMachineName,
-                scrapeMachineId: $0.scrapeMachineId,
-                currentMachineId: currentMachineId,
-                currentMachineName: currentMachineName,
-                allMachines: allMachines
-            ) &&
-            folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
-        }
-        return try OutputFormatter.formatCertificates(filtered, format: format)
+        try renderCertificatesListing(
+            certificates,
+            favoritesOnly: favoritesOnly,
+            cliEnabledOnly: cliEnabledOnly,
+            environment: environment,
+            folder: folder,
+            format: format,
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName
+        ).output
+    }
+
+    static func renderCertificatesListing(
+        _ certificates: [BridgeCertificate],
+        favoritesOnly: Bool,
+        cliEnabledOnly: Bool = false,
+        environment: String? = nil,
+        folder: String? = nil,
+        format: OutputFormat,
+        allMachines: Bool = false,
+        currentMachineId: String = MachineIdentity.load().machineId,
+        currentMachineName: String? = MachineIdentity.load().displayName
+    ) throws -> RenderedList {
+        try renderedList(
+            certificates.filter {
+                (!favoritesOnly || $0.isFavorite) &&
+                (!cliEnabledOnly || $0.isCliEnabled) &&
+                Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
+                folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
+            },
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName,
+            format: format,
+            formatItems: OutputFormatter.formatCertificates,
+            isScraped: \.isScraped,
+            scrapeMachineName: \.scrapeMachineName,
+            scrapeMachineId: \.scrapeMachineId
+        )
     }
 
     static func renderNotes(
@@ -411,21 +500,46 @@ struct List: ParsableCommand {
         currentMachineId: String = MachineIdentity.load().machineId,
         currentMachineName: String? = MachineIdentity.load().displayName
     ) throws -> String {
-        let filtered = notes.filter {
-            (!favoritesOnly || $0.isFavorite) &&
-            (!cliEnabledOnly || $0.isCliEnabled) &&
-            Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
-            ScrapedItemMachineSupport.shouldInclude(
-                isScraped: $0.isScraped,
-                scrapeMachineName: $0.scrapeMachineName,
-                scrapeMachineId: $0.scrapeMachineId,
-                currentMachineId: currentMachineId,
-                currentMachineName: currentMachineName,
-                allMachines: allMachines
-            ) &&
-            folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
-        }
-        return try OutputFormatter.formatNotes(filtered, format: format)
+        try renderNotesListing(
+            notes,
+            favoritesOnly: favoritesOnly,
+            cliEnabledOnly: cliEnabledOnly,
+            environment: environment,
+            folder: folder,
+            format: format,
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName
+        ).output
+    }
+
+    static func renderNotesListing(
+        _ notes: [BridgeNote],
+        favoritesOnly: Bool,
+        cliEnabledOnly: Bool = false,
+        environment: String? = nil,
+        folder: String? = nil,
+        format: OutputFormat,
+        allMachines: Bool = false,
+        currentMachineId: String = MachineIdentity.load().machineId,
+        currentMachineName: String? = MachineIdentity.load().displayName
+    ) throws -> RenderedList {
+        try renderedList(
+            notes.filter {
+                (!favoritesOnly || $0.isFavorite) &&
+                (!cliEnabledOnly || $0.isCliEnabled) &&
+                Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
+                folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
+            },
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName,
+            format: format,
+            formatItems: OutputFormatter.formatNotes,
+            isScraped: \.isScraped,
+            scrapeMachineName: \.scrapeMachineName,
+            scrapeMachineId: \.scrapeMachineId
+        )
     }
 
     static func renderSSHKeys(
@@ -439,21 +553,75 @@ struct List: ParsableCommand {
         currentMachineId: String = MachineIdentity.load().machineId,
         currentMachineName: String? = MachineIdentity.load().displayName
     ) throws -> String {
-        let filtered = keys.filter {
-            (!favoritesOnly || $0.isFavorite) &&
-            (!cliEnabledOnly || $0.isCliEnabled) &&
-            Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
-            ScrapedItemMachineSupport.shouldInclude(
-                isScraped: $0.isScraped,
-                scrapeMachineName: $0.scrapeMachineName,
-                scrapeMachineId: $0.scrapeMachineId,
-                currentMachineId: currentMachineId,
-                currentMachineName: currentMachineName,
-                allMachines: allMachines
-            ) &&
-            folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
-        }
-        return try OutputFormatter.formatSSHKeys(filtered, format: format)
+        try renderSSHKeysListing(
+            keys,
+            favoritesOnly: favoritesOnly,
+            cliEnabledOnly: cliEnabledOnly,
+            environment: environment,
+            folder: folder,
+            format: format,
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName
+        ).output
+    }
+
+    static func renderSSHKeysListing(
+        _ keys: [BridgeSSHKey],
+        favoritesOnly: Bool,
+        cliEnabledOnly: Bool = false,
+        environment: String? = nil,
+        folder: String? = nil,
+        format: OutputFormat,
+        allMachines: Bool = false,
+        currentMachineId: String = MachineIdentity.load().machineId,
+        currentMachineName: String? = MachineIdentity.load().displayName
+    ) throws -> RenderedList {
+        try renderedList(
+            keys.filter {
+                (!favoritesOnly || $0.isFavorite) &&
+                (!cliEnabledOnly || $0.isCliEnabled) &&
+                Self.environmentMatches(environment, itemEnvironments: $0.environments) &&
+                folderMatches(itemFolderPath: $0.folderPath, filterFolderPath: folder)
+            },
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName,
+            format: format,
+            formatItems: OutputFormatter.formatSSHKeys,
+            isScraped: \.isScraped,
+            scrapeMachineName: \.scrapeMachineName,
+            scrapeMachineId: \.scrapeMachineId
+        )
+    }
+
+    private static func renderedList<Item>(
+        _ items: [Item],
+        allMachines: Bool,
+        currentMachineId: String,
+        currentMachineName: String?,
+        format: OutputFormat,
+        formatItems: ([Item], OutputFormat) throws -> String,
+        isScraped: KeyPath<Item, Bool>,
+        scrapeMachineName: KeyPath<Item, String?>,
+        scrapeMachineId: KeyPath<Item, String?>
+    ) throws -> RenderedList {
+        let scoped = ScrapedItemMachineSupport.partition(
+            items,
+            allMachines: allMachines,
+            currentMachineId: currentMachineId,
+            currentMachineName: currentMachineName,
+            isScraped: isScraped,
+            scrapeMachineName: scrapeMachineName,
+            scrapeMachineId: scrapeMachineId
+        )
+        return RenderedList(
+            output: try formatItems(scoped.included, format),
+            omissionWarning: ScrapedItemMachineSupport.omissionWarning(
+                omittedCount: scoped.omittedCount,
+                machineLabels: scoped.omittedMachineLabels
+            )
+        )
     }
 
     static func environmentMatches(_ environment: String?, itemEnvironments: [String]) -> Bool {

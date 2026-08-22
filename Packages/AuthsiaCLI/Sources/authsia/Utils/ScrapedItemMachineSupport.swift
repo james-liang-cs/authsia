@@ -1,6 +1,12 @@
 import Foundation
 
 enum ScrapedItemMachineSupport {
+    struct Partition<Item> {
+        let included: [Item]
+        let omittedCount: Int
+        let omittedMachineLabels: [String]
+    }
+
     static func shouldInclude(
         isScraped: Bool,
         scrapeMachineName: String? = nil,
@@ -18,6 +24,52 @@ enum ScrapedItemMachineSupport {
             return false
         }
         return scrapeMachineName == currentMachineName
+    }
+
+    static func partition<Item>(
+        _ items: [Item],
+        allMachines: Bool,
+        currentMachineId: String,
+        currentMachineName: String?,
+        isScraped: KeyPath<Item, Bool>,
+        scrapeMachineName: KeyPath<Item, String?>,
+        scrapeMachineId: KeyPath<Item, String?>
+    ) -> Partition<Item> {
+        var included: [Item] = []
+        var omittedLabels: [String] = []
+        for item in items {
+            if shouldInclude(
+                isScraped: item[keyPath: isScraped],
+                scrapeMachineName: item[keyPath: scrapeMachineName],
+                scrapeMachineId: item[keyPath: scrapeMachineId],
+                currentMachineId: currentMachineId,
+                currentMachineName: currentMachineName,
+                allMachines: allMachines
+            ) {
+                included.append(item)
+            } else {
+                omittedLabels.append(
+                    displayMachine(
+                        isScraped: true,
+                        scrapeMachineName: item[keyPath: scrapeMachineName],
+                        scrapeMachineId: item[keyPath: scrapeMachineId]
+                    )
+                )
+            }
+        }
+        return Partition(
+            included: included,
+            omittedCount: omittedLabels.count,
+            omittedMachineLabels: Array(Set(omittedLabels)).sorted()
+        )
+    }
+
+    static func omissionWarning(omittedCount: Int, machineLabels: [String]) -> String? {
+        guard omittedCount > 0 else { return nil }
+        let noun = omittedCount == 1 ? "item" : "items"
+        let labels = machineLabels.filter { !$0.isEmpty && $0 != "-" }
+        let origin = labels.isEmpty ? "" : " (\(labels.joined(separator: ", ")))"
+        return "warning: omitted \(omittedCount) scraped \(noun) not from this machine\(origin); pass --all-machines to include them"
     }
 
     static func displayMachine(
