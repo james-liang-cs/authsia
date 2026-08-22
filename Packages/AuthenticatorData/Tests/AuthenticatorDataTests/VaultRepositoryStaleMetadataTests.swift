@@ -1297,6 +1297,26 @@ final class VaultRepositoryStaleMetadataTests: XCTestCase {
         XCTAssertEqual(cleared, 4)
         XCTAssertEqual(repository.passwords.first(where: { $0.id == defaultID })?.environments, [])
         XCTAssertEqual(repository.notes.first(where: { $0.id == allID })?.environments, [])
+
+        try repository.updateEnvironments(forItemIDs: [productionID, stagingID], mutation: .add("Production"))
+        try repository.updateEnvironments(forItemIDs: [stagingID], mutation: .add("Staging"))
+
+        // Removing only touches the items that carry the tag.
+        let removed = try repository.updateEnvironments(forItemIDs: selected, mutation: .remove("Production"))
+        XCTAssertEqual(removed, 2)
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == productionID })?.environments, [])
+        XCTAssertEqual(repository.apiKeys.first(where: { $0.id == stagingID })?.environments, ["Staging"])
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == unrelatedID })?.environments, ["Development"])
+
+        let broadened = try repository.updateEnvironments(forItemIDs: selected, mutation: .setAll)
+        XCTAssertEqual(broadened, 4)
+        XCTAssertEqual(repository.apiKeys.first(where: { $0.id == stagingID })?.environments, ["All"])
+        XCTAssertEqual(repository.notes.first(where: { $0.id == allID })?.environments, ["All"])
+        XCTAssertEqual(repository.passwords.first(where: { $0.id == unrelatedID })?.environments, ["Development"])
+        XCTAssertEqual(
+            snapshotStore.savedSnapshots.last?.apiKeys.first(where: { $0.id == stagingID })?.environments,
+            ["All"]
+        )
     }
 
     func testEnableCLIAccessForSelectedItemIDsUpdatesOnlyThoseItems() throws {
