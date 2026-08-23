@@ -534,13 +534,22 @@ public final class InjectedProcessTreeStore: @unchecked Sendable {
 
     private let fileURL: URL
     private let fileManager: FileManager
+    private let retentionInterval: TimeInterval
+    private let runLimit: Int
 
-    public init(fileURL: URL = InjectedProcessTreeStore.defaultFileURL, fileManager: FileManager = .default) {
+    public init(
+        fileURL: URL = InjectedProcessTreeStore.defaultFileURL,
+        fileManager: FileManager = .default,
+        retentionInterval: TimeInterval = 30 * 24 * 60 * 60,
+        runLimit: Int = 200
+    ) {
         self.fileURL = fileURL
         self.fileManager = fileManager
+        self.retentionInterval = retentionInterval
+        self.runLimit = max(1, runLimit)
     }
 
-    public func upsert(_ run: InjectedProcessTreeRun) throws {
+    public func upsert(_ run: InjectedProcessTreeRun, now: Date = Date()) throws {
         try Self.mutationLock.withLock {
             var runs = try loadAllUnlocked()
             if let index = runs.firstIndex(where: { $0.id == run.id }) {
@@ -548,7 +557,9 @@ public final class InjectedProcessTreeStore: @unchecked Sendable {
             } else {
                 runs.append(run)
             }
-            try writeUnlocked(runs.sorted { $0.startedAt < $1.startedAt })
+            try writeUnlocked(
+                pruned(runs.sorted { $0.startedAt < $1.startedAt }, keeping: run.id, now: now)
+            )
         }
         #if os(macOS)
         AccessCenterActivityNotifier.post()
@@ -572,6 +583,31 @@ public final class InjectedProcessTreeStore: @unchecked Sendable {
         return try data.split(separator: 0x0A)
             .map { try JSONDecoder.injectedProcessTree.decode(InjectedProcessTreeRun.self, from: Data($0)) }
             .sorted { $0.startedAt < $1.startedAt }
+    }
+
+    /// Every upsert rewrites this file, so it has to stay bounded: drop runs past the
+    /// retention window, then keep only the newest `runLimit`. Mirrors the retention
+    /// `AgentNetworkActivityStore` already applies. The run being written is always kept,
+    /// so a long-running run can never prune itself away.
+    private func pruned(
+        _ runs: [InjectedProcessTreeRun],
+        keeping keptID: UUID,
+        now: Date
+    ) -> [InjectedProcessTreeRun] {
+        let cutoff = now.addingTimeInterval(-retentionInterval)
+        let retained = runs.filter {
+            $0.id == keptID || ($0.endedAt ?? $0.startedAt) >= cutoff
+        }
+        guard retained.count > runLimit else { return retained }
+
+        let newestFirst = retained.sorted { $0.startedAt > $1.startedAt }
+        var kept = Array(newestFirst.prefix(runLimit))
+        if !kept.contains(where: { $0.id == keptID }),
+           let current = newestFirst.first(where: { $0.id == keptID }) {
+            kept.removeLast()
+            kept.append(current)
+        }
+        return kept.sorted { $0.startedAt < $1.startedAt }
     }
 
     private func writeUnlocked(_ runs: [InjectedProcessTreeRun]) throws {
@@ -615,12 +651,15 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
     private let networkInspectionProvider: NetworkInspectionProvider
     private let pollInterval: TimeInterval
     private let networkCheckpointInterval: TimeInterval
+    private let treeCheckpointInterval: TimeInterval
     private let context: InjectedProcessTreeWatchContext
     private let lock = NSLock()
     private let samplingSemaphore = DispatchSemaphore(value: 1)
     private var run: InjectedProcessTreeRun?
     private var timer: DispatchSourceTimer?
     private var recordedCommandKeys = Set<String>()
+    private var lastPersistedSignature: [String] = []
+    private var lastPersistedAt: Date?
     private var networkAccumulator: AgentNetworkActivityAccumulator?
     private var networkCoverage: AgentNetworkCaptureCoverage = .observed
     private var lastNetworkCheckpointAt: Date?
@@ -636,6 +675,7 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         },
         pollInterval: TimeInterval = 0.5,
         networkCheckpointInterval: TimeInterval = 2,
+        treeCheckpointInterval: TimeInterval = 30,
         context: InjectedProcessTreeWatchContext = InjectedProcessTreeWatchContext()
     ) {
         self.store = store
@@ -645,6 +685,7 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         self.networkInspectionProvider = networkInspectionProvider
         self.pollInterval = pollInterval
         self.networkCheckpointInterval = max(0, networkCheckpointInterval)
+        self.treeCheckpointInterval = max(0, treeCheckpointInterval)
         self.context = context
     }
 
@@ -677,8 +718,10 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         networkCoverage = .observed
         lastNetworkCheckpointAt = nil
         lastSurvivingDescendantIdentityKeys = []
+        lastPersistedSignature = Self.persistenceSignature(for: opened)
+        lastPersistedAt = now
         lock.unlock()
-        try? store.upsert(opened)
+        try? store.upsert(opened, now: now)
         recordCommandEvents(for: opened.nodes, grantIDs: context.agentJITGrantIDs, now: now)
         performSample(now: now, waitForActiveSample: true)
 
@@ -705,8 +748,10 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         let accumulator = networkAccumulator
         let coverage = networkCoverage
         let survivingDescendants = lastSurvivingDescendantIdentityKeys
+        lastPersistedSignature = Self.persistenceSignature(for: finished)
+        lastPersistedAt = now
         lock.unlock()
-        try? store.upsert(finished)
+        try? store.upsert(finished, now: now)
         if let accumulator {
             let snapshot = AgentNetworkActivityRunSnapshot(
                 runID: accumulator.runID,
@@ -795,13 +840,36 @@ public final class InjectedProcessTreeWatcher: @unchecked Sendable {
         }
         lastSurvivingDescendantIdentityKeys = survivingDescendants
         run = result.run
+        let signature = Self.persistenceSignature(for: result.run)
+        let checkpointIsDue = lastPersistedAt.map {
+            now.timeIntervalSince($0) >= treeCheckpointInterval
+        } ?? true
+        let shouldPersist = signature != lastPersistedSignature || checkpointIsDue
+        if shouldPersist {
+            lastPersistedSignature = signature
+            lastPersistedAt = now
+        }
         lock.unlock()
 
-        try? store.upsert(result.run)
+        if shouldPersist {
+            try? store.upsert(result.run, now: now)
+        }
         if let networkSnapshot {
             try? networkActivityStore.checkpoint(networkSnapshot)
         }
         recordCommandEvents(for: result.newlySeenNodes, grantIDs: context.agentJITGrantIDs, now: now)
+    }
+
+    /// What has to reach disk: which processes exist and how they exited. `lastSeenAt` is
+    /// deliberately excluded — it advances on every sample, so including it would rewrite
+    /// the whole store twice a second for a tree that never changed. `treeCheckpointInterval`
+    /// bounds how stale the persisted `lastSeenAt` can get.
+    private static func persistenceSignature(for run: InjectedProcessTreeRun) -> [String] {
+        var signature = run.nodes.map { node in
+            "\(node.identityKey)|\(node.exitStatus.map(String.init) ?? "-")"
+        }
+        signature.append("root|\(run.rootExitStatus.map(String.init) ?? "-")")
+        return signature
     }
 
     private func mergedCoverage(

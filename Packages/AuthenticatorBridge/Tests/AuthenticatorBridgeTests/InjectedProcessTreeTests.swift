@@ -384,7 +384,223 @@ final class InjectedProcessTreeTests: XCTestCase {
         XCTAssertFalse(findings.contains { $0.type == .processFallbackUsed })
         XCTAssertTrue(findings.contains { $0.type == .injectedTreeCapture })
     }
+
+    // MARK: - Durable write throttling
+
+    /// The watcher samples twice a second, but each `upsert` rewrites the whole store.
+    /// These cover the rule that only structural change (or a checkpoint) reaches disk.
+
+    private func makeThrottledWatcher(
+        directory: URL,
+        samples: @escaping @Sendable () -> [InjectedProcessTreeSample],
+        treeCheckpointInterval: TimeInterval = 30
+    ) -> (watcher: InjectedProcessTreeWatcher, treeURL: URL) {
+        let treeURL = directory.appendingPathComponent("trees.jsonl")
+        let watcher = InjectedProcessTreeWatcher(
+            store: InjectedProcessTreeStore(fileURL: treeURL),
+            commandHistoryStore: AgentCommandHistoryStore(
+                fileURL: directory.appendingPathComponent("commands.jsonl")
+            ),
+            networkActivityStore: AgentNetworkActivityStore(
+                historyFileURL: directory.appendingPathComponent("network.jsonl"),
+                activeFileURL: directory.appendingPathComponent("network-active.jsonl")
+            ),
+            sampleProvider: { _ in samples() },
+            networkInspectionProvider: { _, _ in
+                AgentNetworkInspectionResult(
+                    observations: [],
+                    coverage: .observed,
+                    failedProcessIdentityKeys: []
+                )
+            },
+            // Long enough that the repeating timer never fires inside a test.
+            pollInterval: 3600,
+            treeCheckpointInterval: treeCheckpointInterval
+        )
+        return (watcher, treeURL)
+    }
+
+    private static let throttleRoot = InjectedProcessTreeSample(
+        pid: 10, ppid: 1, startTime: 100, executable: "root", arguments: ["root"]
+    )
+    private static let throttleChild = InjectedProcessTreeSample(
+        pid: 11, ppid: 10, startTime: 101, executable: "aws", arguments: ["aws", "dynamodb", "scan"]
+    )
+
+    func testWatcherSkipsPersistWhenOnlySeenTimestampsAdvance() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let (watcher, treeURL) = makeThrottledWatcher(directory: directory) {
+            [Self.throttleRoot, Self.throttleChild]
+        }
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        watcher.start(rootPID: 10, rootExecutable: "root", rootArguments: ["root"], now: start)
+        let afterStart = try Data(contentsOf: treeURL)
+
+        // An unchanged tree, sampled repeatedly: only lastSeenAt would move.
+        watcher.sampleNow(now: start.addingTimeInterval(1))
+        watcher.sampleNow(now: start.addingTimeInterval(2))
+        watcher.sampleNow(now: start.addingTimeInterval(3))
+
+        XCTAssertEqual(try Data(contentsOf: treeURL), afterStart)
+    }
+
+    func testWatcherPersistsWhenADescendantAppears() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let visible = VisibleSamples(samples: [Self.throttleRoot])
+        let (watcher, treeURL) = makeThrottledWatcher(directory: directory) { visible.value }
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        watcher.start(rootPID: 10, rootExecutable: "root", rootArguments: ["root"], now: start)
+        let afterStart = try Data(contentsOf: treeURL)
+
+        visible.value = [Self.throttleRoot, Self.throttleChild]
+        watcher.sampleNow(now: start.addingTimeInterval(1))
+
+        let afterChild = try Data(contentsOf: treeURL)
+        XCTAssertNotEqual(afterChild, afterStart)
+        XCTAssertTrue(String(decoding: afterChild, as: UTF8.self).contains("dynamodb"))
+    }
+
+    func testWatcherPersistsWhenADescendantExits() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let visible = VisibleSamples(samples: [Self.throttleRoot, Self.throttleChild])
+        let (watcher, treeURL) = makeThrottledWatcher(directory: directory) { visible.value }
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        watcher.start(rootPID: 10, rootExecutable: "root", rootArguments: ["root"], now: start)
+        watcher.sampleNow(now: start.addingTimeInterval(1))
+        let beforeExit = try Data(contentsOf: treeURL)
+
+        visible.value = [Self.throttleRoot]
+        watcher.sampleNow(now: start.addingTimeInterval(2))
+
+        XCTAssertNotEqual(try Data(contentsOf: treeURL), beforeExit)
+    }
+
+    func testWatcherPersistsUnchangedTreeOnceTheCheckpointIntervalElapses() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let (watcher, treeURL) = makeThrottledWatcher(
+            directory: directory,
+            samples: { [Self.throttleRoot, Self.throttleChild] },
+            treeCheckpointInterval: 30
+        )
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        watcher.start(rootPID: 10, rootExecutable: "root", rootArguments: ["root"], now: start)
+        let afterStart = try Data(contentsOf: treeURL)
+
+        watcher.sampleNow(now: start.addingTimeInterval(29))
+        XCTAssertEqual(try Data(contentsOf: treeURL), afterStart, "before the checkpoint is due")
+
+        watcher.sampleNow(now: start.addingTimeInterval(31))
+        XCTAssertNotEqual(try Data(contentsOf: treeURL), afterStart, "after the checkpoint is due")
+    }
+
+    func testWatcherAlwaysPersistsOnStop() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let (watcher, treeURL) = makeThrottledWatcher(directory: directory) {
+            [Self.throttleRoot, Self.throttleChild]
+        }
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        watcher.start(rootPID: 10, rootExecutable: "root", rootArguments: ["root"], now: start)
+
+        watcher.stop(exitStatus: 0, now: start.addingTimeInterval(2))
+
+        let runs = try InjectedProcessTreeStore(fileURL: treeURL).loadAll()
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertNotNil(runs.first?.endedAt)
+        XCTAssertEqual(runs.first?.rootExitStatus, 0)
+    }
+
+    // MARK: - Store retention
+
+    private func makeRun(startedAt: Date, endedAt: Date?) -> InjectedProcessTreeRun {
+        InjectedProcessTreeRun(
+            startedAt: startedAt,
+            endedAt: endedAt,
+            rootPID: 10,
+            rootExecutable: "root",
+            rootArguments: ["root"]
+        )
+    }
+
+    func testStoreDropsRunsPastTheRetentionWindow() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = InjectedProcessTreeStore(
+            fileURL: directory.appendingPathComponent("trees.jsonl"),
+            retentionInterval: 60,
+            runLimit: 100
+        )
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let stale = makeRun(startedAt: now.addingTimeInterval(-600), endedAt: now.addingTimeInterval(-500))
+        let fresh = makeRun(startedAt: now.addingTimeInterval(-30), endedAt: now.addingTimeInterval(-10))
+
+        try store.upsert(stale, now: now.addingTimeInterval(-500))
+        try store.upsert(fresh, now: now)
+
+        XCTAssertEqual(try store.loadAll().map(\.id), [fresh.id])
+    }
+
+    func testStoreKeepsOnlyTheNewestRunsUpToTheLimit() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = InjectedProcessTreeStore(
+            fileURL: directory.appendingPathComponent("trees.jsonl"),
+            retentionInterval: 30 * 24 * 60 * 60,
+            runLimit: 3
+        )
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var written: [InjectedProcessTreeRun] = []
+        for offset in 0..<6 {
+            let run = makeRun(
+                startedAt: now.addingTimeInterval(TimeInterval(offset)),
+                endedAt: now.addingTimeInterval(TimeInterval(offset))
+            )
+            written.append(run)
+            try store.upsert(run, now: now.addingTimeInterval(TimeInterval(offset)))
+        }
+
+        XCTAssertEqual(try store.loadAll().map(\.id), written.suffix(3).map(\.id))
+    }
+
+    func testStoreNeverPrunesTheRunItIsWriting() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = InjectedProcessTreeStore(
+            fileURL: directory.appendingPathComponent("trees.jsonl"),
+            retentionInterval: 60,
+            runLimit: 2
+        )
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        // A long-running run started before the retention window opened must survive
+        // its own checkpoints rather than prune itself away.
+        let longRunning = makeRun(startedAt: now.addingTimeInterval(-600), endedAt: nil)
+        try store.upsert(longRunning, now: now)
+        try store.upsert(makeRun(startedAt: now, endedAt: now), now: now)
+        try store.upsert(makeRun(startedAt: now.addingTimeInterval(1), endedAt: now.addingTimeInterval(1)), now: now)
+        try store.upsert(longRunning, now: now.addingTimeInterval(2))
+
+        XCTAssertTrue(try store.loadAll().contains { $0.id == longRunning.id })
+    }
 }
+
+private final class VisibleSamples: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [InjectedProcessTreeSample]
+
+    init(samples: [InjectedProcessTreeSample]) {
+        self.samples = samples
+    }
+
+    var value: [InjectedProcessTreeSample] {
+        get { lock.withLock { samples } }
+        set { lock.withLock { samples = newValue } }
+    }
+}
+
 
 private final class CallCounter: @unchecked Sendable {
     private let lock = NSLock()
