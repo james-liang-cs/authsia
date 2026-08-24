@@ -2285,6 +2285,9 @@ struct Exec: ParsableCommand {
         networkInspectionProvider: InjectedProcessTreeWatcher.NetworkInspectionProvider? = nil,
         fileTouchWatcher: InjectedFileTouchWatcher? = nil,
         signalCoordinator: ChildSignalForwardingCoordinator = .shared,
+        terminalOwnershipProvider: (pid_t) -> ChildTerminalOwnership? = {
+            ChildTerminalOwnership(childProcessID: $0)
+        },
         childProcess: Process = Process(),
         processExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/env"),
         sshAutomationLeaseIssuer:
@@ -2368,6 +2371,10 @@ struct Exec: ParsableCommand {
                 fileCleanupStatus: .notRequested
             )
         }
+        // Before the child can reach a terminal read and be stopped with SIGTTIN.
+        let terminalOwnership = terminalOwnershipProvider(process.processIdentifier)
+        defer { terminalOwnership?.restore() }
+
         let signalRegistration = signalCoordinator.register(process)
         defer { signalRegistration.unregister() }
 
@@ -2620,6 +2627,103 @@ struct ChildSignalActionController: @unchecked Sendable {
                 "Unable to restore signal disposition"
             )
         }
+    }
+
+    /// Ignoring SIGTTOU lets a background process group reclaim the terminal and keep
+    /// relaying output to it, instead of being stopped for touching it.
+    func installIgnored(signal: Int32) -> ChildSignalDispositionInstallation {
+        var ignoredAction = sigaction()
+        ignoredAction.__sigaction_u.__sa_handler = SIG_IGN
+        ignoredAction.sa_flags = 0
+        sigemptyset(&ignoredAction.sa_mask)
+
+        var previousAction = sigaction()
+        precondition(
+            apply(signal, &ignoredAction, &previousAction) == 0,
+            "Unable to install signal disposition"
+        )
+        let actionToRestore = previousAction
+
+        return ChildSignalDispositionInstallation {
+            var action = actionToRestore
+            precondition(
+                apply(signal, &action, nil) == 0,
+                "Unable to restore signal disposition"
+            )
+        }
+    }
+}
+
+/// Hands the controlling terminal to the child's process group while it runs, the way a
+/// shell does for a foreground job, and gives it back afterwards.
+///
+/// Foundation's `Process` starts the child in a new process group, which makes it a
+/// *background* group for the terminal. The first time such a child reads the terminal —
+/// a `read -p` prompt, `sudo`, an ssh passphrase, a git credential prompt — the kernel
+/// stops it with SIGTTIN, and the run hangs with no output and no error.
+struct ChildTerminalOwnership {
+    /// Terminal and process-group calls, injectable so the handover rules can be tested
+    /// without a controlling terminal.
+    struct Control: Sendable {
+        var openTerminal: @Sendable () -> Int32 = { open("/dev/tty", O_RDWR | O_NOCTTY) }
+        var closeTerminal: @Sendable (Int32) -> Void = { _ = close($0) }
+        var currentProcessGroup: @Sendable () -> pid_t = { getpgrp() }
+        var processGroup: @Sendable (pid_t) -> pid_t = { getpgid($0) }
+        var foregroundProcessGroup: @Sendable (Int32) -> pid_t = { tcgetpgrp($0) }
+        var setForegroundProcessGroup: @Sendable (Int32, pid_t) -> Int32 = { tcsetpgrp($0, $1) }
+        var resumeProcessGroup: @Sendable (pid_t) -> Void = { _ = killpg($0, SIGCONT) }
+        var ignoreBackgroundTerminalWrites:
+            @Sendable () -> ChildSignalDispositionInstallation = {
+                ChildSignalActionController().installIgnored(signal: SIGTTOU)
+            }
+    }
+
+    private let control: Control
+    private let terminal: Int32
+    private let previousProcessGroup: pid_t
+    private let ignoredSIGTTOU: ChildSignalDispositionInstallation
+
+    /// Nil when there is nothing to hand over: the child shares this process group, there
+    /// is no controlling terminal, this process does not currently hold it, or the kernel
+    /// refuses the handover. Each case leaves the terminal exactly as it was.
+    init?(childProcessID: pid_t, control: Control = Control()) {
+        let childProcessGroup = control.processGroup(childProcessID)
+        guard childProcessGroup > 0,
+              childProcessGroup != control.currentProcessGroup() else { return nil }
+
+        let terminal = control.openTerminal()
+        guard terminal >= 0 else { return nil }
+
+        // Only take the terminal when this process is the one holding it. Otherwise it
+        // belongs to another job and is not ours to move.
+        let previousProcessGroup = control.foregroundProcessGroup(terminal)
+        guard previousProcessGroup > 0,
+              previousProcessGroup == control.currentProcessGroup() else {
+            control.closeTerminal(terminal)
+            return nil
+        }
+
+        let ignoredSIGTTOU = control.ignoreBackgroundTerminalWrites()
+        guard control.setForegroundProcessGroup(terminal, childProcessGroup) == 0 else {
+            ignoredSIGTTOU.restore()
+            control.closeTerminal(terminal)
+            return nil
+        }
+
+        // The child can reach a terminal read in the window between spawn and here and
+        // already be stopped; this is a no-op for a child that is still running.
+        control.resumeProcessGroup(childProcessGroup)
+
+        self.control = control
+        self.terminal = terminal
+        self.previousProcessGroup = previousProcessGroup
+        self.ignoredSIGTTOU = ignoredSIGTTOU
+    }
+
+    func restore() {
+        _ = control.setForegroundProcessGroup(terminal, previousProcessGroup)
+        ignoredSIGTTOU.restore()
+        control.closeTerminal(terminal)
     }
 }
 

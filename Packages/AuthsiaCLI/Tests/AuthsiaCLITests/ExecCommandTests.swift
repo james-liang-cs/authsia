@@ -1773,3 +1773,128 @@ private final class RecordingSSHAutomationExecutionLeaseIssuer:
         retiredLeaseID = leaseID
     }
 }
+
+@Suite("Exec child terminal ownership")
+struct ChildTerminalOwnershipTests {
+
+    @Test("hands the terminal to the child's process group and resumes it")
+    func handsTerminalToChild() {
+        let recorder = TerminalControlRecorder()
+
+        let ownership = ChildTerminalOwnership(childProcessID: 4_242, control: recorder.control())
+
+        #expect(ownership != nil)
+        #expect(recorder.foregroundAssignments == [.init(descriptor: 7, processGroup: 200)])
+        // A child already stopped by SIGTTIN between spawn and handover has to be woken.
+        #expect(recorder.resumed == [200])
+        #expect(recorder.closed.isEmpty)
+    }
+
+    @Test("gives the terminal back when the run finishes")
+    func restoresTerminalAfterRun() {
+        let recorder = TerminalControlRecorder()
+        let ownership = ChildTerminalOwnership(childProcessID: 4_242, control: recorder.control())
+
+        ownership?.restore()
+
+        #expect(recorder.foregroundAssignments == [
+            .init(descriptor: 7, processGroup: 200),
+            .init(descriptor: 7, processGroup: 100),
+        ])
+        #expect(recorder.restoredSIGTTOU == 1)
+        #expect(recorder.closed == [7])
+    }
+
+    @Test("leaves the terminal alone when the child shares this process group")
+    func skipsWhenChildSharesProcessGroup() {
+        let recorder = TerminalControlRecorder()
+        recorder.childProcessGroup = recorder.currentProcessGroup
+
+        #expect(ChildTerminalOwnership(childProcessID: 4_242, control: recorder.control()) == nil)
+        #expect(recorder.opened == 0)
+        #expect(recorder.foregroundAssignments.isEmpty)
+    }
+
+    @Test("leaves the terminal alone when the child has already exited")
+    func skipsWhenChildProcessGroupIsUnknown() {
+        let recorder = TerminalControlRecorder()
+        recorder.childProcessGroup = -1
+
+        #expect(ChildTerminalOwnership(childProcessID: 4_242, control: recorder.control()) == nil)
+        #expect(recorder.opened == 0)
+    }
+
+    @Test("leaves the terminal alone when there is no controlling terminal")
+    func skipsWithoutControllingTerminal() {
+        let recorder = TerminalControlRecorder()
+        recorder.descriptor = -1
+
+        #expect(ChildTerminalOwnership(childProcessID: 4_242, control: recorder.control()) == nil)
+        #expect(recorder.foregroundAssignments.isEmpty)
+        #expect(recorder.closed.isEmpty)
+    }
+
+    @Test("leaves the terminal alone when another job holds it")
+    func skipsWhenAnotherJobHoldsTerminal() {
+        let recorder = TerminalControlRecorder()
+        recorder.terminalForegroundProcessGroup = 999
+
+        #expect(ChildTerminalOwnership(childProcessID: 4_242, control: recorder.control()) == nil)
+        #expect(recorder.foregroundAssignments.isEmpty)
+        #expect(recorder.closed == [7])
+        #expect(recorder.restoredSIGTTOU == 0)
+    }
+
+    @Test("unwinds when the kernel refuses the handover")
+    func unwindsWhenHandoverIsRefused() {
+        let recorder = TerminalControlRecorder()
+        recorder.setForegroundResult = -1
+
+        #expect(ChildTerminalOwnership(childProcessID: 4_242, control: recorder.control()) == nil)
+        #expect(recorder.restoredSIGTTOU == 1)
+        #expect(recorder.closed == [7])
+        #expect(recorder.resumed.isEmpty)
+    }
+}
+
+private final class TerminalControlRecorder: @unchecked Sendable {
+    struct ForegroundAssignment: Equatable {
+        let descriptor: Int32
+        let processGroup: pid_t
+    }
+
+    var descriptor: Int32 = 7
+    var currentProcessGroup: pid_t = 100
+    var childProcessGroup: pid_t = 200
+    var terminalForegroundProcessGroup: pid_t = 100
+    var setForegroundResult: Int32 = 0
+
+    private(set) var opened = 0
+    private(set) var closed: [Int32] = []
+    private(set) var foregroundAssignments: [ForegroundAssignment] = []
+    private(set) var resumed: [pid_t] = []
+    private(set) var restoredSIGTTOU = 0
+
+    func control() -> ChildTerminalOwnership.Control {
+        var control = ChildTerminalOwnership.Control()
+        control.openTerminal = { [self] in
+            opened += 1
+            return descriptor
+        }
+        control.closeTerminal = { [self] descriptor in closed.append(descriptor) }
+        control.currentProcessGroup = { [self] in currentProcessGroup }
+        control.processGroup = { [self] _ in childProcessGroup }
+        control.foregroundProcessGroup = { [self] _ in terminalForegroundProcessGroup }
+        control.setForegroundProcessGroup = { [self] descriptor, processGroup in
+            foregroundAssignments.append(
+                ForegroundAssignment(descriptor: descriptor, processGroup: processGroup)
+            )
+            return setForegroundResult
+        }
+        control.resumeProcessGroup = { [self] processGroup in resumed.append(processGroup) }
+        control.ignoreBackgroundTerminalWrites = { [self] in
+            ChildSignalDispositionInstallation { [self] in restoredSIGTTOU += 1 }
+        }
+        return control
+    }
+}
