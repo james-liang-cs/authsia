@@ -304,15 +304,18 @@ struct OutputMaskerTests {
 
     @Test("streaming a large buffer stays linear in the buffer size")
     func streamLargeBufferStaysLinear() {
-        // Holding back a possible split hex secret used to rescan every suffix of the
-        // pending buffer, making a large read quadratic: this took ~66s before the fix.
+        // Two separate quadratics have lived here. Holding back a possible split hex
+        // secret rescanned every suffix of the pending buffer; holding back a possible
+        // split *plain* secret then re-walked the buffer tail once per candidate length,
+        // which cost ~12 minutes to relay a 318 MB `aws dynamodb query` result. 16 MB in
+        // under 10s needs only 1.6 MB/s, versus roughly 0.9 MB/s for the latter version.
         let masker = OutputMasker(secrets: [
             "AKIAIOSFODNN7EXAMPLE",
             "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
             "hunter2-p@ssw0rd",
         ])
         var line = ""
-        while line.utf8.count < 256 * 1024 {
+        while line.utf8.count < 16 * 1024 * 1024 {
             line += "  { \"id\": \"i-0a1b2c3d4e5f6\", \"vol\": \"deadbeefcafe\" },\n"
         }
         let data = Data(line.utf8)
@@ -335,6 +338,66 @@ struct OutputMaskerTests {
     func streamChunkingMatchesOneShot() {
         let masker = OutputMasker(secrets: ["deadbeefcafe", "hunter2"])
         let text = "vol deadbeef cafe id dead\nbeefcafe pw hunter2 tail deadbee"
+
+        expectChunkedStreamMatchesOneShot(masker: masker, text: text)
+    }
+
+    @Test("strict streaming masks multi-byte secrets at every chunk size")
+    func strictStreamMasksMultiByteSecretsAtEveryChunkSize() {
+        // A secret whose UTF-8 bytes do not line up with its grapheme clusters used to
+        // reach the terminal in the clear even under `.strict`: the hold-back counted
+        // Characters, so a read ending inside "b" + U+0301 emitted the whole secret.
+        // `.maskedCompatibility` is deliberately excluded — it forwards any read that
+        // splits a scalar, so only `.strict` promises this.
+        let secrets = ["ab\u{0301}c", "pässwörd", "秘密鍵", "café"]
+        let masker = OutputMasker(secrets: secrets)
+
+        for secret in secrets {
+            for text in ["\(secret)", "pre \(secret) post", "\(secret)\(secret)", "é\(secret)🔐"] {
+                let data = Data(text.utf8)
+                let expected = masker.mask(data)
+
+                for chunkSize in [1, 2, 3, 4, 5, 7, 16, 64] {
+                    let label = "chunk \(chunkSize) for \(text.debugDescription)"
+                    let result = strictStreamOutput(masker: masker, data: data, chunkSize: chunkSize)
+
+                    #expect(result == .success(expected), "\(label)")
+                    if case .success(let output) = result {
+                        let rendered = String(data: output, encoding: .utf8) ?? ""
+                        #expect(!rendered.contains(secret), "\(label) leaked the secret")
+                    }
+                }
+            }
+        }
+    }
+
+    private func strictStreamOutput(
+        masker: OutputMasker,
+        data: Data,
+        chunkSize: Int
+    ) -> Result<Data, OutputDisclosureFailure> {
+        var stream = masker.makeStream()
+        var output = Data()
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + chunkSize, data.count)
+            switch stream.mask(data.subdata(in: offset..<end), policy: .strict) {
+            case .success(let chunk):
+                output += chunk
+            case .failure(let failure):
+                return .failure(failure)
+            }
+            offset = end
+        }
+        switch stream.flush(policy: .strict) {
+        case .success(let chunk):
+            return .success(output + chunk)
+        case .failure(let failure):
+            return .failure(failure)
+        }
+    }
+
+    private func expectChunkedStreamMatchesOneShot(masker: OutputMasker, text: String) {
         let data = Data(text.utf8)
         let expected = masker.mask(data)
 
@@ -349,7 +412,7 @@ struct OutputMaskerTests {
             }
             output += stream.flush()
 
-            #expect(output == expected, "chunk size \(chunkSize)")
+            #expect(output == expected, "chunk size \(chunkSize) for \(text.debugDescription)")
         }
     }
 }
