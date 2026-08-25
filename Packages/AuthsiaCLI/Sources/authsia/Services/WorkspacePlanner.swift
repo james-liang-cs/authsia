@@ -481,7 +481,8 @@ enum WorkspaceUpdatePlanner {
                         workspaceFolder: existingConfig.workspace.authsiaFolder
                     )
                 )
-            }
+            },
+            mcpUpstreams: existingConfig.mcpUpstreams
         )
 
         let scanner = FileScannerService()

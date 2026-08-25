@@ -572,7 +572,8 @@ struct Workspace: AsyncParsableCommand {
                 managedEnvFiles: selectedEnvFiles.map(\.relativePath),
                 agents: plan.config.agents,
                 guardSettings: plan.config.guardSettings,
-                envBindings: plan.config.envBindings
+                envBindings: plan.config.envBindings,
+                mcpUpstreams: plan.config.mcpUpstreams
             )
             try WorkspaceConfigStore.write(config, toWorkspaceRoot: plan.workspaceRoot)
             Workspace.recordKnownWorkspaceRoot(plan.workspaceRoot, store: knownRootsStore)
@@ -1864,7 +1865,8 @@ struct Workspace: AsyncParsableCommand {
                 managedEnvFiles: config.managedEnvFiles,
                 agents: config.agents,
                 guardSettings: config.guardSettings,
-                envBindings: bindings
+                envBindings: bindings,
+                mcpUpstreams: config.mcpUpstreams
             )
             try WorkspaceConfigStore.write(config, toWorkspaceRoot: workspaceRoot, fileManager: fileManager)
             Workspace.recordKnownWorkspaceRoot(workspaceRoot, store: knownRootsStore)
@@ -1910,7 +1912,8 @@ struct Workspace: AsyncParsableCommand {
                 managedEnvFiles: config.managedEnvFiles,
                 agents: config.agents,
                 guardSettings: config.guardSettings,
-                envBindings: bindings
+                envBindings: bindings,
+                mcpUpstreams: config.mcpUpstreams
             )
             try WorkspaceConfigStore.write(config, toWorkspaceRoot: workspaceRoot, fileManager: fileManager)
             Workspace.recordKnownWorkspaceRoot(workspaceRoot, store: knownRootsStore)
@@ -2373,7 +2376,8 @@ struct Workspace: AsyncParsableCommand {
                 managedEnvFiles: config.managedEnvFiles,
                 agents: config.agents,
                 guardSettings: config.guardSettings,
-                envBindings: bindings
+                envBindings: bindings,
+                mcpUpstreams: config.mcpUpstreams
             )
             try WorkspaceConfigStore.write(config, toWorkspaceRoot: root, fileManager: fileManager)
             return "Updated workspace env bindings: \(updatedNames.joined(separator: ", "))"
@@ -2739,7 +2743,8 @@ struct Workspace: AsyncParsableCommand {
                     tools: tools,
                     responseMode: config.guardSettings.responseMode
                 ),
-                envBindings: config.envBindings
+                envBindings: config.envBindings,
+                mcpUpstreams: config.mcpUpstreams
             )
         }
 
@@ -2763,7 +2768,8 @@ struct Workspace: AsyncParsableCommand {
                     tools: config.guardSettings.tools,
                     responseMode: mode
                 ),
-                envBindings: config.envBindings
+                envBindings: config.envBindings,
+                mcpUpstreams: config.mcpUpstreams
             )
         }
 

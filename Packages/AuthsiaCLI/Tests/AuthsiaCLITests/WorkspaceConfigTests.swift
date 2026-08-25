@@ -356,6 +356,7 @@ struct WorkspaceConfigTests {
         let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
 
         #expect(config.envBindings.isEmpty)
+        #expect(config.mcpUpstreams.isEmpty)
         #expect(config.guardSettings.autoTabs)
         #expect(config.guardSettings.responseMode == .observe)
     }
@@ -534,4 +535,524 @@ struct WorkspaceConfigTests {
             try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
         }
     }
+
+    @Test("schema v1 and v2 files without mcpUpstreams still load")
+    func missingMCPUpstreamsStillLoadForSchemaV1AndV2() throws {
+        for schemaVersion in [1, 2] {
+            let root = try makeWorkspaceRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            try writeWorkspaceJSON(schemaVersion: schemaVersion, extraFields: "", in: root)
+
+            let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+            #expect(config.schemaVersion == schemaVersion)
+            #expect(config.mcpUpstreams.isEmpty)
+        }
+    }
+
+    @Test("workspace env add preserves existing mcpUpstreams")
+    func envAddDoesNotStripExistingMCPUpstreams() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let knownRootsDirectory = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: knownRootsDirectory) }
+        let upstream = MCPUpstreamConfig(
+            name: "jira",
+            command: "mcp-atlassian",
+            env: [
+                "JIRA_API_TOKEN": "authsia://api-key/Atlassian/key?folder=Workspaces%2Fapi",
+                "JIRA_URL": "https://example.atlassian.net",
+            ],
+            tools: MCPUpstreamToolPolicy(
+                allow: ["jira_get_issue"],
+                approve: ["jira_create_issue"],
+                deny: ["jira_delete_issue"]
+            )
+        )
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil,
+            mcpUpstreams: [upstream]
+        )
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+
+        _ = try Workspace.Env.addBinding(
+            name: "API_KEY",
+            reference: "authsia://api-key/API_KEY/key",
+            workspaceRoot: root,
+            knownRootsStore: WorkspaceKnownRootsStore(applicationSupportDirectory: knownRootsDirectory)
+        )
+
+        let loaded = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        #expect(loaded.mcpUpstreams == config.mcpUpstreams)
+        #expect(loaded.envBindings.map(\.name) == ["API_KEY"])
+    }
+
+    @Test("HTTP-only upstream round-trips without command env tools or catalog")
+    func httpOnlyUpstreamRoundTripsThroughReadAndStatus() async throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "rovo",
+                "transport": "http",
+                "url": "https://example.atlassian.net/mcp"
+              }
+            ]
+            """,
+            in: root
+        )
+
+        let loaded = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        #expect(loaded.mcpUpstreams.count == 1)
+        #expect(loaded.mcpUpstreams[0].name == "rovo")
+        #expect(loaded.mcpUpstreams[0].transport == .http)
+        #expect(loaded.mcpUpstreams[0].url == "https://example.atlassian.net/mcp")
+        #expect(loaded.mcpUpstreams[0].command == nil)
+        #expect(loaded.mcpUpstreams[0].args.isEmpty)
+        #expect(loaded.mcpUpstreams[0].env.isEmpty)
+        #expect(loaded.mcpUpstreams[0].tools == MCPUpstreamToolPolicy())
+        #expect(loaded.mcpUpstreams[0].catalog.isEmpty)
+
+        try WorkspaceConfigStore.write(loaded, toWorkspaceRoot: root)
+        let raw = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: root.appendingPathComponent(".authsia/workspace.json"))
+        ) as? [String: Any]
+        let upstreams = raw?["mcpUpstreams"] as? [[String: Any]]
+        #expect(upstreams?.count == 1)
+        #expect(Set(upstreams?[0].keys.map { $0 } ?? []) == ["name", "transport", "url"])
+
+        let status = try await WorkspaceStatusReporter.build(workspaceRoot: root)
+        #expect(status.config.mcpUpstreams == loaded.mcpUpstreams)
+    }
+
+    @Test("stdio MCP upstream with PATH command and catalog round-trips")
+    func stdioUpstreamRoundTripsThroughReadNormalizeValidateWrite() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = WorkspaceConfig(
+            schemaVersion: 2,
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil,
+            mcpUpstreams: [
+                MCPUpstreamConfig(
+                    name: "jira",
+                    command: "mcp-atlassian",
+                    env: [
+                        "JIRA_API_TOKEN": "authsia://api-key/Atlassian/key?folder=Workspaces%2Fapi",
+                        "JIRA_URL": "https://example.atlassian.net",
+                        "JIRA_USERNAME": "jane@example.atlassian.net",
+                    ],
+                    tools: MCPUpstreamToolPolicy(
+                        allow: ["jira_get_issue", "jira_search"],
+                        approve: ["jira_create_issue"],
+                        deny: ["jira_delete_issue"]
+                    ),
+                    catalog: [
+                        MCPUpstreamToolDescriptor(
+                            name: "jira_get_issue",
+                            description: "Get one Jira issue by key",
+                            inputSchema: .object([
+                                "additionalProperties": .bool(false),
+                                "properties": .object([
+                                    "issueKey": .object(["type": .string("string")]),
+                                ]),
+                                "required": .array([.string("issueKey")]),
+                                "type": .string("object"),
+                            ])
+                        ),
+                        MCPUpstreamToolDescriptor(name: "jira_search"),
+                        MCPUpstreamToolDescriptor(name: "jira_delete_issue"),
+                        MCPUpstreamToolDescriptor(name: "other_tool"),
+                    ]
+                ),
+            ]
+        )
+
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+        let loaded = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+
+        #expect(loaded.mcpUpstreams.count == 1)
+        #expect(loaded.mcpUpstreams[0].command == "mcp-atlassian")
+        #expect(loaded.mcpUpstreams[0].catalog.map(\.name) == ["jira_get_issue", "jira_search"])
+        #expect(loaded.mcpUpstreams[0].catalog[1].description.isEmpty)
+        #expect(loaded.mcpUpstreams[0].catalog[1].inputSchema == .object([
+            "additionalProperties": .bool(true),
+            "type": .string("object"),
+        ]))
+        #expect(loaded.schemaVersion == 2)
+    }
+
+    @Test("absolute MCP upstream command is rejected")
+    func absoluteMCPUpstreamCommandIsRejected() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "/usr/local/bin/mcp-atlassian"
+              }
+            ]
+            """,
+            in: root
+        )
+
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+    }
+
+    @Test("shell-shaped MCP upstream command and args are rejected")
+    func shellShapedMCPUpstreamCommandIsRejected() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "bash",
+                "args": ["-lc", "mcp-atlassian"]
+              }
+            ]
+            """,
+            in: root
+        )
+
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+    }
+
+    @Test("relative MCP upstream command is accepted")
+    func relativeMCPUpstreamCommandIsAccepted() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "tools/jira-mcp"
+              }
+            ]
+            """,
+            in: root
+        )
+
+        let loaded = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        #expect(loaded.mcpUpstreams[0].command == "tools/jira-mcp")
+    }
+
+    @Test("overlapping MCP tool lists are rejected")
+    func overlappingMCPToolListsAreRejected() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "tools": {
+                  "allow": ["jira_get_issue"],
+                  "deny": ["jira_get_issue"]
+                }
+              }
+            ]
+            """,
+            in: root
+        )
+
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+    }
+
+    @Test("MCP upstream env TOKEN names require authsia refs and reject OTP SSH refs")
+    func mcpUpstreamEnvRefRules() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "env": { "JIRA_API_TOKEN": "plaintext" }
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "env": { "JIRA_OTP": "authsia://otp/GitHub/code" }
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "env": { "DEPLOY_KEY": "authsia://ssh/deploy/privateKey" }
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "env": {
+                  "JIRA_API_TOKEN": "authsia://api-key/Atlassian/key?folder=Workspaces%2Fapi",
+                  "JIRA_URL": "https://example.atlassian.net"
+                }
+              }
+            ]
+            """,
+            in: root
+        )
+        let loaded = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        #expect(loaded.mcpUpstreams[0].env["JIRA_URL"] == "https://example.atlassian.net")
+    }
+
+    @Test("MCP upstream args reject authsia references")
+    func mcpUpstreamArgsRejectSecretReferences() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "args": ["authsia://api-key/Atlassian/key"]
+              }
+            ]
+            """,
+            in: root
+        )
+
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+    }
+
+    @Test("MCP upstream catalog rejects non-object dollar-ref and oversized schemas")
+    func mcpUpstreamCatalogBounds() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "tools": { "allow": ["jira_get_issue"] },
+                "catalog": [
+                  {
+                    "name": "jira_get_issue",
+                    "inputSchema": { "type": "object", "$ref": "#/defs/issue" }
+                  }
+                ]
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "tools": { "allow": ["jira_get_issue"] },
+                "catalog": [
+                  {
+                    "name": "jira_get_issue",
+                    "inputSchema": { "type": "object", "$schema": "https://json-schema.org/draft/2020-12/schema" }
+                  }
+                ]
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "tools": { "allow": ["jira_get_issue"] },
+                "catalog": [
+                  {
+                    "name": "jira_get_issue",
+                    "inputSchema": {
+                      "type": "object",
+                      "properties": { "url": { "type": "string", "default": "https://example.invalid" } }
+                    }
+                  }
+                ]
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "tools": { "allow": ["jira_get_issue"] },
+                "catalog": [
+                  { "name": "jira_get_issue", "inputSchema": true }
+                ]
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        let oversized = String(repeating: "x", count: 65_536)
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "jira",
+                "command": "mcp-atlassian",
+                "tools": { "allow": ["jira_get_issue"] },
+                "catalog": [
+                  { "name": "jira_get_issue", "description": "\(oversized)" }
+                ]
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+    }
+
+    @Test("MCP upstream names must be unique and match the name pattern")
+    func mcpUpstreamNamesMustBeUniqueAndValid() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              { "name": "1jira", "command": "mcp-atlassian" }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              { "name": "jira", "command": "mcp-atlassian" },
+              { "name": "jira", "command": "tools/jira-mcp" }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+    }
+
+    @Test("migratedToV2 preserves mcpUpstreams without bumping current schema")
+    func migratedToV2PreservesMCPUpstreams() {
+        let config = WorkspaceConfig(
+            schemaVersion: 1,
+            workspace: WorkspaceConfig.Workspace(name: "api", authsiaFolder: "Workspaces/api"),
+            managedEnvFiles: [],
+            agents: nil,
+            mcpUpstreams: [MCPUpstreamConfig(name: "jira", command: "mcp-atlassian")]
+        )
+        let migrated = WorkspaceConfigStore.migratedToV2(config)
+        #expect(WorkspaceConfigStore.currentSchemaVersion == 2)
+        #expect(migrated.schemaVersion == 2)
+        #expect(migrated.mcpUpstreams == config.mcpUpstreams)
+    }
+}
+
+private func writeWorkspaceJSON(
+    schemaVersion: Int = 2,
+    extraFields: String,
+    in root: URL
+) throws {
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent(".authsia"),
+        withIntermediateDirectories: true
+    )
+    let extra = extraFields.trimmingCharacters(in: .whitespacesAndNewlines)
+    let extraJSON = extra.isEmpty ? "" : ",\n      \(extra)"
+    try """
+    {
+      "schemaVersion": \(schemaVersion),
+      "workspace": {
+        "name": "api",
+        "authsiaFolder": "Workspaces/api"
+      },
+      "managedEnvFiles": []\(extraJSON)
+    }
+    """.write(
+        to: root.appendingPathComponent(".authsia/workspace.json"),
+        atomically: true,
+        encoding: .utf8
+    )
 }
