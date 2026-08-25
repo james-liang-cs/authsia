@@ -96,7 +96,7 @@ struct MCPProxySpawnTests {
             )
             terminator.start()
         }
-        let observed = waitForFile(pgidFile)
+        let observed = waitForMCPProxyTestFile(pgidFile)
         let parts = observed.split(separator: " ")
         let pid = try #require(pid_t(parts.first.map(String.init) ?? ""))
         let pgid = try #require(pid_t(parts.dropFirst().first.map(String.init) ?? ""))
@@ -266,15 +266,107 @@ struct MCPProxySpawnTests {
         await proxy.waitUntilCompleted()
     }
 
-    private func waitForFile(_ url: URL, timeoutSeconds: Double = 5) -> String {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
+    @Test("relative non-executable command is commandNotFound")
+    func relativeNonExecutableIsCommandNotFound() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let relative = root.appendingPathComponent("tools/upstream-mcp")
+        try FileManager.default.createDirectory(
+            at: relative.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "#!/usr/bin/python3\n".write(to: relative, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: relative.path
+        )
+        #expect(throws: MCPProxySpawnError.commandNotFound) {
+            _ = try MCPProxyCommandResolver.resolve(
+                command: "tools/upstream-mcp",
+                workspaceRoot: root,
+                path: "/usr/bin"
+            )
+        }
+    }
+
+    @Test("hung initialize kills the child process group")
+    func hungInitializeKillsProcessGroup() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = root.appendingPathComponent("tools/upstream-mcp")
+        try writeExecutableMCPProxyScript(at: script)
+        let pgidFile = root.appendingPathComponent("child.pgid")
+        let spawned = try MCPProxyPosixLauncher().spawn(
+            executable: script,
+            arguments: [],
+            environment: [
+                "PATH": "/usr/bin:/bin",
+                "AUTHSIA_TEST_HANG": "1",
+                "AUTHSIA_TEST_PGID": pgidFile.path,
+            ],
+            currentDirectory: root
+        )
+        _ = waitForMCPProxyTestFile(pgidFile)
+        #expect(Darwin.kill(-spawned.processGroupID, 0) == 0 || errno == EPERM)
+        let terminator = MCPProcessTerminator(
+            processID: spawned.processID,
+            processGroupID: spawned.processGroupID,
+            killGraceSeconds: 0.05
+        )
+        Darwin.kill(-spawned.processGroupID, SIGKILL)
+        terminator.start()
+        Darwin.close(spawned.stdinWrite)
+        Darwin.close(spawned.stdoutRead)
+        Darwin.close(spawned.stderrRead)
+        let deadline = Date().addingTimeInterval(2)
         while Date() < deadline {
-            if let contents = try? String(contentsOf: url, encoding: .utf8),
-               !contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return contents.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+            let alive = Darwin.kill(-spawned.processGroupID, 0) == 0 || errno == EPERM
+            if !alive { break }
             Thread.sleep(forTimeInterval: 0.02)
         }
-        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        #expect(Darwin.kill(-spawned.processGroupID, 0) != 0)
+    }
+
+    @Test("trampoline restores SIGTERM and does not inherit extra parent FDs")
+    func trampolineRestoresSignalsAndCloexec() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = root.appendingPathComponent("tools/upstream-mcp")
+        try writeExecutableMCPProxyScript(at: script)
+        var extraPipe = [Int32](repeating: 0, count: 2)
+        guard Darwin.pipe(&extraPipe) == 0 else {
+            Issue.record("pipe failed")
+            return
+        }
+        defer {
+            Darwin.close(extraPipe[0])
+            Darwin.close(extraPipe[1])
+        }
+        let sigtermFile = root.appendingPathComponent("sigterm")
+        let inheritedFile = root.appendingPathComponent("inherited")
+        let spawned = try MCPProxyPosixLauncher().spawn(
+            executable: script,
+            arguments: [],
+            environment: [
+                "PATH": "/usr/bin:/bin",
+                "AUTHSIA_TEST_SIGTERM": sigtermFile.path,
+                "AUTHSIA_TEST_PARENT_FD": String(extraPipe[0]),
+                "AUTHSIA_TEST_PARENT_FD_RESULT": inheritedFile.path,
+            ],
+            currentDirectory: root
+        )
+        defer {
+            let terminator = MCPProcessTerminator(
+                processID: spawned.processID,
+                processGroupID: spawned.processGroupID,
+                killGraceSeconds: 0.05
+            )
+            terminator.start()
+            Darwin.close(spawned.stdinWrite)
+            Darwin.close(spawned.stdoutRead)
+            Darwin.close(spawned.stderrRead)
+        }
+        #expect(waitForMCPProxyTestFile(sigtermFile) == "DEFAULT")
+        #expect(waitForMCPProxyTestFile(inheritedFile) == "closed")
     }
 }

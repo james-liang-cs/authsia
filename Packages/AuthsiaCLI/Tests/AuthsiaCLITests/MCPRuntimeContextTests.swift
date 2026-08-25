@@ -19,6 +19,32 @@ struct MCPRuntimeContextTests {
         #expect(context.workspaceName == "api")
     }
 
+    @Test("proxy identity uses MCP sessionID and proxy agentID without AUTHSIA_AGENT env")
+    func proxyIdentityIsInProcess() async throws {
+        let root = try makeManagedWorkspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let invocationID = UUID(uuidString: "2624F49A-65EE-433C-B816-03631A44D1C7")!
+        let context = MCPRuntimeContext(startingDirectory: root, instanceID: serverID)
+        await context.updateClientInfo(name: "Cursor", version: "1")
+
+        let identity = await context.makeProxyAgentRuntimeContext(
+            upstreamName: "jira",
+            invocationID: invocationID
+        )
+        let invocation = await context.makeInvocation(id: invocationID)
+
+        #expect(identity.agentType == "authsia-mcp")
+        #expect(identity.sessionID == "mcp:\(serverID.uuidString)")
+        #expect(identity.agentID == "proxy:jira")
+        #expect(identity.turnID == "mcp-call:\(invocationID.uuidString)")
+        #expect(identity.toolUseID == "mcp-call:\(invocationID.uuidString)")
+        #expect(identity.platform == "Cursor")
+        #expect(invocation.environment[AgentRuntimeContextResolver.environmentInvokesAuthsiaKey] == "1")
+        #expect(invocation.agentRuntimeContext?.agentID == nil)
+        #expect(identity.agentID != nil)
+    }
+
     @Test("each invocation has fresh agent projection")
     func freshInvocationProjection() async throws {
         let root = try makeManagedWorkspace()

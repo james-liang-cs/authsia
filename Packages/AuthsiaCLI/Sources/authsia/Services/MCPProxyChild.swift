@@ -73,7 +73,8 @@ enum MCPProxyCommandResolver {
         }
         var directory: ObjCBool = false
         guard fileManager.fileExists(atPath: canonicalFile.path, isDirectory: &directory),
-              !directory.boolValue else {
+              !directory.boolValue,
+              fileManager.isExecutableFile(atPath: canonicalFile.path) else {
             throw MCPProxySpawnError.commandNotFound
         }
         return canonicalFile
@@ -148,8 +149,16 @@ struct MCPProxyPosixLauncher: MCPProxyChildLaunching {
             throw MCPProxySpawnError.launchFailed
         }
         defer { posix_spawnattr_destroy(&attributes) }
-        guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP)) == 0,
-              posix_spawnattr_setpgroup(&attributes, 0) == 0 else {
+        var defaultSignals = sigset_t()
+        sigemptyset(&defaultSignals)
+        sigaddset(&defaultSignals, SIGINT)
+        sigaddset(&defaultSignals, SIGTERM)
+        let flags = Int16(
+            POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF
+        )
+        guard posix_spawnattr_setflags(&attributes, flags) == 0,
+              posix_spawnattr_setpgroup(&attributes, 0) == 0,
+              posix_spawnattr_setsigdefault(&attributes, &defaultSignals) == 0 else {
             closeAll()
             throw MCPProxySpawnError.launchFailed
         }

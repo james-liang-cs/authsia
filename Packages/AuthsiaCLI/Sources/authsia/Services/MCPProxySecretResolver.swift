@@ -30,6 +30,30 @@ struct MCPProxySecretResolver: SecretResolverClient {
     }
 }
 
+protocol MCPProxyBridgeSession: Sendable {
+    func withRequestedCommand<R>(
+        _ command: String,
+        includeAutomationCredential: Bool,
+        _ body: () throws -> R
+    ) rethrows -> R
+    func agentJITPreflight(
+        _ payload: AgentJITPreflightPayload,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?
+    ) throws -> AgentJITPreflightResultPayload
+    func resolveSecret(
+        type: SecretReference.ItemType,
+        query: String,
+        field: String,
+        folder: String?,
+        isFolderScoped: Bool,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> String
+}
+
+extension AuthsiaBridgeClient: MCPProxyBridgeSession {}
+
 protocol MCPProxySessionClient: Sendable {
     func prepareChildEnvironment(
         declared: [String: String],
@@ -39,10 +63,29 @@ protocol MCPProxySessionClient: Sendable {
 }
 
 struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
-    let client: AuthsiaBridgeClient
+    let client: any MCPProxyBridgeSession
+    private let makeResolver: @Sendable (AgentRuntimeContext, URL) -> any SecretResolverClient
 
     init(client: AuthsiaBridgeClient = .shared) {
         self.client = client
+        self.makeResolver = { context, root in
+            MCPProxySecretResolver(
+                client: client,
+                agentRuntimeContext: context,
+                workspaceRoot: root
+            )
+        }
+    }
+
+    init(bridge: any MCPProxyBridgeSession) {
+        self.client = bridge
+        self.makeResolver = { context, root in
+            MCPProxyBridgedSecretResolver(
+                client: bridge,
+                agentRuntimeContext: context,
+                workspaceRoot: root
+            )
+        }
     }
 
     func prepareChildEnvironment(
@@ -64,20 +107,42 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
             requestedCommand: "exec",
             references: references
         )
+        let resolver = makeResolver(agentRuntimeContext, workspaceRoot)
         return try client.withRequestedCommand("exec", includeAutomationCredential: false) {
             _ = try client.agentJITPreflight(
                 payload,
                 agentRuntimeContext: agentRuntimeContext,
                 workspaceRoot: workspaceRoot
             )
-            let resolved = try SecretReferenceResolver(
-                client: MCPProxySecretResolver(
-                    client: client,
-                    agentRuntimeContext: agentRuntimeContext,
-                    workspaceRoot: workspaceRoot
-                )
-            ).resolveEnvironment(declared)
+            let resolved = try SecretReferenceResolver(client: resolver).resolveEnvironment(declared)
             return (resolved.resolved, resolved.secrets)
         }
+    }
+}
+
+private struct MCPProxyBridgedSecretResolver: SecretResolverClient {
+    let client: any MCPProxyBridgeSession
+    let agentRuntimeContext: AgentRuntimeContext
+    let workspaceRoot: URL
+
+    func resolveSecret(
+        type: SecretReference.ItemType,
+        query: String,
+        field: String,
+        folder: String?,
+        isFolderScoped: Bool
+    ) throws -> String {
+        guard type != .otp, type != .ssh else {
+            throw MCPToolInputError.invalidArgument("OTP and SSH refs are not injectable")
+        }
+        return try client.resolveSecret(
+            type: type,
+            query: query,
+            field: field,
+            folder: folder,
+            isFolderScoped: isFolderScoped,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot
+        )
     }
 }

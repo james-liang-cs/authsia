@@ -24,6 +24,8 @@ actor AuthsiaMCPProxy {
     private var handlersRegistered = false
     private var childSession: ChildSession?
     private var spawnTask: Task<ChildSession, Error>?
+    private var inFlight: InFlightSpawn?
+    private var isStopped = false
 
     init(
         version: String,
@@ -86,14 +88,26 @@ actor AuthsiaMCPProxy {
     }
 
     func stop() async {
-        await dropChild()
+        await shutdownChild()
         grantService.revokeActiveOwnedGrants()
         await server.stop()
     }
 
     func waitUntilCompleted() async {
         await server.waitUntilCompleted()
+        await shutdownChild()
+    }
+
+    private func shutdownChild() async {
+        isStopped = true
+        let task = spawnTask
+        task?.cancel()
         await dropChild()
+        await consumeInFlight()
+        if let task {
+            _ = try? await task.value
+        }
+        spawnTask = nil
     }
 
     private func registerHandlersIfNeeded() async {
@@ -197,14 +211,25 @@ actor AuthsiaMCPProxy {
         upstream: MCPUpstreamConfig,
         toolName: String
     ) async throws -> ChildSession {
-        if let session = liveSession() {
+        if let session = await liveSession() {
             return session
         }
         if let spawnTask {
-            let session = try await spawnTask.value
-            if session.isAlive {
-                return session
+            do {
+                let session = try await spawnTask.value
+                if let live = await liveSession() {
+                    return live
+                }
+                if session.isAlive {
+                    return session
+                }
+                await dropChild()
+            } catch {
+                throw error
             }
+        }
+        if isStopped {
+            throw CancellationError()
         }
         let task = Task {
             try await self.spawnAndInitialize(upstream: upstream, toolName: toolName)
@@ -224,9 +249,11 @@ actor AuthsiaMCPProxy {
         upstream: MCPUpstreamConfig,
         toolName: String
     ) async throws -> ChildSession {
-        if let session = liveSession() {
+        if let session = await liveSession() {
             return session
         }
+        try Task.checkCancellation()
+        guard !isStopped else { throw CancellationError() }
         guard let workspaceRoot = runtimeContext.workspaceRoot else {
             throw MCPRuntimeContextError.workspaceUnavailable
         }
@@ -239,11 +266,17 @@ actor AuthsiaMCPProxy {
             upstreamName: upstreamName,
             invocationID: invocationID
         )
-        let prepared = try sessionClient.prepareChildEnvironment(
-            declared: upstream.env,
-            agentRuntimeContext: agentRuntimeContext,
-            workspaceRoot: workspaceRoot
-        )
+        let declaredEnv = upstream.env
+        let sessionClient = self.sessionClient
+        let prepared = try await Task.detached {
+            try sessionClient.prepareChildEnvironment(
+                declared: declaredEnv,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            )
+        }.value
+        try Task.checkCancellation()
+        guard !isStopped else { throw CancellationError() }
         let childEnvironment = MCPProxyChildEnvironment.make(
             parent: parentEnvironment,
             declared: prepared.environment
@@ -265,61 +298,65 @@ actor AuthsiaMCPProxy {
             processGroupID: spawned.processGroupID,
             killGraceSeconds: killGraceSeconds
         )
-        let transport = StdioTransport(
-            input: FileDescriptor(rawValue: spawned.stdoutRead),
-            output: FileDescriptor(rawValue: spawned.stdinWrite)
-        )
         let client = Client(
             name: "authsia-mcp-proxy",
             version: proxyVersion,
             configuration: .default
         )
-        do {
-            try await withTimeout(initializeTimeoutSeconds) {
-                _ = try await client.connect(transport: transport)
-            }
-        } catch {
-            terminator.start()
-            await terminator.waitUntilFinished()
-            Darwin.close(spawned.stdinWrite)
-            Darwin.close(spawned.stdoutRead)
-            throw MCPProxySpawnError.launchFailed
+        inFlight = InFlightSpawn(
+            processGroupID: spawned.processGroupID,
+            terminator: terminator,
+            stdinWrite: spawned.stdinWrite,
+            stdoutRead: spawned.stdoutRead,
+            client: client
+        )
+        if isStopped || Task.isCancelled {
+            await consumeInFlight()
+            throw CancellationError()
         }
-        let listed: Set<String>
+        let transport = StdioTransport(
+            input: FileDescriptor(rawValue: spawned.stdoutRead),
+            output: FileDescriptor(rawValue: spawned.stdinWrite)
+        )
+        let timeout = initializeTimeoutSeconds
         do {
-            listed = try await withTimeout(initializeTimeoutSeconds) {
+            let listed = try await mcpProxyWithTimeout(timeout) {
+                _ = try await client.connect(transport: transport)
                 let tools = try await client.listTools()
                 return Set(tools.tools.map(\.name))
             }
+            try Task.checkCancellation()
+            guard !isStopped else {
+                await consumeInFlight()
+                throw CancellationError()
+            }
+            let session = ChildSession(
+                processID: spawned.processID,
+                processGroupID: spawned.processGroupID,
+                client: client,
+                childToolNames: listed,
+                terminator: terminator,
+                stdinWrite: spawned.stdinWrite,
+                stdoutRead: spawned.stdoutRead
+            )
+            childSession = session
+            inFlight = nil
+            watchChild(session)
+            _ = toolName
+            return session
         } catch {
-            terminator.start()
-            await client.disconnect()
-            await terminator.waitUntilFinished()
+            await consumeInFlight()
             throw MCPProxySpawnError.launchFailed
         }
-        let session = ChildSession(
-            processID: spawned.processID,
-            processGroupID: spawned.processGroupID,
-            client: client,
-            childToolNames: listed,
-            terminator: terminator,
-            stdinWrite: spawned.stdinWrite,
-            stdoutRead: spawned.stdoutRead
-        )
-        childSession = session
-        watchChild(session)
-        _ = toolName
-        return session
     }
 
-    private func liveSession() -> ChildSession? {
-        guard let childSession, childSession.isAlive else {
-            if childSession != nil {
-                childSession = nil
-            }
+    private func liveSession() async -> ChildSession? {
+        guard let session = childSession else { return nil }
+        guard session.isAlive else {
+            await dropChild()
             return nil
         }
-        return childSession
+        return session
     }
 
     private func watchChild(_ session: ChildSession) {
@@ -333,19 +370,50 @@ actor AuthsiaMCPProxy {
 
     private func childDidExit(_ processID: pid_t) async {
         guard childSession?.processID == processID else { return }
-        await dropChild(notifyClient: false)
+        await dropChild()
     }
 
-    private func dropChild(notifyClient: Bool = true) async {
+    private func dropChild() async {
         guard let session = childSession else { return }
         childSession = nil
-        if notifyClient {
-            await session.client.disconnect()
+        await teardownSpawn(
+            processGroupID: session.processGroupID,
+            client: session.client,
+            terminator: session.terminator,
+            stdinWrite: session.stdinWrite,
+            stdoutRead: session.stdoutRead
+        )
+    }
+
+    private func consumeInFlight() async {
+        guard let inFlight else { return }
+        self.inFlight = nil
+        await teardownSpawn(
+            processGroupID: inFlight.processGroupID,
+            client: inFlight.client,
+            terminator: inFlight.terminator,
+            stdinWrite: inFlight.stdinWrite,
+            stdoutRead: inFlight.stdoutRead
+        )
+    }
+
+    private func teardownSpawn(
+        processGroupID: pid_t? = nil,
+        client: Client?,
+        terminator: MCPProcessTerminator,
+        stdinWrite: Int32,
+        stdoutRead: Int32
+    ) async {
+        if let processGroupID, processGroupID > 0 {
+            Darwin.kill(-processGroupID, SIGKILL)
         }
-        session.terminator.start()
-        await session.terminator.waitUntilFinished()
-        Darwin.close(session.stdinWrite)
-        Darwin.close(session.stdoutRead)
+        terminator.start()
+        await terminator.waitUntilFinished()
+        if let client {
+            await client.disconnect()
+        }
+        Darwin.close(stdinWrite)
+        Darwin.close(stdoutRead)
     }
 
     private func stdioUpstream() -> MCPUpstreamConfig? {
@@ -389,24 +457,32 @@ actor AuthsiaMCPProxy {
         return source
     }
 
-    private func withTimeout<T: Sendable>(
-        _ seconds: Double,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                let nanoseconds = UInt64(max(seconds, 0) * 1_000_000_000)
-                try await Task.sleep(nanoseconds: nanoseconds)
-                throw MCPProxySpawnError.launchFailed
-            }
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
+}
+
+private func mcpProxyWithTimeout<T: Sendable>(
+    _ seconds: Double,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            try await operation()
         }
+        group.addTask {
+            try await Task.sleep(for: .seconds(max(seconds, 0)))
+            throw MCPProxySpawnError.launchFailed
+        }
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
     }
+}
+
+private struct InFlightSpawn {
+    let processGroupID: pid_t
+    let terminator: MCPProcessTerminator
+    let stdinWrite: Int32
+    let stdoutRead: Int32
+    let client: Client
 }
 
 private struct ChildSession: Sendable {

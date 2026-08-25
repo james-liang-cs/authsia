@@ -64,6 +64,83 @@ struct MCPProxyJITTests {
         #expect(!grant.matchesAgentRuntimeContext(nil))
     }
 
+    @Test("LiveMCPProxySessionClient exec get requires the matching MCP sessionID")
+    func livePrepareRejectsGetWithoutMatchingSessionID() throws {
+        let sessionID = "mcp:\(UUID().uuidString)"
+        let matching = AgentRuntimeContext(
+            sessionID: sessionID,
+            agentID: "proxy:jira",
+            agentType: "authsia-mcp"
+        )
+        let missingSession = AgentRuntimeContext(agentType: "authsia-mcp")
+        let bridge = RecordingMCPProxyBridgeSession()
+        bridge.allowedSessionID = sessionID
+        let client = LiveMCPProxySessionClient(bridge: bridge)
+        let declared = [
+            "JIRA_API_TOKEN": "authsia://api-key/Atlassian/key",
+            "JIRA_URL": "https://example.atlassian.net",
+        ]
+        let root = URL(fileURLWithPath: "/tmp")
+
+        let resolved = try client.prepareChildEnvironment(
+            declared: declared,
+            agentRuntimeContext: matching,
+            workspaceRoot: root
+        )
+        #expect(bridge.requestedCommands == ["exec"])
+        #expect(resolved.environment["JIRA_API_TOKEN"] == "synthetic-token")
+        #expect(bridge.resolveContexts.first?.sessionID == sessionID)
+
+        #expect(throws: BridgeClientError.self) {
+            _ = try client.prepareChildEnvironment(
+                declared: declared,
+                agentRuntimeContext: missingSession,
+                workspaceRoot: root
+            )
+        }
+    }
+
+    @Test("tools/list stays responsive while JIT preflight is in flight")
+    func toolsListDoesNotWaitForJIT() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: [
+                "JIRA_API_TOKEN": "synthetic-token",
+                "JIRA_URL": "https://example.atlassian.net",
+            ],
+            delayNanoseconds: 400_000_000
+        )
+        let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            acceptsToolWorkspace: true,
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Cursor")
+        let call = Task {
+            let context: RequestContext<CallTool.Result> = try await connection.client.callTool(
+                name: "jira_get_issue"
+            )
+            return try await context.value
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let listed = try await connection.client.listTools()
+        #expect(listed.tools.map(\.name).contains("jira_get_issue"))
+        let result = try await call.value
+        #expect(result.isError != true)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
     @Test("OTP and SSH refs are rejected before inject")
     func otpAndSSHRefsAreRejected() throws {
         let resolver = MCPProxySecretResolver(
