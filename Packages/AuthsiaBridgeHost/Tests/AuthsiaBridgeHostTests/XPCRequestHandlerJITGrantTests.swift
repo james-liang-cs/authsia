@@ -332,6 +332,53 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(clock.callCount, 2)
     }
 
+    func testMCPPreflightPromptIncludesToolUpstreamCallerAndWorkspaceWithoutRemoteMCPFields() async throws {
+        let builder = RemoteRequestBuilderSpy()
+        let approver = JITApprovalTracker(result: true)
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            requestBuilder: builder,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "password", query: "API", folderPath: "Team/API"),
+            ],
+            mcpUpstreamName: "mcp-proxy-jira",
+            mcpToolName: "jira_get_issue",
+            mcpToolPolicy: .approve
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(handler, body: payload)
+
+        XCTAssertNil(response.error)
+        let prompt = try XCTUnwrap(approver.requests.first?.prompt)
+        XCTAssertTrue(prompt.contains("Allow Claude temporary access"))
+        XCTAssertTrue(prompt.contains("MCP tool: jira_get_issue."))
+        XCTAssertTrue(prompt.contains("Upstream: mcp-proxy-jira."))
+        XCTAssertTrue(prompt.contains("Workspace: repo."))
+        XCTAssertFalse(prompt.contains("synthetic-token"))
+        let descriptor = try XCTUnwrap(approver.requests.first?.approvalDescriptors.first)
+        XCTAssertEqual(descriptor.mcpUpstreamName, "mcp-proxy-jira")
+        XCTAssertEqual(descriptor.mcpToolName, "jira_get_issue")
+        XCTAssertEqual(descriptor.mcpToolPolicy, .approve)
+        XCTAssertEqual(descriptor.callerDisplayName, "Claude")
+        XCTAssertEqual(descriptor.workspaceLabel, "repo")
+        let remoteDescriptor = try XCTUnwrap(approver.requests.first?.remoteRequests.first?.descriptor)
+        XCTAssertEqual(RemoteJITApprovalDescriptor.schemaVersion, 2)
+        XCTAssertEqual(RemoteJITApprovalDescriptor.protocolVersion, 2)
+        let encoded = try RemoteJITApprovalCanonicalCoding.encodeDescriptor(remoteDescriptor)
+        XCTAssertNil(encoded.range(of: Data("jira_get_issue".utf8)))
+        XCTAssertNil(encoded.range(of: Data("mcp-proxy-jira".utf8)))
+        let propertyNames = Set(Mirror(reflecting: remoteDescriptor).children.compactMap(\.label))
+        XCTAssertFalse(propertyNames.contains("mcpUpstreamName"))
+        XCTAssertFalse(propertyNames.contains("mcpToolName"))
+        XCTAssertFalse(propertyNames.contains("mcpToolPolicy"))
+    }
+
     func testDisabledICloudSyncSkipsRemoteBuilderAndKeepsLocalApproval() async throws {
         let builder = RemoteRequestBuilderSpy()
         let approver = JITApprovalTracker(result: true)

@@ -414,19 +414,69 @@ public struct AgentJITPreflightReference: Codable, Equatable, Sendable {
     }
 }
 
+public enum AgentJITMCPToolPolicy: String, Codable, Equatable, Sendable {
+    case allow
+    case approve
+}
+
 public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
     public let requestedCommand: String
     public let references: [AgentJITPreflightReference]
     public let environmentScope: EnvironmentAccessScope?
+    public let mcpUpstreamName: String?
+    public let mcpToolName: String?
+    public let mcpToolPolicy: AgentJITMCPToolPolicy?
 
     public init(
         requestedCommand: String,
         references: [AgentJITPreflightReference],
-        environmentScope: EnvironmentAccessScope? = nil
+        environmentScope: EnvironmentAccessScope? = nil,
+        mcpUpstreamName: String? = nil,
+        mcpToolName: String? = nil,
+        mcpToolPolicy: AgentJITMCPToolPolicy? = nil
     ) {
         self.requestedCommand = requestedCommand
         self.references = references
         self.environmentScope = environmentScope
+        self.mcpUpstreamName = mcpUpstreamName
+        self.mcpToolName = mcpToolName
+        self.mcpToolPolicy = mcpToolPolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestedCommand
+        case references
+        case environmentScope
+        case mcpUpstreamName
+        case mcpToolName
+        case mcpToolPolicy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        requestedCommand = try container.decode(String.self, forKey: .requestedCommand)
+        references = try container.decode([AgentJITPreflightReference].self, forKey: .references)
+        environmentScope = try container.decodeIfPresent(
+            EnvironmentAccessScope.self,
+            forKey: .environmentScope
+        )
+        mcpUpstreamName = try container.decodeIfPresent(String.self, forKey: .mcpUpstreamName)
+        mcpToolName = try container.decodeIfPresent(String.self, forKey: .mcpToolName)
+        if let rawPolicy = try container.decodeIfPresent(String.self, forKey: .mcpToolPolicy) {
+            mcpToolPolicy = AgentJITMCPToolPolicy(rawValue: rawPolicy)
+        } else {
+            mcpToolPolicy = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(requestedCommand, forKey: .requestedCommand)
+        try container.encode(references, forKey: .references)
+        try container.encodeIfPresent(environmentScope, forKey: .environmentScope)
+        try container.encodeIfPresent(mcpUpstreamName, forKey: .mcpUpstreamName)
+        try container.encodeIfPresent(mcpToolName, forKey: .mcpToolName)
+        try container.encodeIfPresent(mcpToolPolicy, forKey: .mcpToolPolicy)
     }
 }
 

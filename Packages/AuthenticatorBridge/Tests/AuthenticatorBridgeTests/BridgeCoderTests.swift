@@ -64,6 +64,70 @@ final class BridgeCoderTests: XCTestCase {
         XCTAssertEqual(decoded.references.first?.folderPath, "Team/API")
         XCTAssertEqual(decoded.references.first?.isFolderScoped, true)
         XCTAssertEqual(decoded.references.last?.isFolderScoped, false)
+        XCTAssertNil(decoded.mcpUpstreamName)
+        XCTAssertNil(decoded.mcpToolName)
+        XCTAssertNil(decoded.mcpToolPolicy)
+    }
+
+    func testAgentJITPreflightPayloadDecodesMissingMCPDisplayFields() throws {
+        let data = """
+        {
+          "requestedCommand": "exec",
+          "references": [
+            {
+              "type": "password",
+              "query": "GitHub",
+              "folderPath": "Team/API"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try BridgeCoder.decode(AgentJITPreflightPayload.self, from: data)
+
+        XCTAssertEqual(decoded.requestedCommand, "exec")
+        XCTAssertNil(decoded.mcpUpstreamName)
+        XCTAssertNil(decoded.mcpToolName)
+        XCTAssertNil(decoded.mcpToolPolicy)
+    }
+
+    func testAgentJITPreflightPayloadRoundTripsMCPDisplayFields() throws {
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(type: "api-key", query: "Atlassian", folderPath: nil),
+            ],
+            mcpUpstreamName: "jira",
+            mcpToolName: "jira_get_issue",
+            mcpToolPolicy: .approve
+        )
+
+        let decoded = try BridgeCoder.decode(
+            AgentJITPreflightPayload.self,
+            from: try BridgeCoder.encode(payload)
+        )
+
+        XCTAssertEqual(decoded.mcpUpstreamName, "jira")
+        XCTAssertEqual(decoded.mcpToolName, "jira_get_issue")
+        XCTAssertEqual(decoded.mcpToolPolicy, .approve)
+    }
+
+    func testAgentJITPreflightPayloadIgnoresUnknownMCPToolPolicy() throws {
+        let data = """
+        {
+          "requestedCommand": "exec",
+          "references": [],
+          "mcpUpstreamName": "jira",
+          "mcpToolName": "jira_get_issue",
+          "mcpToolPolicy": "deny"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try BridgeCoder.decode(AgentJITPreflightPayload.self, from: data)
+
+        XCTAssertEqual(decoded.mcpUpstreamName, "jira")
+        XCTAssertEqual(decoded.mcpToolName, "jira_get_issue")
+        XCTAssertNil(decoded.mcpToolPolicy)
     }
 
     func testAgentJITPreflightReferenceDefaultsMissingFolderScopedFlagToTrue() throws {

@@ -268,11 +268,23 @@ actor AuthsiaMCPProxy {
         )
         let declaredEnv = upstream.env
         let sessionClient = self.sessionClient
+        let upstreamName = self.upstreamName
+        let mcpToolPolicy: AgentJITMCPToolPolicy?
+        if upstream.tools.approve.contains(toolName) {
+            mcpToolPolicy = .approve
+        } else if upstream.tools.allow.contains(toolName) {
+            mcpToolPolicy = .allow
+        } else {
+            mcpToolPolicy = nil
+        }
         let prepared = try await Task.detached {
             try sessionClient.prepareChildEnvironment(
                 declared: declaredEnv,
                 agentRuntimeContext: agentRuntimeContext,
-                workspaceRoot: workspaceRoot
+                workspaceRoot: workspaceRoot,
+                mcpUpstreamName: upstreamName,
+                mcpToolName: toolName,
+                mcpToolPolicy: mcpToolPolicy
             )
         }.value
         try Task.checkCancellation()
@@ -342,7 +354,6 @@ actor AuthsiaMCPProxy {
             childSession = session
             inFlight = nil
             watchChild(session)
-            _ = toolName
             return session
         } catch {
             await consumeInFlight()

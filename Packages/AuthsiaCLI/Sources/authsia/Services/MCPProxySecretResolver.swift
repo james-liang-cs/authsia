@@ -58,7 +58,10 @@ protocol MCPProxySessionClient: Sendable {
     func prepareChildEnvironment(
         declared: [String: String],
         agentRuntimeContext: AgentRuntimeContext,
-        workspaceRoot: URL
+        workspaceRoot: URL,
+        mcpUpstreamName: String?,
+        mcpToolName: String?,
+        mcpToolPolicy: AgentJITMCPToolPolicy?
     ) throws -> (environment: [String: String], secrets: [String])
 }
 
@@ -91,7 +94,10 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
     func prepareChildEnvironment(
         declared: [String: String],
         agentRuntimeContext: AgentRuntimeContext,
-        workspaceRoot: URL
+        workspaceRoot: URL,
+        mcpUpstreamName: String? = nil,
+        mcpToolName: String? = nil,
+        mcpToolPolicy: AgentJITMCPToolPolicy? = nil
     ) throws -> (environment: [String: String], secrets: [String]) {
         let unsupported = try SecretReferenceResolver.unsupportedAgentJITReferences(
             environment: declared
@@ -105,7 +111,10 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
         }
         let payload = AgentJITPreflightPayload(
             requestedCommand: "exec",
-            references: references
+            references: references,
+            mcpUpstreamName: mcpUpstreamName,
+            mcpToolName: mcpToolName,
+            mcpToolPolicy: mcpToolPolicy
         )
         let resolver = makeResolver(agentRuntimeContext, workspaceRoot)
         return try client.withRequestedCommand("exec", includeAutomationCredential: false) {

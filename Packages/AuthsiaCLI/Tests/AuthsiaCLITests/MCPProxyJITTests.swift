@@ -100,6 +100,32 @@ struct MCPProxyJITTests {
         }
     }
 
+    @Test("LiveMCPProxySessionClient copies MCP tool and upstream onto the exec preflight payload")
+    func livePrepareCopiesMCPDisplayFieldsOntoPreflightPayload() throws {
+        let bridge = RecordingMCPProxyBridgeSession()
+        let client = LiveMCPProxySessionClient(bridge: bridge)
+        _ = try client.prepareChildEnvironment(
+            declared: [
+                "JIRA_API_TOKEN": "authsia://api-key/Atlassian/key",
+                "JIRA_URL": "https://example.atlassian.net",
+            ],
+            agentRuntimeContext: AgentRuntimeContext(
+                sessionID: "mcp:\(UUID().uuidString)",
+                agentType: "authsia-mcp"
+            ),
+            workspaceRoot: URL(fileURLWithPath: "/tmp"),
+            mcpUpstreamName: "jira",
+            mcpToolName: "jira_create_issue",
+            mcpToolPolicy: .approve
+        )
+
+        let payload = try #require(bridge.payloads.first)
+        #expect(payload.requestedCommand == "exec")
+        #expect(payload.mcpUpstreamName == "jira")
+        #expect(payload.mcpToolName == "jira_create_issue")
+        #expect(payload.mcpToolPolicy == .approve)
+    }
+
     @Test("tools/list stays responsive while JIT preflight is in flight")
     func toolsListDoesNotWaitForJIT() async throws {
         let bin = try makeWorkspaceRoot()
@@ -236,6 +262,9 @@ struct MCPProxyJITTests {
         #expect(context.agentID == "proxy:jira")
         #expect(context.toolUseID?.hasPrefix("mcp-call:") == true)
         #expect(context.platform == "Cursor")
+        #expect(sessionClient.mcpUpstreamNames == ["jira"])
+        #expect(sessionClient.mcpToolNames == ["jira_get_issue"])
+        #expect(sessionClient.mcpToolPolicies == [.allow])
 
         let second: RequestContext<CallTool.Result> = try await connection.client.callTool(
             name: "jira_search"

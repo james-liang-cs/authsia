@@ -223,6 +223,9 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
     public let requestedItems: [AgentJITApprovalItem]
     public let requestIssuedAtMilliseconds: Int64
     public let grantExpiresAtMilliseconds: Int64
+    public let mcpUpstreamName: String?
+    public let mcpToolName: String?
+    public let mcpToolPolicy: AgentJITMCPToolPolicy?
 
     public init(
         callerFingerprint: AgentJITCallerFingerprint,
@@ -231,7 +234,10 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
         environmentScope: EnvironmentAccessScope?,
         requestedItems: [AgentJITGrantItemReference],
         requestIssuedAtMilliseconds: Int64,
-        grantExpiresAtMilliseconds: Int64
+        grantExpiresAtMilliseconds: Int64,
+        mcpUpstreamName: String? = nil,
+        mcpToolName: String? = nil,
+        mcpToolPolicy: AgentJITMCPToolPolicy? = nil
     ) {
         self.callerFingerprint = callerFingerprint
         self.capabilities = Array(Set(capabilities)).sorted { $0.rawValue < $1.rawValue }
@@ -240,6 +246,15 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
         self.requestedItems = requestedItems.compactMap(AgentJITApprovalItem.init(reference:))
         self.requestIssuedAtMilliseconds = requestIssuedAtMilliseconds
         self.grantExpiresAtMilliseconds = grantExpiresAtMilliseconds
+        self.mcpUpstreamName = Self.optionalDisplay(mcpUpstreamName)
+        self.mcpToolName = Self.optionalDisplay(mcpToolName)
+        self.mcpToolPolicy = mcpToolPolicy
+    }
+
+    private static func optionalDisplay(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : String(trimmed.prefix(256))
     }
 
     public var callerDisplayName: String {

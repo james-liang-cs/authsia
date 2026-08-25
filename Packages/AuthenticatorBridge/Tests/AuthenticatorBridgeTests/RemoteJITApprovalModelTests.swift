@@ -58,6 +58,21 @@ final class RemoteJITApprovalModelTests: XCTestCase {
         XCTAssertEqual(descriptor.grantIssuedAtMilliseconds, input.requestIssuedAtMilliseconds)
     }
 
+    func testDescriptorSchemaAndProtocolRemainVersion2WithoutMCPDisplayFields() throws {
+        XCTAssertEqual(RemoteJITApprovalDescriptor.schemaVersion, 2)
+        XCTAssertEqual(RemoteJITApprovalDescriptor.protocolVersion, 2)
+
+        let descriptor = try makeValidDescriptor()
+        let propertyNames = Set(Mirror(reflecting: descriptor).children.compactMap(\.label))
+        XCTAssertFalse(propertyNames.contains("mcpUpstreamName"))
+        XCTAssertFalse(propertyNames.contains("mcpToolName"))
+        XCTAssertFalse(propertyNames.contains("mcpToolPolicy"))
+
+        let encoded = try RemoteJITApprovalCanonicalCoding.encodeDescriptor(descriptor)
+        XCTAssertNil(encoded.range(of: Data("jira_get_issue".utf8)))
+        XCTAssertNil(encoded.range(of: Data("mcp-proxy-jira".utf8)))
+    }
+
     func testDescriptorInputRejectsInvalidTimeAndCallerAuthority() throws {
         assertValidationError(.invalidTime) {
             try makeValidDescriptorInput(grantExpiresAtMilliseconds: 2_000_000_000_000)

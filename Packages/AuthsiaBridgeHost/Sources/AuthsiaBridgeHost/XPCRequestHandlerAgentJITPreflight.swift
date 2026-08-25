@@ -335,6 +335,21 @@ extension XPCRequestHandler {
                 environmentScope: payload.environmentScope,
                 resolutions: pendingResolutions
             )
+            let approvalDescriptors = agentJITApprovalDescriptors(
+                timing: timing,
+                caller: caller,
+                capabilities: grantCapabilities,
+                environmentScope: payload.environmentScope,
+                resolutions: pendingResolutions,
+                mcpUpstreamName: payload.mcpUpstreamName,
+                mcpToolName: payload.mcpToolName,
+                mcpToolPolicy: payload.mcpToolPolicy
+            )
+            let mcpPromptSuffix = agentJTMCPPromptSuffix(
+                mcpUpstreamName: payload.mcpUpstreamName,
+                mcpToolName: payload.mcpToolName,
+                workspaceLabel: approvalDescriptors.first?.workspaceLabel ?? "/"
+            )
             let outcome = await requestAgentJITApproval(
                 prompt: isBroadListBatch
                     ? agentJITBroadListPreflightPrompt(
@@ -342,7 +357,8 @@ extension XPCRequestHandler {
                         duration: duration,
                         pendingScopes: pendingResolutions.map(\.scope),
                         activeScopes: promptGrantSnapshot.map(\.folderScope),
-                        environmentScope: payload.environmentScope
+                        environmentScope: payload.environmentScope,
+                        mcpPromptSuffix: mcpPromptSuffix
                     )
                     : agentJITExactItemBatchPreflightPrompt(
                         caller: caller,
@@ -350,19 +366,14 @@ extension XPCRequestHandler {
                         requestedCommand: requestedCommand,
                         pendingScopes: pendingResolutions.map(\.scope),
                         hasActiveGrants: !promptGrantSnapshot.isEmpty,
-                        environmentScope: payload.environmentScope
+                        environmentScope: payload.environmentScope,
+                        mcpPromptSuffix: mcpPromptSuffix
                     ),
                 command: .agentJITPreflight,
                 itemLabel: isBroadListBatch ? "All folders" : "Multiple items",
                 field: nil,
                 callback: callback,
-                approvalDescriptors: agentJITApprovalDescriptors(
-                    timing: timing,
-                    caller: caller,
-                    capabilities: grantCapabilities,
-                    environmentScope: payload.environmentScope,
-                    resolutions: pendingResolutions
-                ),
+                approvalDescriptors: approvalDescriptors,
                 remoteRequests: remoteRequests
             )
             let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
@@ -408,6 +419,16 @@ extension XPCRequestHandler {
                     environmentScope: payload.environmentScope,
                     resolutions: [resolution]
                 )
+                let approvalDescriptors = agentJITApprovalDescriptors(
+                    timing: timing,
+                    caller: caller,
+                    capabilities: grantCapabilities,
+                    environmentScope: payload.environmentScope,
+                    resolutions: [resolution],
+                    mcpUpstreamName: payload.mcpUpstreamName,
+                    mcpToolName: payload.mcpToolName,
+                    mcpToolPolicy: payload.mcpToolPolicy
+                )
                 let outcome = await requestAgentJITApproval(
                     prompt: agentJITPreflightPrompt(
                         caller: caller,
@@ -415,19 +436,16 @@ extension XPCRequestHandler {
                         duration: duration,
                         requestedCommand: requestedCommand,
                         activeGrants: promptGrantSnapshot,
-                        environmentScope: payload.environmentScope
+                        environmentScope: payload.environmentScope,
+                        mcpUpstreamName: payload.mcpUpstreamName,
+                        mcpToolName: payload.mcpToolName,
+                        workspaceLabel: approvalDescriptors.first?.workspaceLabel ?? "/"
                     ),
                     command: .agentJITPreflight,
                     itemLabel: scope.displayName,
                     field: nil,
                     callback: callback,
-                    approvalDescriptors: agentJITApprovalDescriptors(
-                        timing: timing,
-                        caller: caller,
-                        capabilities: grantCapabilities,
-                        environmentScope: payload.environmentScope,
-                        resolutions: [resolution]
-                    ),
+                    approvalDescriptors: approvalDescriptors,
                     remoteRequests: remoteRequests
                 )
                 let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
@@ -723,7 +741,10 @@ extension XPCRequestHandler {
         caller: AgentJITCallerFingerprint,
         capabilities: [AgentJITCapability],
         environmentScope: EnvironmentAccessScope?,
-        resolutions: [AgentJITScopeResolution]
+        resolutions: [AgentJITScopeResolution],
+        mcpUpstreamName: String? = nil,
+        mcpToolName: String? = nil,
+        mcpToolPolicy: AgentJITMCPToolPolicy? = nil
     ) -> [AgentJITApprovalDescriptor] {
         resolutions.map { resolution in
             AgentJITApprovalDescriptor(
@@ -733,7 +754,10 @@ extension XPCRequestHandler {
                 environmentScope: environmentScope,
                 requestedItems: resolution.requestedItems,
                 requestIssuedAtMilliseconds: timing.issuedAtMilliseconds,
-                grantExpiresAtMilliseconds: timing.grantExpiresAtMilliseconds
+                grantExpiresAtMilliseconds: timing.grantExpiresAtMilliseconds,
+                mcpUpstreamName: mcpUpstreamName,
+                mcpToolName: mcpToolName,
+                mcpToolPolicy: mcpToolPolicy
             )
         }
     }
@@ -953,19 +977,27 @@ extension XPCRequestHandler {
         duration: String,
         requestedCommand: String,
         activeGrants: [AgentJITGrant],
-        environmentScope: EnvironmentAccessScope?
+        environmentScope: EnvironmentAccessScope?,
+        mcpUpstreamName: String? = nil,
+        mcpToolName: String? = nil,
+        workspaceLabel: String = "/"
     ) -> String {
         let scopeText = agentJITBaseScopeDescription(scope)
         let environmentText = agentJITEnvironmentDescription(environmentScope)
+        let mcpText = agentJTMCPPromptSuffix(
+            mcpUpstreamName: mcpUpstreamName,
+            mcpToolName: mcpToolName,
+            workspaceLabel: workspaceLabel
+        )
         let basePrompt: String
         if requestedCommand == "list" {
             basePrompt = "Allow \(caller.displayName) temporary scoped list access to CLI-enabled Vault item " +
                 "metadata " +
-                "in \(scopeText) for \(duration).\(environmentText)"
+                "in \(scopeText) for \(duration).\(environmentText)\(mcpText)"
         } else {
             basePrompt = "Allow \(caller.displayName) temporary access to CLI-enabled password, API key, " +
                 "certificate, " +
-                "and note items in \(scopeText) for \(duration), plus scoped list access.\(environmentText)"
+                "and note items in \(scopeText) for \(duration), plus scoped list access.\(environmentText)\(mcpText)"
         }
 
         switch agentJITApprovalReason(
@@ -1087,6 +1119,29 @@ extension XPCRequestHandler {
         }
     }
 
+    private func agentJTMCPPromptSuffix(
+        mcpUpstreamName: String?,
+        mcpToolName: String?,
+        workspaceLabel: String
+    ) -> String {
+        var parts: [String] = []
+        if let toolName = nonEmptyMCPDisplay(mcpToolName) {
+            parts.append("MCP tool: \(toolName).")
+        }
+        if let upstreamName = nonEmptyMCPDisplay(mcpUpstreamName) {
+            parts.append("Upstream: \(upstreamName).")
+        }
+        guard !parts.isEmpty else { return "" }
+        parts.append("Workspace: \(workspaceLabel).")
+        return " " + parts.joined(separator: " ")
+    }
+
+    private func nonEmptyMCPDisplay(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : String(trimmed.prefix(256))
+    }
+
     private func shouldBatchAgentJITListApproval(_ payload: AgentJITPreflightPayload) -> Bool {
         payload.requestedCommand == "list"
             && !payload.references.isEmpty
@@ -1102,12 +1157,14 @@ extension XPCRequestHandler {
         duration: String,
         pendingScopes: [AgentJITFolderScope],
         activeScopes: [AgentJITFolderScope],
-        environmentScope: EnvironmentAccessScope?
+        environmentScope: EnvironmentAccessScope?,
+        mcpPromptSuffix: String = ""
     ) -> String {
         let basePrompt = "Allow \(caller.displayName) temporary scoped list access to CLI-enabled Vault item " +
             "metadata " +
             "across all resolved folders for \(duration). Secret values are not included." +
-            agentJITEnvironmentDescription(environmentScope)
+            agentJITEnvironmentDescription(environmentScope) +
+            mcpPromptSuffix
         guard !activeScopes.isEmpty else { return basePrompt }
 
         let normalizedPendingScopes = normalizedAgentJITScopes(pendingScopes)
@@ -1147,14 +1204,16 @@ extension XPCRequestHandler {
         requestedCommand: String,
         pendingScopes: [AgentJITFolderScope],
         hasActiveGrants: Bool,
-        environmentScope: EnvironmentAccessScope?
+        environmentScope: EnvironmentAccessScope?,
+        mcpPromptSuffix: String = ""
     ) -> String {
         let scopes = agentJITScopeListDescription(normalizedAgentJITScopes(pendingScopes))
         let access = requestedCommand == "list"
             ? "temporary scoped list access to the exact CLI-enabled Vault items shown"
             : "temporary access to the exact CLI-enabled Vault items shown, plus scoped list access"
         let basePrompt = "Allow \(caller.displayName) \(access) across \(scopes) for \(duration)." +
-            agentJITEnvironmentDescription(environmentScope)
+            agentJITEnvironmentDescription(environmentScope) +
+            mcpPromptSuffix
         guard hasActiveGrants else { return basePrompt }
         return "Separate approval required: This request adds exact-item authority not covered by active grants. " +
             basePrompt

@@ -328,6 +328,40 @@ final class AgentJITGrantTests: XCTestCase {
         )
 
         XCTAssertEqual(descriptor.reuseDescription, "Folder reuse: Team/API")
+        XCTAssertNil(descriptor.mcpUpstreamName)
+        XCTAssertNil(descriptor.mcpToolName)
+        XCTAssertNil(descriptor.mcpToolPolicy)
+    }
+
+    func testApprovalDescriptorCopiesMCPDisplayFieldsWithoutNamingItemValues() {
+        let descriptor = AgentJITApprovalDescriptor(
+            callerFingerprint: .fixture(workingDirectory: "/repo/project"),
+            capabilities: [.exec, .list],
+            resourceScope: .items([
+                AgentJITItemIdentity(type: "apiKey", id: UUID()),
+            ]),
+            environmentScope: nil,
+            requestedItems: [
+                AgentJITGrantItemReference(
+                    type: "api-key",
+                    id: UUID().uuidString,
+                    name: "Deploy\nToken",
+                    folderPath: "Team/API"
+                ),
+            ],
+            requestIssuedAtMilliseconds: 1_700_000_000_000,
+            grantExpiresAtMilliseconds: 1_700_000_300_000,
+            mcpUpstreamName: "  jira  ",
+            mcpToolName: "jira_get_issue",
+            mcpToolPolicy: .approve
+        )
+
+        XCTAssertEqual(descriptor.mcpUpstreamName, "jira")
+        XCTAssertEqual(descriptor.mcpToolName, "jira_get_issue")
+        XCTAssertEqual(descriptor.mcpToolPolicy, .approve)
+        XCTAssertEqual(descriptor.callerDisplayName, "Claude")
+        XCTAssertEqual(descriptor.workspaceLabel, "project")
+        XCTAssertEqual(descriptor.requestedItems.map(\.name), ["Unnamed item"])
     }
 
     func testAllowsDeniesWrongCaller() {

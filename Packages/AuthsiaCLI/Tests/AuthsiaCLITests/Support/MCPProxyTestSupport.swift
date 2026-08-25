@@ -179,6 +179,9 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
     private let lock = NSLock()
     private(set) var prepareCount = 0
     private(set) var contexts: [AgentRuntimeContext] = []
+    private(set) var mcpUpstreamNames: [String?] = []
+    private(set) var mcpToolNames: [String?] = []
+    private(set) var mcpToolPolicies: [AgentJITMCPToolPolicy?] = []
     var environment: [String: String]
     var secrets: [String]
     var error: (any Error)?
@@ -199,11 +202,17 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
     func prepareChildEnvironment(
         declared: [String: String],
         agentRuntimeContext: AgentRuntimeContext,
-        workspaceRoot: URL
+        workspaceRoot: URL,
+        mcpUpstreamName: String?,
+        mcpToolName: String?,
+        mcpToolPolicy: AgentJITMCPToolPolicy?
     ) throws -> (environment: [String: String], secrets: [String]) {
         lock.lock()
         prepareCount += 1
         contexts.append(agentRuntimeContext)
+        mcpUpstreamNames.append(mcpUpstreamName)
+        mcpToolNames.append(mcpToolName)
+        mcpToolPolicies.append(mcpToolPolicy)
         let error = self.error
         var environment = declared.merging(self.environment) { _, override in override }
         environment["PYTHONUNBUFFERED"] = "1"
@@ -286,6 +295,7 @@ final class RecordingMCPProxyBridgeSession: MCPProxyBridgeSession, @unchecked Se
     private let lock = NSLock()
     private(set) var requestedCommands: [String] = []
     private(set) var resolveContexts: [AgentRuntimeContext] = []
+    private(set) var payloads: [AgentJITPreflightPayload] = []
     var allowedSessionID: String?
     var secretValue = "synthetic-token"
 
@@ -306,7 +316,9 @@ final class RecordingMCPProxyBridgeSession: MCPProxyBridgeSession, @unchecked Se
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?
     ) throws -> AgentJITPreflightResultPayload {
-        _ = payload
+        lock.lock()
+        payloads.append(payload)
+        lock.unlock()
         _ = agentRuntimeContext
         _ = workspaceRoot
         return AgentJITPreflightResultPayload(grantIDs: [UUID()])
