@@ -420,16 +420,52 @@ final class AuthsiaBridgeClient:
     }
 
     func getPassword(query: String, field: String? = nil) throws -> PasswordResult {
+        try getPassword(
+            query: query,
+            field: field,
+            context: currentContext(),
+            sessionToken: sessionToken,
+            cacheSession: true
+        )
+    }
+
+    func getPassword(
+        query: String,
+        field: String? = nil,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> PasswordResult {
+        try getPassword(
+            query: query,
+            field: field,
+            context: Self.currentContext(
+                overriding: agentRuntimeContext,
+                currentDirectoryPath: workspaceRoot.path
+            ),
+            sessionToken: nil,
+            cacheSession: false
+        )
+    }
+
+    private func getPassword(
+        query: String,
+        field: String?,
+        context: BridgeContext,
+        sessionToken: String?,
+        cacheSession: Bool
+    ) throws -> PasswordResult {
         let request = BridgeRequest(
             id: UUID(),
             type: .getPassword,
             query: query,
             options: BridgeOptions(field: field, copy: false),
-            context: currentContext(),
+            context: context,
             sessionToken: sessionToken
         )
         let response: BridgeResponse<PasswordPayload> = try sendRequest(request)
-        cacheSessionToken(from: response)
+        if cacheSession {
+            cacheSessionToken(from: response)
+        }
 
         if let error = response.error {
             throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: query)
@@ -452,16 +488,52 @@ final class AuthsiaBridgeClient:
     }
 
     func getAPIKey(query: String, field: String? = nil) throws -> APIKeyResult {
+        try getAPIKey(
+            query: query,
+            field: field,
+            context: currentContext(),
+            sessionToken: sessionToken,
+            cacheSession: true
+        )
+    }
+
+    func getAPIKey(
+        query: String,
+        field: String? = nil,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> APIKeyResult {
+        try getAPIKey(
+            query: query,
+            field: field,
+            context: Self.currentContext(
+                overriding: agentRuntimeContext,
+                currentDirectoryPath: workspaceRoot.path
+            ),
+            sessionToken: nil,
+            cacheSession: false
+        )
+    }
+
+    private func getAPIKey(
+        query: String,
+        field: String?,
+        context: BridgeContext,
+        sessionToken: String?,
+        cacheSession: Bool
+    ) throws -> APIKeyResult {
         let request = BridgeRequest(
             id: UUID(),
             type: .getAPIKey,
             query: query,
             options: BridgeOptions(field: field, copy: false),
-            context: currentContext(),
+            context: context,
             sessionToken: sessionToken
         )
         let response: BridgeResponse<APIKeyPayload> = try sendRequest(request)
-        cacheSessionToken(from: response)
+        if cacheSession {
+            cacheSessionToken(from: response)
+        }
 
         if let error = response.error {
             throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: query)
@@ -483,16 +555,52 @@ final class AuthsiaBridgeClient:
     }
 
     func getCertificate(query: String, field: String? = nil) throws -> CertificateResult {
+        try getCertificate(
+            query: query,
+            field: field,
+            context: currentContext(),
+            sessionToken: sessionToken,
+            cacheSession: true
+        )
+    }
+
+    func getCertificate(
+        query: String,
+        field: String? = nil,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> CertificateResult {
+        try getCertificate(
+            query: query,
+            field: field,
+            context: Self.currentContext(
+                overriding: agentRuntimeContext,
+                currentDirectoryPath: workspaceRoot.path
+            ),
+            sessionToken: nil,
+            cacheSession: false
+        )
+    }
+
+    private func getCertificate(
+        query: String,
+        field: String?,
+        context: BridgeContext,
+        sessionToken: String?,
+        cacheSession: Bool
+    ) throws -> CertificateResult {
         let request = BridgeRequest(
             id: UUID(),
             type: .getCertificate,
             query: query,
             options: BridgeOptions(field: field, copy: false),
-            context: currentContext(),
+            context: context,
             sessionToken: sessionToken
         )
         let response: BridgeResponse<CertificatePayload> = try sendRequest(request)
-        cacheSessionToken(from: response)
+        if cacheSession {
+            cacheSessionToken(from: response)
+        }
 
         if let error = response.error {
             throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: query)
@@ -517,16 +625,48 @@ final class AuthsiaBridgeClient:
     }
 
     func getNote(query: String) throws -> NoteResult {
+        try getNote(
+            query: query,
+            context: currentContext(),
+            sessionToken: sessionToken,
+            cacheSession: true
+        )
+    }
+
+    func getNote(
+        query: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> NoteResult {
+        try getNote(
+            query: query,
+            context: Self.currentContext(
+                overriding: agentRuntimeContext,
+                currentDirectoryPath: workspaceRoot.path
+            ),
+            sessionToken: nil,
+            cacheSession: false
+        )
+    }
+
+    private func getNote(
+        query: String,
+        context: BridgeContext,
+        sessionToken: String?,
+        cacheSession: Bool
+    ) throws -> NoteResult {
         let request = BridgeRequest(
             id: UUID(),
             type: .getNote,
             query: query,
             options: BridgeOptions(field: nil, copy: false),
-            context: currentContext(),
+            context: context,
             sessionToken: sessionToken
         )
         let response: BridgeResponse<NotePayload> = try sendRequest(request)
-        cacheSessionToken(from: response)
+        if cacheSession {
+            cacheSessionToken(from: response)
+        }
 
         if let error = response.error {
             throw BridgeClientError.bridgeError(code: error.code.rawValue, message: error.message, query: query)

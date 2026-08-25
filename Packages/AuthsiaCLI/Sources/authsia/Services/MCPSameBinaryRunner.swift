@@ -29,20 +29,6 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
 
     static let outputLimit = 65_536
 
-    private static let inheritedEnvironmentNames: Set<String> = [
-        "HOME",
-        "LANG",
-        "LOGNAME",
-        "PATH",
-        "REQUESTS_CA_BUNDLE",
-        "SHELL",
-        "SSL_CERT_FILE",
-        "TERM",
-        "TMPDIR",
-        "USER",
-        "__CF_USER_TEXT_ENCODING",
-    ]
-
     let executableURL: URL
     let workspaceRoot: URL
     let parentEnvironment: [String: String]
@@ -73,9 +59,7 @@ struct MCPSameBinaryRunner: MCPChildRunning, Sendable {
         process.currentDirectoryURL = workspaceRoot
         process.arguments = arguments
 
-        var environment = parentEnvironment.filter { key, _ in
-            Self.inheritedEnvironmentNames.contains(key) || key.hasPrefix("LC_")
-        }
+        var environment = MCPInheritedEnvironment.filtered(parentEnvironment)
         for (key, value) in invocation.environment {
             environment[key] = value
         }
@@ -282,140 +266,5 @@ private final class MCPChildTimeout: @unchecked Sendable {
         cancelled = true
         condition.signal()
         condition.unlock()
-    }
-}
-
-private final class MCPProcessTerminator: @unchecked Sendable {
-    private let lock = NSLock()
-    private let process: Process
-    private let killGraceSeconds: Double
-    private var operation: MCPBlockingOperation<Void>?
-
-    init(process: Process, killGraceSeconds: Double) {
-        self.process = process
-        self.killGraceSeconds = max(0, killGraceSeconds)
-    }
-
-    @discardableResult
-    func start() -> Bool {
-        let result: (operation: MCPBlockingOperation<Void>?, hasTarget: Bool) = lock.withLock {
-            let processID = process.processIdentifier
-            let processGroupID = Self.managedProcessGroupID(processID)
-            if self.operation != nil {
-                return (nil, process.isRunning || processGroupID != nil)
-            }
-            guard process.isRunning || processGroupID != nil else { return (nil, false) }
-            let operation = MCPBlockingOperation<Void> { [process, killGraceSeconds] in
-                Self.terminateAndWait(
-                    process: process,
-                    processID: processID,
-                    processGroupID: processGroupID,
-                    killGraceSeconds: killGraceSeconds
-                )
-            }
-            self.operation = operation
-            return (operation, true)
-        }
-        result.operation?.start()
-        return result.hasTarget
-    }
-
-    func waitUntilFinished() async {
-        let operation = lock.withLock { self.operation }
-        if let operation {
-            await operation.value()
-        }
-    }
-
-    private static func terminateAndWait(
-        process: Process,
-        processID: Int32,
-        processGroupID: Int32?,
-        killGraceSeconds: Double
-    ) {
-        if let processGroupID {
-            Darwin.kill(-processGroupID, SIGTERM)
-        } else {
-            process.terminate()
-        }
-
-        let gracefulDeadline = Date().addingTimeInterval(killGraceSeconds)
-        while targetExists(process: process, processGroupID: processGroupID),
-              Date() < gracefulDeadline {
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-        guard targetExists(process: process, processGroupID: processGroupID) else { return }
-
-        if let processGroupID {
-            Darwin.kill(-processGroupID, SIGKILL)
-        } else {
-            Darwin.kill(processID, SIGKILL)
-        }
-
-        let forcedDeadline = Date().addingTimeInterval(1)
-        while targetExists(process: process, processGroupID: processGroupID),
-              Date() < forcedDeadline {
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-    }
-
-    private static func targetExists(process: Process, processGroupID: Int32?) -> Bool {
-        guard let processGroupID else { return process.isRunning }
-        return Darwin.kill(-processGroupID, 0) == 0 || errno == EPERM
-    }
-
-    private static func managedProcessGroupID(_ processID: Int32) -> Int32? {
-        if Darwin.getpgid(processID) == processID {
-            return processID
-        }
-        return Darwin.kill(-processID, 0) == 0 || errno == EPERM ? processID : nil
-    }
-}
-
-private final class MCPBlockingOperation<Value: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private let operation: @Sendable () -> Value
-    private var result: Value?
-    private var continuation: CheckedContinuation<Value, Never>?
-    private var started = false
-
-    init(_ operation: @escaping @Sendable () -> Value) {
-        self.operation = operation
-    }
-
-    func start() {
-        lock.lock()
-        guard !started else {
-            lock.unlock()
-            return
-        }
-        started = true
-        lock.unlock()
-
-        Thread.detachNewThread { [self] in
-            complete(operation())
-        }
-    }
-
-    func value() async -> Value {
-        await withCheckedContinuation { pending in
-            lock.lock()
-            if let result {
-                lock.unlock()
-                pending.resume(returning: result)
-            } else {
-                continuation = pending
-                lock.unlock()
-            }
-        }
-    }
-
-    private func complete(_ value: Value) {
-        lock.lock()
-        result = value
-        let pending = continuation
-        continuation = nil
-        lock.unlock()
-        pending?.resume(returning: value)
     }
 }

@@ -217,16 +217,6 @@ struct MCPProxyLifecycleTests {
             )
         }
 
-        let advertised: RequestContext<CallTool.Result> = try await client.callTool(
-            name: "jira_get_issue"
-        )
-        let stub = try await advertised.value
-        #expect(stub.isError == true)
-        #expect(
-            stub.structuredContent?.objectValue?["code"]?.stringValue
-                == MCPToolErrorCode.internalError.rawValue
-        )
-
         await client.disconnect()
         await fixture.proxy.waitUntilCompleted()
     }

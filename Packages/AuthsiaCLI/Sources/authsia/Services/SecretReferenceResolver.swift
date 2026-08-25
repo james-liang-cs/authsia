@@ -358,6 +358,50 @@ extension AuthsiaBridgeClient: SecretResolverClient {
         return try resolveUnscopedSecret(type: type, query: query, field: field)
     }
 
+    func resolveSecret(
+        type: SecretReference.ItemType,
+        query: String,
+        field: String,
+        folder: String?,
+        isFolderScoped: Bool,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> String {
+        try SecretReference(
+            type: type,
+            item: query,
+            field: field,
+            folder: folder,
+            isFolderScoped: isFolderScoped
+        ).validateResolvedField()
+        if let folder = normalizeFolderPath(folder) {
+            return try resolveFolderScopedSecret(
+                type: type,
+                query: query,
+                field: field,
+                folder: folder,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            )
+        }
+        if isFolderScoped {
+            return try resolveRootScopedSecret(
+                type: type,
+                query: query,
+                field: field,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            )
+        }
+        return try resolveUnscopedSecret(
+            type: type,
+            query: query,
+            field: field,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot
+        )
+    }
+
     private func resolveUnscopedSecret(type: SecretReference.ItemType, query: String, field: String) throws -> String {
         switch type {
         case .password:
@@ -459,5 +503,120 @@ extension AuthsiaBridgeClient: SecretResolverClient {
         )
 
         return try resolveUnscopedSecret(type: type, query: match.id, field: field)
+    }
+
+    private func resolveUnscopedSecret(
+        type: SecretReference.ItemType,
+        query: String,
+        field: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> String {
+        switch type {
+        case .password:
+            let result = try getPassword(
+                query: query,
+                field: field,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            )
+            return field == "username" ? result.username : result.password
+        case .apiKey:
+            return try getAPIKey(
+                query: query,
+                field: field,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            ).key
+        case .cert:
+            let result = try getCertificate(
+                query: query,
+                field: field,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            )
+            return field == "privateKey" ? (result.privateKey ?? "") : result.certificate
+        case .note:
+            return try getNote(
+                query: query,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            ).content
+        case .ssh, .otp:
+            throw MCPToolInputError.invalidArgument("OTP and SSH refs are not injectable")
+        }
+    }
+
+    private func resolveFolderScopedSecret(
+        type: SecretReference.ItemType,
+        query: String,
+        field: String,
+        folder: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> String {
+        let loadType = try loadType(forInjectable: type)
+        let match = try Load.selectExactFolderReference(
+            type: loadType,
+            query: query,
+            folderPath: folder,
+            payload: list(agentRuntimeContext: agentRuntimeContext, workspaceRoot: workspaceRoot),
+            allMachines: true
+        )
+        return try resolveUnscopedSecret(
+            type: type,
+            query: match.id,
+            field: field,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot
+        )
+    }
+
+    private func resolveRootScopedSecret(
+        type: SecretReference.ItemType,
+        query: String,
+        field: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL
+    ) throws -> String {
+        let loadType = try loadType(forInjectable: type)
+        let references = try Load.selectReferences(
+            type: loadType,
+            scope: .global,
+            payload: list(agentRuntimeContext: agentRuntimeContext, workspaceRoot: workspaceRoot),
+            allMachines: true
+        ).filter {
+            normalizeFolderPath($0.folderPath) == nil
+        }
+        let match = try MatchHelper.findSingle(
+            query: query,
+            items: references,
+            kind: "\(loadType.rawValue) item",
+            id: { $0.id },
+            searchable: { [$0.name] },
+            display: { CLIError.MatchDescriptor(name: $0.name, id: $0.id, context: "folder: (root)") }
+        )
+        return try resolveUnscopedSecret(
+            type: type,
+            query: match.id,
+            field: field,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot
+        )
+    }
+
+    private func loadType(forInjectable type: SecretReference.ItemType) throws -> Load.ItemType {
+        switch type {
+        case .password:
+            return .password
+        case .apiKey:
+            return .apiKey
+        case .cert:
+            return .cert
+        case .note:
+            return .note
+        case .ssh, .otp:
+            throw MCPToolInputError.invalidArgument("OTP and SSH refs are not injectable")
+        }
     }
 }

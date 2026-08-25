@@ -64,6 +64,21 @@ actor MCPRuntimeContext {
         workspaceBinding.replace(with: binding)
     }
 
+    func makeProxyAgentRuntimeContext(
+        upstreamName: String,
+        invocationID: UUID = UUID()
+    ) -> AgentRuntimeContext {
+        let invocation = "mcp-call:\(invocationID.uuidString)"
+        return AgentRuntimeContext(
+            platform: clientPlatform,
+            sessionID: "mcp:\(instanceID.uuidString)",
+            turnID: invocation,
+            agentID: "proxy:\(upstreamName)",
+            agentType: "authsia-mcp",
+            toolUseID: invocation
+        )
+    }
+
     func makeInvocation(id: UUID = UUID()) -> MCPInvocationContext {
         let invocation = "mcp-call:\(id.uuidString)"
         let agentRuntimeContext = AgentRuntimeContext(
