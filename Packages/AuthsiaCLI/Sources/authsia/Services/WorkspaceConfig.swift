@@ -561,7 +561,7 @@ enum WorkspaceConfigStore {
         "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "sh", "tcsh", "zsh",
     ]
 
-    private static func isValidMCPUpstreamName(_ name: String) -> Bool {
+    static func isValidMCPUpstreamName(_ name: String) -> Bool {
         let range = NSRange(name.startIndex..<name.endIndex, in: name)
         return mcpUpstreamNamePattern.firstMatch(in: name, options: [], range: range) != nil
     }

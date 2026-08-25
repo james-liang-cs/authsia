@@ -154,14 +154,16 @@ struct MCPClientConfigurationTests {
         }
     }
 
-    @Test("configure and serve commands are visible")
+    @Test("configure, serve, and proxy commands are visible")
     func commandRegistration() throws {
         #expect(MCPCommand.Configure.configuration.shouldDisplay)
         #expect(MCPCommand.Serve.configuration.shouldDisplay)
+        #expect(MCPCommand.Proxy.configuration.shouldDisplay)
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "codex"])
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "devin"])
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "windsurf"])
         _ = try Authsia.parseAsRoot(["mcp", "serve", "--workspace", "/tmp/project"])
+        _ = try Authsia.parseAsRoot(["mcp", "proxy", "--upstream", "jira"])
     }
 
     private func render(

@@ -11,13 +11,37 @@ struct MCPCommand: AsyncParsableCommand {
             Most users should configure a supported client, which launches the server
             automatically and supplies its active workspace when supported.
             Enable MCP Integrations in Authsia Settings > Developer Access first.
+            `mcp proxy --upstream` wraps one named workspace upstream as a separate
+            stdio process; it does not add tools to `mcp serve`.
 
             Examples:
               authsia mcp configure --client codex
               authsia mcp serve --workspace /path/to/repository
+              authsia mcp proxy --upstream jira
             """,
-        subcommands: [Configure.self, Serve.self]
+        subcommands: [Configure.self, Serve.self, Proxy.self]
     )
+
+    static func startingDirectory(
+        workspace: String?,
+        environment: [String: String],
+        currentDirectoryPath: String
+    ) -> URL {
+        let clientWorkspacePath: String?
+        if let value = environment["WORKSPACE_FOLDER_PATHS"] {
+            let paths = value.split(separator: ",", omittingEmptySubsequences: false)
+            let path = paths.count == 1 ? String(paths[0]) : ""
+            clientWorkspacePath = path.hasPrefix("/") && path.unicodeScalars.allSatisfy {
+                !CharacterSet.controlCharacters.contains($0)
+            } ? path : nil
+        } else {
+            clientWorkspacePath = nil
+        }
+        return URL(
+            fileURLWithPath: workspace ?? clientWorkspacePath ?? currentDirectoryPath,
+            isDirectory: true
+        )
+    }
 
     struct Configure: ParsableCommand {
         static let configuration = CommandConfiguration(
@@ -44,7 +68,7 @@ struct MCPCommand: AsyncParsableCommand {
         var workspace: String?
 
         mutating func run() async throws {
-            let startingDirectory = Self.startingDirectory(
+            let startingDirectory = MCPCommand.startingDirectory(
                 workspace: workspace,
                 environment: ProcessInfo.processInfo.environment,
                 currentDirectoryPath: FileManager.default.currentDirectoryPath
@@ -63,20 +87,43 @@ struct MCPCommand: AsyncParsableCommand {
             environment: [String: String],
             currentDirectoryPath: String
         ) -> URL {
-            let clientWorkspacePath: String?
-            if let value = environment["WORKSPACE_FOLDER_PATHS"] {
-                let paths = value.split(separator: ",", omittingEmptySubsequences: false)
-                let path = paths.count == 1 ? String(paths[0]) : ""
-                clientWorkspacePath = path.hasPrefix("/") && path.unicodeScalars.allSatisfy {
-                    !CharacterSet.controlCharacters.contains($0)
-                } ? path : nil
-            } else {
-                clientWorkspacePath = nil
-            }
-            return URL(
-                fileURLWithPath: workspace ?? clientWorkspacePath ?? currentDirectoryPath,
-                isDirectory: true
+            MCPCommand.startingDirectory(
+                workspace: workspace,
+                environment: environment,
+                currentDirectoryPath: currentDirectoryPath
             )
+        }
+    }
+
+    struct Proxy: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Proxy a named workspace upstream over local stdio"
+        )
+
+        @Option(help: "Named workspace MCP upstream")
+        var upstream: String
+
+        @Option(help: "Explicit workspace binding (otherwise uses tool input or launch context)")
+        var workspace: String?
+
+        mutating func validate() throws {
+            guard WorkspaceConfigStore.isValidMCPUpstreamName(upstream) else {
+                throw ValidationError("--upstream must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
+            }
+        }
+
+        mutating func run() async throws {
+            let startingDirectory = MCPCommand.startingDirectory(
+                workspace: workspace,
+                environment: ProcessInfo.processInfo.environment,
+                currentDirectoryPath: FileManager.default.currentDirectoryPath
+            )
+            let proxy = AuthsiaMCPProxy(
+                version: Authsia.version(),
+                runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
+                acceptsToolWorkspace: workspace == nil
+            )
+            try await proxy.runStdio()
         }
     }
 }
