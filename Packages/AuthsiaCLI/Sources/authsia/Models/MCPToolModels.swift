@@ -453,6 +453,9 @@ enum MCPToolErrorCode: String, CaseIterable, Codable, Equatable, Sendable {
     case cancelled
     case executionFailed
     case internalError
+    case upstreamDenied
+    case upstreamUnavailable
+    case httpUpstreamUnsupported
 }
 
 struct MCPToolErrorOutput: Codable, Equatable, Sendable {

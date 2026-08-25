@@ -120,8 +120,10 @@ struct MCPCommand: AsyncParsableCommand {
             )
             let proxy = AuthsiaMCPProxy(
                 version: Authsia.version(),
+                upstreamName: upstream,
                 runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
-                acceptsToolWorkspace: workspace == nil
+                acceptsToolWorkspace: workspace == nil,
+                mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
             )
             try await proxy.runStdio()
         }

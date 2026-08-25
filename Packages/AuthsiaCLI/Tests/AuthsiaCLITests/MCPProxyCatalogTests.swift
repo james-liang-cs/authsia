@@ -1,0 +1,157 @@
+import Foundation
+import MCP
+import Testing
+@testable import authsia
+
+@Suite("MCP proxy catalog")
+struct MCPProxyCatalogTests {
+    @Test("allow union approve is advertised and deny catalog names are omitted")
+    func allowApproveUnionOmitsDeny() {
+        let upstream = MCPUpstreamConfig(
+            name: "jira",
+            command: "mcp-atlassian",
+            tools: MCPUpstreamToolPolicy(
+                allow: ["jira_get_issue", "jira_search"],
+                approve: ["jira_create_issue"],
+                deny: ["jira_delete_issue"]
+            ),
+            catalog: [
+                MCPUpstreamToolDescriptor(
+                    name: "jira_get_issue",
+                    description: "Get one Jira issue by key",
+                    inputSchema: .object([
+                        "additionalProperties": .bool(false),
+                        "properties": .object([
+                            "issueKey": .object(["type": .string("string")]),
+                        ]),
+                        "required": .array([.string("issueKey")]),
+                        "type": .string("object"),
+                    ])
+                ),
+                MCPUpstreamToolDescriptor(name: "jira_delete_issue", description: "must not leak"),
+                MCPUpstreamToolDescriptor(name: "other_tool", description: "not in policy"),
+            ]
+        )
+
+        let tools = MCPProxyCatalog.listedTools(for: upstream)
+        #expect(tools.map(\.name) == ["jira_get_issue", "jira_search", "jira_create_issue"])
+        #expect(!tools.map(\.name).contains("jira_delete_issue"))
+        #expect(!tools.map(\.name).contains("other_tool"))
+        #expect(tools[0].description == "Get one Jira issue by key")
+        #expect(tools[0].inputSchema.objectValue?["properties"]?.objectValue?["issueKey"] != nil)
+        #expect(tools[1].description == "")
+        #expect(tools[1].inputSchema == MCPProxyCatalog.defaultInputSchema)
+        #expect(tools[2].description == "")
+        #expect(tools[2].inputSchema == MCPProxyCatalog.defaultInputSchema)
+    }
+
+    @Test("empty allow and approve advertise no tools")
+    func emptyCatalogAdvertisesNothing() {
+        let upstream = MCPUpstreamConfig(
+            name: "jira",
+            command: "mcp-atlassian",
+            tools: MCPUpstreamToolPolicy(deny: ["jira_delete_issue"]),
+            catalog: [MCPUpstreamToolDescriptor(name: "jira_delete_issue")]
+        )
+        #expect(MCPProxyCatalog.listedTools(for: upstream).isEmpty)
+    }
+
+    @Test("unbound and HTTP upstreams advertise an empty list")
+    func unboundAndHTTPAdvertiseNothing() {
+        #expect(MCPProxyCatalog.listedTools(for: nil).isEmpty)
+
+        let http = MCPUpstreamConfig(
+            name: "rovo",
+            transport: .http,
+            url: "https://example.atlassian.net/mcp",
+            tools: MCPUpstreamToolPolicy(allow: ["jira_get_issue"]),
+            catalog: [MCPUpstreamToolDescriptor(name: "jira_get_issue")]
+        )
+        #expect(MCPProxyCatalog.listedTools(for: http).isEmpty)
+
+        let sse = MCPUpstreamConfig(
+            name: "rovo",
+            transport: .sse,
+            url: "https://example.atlassian.net/mcp",
+            tools: MCPUpstreamToolPolicy(allow: ["jira_get_issue"])
+        )
+        #expect(MCPProxyCatalog.listedTools(for: sse).isEmpty)
+
+        let streamable = MCPUpstreamConfig(
+            name: "rovo",
+            transport: .streamableHTTP,
+            url: "https://example.atlassian.net/mcp",
+            tools: MCPUpstreamToolPolicy(allow: ["jira_get_issue"])
+        )
+        #expect(MCPProxyCatalog.listedTools(for: streamable).isEmpty)
+
+        let urlOnly = MCPUpstreamConfig(
+            name: "rovo",
+            url: "https://example.atlassian.net/mcp",
+            tools: MCPUpstreamToolPolicy(allow: ["jira_get_issue"])
+        )
+        #expect(MCPProxyCatalog.listedTools(for: urlOnly).isEmpty)
+    }
+
+    @Test("dollar-ref schema and URI-shaped values are rejected from the advertised catalog")
+    func forbiddenSchemaContentIsRejected() {
+        let refSchema = MCPJSONValue.object([
+            "type": .string("object"),
+            "$ref": .string("#/defs/issue"),
+            "properties": .object([
+                "url": .object([
+                    "type": .string("string"),
+                    "default": .string("https://example.invalid"),
+                ]),
+            ]),
+        ])
+        let advertised = MCPProxyCatalog.advertisedSchema(refSchema)
+        #expect(advertised.objectValue?["$ref"] == nil)
+        #expect(advertised.objectValue?["$schema"] == nil)
+        let encoded = String(decoding: (try? JSONEncoder().encode(advertised)) ?? Data(), as: UTF8.self)
+        #expect(!encoded.contains("$ref"))
+        #expect(!encoded.lowercased().contains("https:"))
+
+        let schemaKey = MCPJSONValue.object([
+            "type": .string("object"),
+            "$schema": .string("https://json-schema.org/draft/2020-12/schema"),
+        ])
+        #expect(MCPProxyCatalog.advertisedSchema(schemaKey).objectValue?["$schema"] == nil)
+        #expect(MCPProxyCatalog.advertisedSchema(.bool(true)) == MCPProxyCatalog.defaultInputSchema)
+        #expect(MCPProxyCatalog.advertisedSchema(.array([])) == MCPProxyCatalog.defaultInputSchema)
+    }
+
+    @Test("too-large catalog schemas fall back to the open object schema")
+    func oversizedSchemaIsRejected() {
+        let oversized = MCPJSONValue.object([
+            "type": .string("object"),
+            "description": .string(String(repeating: "x", count: 65_536)),
+        ])
+        #expect(MCPProxyCatalog.advertisedSchema(oversized) == MCPProxyCatalog.defaultInputSchema)
+    }
+
+    @Test("serve still exposes exactly six tools and inspect does not grow")
+    func serveCatalogStaysFrozen() {
+        #expect(MCPToolCatalog.tools.count == 6)
+        #expect(!MCPToolCatalog.tools.map(\.name).contains { $0.hasPrefix("jira_") })
+        let inspect = MCPToolCatalog.descriptors.first { $0.name == .workspaceInspect }
+        #expect(inspect?.outputPropertyNames.contains("mcpUpstreams") == false)
+        #expect(inspect?.outputPropertyNames == [
+            "workspaceName", "workspaceRoot", "schemaVersion", "selectedEnvironment",
+            "availableEnvironments", "managedFiles", "references", "referencesTruncated",
+            "diagnostics",
+        ])
+
+        let errorCodes = MCPToolErrorCode.allCases.map(\.rawValue)
+        #expect(errorCodes.contains("upstreamDenied"))
+        #expect(errorCodes.contains("upstreamUnavailable"))
+        #expect(errorCodes.contains("httpUpstreamUnsupported"))
+
+        let errorEnum = MCPToolCatalog.tools[0].outputSchema?
+            .objectValue?["oneOf"]?.arrayValue?.last?
+            .objectValue?["properties"]?.objectValue?["code"]?
+            .objectValue?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        #expect(Set(errorEnum) == Set(errorCodes))
+        #expect(errorEnum.count == MCPToolErrorCode.allCases.count)
+    }
+}
