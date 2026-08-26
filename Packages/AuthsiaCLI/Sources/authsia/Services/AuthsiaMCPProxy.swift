@@ -21,6 +21,7 @@ actor AuthsiaMCPProxy {
     private let killGraceSeconds: Double
     private let grantPollIntervalSeconds: Double
     private let grantService: MCPGrantService
+    private let toolCallRecorder: any MCPProxyToolCallRecording
     private let stderrOutput: FileHandle
     private var handlersRegistered = false
     private var childSession: ChildSession?
@@ -41,6 +42,7 @@ actor AuthsiaMCPProxy {
         killGraceSeconds: Double = 2,
         grantPollIntervalSeconds: Double = 2,
         grantService: MCPGrantService? = nil,
+        toolCallRecorder: (any MCPProxyToolCallRecording)? = nil,
         stderrOutput: FileHandle = .standardError
     ) {
         self.server = Server(
@@ -64,6 +66,7 @@ actor AuthsiaMCPProxy {
         self.grantService = grantService ?? MCPGrantService(
             serverInstanceID: runtimeContext.instanceID
         )
+        self.toolCallRecorder = toolCallRecorder ?? LiveMCPProxyToolCallRecorder()
         self.stderrOutput = stderrOutput
     }
 
@@ -161,13 +164,30 @@ actor AuthsiaMCPProxy {
                 )
             }
             do {
-                let session = try await ensureChild(upstream: upstream, toolName: parameters.name)
+                let invocationID = UUID()
+                let agentRuntimeContext = await runtimeContext.makeProxyAgentRuntimeContext(
+                    upstreamName: upstreamName,
+                    invocationID: invocationID
+                )
+                let session = try await ensureChild(
+                    upstream: upstream,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext
+                )
                 guard session.childToolNames.contains(parameters.name) else {
                     return try Self.errorResult(
                         code: .upstreamUnavailable,
                         message: "The upstream MCP server does not implement this tool."
                     )
                 }
+                try toolCallRecorder.record(
+                    upstreamName: upstreamName,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    workspaceRoot: runtimeContext.workspaceRoot,
+                    grantID: session.grantIDs.sorted { $0.uuidString < $1.uuidString }.first
+                )
                 return try await forward(parameters, using: session)
             } catch let error as MCPToolInputError {
                 return try Self.errorResult(
@@ -223,7 +243,8 @@ actor AuthsiaMCPProxy {
 
     private func ensureChild(
         upstream: MCPUpstreamConfig,
-        toolName: String
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext
     ) async throws -> ChildSession {
         if let session = await liveSession() {
             return session
@@ -246,7 +267,11 @@ actor AuthsiaMCPProxy {
             throw CancellationError()
         }
         let task = Task {
-            try await self.spawnAndInitialize(upstream: upstream, toolName: toolName)
+            try await self.spawnAndInitialize(
+                upstream: upstream,
+                toolName: toolName,
+                agentRuntimeContext: agentRuntimeContext
+            )
         }
         spawnTask = task
         do {
@@ -261,7 +286,8 @@ actor AuthsiaMCPProxy {
 
     private func spawnAndInitialize(
         upstream: MCPUpstreamConfig,
-        toolName: String
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext
     ) async throws -> ChildSession {
         if let session = await liveSession() {
             return session
@@ -275,11 +301,6 @@ actor AuthsiaMCPProxy {
         guard !command.isEmpty else {
             throw MCPProxySpawnError.commandNotFound
         }
-        let invocationID = UUID()
-        let agentRuntimeContext = await runtimeContext.makeProxyAgentRuntimeContext(
-            upstreamName: upstreamName,
-            invocationID: invocationID
-        )
         let declaredEnv = upstream.env
         let sessionClient = self.sessionClient
         let upstreamName = self.upstreamName

@@ -1,0 +1,329 @@
+import Foundation
+
+public enum MCPClientConfigSource: String, Codable, CaseIterable, Equatable, Sendable {
+    case codex
+    case claude
+    case cursor
+    case devin
+    case vscode
+
+    public var displayName: String {
+        switch self {
+        case .codex: return "Codex"
+        case .claude: return "Claude"
+        case .cursor: return "Cursor"
+        case .devin: return "Devin"
+        case .vscode: return "Visual Studio Code"
+        }
+    }
+}
+
+public struct MCPClientConfigLocation: Equatable, Sendable {
+    public let source: MCPClientConfigSource
+    public let fileURL: URL
+    public let displayPath: String
+
+    public init(source: MCPClientConfigSource, fileURL: URL, displayPath: String) {
+        self.source = source
+        self.fileURL = fileURL
+        self.displayPath = displayPath
+    }
+
+    public static func knownLocations(homeDirectory: URL) -> [Self] {
+        [
+            Self(
+                source: .codex,
+                fileURL: homeDirectory.appendingPathComponent(".codex/config.toml"),
+                displayPath: "~/.codex/config.toml"
+            ),
+            Self(
+                source: .claude,
+                fileURL: homeDirectory.appendingPathComponent(".claude.json"),
+                displayPath: "~/.claude.json"
+            ),
+            Self(
+                source: .cursor,
+                fileURL: homeDirectory.appendingPathComponent(".cursor/mcp.json"),
+                displayPath: "~/.cursor/mcp.json"
+            ),
+            Self(
+                source: .devin,
+                fileURL: homeDirectory.appendingPathComponent(".config/devin/mcp_config.json"),
+                displayPath: "~/.config/devin/mcp_config.json"
+            ),
+            Self(
+                source: .vscode,
+                fileURL: homeDirectory.appendingPathComponent("Library/Application Support/Code/User/mcp.json"),
+                displayPath: "VS Code user mcp.json"
+            ),
+        ]
+    }
+}
+
+public struct MCPDeclaredLocalServer: Equatable, Sendable {
+    public let name: String
+    public let command: String
+    public let arguments: [String]
+
+    public init(name: String, command: String, arguments: [String]) {
+        self.name = name
+        self.command = command
+        self.arguments = arguments
+    }
+}
+
+public enum MCPClientServerAdmissionStatus: String, Codable, Equatable, Sendable {
+    case admittedWrapped = "admitted-wrapped"
+    case directBypass = "direct-bypass"
+    case unadmitted
+}
+
+public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable {
+    public let source: MCPClientConfigSource
+    public let serverName: String
+    public let commandLabel: String
+    public let status: MCPClientServerAdmissionStatus
+    public let declaredUpstreamName: String?
+    public let configPathLabel: String
+
+    public var id: String {
+        "\(source.rawValue):\(serverName):\(configPathLabel)"
+    }
+
+    public init(
+        source: MCPClientConfigSource,
+        serverName: String,
+        commandLabel: String,
+        status: MCPClientServerAdmissionStatus,
+        declaredUpstreamName: String?,
+        configPathLabel: String
+    ) {
+        self.source = source
+        self.serverName = serverName
+        self.commandLabel = commandLabel
+        self.status = status
+        self.declaredUpstreamName = declaredUpstreamName
+        self.configPathLabel = configPathLabel
+    }
+}
+
+public struct MCPClientConfigScanner {
+    private static let maximumConfigBytes: UInt64 = 1_048_576
+    private let fileManager: FileManager
+
+    public init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    public func scan(
+        declaredServers: [MCPDeclaredLocalServer],
+        locations: [MCPClientConfigLocation]
+    ) -> [MCPClientServerFinding] {
+        let observedServers = locations.flatMap { entries(at: $0) }
+        return observedServers.compactMap { entry in
+            finding(for: entry, declaredServers: declaredServers)
+        }.sorted { lhs, rhs in
+            if lhs.source.rawValue != rhs.source.rawValue {
+                return lhs.source.rawValue < rhs.source.rawValue
+            }
+            if lhs.serverName != rhs.serverName {
+                return lhs.serverName < rhs.serverName
+            }
+            return lhs.configPathLabel < rhs.configPathLabel
+        }
+    }
+
+    private func entries(at location: MCPClientConfigLocation) -> [ObservedServer] {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: location.fileURL.path),
+              let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              size <= Self.maximumConfigBytes,
+              let data = try? Data(contentsOf: location.fileURL, options: .mappedIfSafe) else {
+            return []
+        }
+        if location.source == .codex {
+            return Self.codexEntries(data: data, location: location)
+        }
+        return Self.jsonEntries(data: data, location: location)
+    }
+
+    private func finding(
+        for entry: ObservedServer,
+        declaredServers: [MCPDeclaredLocalServer]
+    ) -> MCPClientServerFinding? {
+        guard let serverName = Self.safeLabel(entry.name, maximumLength: 128),
+              let commandLabel = Self.commandLabel(entry.command),
+              let configPathLabel = Self.safeLabel(
+                entry.location.displayPath,
+                maximumLength: 256
+              ) else {
+            return nil
+        }
+        let executableName = URL(fileURLWithPath: entry.command).lastPathComponent
+        if executableName == "authsia", entry.arguments == ["mcp", "serve"] {
+            return nil
+        }
+
+        let wrappedUpstream: String?
+        if executableName == "authsia",
+           entry.arguments.count == 4,
+           Array(entry.arguments.prefix(3)) == ["mcp", "proxy", "--upstream"] {
+            wrappedUpstream = Self.validUpstreamName(entry.arguments[3])
+        } else {
+            wrappedUpstream = nil
+        }
+        let declaredNames = Set(declaredServers.map(\.name))
+        let directMatch = declaredServers.first { declared in
+            declared.name == entry.name
+                && URL(fileURLWithPath: declared.command).lastPathComponent == executableName
+                && declared.arguments == entry.arguments
+        }
+        let status: MCPClientServerAdmissionStatus
+        let declaredUpstreamName: String?
+        if let wrappedUpstream, declaredNames.contains(wrappedUpstream) {
+            status = .admittedWrapped
+            declaredUpstreamName = wrappedUpstream
+        } else if let directMatch {
+            status = .directBypass
+            declaredUpstreamName = directMatch.name
+        } else {
+            status = .unadmitted
+            declaredUpstreamName = wrappedUpstream
+        }
+        return MCPClientServerFinding(
+            source: entry.location.source,
+            serverName: serverName,
+            commandLabel: commandLabel,
+            status: status,
+            declaredUpstreamName: declaredUpstreamName,
+            configPathLabel: configPathLabel
+        )
+    }
+
+    private static func jsonEntries(
+        data: Data,
+        location: MCPClientConfigLocation
+    ) -> [ObservedServer] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = root[location.source == .vscode ? "servers" : "mcpServers"]
+                as? [String: Any] else {
+            return []
+        }
+        return servers.compactMap { name, rawValue in
+            guard let value = rawValue as? [String: Any],
+                  let command = value["command"] as? String else {
+                return nil
+            }
+            let arguments: [String]
+            if let rawArguments = value["args"] {
+                guard let decodedArguments = rawArguments as? [String] else { return nil }
+                arguments = decodedArguments
+            } else {
+                arguments = []
+            }
+            return ObservedServer(
+                name: name,
+                command: command,
+                arguments: arguments,
+                location: location
+            )
+        }
+    }
+
+    private static func codexEntries(
+        data: Data,
+        location: MCPClientConfigLocation
+    ) -> [ObservedServer] {
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+        var entries: [ObservedServer] = []
+        var name: String?
+        var command: String?
+        var arguments: [String] = []
+
+        func flush() {
+            if let name, let command {
+                entries.append(ObservedServer(
+                    name: name,
+                    command: command,
+                    arguments: arguments,
+                    location: location
+                ))
+            }
+        }
+
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[mcp_servers."), line.hasSuffix("]") {
+                flush()
+                let start = line.index(line.startIndex, offsetBy: "[mcp_servers.".count)
+                let rawName = String(line[start..<line.index(before: line.endIndex)])
+                name = parseTOMLString(rawName) ?? rawName
+                command = nil
+                arguments = []
+            } else if name != nil, let value = assignmentValue(in: line, key: "command") {
+                command = parseTOMLString(value)
+            } else if name != nil, let value = assignmentValue(in: line, key: "args") {
+                arguments = parseTOMLStringArray(value) ?? []
+            }
+        }
+        flush()
+        return entries
+    }
+
+    private static func assignmentValue(in line: String, key: String) -> String? {
+        guard let equals = line.firstIndex(of: "=") else { return nil }
+        let lhs = line[..<equals].trimmingCharacters(in: .whitespaces)
+        guard lhs == key else { return nil }
+        return line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func parseTOMLString(_ rawValue: String) -> String? {
+        let value = rawValue.trimmingCharacters(in: .whitespaces)
+        if value.hasPrefix("'"), value.hasSuffix("'"), value.count >= 2 {
+            return String(value.dropFirst().dropLast())
+        }
+        guard let data = "[\(value)]".data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [String],
+              array.count == 1 else {
+            return nil
+        }
+        return array[0]
+    }
+
+    private static func parseTOMLStringArray(_ rawValue: String) -> [String]? {
+        var value = rawValue.trimmingCharacters(in: .whitespaces)
+        value = value.replacingOccurrences(
+            of: #",\s*\]$"#,
+            with: "]",
+            options: .regularExpression
+        )
+        guard let data = value.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String]
+    }
+
+    private static func commandLabel(_ command: String) -> String? {
+        safeLabel(URL(fileURLWithPath: command).lastPathComponent, maximumLength: 128)
+    }
+
+    private static func validUpstreamName(_ value: String) -> String? {
+        value.range(
+            of: #"^[A-Za-z][A-Za-z0-9_-]{0,31}$"#,
+            options: .regularExpression
+        ) == nil ? nil : value
+    }
+
+    private static func safeLabel(_ value: String, maximumLength: Int) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+            return nil
+        }
+        return String(trimmed.prefix(maximumLength))
+    }
+
+    private struct ObservedServer {
+        let name: String
+        let command: String
+        let arguments: [String]
+        let location: MCPClientConfigLocation
+    }
+}

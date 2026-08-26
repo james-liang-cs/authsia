@@ -180,6 +180,20 @@ extension XPCRequestHandler {
             return
         }
 
+        if payload.mcpAdmissionRequested {
+            await handleMCPAdmissionPreflight(
+                bridgeRequest,
+                payload: payload,
+                caller: caller,
+                callerIdentity: callerIdentity,
+                callback: callback,
+                timing: timing,
+                ttl: ttl,
+                reply: reply
+            )
+            return
+        }
+
         let scopes: [AgentJITScopeResolution]
         do {
             let list: BridgeListPayload
@@ -664,6 +678,206 @@ extension XPCRequestHandler {
             payload: AgentJITPreflightResultPayload(grantIDs: grantIDs)
         )
         reply(encodeResponse(response), nil)
+    }
+
+    @MainActor
+    private func handleMCPAdmissionPreflight(
+        _ bridgeRequest: BridgeRequest,
+        payload: AgentJITPreflightPayload,
+        caller: AgentJITCallerFingerprint,
+        callerIdentity: CallerIdentity?,
+        callback: AuthsiaBridgeApprovalCallbackProtocol?,
+        timing: AgentJITFixedApprovalTiming,
+        ttl: TimeInterval,
+        reply: XPCReply
+    ) async {
+        let runtime = bridgeRequest.context.agentRuntimeContext
+        guard bridgeRequest.type == .agentJITPreflight,
+              payload.requestedCommand == "exec",
+              payload.references.isEmpty,
+              payload.environmentScope == nil,
+              runtime?.agentType == "authsia-mcp",
+              AgentRuntimeContext.sanitize(runtime?.sessionID) != nil,
+              let upstreamName = AgentRuntimeContext.sanitize(payload.mcpUpstreamName),
+              runtime?.agentID == "proxy:\(upstreamName)" else {
+            replyError(
+                id: bridgeRequest.id,
+                code: .invalidRequest,
+                message: "MCP admission requires an Authsia proxy session and no vault references",
+                reply: reply
+            )
+            return
+        }
+
+        do {
+            if let existing = try activeMCPAdmissionGrant(
+                caller: caller,
+                runtime: runtime,
+                now: timing.issuedAt
+            ) {
+                let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
+                    id: bridgeRequest.id,
+                    payload: AgentJITPreflightResultPayload(grantIDs: [existing.id])
+                )
+                reply(encodeResponse(response), nil)
+                return
+            }
+        } catch {
+            replyError(
+                id: bridgeRequest.id,
+                code: .appUnavailable,
+                message: "Failed to check MCP admission grants: \(error.localizedDescription)",
+                reply: reply
+            )
+            return
+        }
+
+        let descriptor = AgentJITApprovalDescriptor(
+            callerFingerprint: caller,
+            capabilities: [.mcpAdmission],
+            resourceScope: .folder(.root),
+            environmentScope: nil,
+            requestedItems: [],
+            requestIssuedAtMilliseconds: timing.issuedAtMilliseconds,
+            grantExpiresAtMilliseconds: timing.grantExpiresAtMilliseconds,
+            mcpUpstreamName: upstreamName,
+            mcpToolName: payload.mcpToolName,
+            mcpToolPolicy: payload.mcpToolPolicy
+        )
+        let outcome = await requestAgentJITApproval(
+            prompt: "Allow \(caller.displayName) to start local MCP server \(upstreamName) for workspace "
+                + "\(descriptor.workspaceLabel) for \(durationDescription(for: ttl)). Revoking this admission "
+                + "stops the wrapped server.",
+            command: .agentJITPreflight,
+            itemLabel: upstreamName,
+            field: nil,
+            callback: callback,
+            approvalDescriptors: [descriptor],
+            remoteRequests: []
+        )
+        let authorization = RemoteJITApprovalAuthorizationPolicy.authorize(
+            outcome: outcome,
+            command: .agentJITPreflight,
+            remoteRequests: []
+        )
+        guard case .allowed(_, let approvalAttribution) = authorization else {
+            recordMCPAdmissionAudit(
+                bridgeRequest,
+                upstreamName: upstreamName,
+                approvedBy: authorization.attribution,
+                callerIdentity: callerIdentity,
+                grantID: nil
+            )
+            replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
+            return
+        }
+
+        guard let revalidationMilliseconds = Self.checkedAgentJITMilliseconds(agentJITApprovalClock()),
+              revalidationMilliseconds >= timing.issuedAtMilliseconds,
+              revalidationMilliseconds < timing.requestExpiresAtMilliseconds,
+              revalidationMilliseconds < timing.grantExpiresAtMilliseconds,
+              let originalCallerIdentity = callerIdentity,
+              let freshCallerIdentity = callerIdentityRevalidationProvider(originalCallerIdentity),
+              let freshCaller = AgentJITCallerContext.fingerprint(for: bridgeRequest, caller: freshCallerIdentity),
+              Self.agentJITCallersStillMatch(caller, freshCaller),
+              Self.isCliAccessEnabled else {
+            recordMCPAdmissionAudit(
+                bridgeRequest,
+                upstreamName: upstreamName,
+                approvedBy: "denied:revalidation",
+                callerIdentity: callerIdentity,
+                grantID: nil
+            )
+            replyError(id: bridgeRequest.id, code: .notAuthorized, message: "Access denied", reply: reply)
+            return
+        }
+
+        let revalidationDate = Date(
+            timeIntervalSince1970: Double(revalidationMilliseconds) / 1_000
+        )
+        do {
+            if let existing = try activeMCPAdmissionGrant(
+                caller: caller,
+                runtime: runtime,
+                now: revalidationDate
+            ) {
+                let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
+                    id: bridgeRequest.id,
+                    payload: AgentJITPreflightResultPayload(grantIDs: [existing.id])
+                )
+                reply(encodeResponse(response), nil)
+                return
+            }
+            let grant = makeAgentJITGrant(
+                caller: caller,
+                scope: .root,
+                capabilities: [.mcpAdmission],
+                createdAt: timing.issuedAt,
+                expiresAt: timing.grantExpiresAt,
+                requestedItems: [],
+                agentRuntimeContext: runtime,
+                environmentScope: nil,
+                approvedBy: approvalAttribution
+            )
+            try agentJITGrantStore.save(grant)
+            postAgentJITGrantDidChange()
+            recordMCPAdmissionAudit(
+                bridgeRequest,
+                upstreamName: upstreamName,
+                approvedBy: grant.approvedBy,
+                callerIdentity: callerIdentity,
+                grantID: grant.id
+            )
+            let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
+                id: bridgeRequest.id,
+                payload: AgentJITPreflightResultPayload(grantIDs: [grant.id])
+            )
+            reply(encodeResponse(response), nil)
+        } catch {
+            replyError(
+                id: bridgeRequest.id,
+                code: .appUnavailable,
+                message: "Failed to save MCP admission grant: \(error.localizedDescription)",
+                reply: reply
+            )
+        }
+    }
+
+    private func activeMCPAdmissionGrant(
+        caller: AgentJITCallerFingerprint,
+        runtime: AgentRuntimeContext?,
+        now: Date
+    ) throws -> AgentJITGrant? {
+        try agentJITGrantAuthorizer.activeGrants(
+            capability: .mcpAdmission,
+            caller: caller,
+            agentRuntimeContext: runtime,
+            now: now
+        ).first { grant in
+            grant.agentRuntimeContext?.agentID == runtime?.agentID
+        }
+    }
+
+    private func recordMCPAdmissionAudit(
+        _ bridgeRequest: BridgeRequest,
+        upstreamName: String,
+        approvedBy: String,
+        callerIdentity: CallerIdentity?,
+        grantID: UUID?
+    ) {
+        recordAudit(
+            command: .agentJITPreflight,
+            itemId: grantID?.uuidString ?? upstreamName,
+            itemName: "MCP server \(upstreamName)",
+            approvedBy: approvedBy,
+            caller: callerIdentity,
+            requestedCommand: bridgeRequest.context.requestedCommand,
+            fullCommand: bridgeRequest.context.fullCommand,
+            agentJITGrantID: grantID,
+            agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+            workspaceContext: bridgeRequest.context.workspaceContext,
+            environmentScope: nil
+        )
     }
 
     /// Revalidation may lose optional signing or parent/host fields after Touch ID

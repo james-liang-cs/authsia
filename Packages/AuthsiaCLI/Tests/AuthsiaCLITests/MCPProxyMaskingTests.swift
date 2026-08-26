@@ -115,7 +115,8 @@ struct MCPProxyMaskingTests {
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
             initializeTimeoutSeconds: 15,
-            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP masking test")
         let request: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -218,6 +219,7 @@ struct MCPProxyMaskingTests {
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
             initializeTimeoutSeconds: 15,
             grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder(),
             stderrOutput: output
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP stderr test")

@@ -329,6 +329,7 @@ final class RecordingMCPProxyBridgeSession: MCPProxyBridgeSession, @unchecked Se
     private(set) var payloads: [AgentJITPreflightPayload] = []
     var allowedSessionID: String?
     var secretValue = "synthetic-token"
+    var preflightGrantIDs = [UUID()]
 
     func withRequestedCommand<R>(
         _ command: String,
@@ -352,7 +353,7 @@ final class RecordingMCPProxyBridgeSession: MCPProxyBridgeSession, @unchecked Se
         lock.unlock()
         _ = agentRuntimeContext
         _ = workspaceRoot
-        return AgentJITPreflightResultPayload(grantIDs: [UUID()])
+        return AgentJITPreflightResultPayload(grantIDs: preflightGrantIDs)
     }
 
     func resolveSecret(
@@ -383,6 +384,55 @@ final class RecordingMCPProxyBridgeSession: MCPProxyBridgeSession, @unchecked Se
             )
         }
         return secret
+    }
+}
+
+final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Sendable {
+    struct Call: Equatable {
+        let upstreamName: String
+        let upstreamCommand: String?
+        let toolName: String
+        let agentRuntimeContext: AgentRuntimeContext
+        let workspaceRoot: URL?
+        let grantID: UUID?
+    }
+
+    private let lock = NSLock()
+    private(set) var calls: [Call] = []
+    var error: (any Error)?
+
+    func record(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?
+    ) throws {
+        try lock.withLock {
+            if let error { throw error }
+            calls.append(Call(
+                upstreamName: upstreamName,
+                upstreamCommand: upstreamCommand,
+                toolName: toolName,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot,
+                grantID: grantID
+            ))
+        }
+    }
+}
+
+struct NoopMCPProxyToolCallRecorder: MCPProxyToolCallRecording {
+    func record(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?
+    ) throws {
+        _ = (upstreamName, upstreamCommand, toolName, agentRuntimeContext, workspaceRoot, grantID)
     }
 }
 

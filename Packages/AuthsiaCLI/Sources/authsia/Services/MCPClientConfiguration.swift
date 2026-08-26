@@ -1,4 +1,5 @@
 import ArgumentParser
+import AuthenticatorBridge
 import Foundation
 
 enum MCPClient: String, CaseIterable, Sendable {
@@ -47,6 +48,28 @@ enum MCPClientConfigurationError: LocalizedError, Equatable {
 }
 
 enum MCPClientConfiguration {
+    static func scanReport(_ findings: [MCPClientServerFinding]) -> String? {
+        guard !findings.isEmpty else { return nil }
+        let rows = findings.map { finding in
+            let state: String
+            switch finding.status {
+            case .admittedWrapped:
+                state = "wrapped and admitted"
+            case .directBypass:
+                state = "declared, but launches directly and bypasses admission"
+            case .unadmitted:
+                state = "not on the current workspace allowlist"
+            }
+            return "- \(finding.source.displayName) / \(finding.serverName) "
+                + "(\(finding.commandLabel)): \(state)"
+        }
+        return ([
+            "Read-only local MCP configuration scan:",
+        ] + rows + [
+            "Detection is visibility only for direct client launches; Authsia does not edit client files or block them.",
+        ]).joined(separator: "\n")
+    }
+
     static func render(
         clientName: String,
         executableURL: URL,

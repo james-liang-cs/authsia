@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticatorBridge
 import Testing
 @testable import authsia
 
@@ -126,6 +127,46 @@ struct MCPClientConfigurationTests {
             environment: [:],
             currentDirectoryPath: empty.path
         ).isEmpty)
+    }
+
+    @Test("scanner report states wrapped, bypass, and detective-only boundaries")
+    func scannerReport() throws {
+        let findings = [
+            MCPClientServerFinding(
+                source: .codex,
+                serverName: "jira",
+                commandLabel: "authsia",
+                status: .admittedWrapped,
+                declaredUpstreamName: "jira",
+                configPathLabel: "~/.codex/config.toml"
+            ),
+            MCPClientServerFinding(
+                source: .cursor,
+                serverName: "filesystem",
+                commandLabel: "npx",
+                status: .directBypass,
+                declaredUpstreamName: "filesystem",
+                configPathLabel: "~/.cursor/mcp.json"
+            ),
+            MCPClientServerFinding(
+                source: .vscode,
+                serverName: "rogue",
+                commandLabel: "node",
+                status: .unadmitted,
+                declaredUpstreamName: nil,
+                configPathLabel: "VS Code user mcp.json"
+            ),
+        ]
+
+        let report = try #require(MCPClientConfiguration.scanReport(findings))
+
+        #expect(report.contains("wrapped and admitted"))
+        #expect(report.contains("bypasses admission"))
+        #expect(report.contains("not on the current workspace allowlist"))
+        #expect(report.contains("visibility only"))
+        #expect(report.contains("does not edit client files or block them"))
+        #expect(!report.contains("config.toml"))
+        #expect(MCPClientConfiguration.scanReport([]) == nil)
     }
 
     @Test("client shapes match their documented configuration surfaces")

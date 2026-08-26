@@ -426,6 +426,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
     public let mcpUpstreamName: String?
     public let mcpToolName: String?
     public let mcpToolPolicy: AgentJITMCPToolPolicy?
+    public let mcpAdmissionRequested: Bool
 
     public init(
         requestedCommand: String,
@@ -433,7 +434,8 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         environmentScope: EnvironmentAccessScope? = nil,
         mcpUpstreamName: String? = nil,
         mcpToolName: String? = nil,
-        mcpToolPolicy: AgentJITMCPToolPolicy? = nil
+        mcpToolPolicy: AgentJITMCPToolPolicy? = nil,
+        mcpAdmissionRequested: Bool = false
     ) {
         self.requestedCommand = requestedCommand
         self.references = references
@@ -441,6 +443,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         self.mcpUpstreamName = mcpUpstreamName
         self.mcpToolName = mcpToolName
         self.mcpToolPolicy = mcpToolPolicy
+        self.mcpAdmissionRequested = mcpAdmissionRequested
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -450,6 +453,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         case mcpUpstreamName
         case mcpToolName
         case mcpToolPolicy
+        case mcpAdmissionRequested
     }
 
     public init(from decoder: Decoder) throws {
@@ -467,6 +471,10 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         } else {
             mcpToolPolicy = nil
         }
+        mcpAdmissionRequested = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .mcpAdmissionRequested
+        ) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -477,6 +485,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         try container.encodeIfPresent(mcpUpstreamName, forKey: .mcpUpstreamName)
         try container.encodeIfPresent(mcpToolName, forKey: .mcpToolName)
         try container.encodeIfPresent(mcpToolPolicy, forKey: .mcpToolPolicy)
+        try container.encode(mcpAdmissionRequested, forKey: .mcpAdmissionRequested)
     }
 }
 

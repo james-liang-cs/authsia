@@ -379,6 +379,136 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertFalse(propertyNames.contains("mcpToolPolicy"))
     }
 
+    func testMCPAdmissionCreatesDedicatedLocalGrantWithoutVaultAuthority() async throws {
+        let approver = JITApprovalTracker(result: true)
+        let builder = RemoteRequestBuilderSpy()
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            requestBuilder: builder,
+            clock: AgentJITApprovalClockSpy([now, now]).callAsFunction
+        )
+        let runtime = AgentRuntimeContext(
+            platform: "Cursor",
+            sessionID: "mcp:admission",
+            turnID: "mcp-call:1",
+            agentID: "proxy:jira",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:1"
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [],
+            mcpUpstreamName: "jira",
+            mcpToolName: "jira_get_issue",
+            mcpToolPolicy: .allow,
+            mcpAdmissionRequested: true
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: execContext(
+                agentRuntimeContext: runtime,
+                workspaceContext: WorkspaceRuntimeContext(name: "repo", rootLabel: "repo")
+            )
+        )
+
+        XCTAssertNil(response.error)
+        let grant = try XCTUnwrap(store.grants.first)
+        XCTAssertEqual(response.payload?.grantIDs, [grant.id])
+        XCTAssertEqual(grant.capabilities, [.mcpAdmission])
+        XCTAssertTrue(grant.requestedItems.isEmpty)
+        XCTAssertTrue(grant.matchesAgentRuntimeContext(runtime))
+        XCTAssertTrue(grant.allows(
+            capability: .mcpAdmission,
+            itemFolderPath: nil,
+            caller: grant.callerFingerprint,
+            now: now
+        ))
+        XCTAssertFalse(grant.allows(
+            capability: .exec,
+            itemFolderPath: nil,
+            caller: grant.callerFingerprint,
+            now: now
+        ))
+        XCTAssertTrue(builder.inputBatches.isEmpty)
+        let request = try XCTUnwrap(approver.requests.first)
+        XCTAssertTrue(request.prompt.contains("local MCP server jira"))
+        XCTAssertTrue(request.prompt.contains("workspace repo"))
+        XCTAssertEqual(request.itemLabel, "jira")
+        XCTAssertEqual(request.remoteRequests, [])
+        let descriptor = try XCTUnwrap(request.approvalDescriptors.first)
+        XCTAssertEqual(descriptor.capabilities, [.mcpAdmission])
+        XCTAssertEqual(descriptor.reuseDescription, "MCP server admission")
+        XCTAssertEqual(descriptor.mcpUpstreamName, "jira")
+        XCTAssertTrue(descriptor.requestedItems.isEmpty)
+    }
+
+    func testMCPAdmissionReusesGrantForSameProxySession() async throws {
+        let approver = JITApprovalTracker(result: true)
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            clock: AgentJITApprovalClockSpy([now, now, now]).callAsFunction
+        )
+        let runtime = AgentRuntimeContext(
+            sessionID: "mcp:admission",
+            agentID: "proxy:jira",
+            agentType: "authsia-mcp"
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [],
+            mcpUpstreamName: "jira",
+            mcpAdmissionRequested: true
+        )
+        let context = execContext(agentRuntimeContext: runtime)
+
+        let first: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: context
+        )
+        let second: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: context
+        )
+
+        XCTAssertEqual(first.payload?.grantIDs, second.payload?.grantIDs)
+        XCTAssertEqual(store.grants.count, 1)
+        XCTAssertEqual(approver.requests.count, 1)
+    }
+
+    func testMCPAdmissionRejectsNonProxyRuntimeContext() async throws {
+        let approver = JITApprovalTracker(result: true)
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            clock: AgentJITApprovalClockSpy([now]).callAsFunction
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [],
+            mcpUpstreamName: "jira",
+            mcpAdmissionRequested: true
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: execContext(agentRuntimeContext: agentRuntimeContext())
+        )
+
+        XCTAssertEqual(response.error?.code, .invalidRequest)
+        XCTAssertTrue(store.grants.isEmpty)
+        XCTAssertTrue(approver.requests.isEmpty)
+    }
+
     func testDisabledICloudSyncSkipsRemoteBuilderAndKeepsLocalApproval() async throws {
         let builder = RemoteRequestBuilderSpy()
         let approver = JITApprovalTracker(result: true)

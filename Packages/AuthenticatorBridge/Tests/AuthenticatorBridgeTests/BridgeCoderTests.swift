@@ -67,6 +67,7 @@ final class BridgeCoderTests: XCTestCase {
         XCTAssertNil(decoded.mcpUpstreamName)
         XCTAssertNil(decoded.mcpToolName)
         XCTAssertNil(decoded.mcpToolPolicy)
+        XCTAssertFalse(decoded.mcpAdmissionRequested)
     }
 
     func testAgentJITPreflightPayloadDecodesMissingMCPDisplayFields() throws {
@@ -89,6 +90,7 @@ final class BridgeCoderTests: XCTestCase {
         XCTAssertNil(decoded.mcpUpstreamName)
         XCTAssertNil(decoded.mcpToolName)
         XCTAssertNil(decoded.mcpToolPolicy)
+        XCTAssertFalse(decoded.mcpAdmissionRequested)
     }
 
     func testAgentJITPreflightPayloadRoundTripsMCPDisplayFields() throws {
@@ -99,7 +101,8 @@ final class BridgeCoderTests: XCTestCase {
             ],
             mcpUpstreamName: "jira",
             mcpToolName: "jira_get_issue",
-            mcpToolPolicy: .approve
+            mcpToolPolicy: .approve,
+            mcpAdmissionRequested: true
         )
 
         let decoded = try BridgeCoder.decode(
@@ -110,6 +113,7 @@ final class BridgeCoderTests: XCTestCase {
         XCTAssertEqual(decoded.mcpUpstreamName, "jira")
         XCTAssertEqual(decoded.mcpToolName, "jira_get_issue")
         XCTAssertEqual(decoded.mcpToolPolicy, .approve)
+        XCTAssertTrue(decoded.mcpAdmissionRequested)
     }
 
     func testAgentJITPreflightPayloadIgnoresUnknownMCPToolPolicy() throws {

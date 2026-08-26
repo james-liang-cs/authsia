@@ -124,6 +124,57 @@ struct MCPProxyJITTests {
         #expect(payload.mcpUpstreamName == "jira")
         #expect(payload.mcpToolName == "jira_create_issue")
         #expect(payload.mcpToolPolicy == .approve)
+        #expect(!payload.mcpAdmissionRequested)
+    }
+
+    @Test("credential-less upstream requests a watched admission grant before spawn")
+    func credentiallessUpstreamRequestsAdmissionGrant() throws {
+        let bridge = RecordingMCPProxyBridgeSession()
+        let client = LiveMCPProxySessionClient(bridge: bridge)
+
+        let resolved = try client.prepareChildEnvironment(
+            declared: ["JIRA_URL": "https://example.atlassian.net"],
+            agentRuntimeContext: AgentRuntimeContext(
+                sessionID: "mcp:\(UUID().uuidString)",
+                agentID: "proxy:jira",
+                agentType: "authsia-mcp"
+            ),
+            workspaceRoot: URL(fileURLWithPath: "/tmp/project"),
+            mcpUpstreamName: "jira",
+            mcpToolName: "jira_get_issue",
+            mcpToolPolicy: .allow
+        )
+
+        let payload = try #require(bridge.payloads.first)
+        #expect(bridge.requestedCommands == ["exec"])
+        #expect(payload.references.isEmpty)
+        #expect(payload.mcpAdmissionRequested)
+        #expect(payload.mcpUpstreamName == "jira")
+        #expect(resolved.environment == ["JIRA_URL": "https://example.atlassian.net"])
+        #expect(resolved.secrets.isEmpty)
+        #expect(resolved.grantIDs.count == 1)
+    }
+
+    @Test("credential-less upstream fails closed when admission has no grant")
+    func credentiallessUpstreamRejectsMissingAdmissionGrant() {
+        let bridge = RecordingMCPProxyBridgeSession()
+        bridge.preflightGrantIDs = []
+        let client = LiveMCPProxySessionClient(bridge: bridge)
+
+        #expect(throws: MCPProxySpawnError.self) {
+            _ = try client.prepareChildEnvironment(
+                declared: ["JIRA_URL": "https://example.atlassian.net"],
+                agentRuntimeContext: AgentRuntimeContext(
+                    sessionID: "mcp:\(UUID().uuidString)",
+                    agentID: "proxy:jira",
+                    agentType: "authsia-mcp"
+                ),
+                workspaceRoot: URL(fileURLWithPath: "/tmp/project"),
+                mcpUpstreamName: "jira",
+                mcpToolName: "jira_get_issue",
+                mcpToolPolicy: .allow
+            )
+        }
     }
 
     @Test("tools/list stays responsive while JIT preflight is in flight")
@@ -147,7 +198,8 @@ struct MCPProxyJITTests {
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
-            initializeTimeoutSeconds: 15
+            initializeTimeoutSeconds: 15,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "Cursor")
         let call = Task {
@@ -233,6 +285,7 @@ struct MCPProxyJITTests {
             grantIDs: [grantID]
         )
         let launcher = RecordingMCPProxyChildLauncher()
+        let recorder = RecordingMCPProxyToolCallRecorder()
         let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
         defer { try? FileManager.default.removeItem(at: root) }
         let proxy = AuthsiaMCPProxy(
@@ -247,7 +300,8 @@ struct MCPProxyJITTests {
                 "HOME": "/synthetic/home",
             ],
             initializeTimeoutSeconds: 15,
-            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: recorder
         )
         let connection = try await connectMCPProxy(proxy, clientName: "Cursor")
 
@@ -273,6 +327,10 @@ struct MCPProxyJITTests {
         #expect(sessionClient.mcpUpstreamNames == ["jira"])
         #expect(sessionClient.mcpToolNames == ["jira_get_issue"])
         #expect(sessionClient.mcpToolPolicies == [.allow])
+        #expect(recorder.calls.count == 1)
+        #expect(recorder.calls.first?.upstreamName == "jira")
+        #expect(recorder.calls.first?.toolName == "jira_get_issue")
+        #expect(recorder.calls.first?.grantID == grantID)
 
         let second: RequestContext<CallTool.Result> = try await connection.client.callTool(
             name: "jira_search"
@@ -281,6 +339,7 @@ struct MCPProxyJITTests {
         #expect(secondResult.isError != true)
         #expect(sessionClient.prepareCount == 1)
         #expect(launcher.spawnCount == 1)
+        #expect(recorder.calls.map(\.toolName) == ["jira_get_issue", "jira_search"])
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
@@ -299,7 +358,8 @@ struct MCPProxyJITTests {
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             childLauncher: launcher,
-            parentEnvironment: ["PATH": "/usr/bin"]
+            parentEnvironment: ["PATH": "/usr/bin"],
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP deny test")
         let denied: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -332,7 +392,8 @@ struct MCPProxyJITTests {
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
-            initializeTimeoutSeconds: 15
+            initializeTimeoutSeconds: 15,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP drift test")
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(

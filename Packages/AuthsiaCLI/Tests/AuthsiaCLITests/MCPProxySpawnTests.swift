@@ -145,7 +145,8 @@ struct MCPProxySpawnTests {
                 "AUTHSIA_MCP_PROCESS_GROUP": "1",
                 "AUTHSIA_MCP_FAILURE_FILE": "/tmp/failure",
             ],
-            initializeTimeoutSeconds: 15
+            initializeTimeoutSeconds: 15,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP spawn env test")
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -203,7 +204,8 @@ struct MCPProxySpawnTests {
             initializeTimeoutSeconds: 15,
             killGraceSeconds: 0.05,
             grantPollIntervalSeconds: 0.05,
-            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP revoke test")
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -260,7 +262,8 @@ struct MCPProxySpawnTests {
             initializeTimeoutSeconds: 15,
             killGraceSeconds: 0.05,
             grantPollIntervalSeconds: 5,
-            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP shutdown test")
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -309,7 +312,8 @@ struct MCPProxySpawnTests {
             initializeTimeoutSeconds: 15,
             killGraceSeconds: 0.05,
             grantPollIntervalSeconds: 5,
-            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP on-call revoke test")
         let firstCall: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -362,7 +366,8 @@ struct MCPProxySpawnTests {
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "/usr/bin:/bin"],
-            initializeTimeoutSeconds: 15
+            initializeTimeoutSeconds: 15,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP relative spawn")
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -405,7 +410,8 @@ struct MCPProxySpawnTests {
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
-            initializeTimeoutSeconds: 15
+            initializeTimeoutSeconds: 15,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP sdk spike")
         let slow: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "slow")
@@ -572,7 +578,8 @@ struct MCPProxySpawnTests {
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
             initializeTimeoutSeconds: 15,
             grantPollIntervalSeconds: 5,
-            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP graceful stop test")
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -611,7 +618,8 @@ struct MCPProxySpawnTests {
             sessionClient: sessionClient,
             childLauncher: launcher,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
-            initializeTimeoutSeconds: 15
+            initializeTimeoutSeconds: 15,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP ungranted test")
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(

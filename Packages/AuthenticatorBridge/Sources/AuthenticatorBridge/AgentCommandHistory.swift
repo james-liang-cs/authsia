@@ -4,6 +4,7 @@ public enum AgentCommandCaptureSource: String, Codable, Equatable, Sendable {
     case hook
     case process
     case injectedTree
+    case mcpProxy
 }
 
 public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
@@ -500,6 +501,15 @@ private extension AgentCommandEvent {
                 agentJITGrantID?.uuidString ?? "",
                 terminalSessionScope ?? "",
                 workingDirectory ?? "",
+                executable ?? "",
+                command,
+            ].joined(separator: "\u{1f}")
+        case .mcpProxy:
+            guard let toolUseID else { return nil }
+            return [
+                "mcpProxy",
+                agentJITGrantID?.uuidString ?? "",
+                toolUseID,
                 executable ?? "",
                 command,
             ].joined(separator: "\u{1f}")

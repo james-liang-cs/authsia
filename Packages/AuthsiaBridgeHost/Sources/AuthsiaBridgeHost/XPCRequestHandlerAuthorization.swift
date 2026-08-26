@@ -508,6 +508,8 @@ extension XPCRequestHandler {
             return request.context.requestedCommand == "exec"
         case .list:
             return request.context.requestedCommand == "list" || request.context.requestedCommand == "exec"
+        case .mcpAdmission:
+            return false
         }
     }
 

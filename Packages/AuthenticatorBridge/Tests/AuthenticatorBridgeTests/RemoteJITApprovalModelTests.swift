@@ -298,7 +298,13 @@ final class RemoteJITApprovalModelTests: XCTestCase {
             [.exec, .list]
         )
 
-        for invalid: [AgentJITCapability] in [[], [.exec], [.list, .list], [.exec, .list, .exec]] {
+        for invalid: [AgentJITCapability] in [
+            [],
+            [.exec],
+            [.mcpAdmission],
+            [.list, .list],
+            [.exec, .list, .exec],
+        ] {
             assertValidationError(.invalidCapabilities) {
                 try makeValidDescriptor(capabilities: invalid)
             }

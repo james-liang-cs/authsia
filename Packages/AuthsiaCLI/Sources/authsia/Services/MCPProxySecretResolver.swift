@@ -106,17 +106,14 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
             throw MCPToolInputError.invalidArgument("OTP and SSH refs are not injectable")
         }
         let references = try SecretReferenceResolver.preflightReferences(environment: declared)
-        guard !references.isEmpty else {
-            return (declared, [], [])
-        }
         let payload = AgentJITPreflightPayload(
             requestedCommand: "exec",
             references: references,
             mcpUpstreamName: mcpUpstreamName,
             mcpToolName: mcpToolName,
-            mcpToolPolicy: mcpToolPolicy
+            mcpToolPolicy: mcpToolPolicy,
+            mcpAdmissionRequested: references.isEmpty
         )
-        let resolver = makeResolver(agentRuntimeContext, workspaceRoot)
         return try client.withRequestedCommand("exec", includeAutomationCredential: false) {
             let preflight = try client.agentJITPreflight(
                 payload,
@@ -130,6 +127,10 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
             guard !preflight.grantIDs.isEmpty else {
                 throw MCPProxySpawnError.grantUnavailable
             }
+            guard !references.isEmpty else {
+                return (declared, [], preflight.grantIDs)
+            }
+            let resolver = makeResolver(agentRuntimeContext, workspaceRoot)
             let resolved = try SecretReferenceResolver(client: resolver).resolveEnvironment(declared)
             return (resolved.resolved, resolved.secrets, preflight.grantIDs)
         }
@@ -160,5 +161,50 @@ private struct MCPProxyBridgedSecretResolver: SecretResolverClient {
             agentRuntimeContext: agentRuntimeContext,
             workspaceRoot: workspaceRoot
         )
+    }
+}
+
+protocol MCPProxyToolCallRecording: Sendable {
+    func record(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?
+    ) throws
+}
+
+struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Sendable {
+    private let store: AgentCommandHistoryStore
+
+    init(store: AgentCommandHistoryStore = AgentCommandHistoryStore()) {
+        self.store = store
+    }
+
+    func record(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?
+    ) throws {
+        let executable = upstreamCommand ?? upstreamName
+        try store.record(AgentCommandEvent(
+            recordedAt: Date(),
+            agentPlatform: agentRuntimeContext.platform,
+            sessionID: agentRuntimeContext.sessionID,
+            turnID: agentRuntimeContext.turnID,
+            agentID: agentRuntimeContext.agentID,
+            agentType: agentRuntimeContext.agentType,
+            toolUseID: agentRuntimeContext.toolUseID,
+            agentJITGrantID: grantID,
+            captureSource: .mcpProxy,
+            workingDirectory: workspaceRoot?.path,
+            executable: executable,
+            arguments: ["mcp-tool", toolName],
+            command: "\(executable) mcp-tool \(toolName)"
+        ))
     }
 }

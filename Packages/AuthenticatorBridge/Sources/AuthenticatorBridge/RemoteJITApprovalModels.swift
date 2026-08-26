@@ -568,6 +568,7 @@ private func capabilityTag(_ capability: AgentJITCapability) -> UInt8 {
     switch capability {
     case .exec: 0x01
     case .list: 0x02
+    case .mcpAdmission: 0x03
     }
 }
 

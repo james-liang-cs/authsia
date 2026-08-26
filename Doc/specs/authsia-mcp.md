@@ -137,10 +137,12 @@ or revocation checks. Non-MCP JIT behavior remains unchanged.
 
 “Direct Agent JIT” below means the agent-classified Authsia CLI path described
 in [`jit-agent-grants.md`](jit-agent-grants.md), not the broader human CLI or
-automation-credential surfaces. Agent JIT stores only `list` and `exec`
-capabilities. Of the six MCP tools, only `authsia_list` and `authsia_exec` enter
-JIT; status, workspace inspection, owned-grant status, and owned-grant
-revocation are bounded non-secret control tools.
+automation-credential surfaces. Secret/data JIT stores only `list` and `exec`
+capabilities. The upstream proxy may additionally mint the local-only
+`mcp-admission` grant described below; that grant cannot list Vault metadata or
+authorize a secret read. Of the six serve tools, only `authsia_list` and
+`authsia_exec` enter secret/data JIT; status, workspace inspection, owned-grant
+status, and owned-grant revocation are bounded non-secret control tools.
 
 | Capability | Direct Agent JIT | Local Authsia MCP V1 |
 | --- | --- | --- |
@@ -455,6 +457,15 @@ upstream in its own process group, initializes it as an outbound MCP client,
 and privately verifies its tool list. Extra child tools never become visible,
 and a policy-advertised tool missing from the child fails closed.
 
+When the upstream declares no `authsia://` references, the first permitted call
+instead requests a dedicated local `mcp-admission` grant, narrowed to the same
+caller, workspace, proxy name, and MCP server-instance ID. This grant carries no
+Vault items and authorizes neither `list` nor `exec`. Declining admission means
+the child never starts. An approved credential-less child follows the same
+audit, liveness, process-group termination, and revoke-kill lifecycle as a
+credentialed child. Admission approval is local-Mac only and is not encoded in
+the paired-iPhone remote approval protocol.
+
 After startup, calls may overlap through the single child. Known injected
 secret values of at least four UTF-8 bytes are concealed only inside JSON
 string values in both forwarded arguments and returned results. JSON keys,
@@ -603,6 +614,10 @@ terminal event rather than showing an unattributed revoke.
 Audit and activity must never store raw JSON-RPC requests/responses, MCP client
 conversation content, command output, stdin, environment values, secret values,
 or cancellation text. Existing HMAC verification and export redaction apply.
+Before forwarding each permitted proxy `tools/call`, Authsia records one
+redacted Agent command event containing only the proxy source, grant ID,
+workspace/runtime correlation, and MCP tool name. If that record cannot be
+persisted, the call fails before it reaches the upstream.
 
 ## Errors And Output
 
@@ -659,6 +674,7 @@ payloads.
 | Injected values leak through proxied JSON-RPC | Parse and mask JSON string values in both directions; never patch raw frames or store them in audit or diagnostics. |
 | Revocation leaves a long-lived upstream authorized | Associate the child with exact owned grant IDs, recheck on every call and periodically, and terminate the complete process group when association fails. |
 | Approved upstream, package launcher, or unmanaged sibling MCP exfiltrates data | Treat the upstream and MCP client as untrusted; Authsia does not sandbox an approved child, police sibling client configuration, or provide OS-wide DLP. |
+| Read-only config detection is mistaken for launch enforcement | Label direct launches as existence-only findings; never claim call audit, revoke-kill, or blocking outside the proxy. |
 
 The model does not claim to sandbox an approved child or stop it from sending a
 secret through every possible channel. Existing output masking and activity
@@ -711,6 +727,29 @@ hint, then the process working directory, remain compatibility fallbacks.
 Outside an initialized Authsia workspace the server remains available but
 unbound, and workspace-dependent tools fail closed. Configuration formats
 remain client-owned compatibility surfaces, not part of Authsia authorization.
+
+After printing configuration for a managed workspace, `mcp configure` also
+performs a best-effort read-only scan of the known user-global client paths:
+Codex `~/.codex/config.toml`, Claude `~/.claude.json`, Cursor
+`~/.cursor/mcp.json`, Devin `~/.config/devin/mcp_config.json`, and VS Code's
+user `mcp.json`. It reads only server name, command, and argv; environment
+values and raw protocol frames are neither retained nor reported. Findings are:
+
+- **wrapped**: the client launches `authsia mcp proxy --upstream <name>` for a
+  workspace-declared upstream;
+- **direct bypass**: the declared command/argv exists, but the client launches
+  it directly; and
+- **unadmitted**: no known workspace declaration matches the observed launch.
+
+Malformed, missing, or oversized config files are skipped, and the scanner
+never edits client configuration. A direct or unadmitted entry is visibility
+only: Authsia cannot audit its calls, kill it on revoke, or prevent its launch.
+An empty or partial allowlist therefore fails open and can only affect the
+displayed finding. Command/argv matching is an identity hint, not executable
+attestation; pin a local binary instead of a drifting package launcher when
+stronger identity matters. This local layer complements a company MCP gateway:
+the gateway can own SSO and remote policy while Authsia covers proxy-wrapped
+local stdio admission, agent attribution, and revoke-kill.
 
 ## Compatibility And Upgrade Policy
 

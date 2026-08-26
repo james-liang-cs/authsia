@@ -3,6 +3,7 @@ import Foundation
 public enum AgentJITCapability: String, Codable, CaseIterable, Sendable {
     case exec
     case list
+    case mcpAdmission = "mcp-admission"
 }
 
 public enum AgentJITGrantStatus: String, Codable, Sendable {
@@ -273,6 +274,9 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
     }
 
     public var reuseDescription: String {
+        if capabilities == [.mcpAdmission] {
+            return "MCP server admission"
+        }
         switch resourceScope {
         case .items:
             return "Exact items only"

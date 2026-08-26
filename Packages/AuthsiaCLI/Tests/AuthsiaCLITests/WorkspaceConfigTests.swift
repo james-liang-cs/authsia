@@ -589,6 +589,32 @@ struct WorkspaceConfigTests {
         #expect(loaded.envBindings.map(\.name) == ["API_KEY"])
     }
 
+    @Test("credential-less stdio MCP upstream is a valid admission allowlist entry")
+    func credentiallessMCPUpstreamIsValid() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = WorkspaceConfig(
+            workspace: .init(name: "capability", authsiaFolder: "Workspaces/capability"),
+            managedEnvFiles: [],
+            agents: nil,
+            mcpUpstreams: [
+                MCPUpstreamConfig(
+                    name: "filesystem",
+                    command: "mcp-filesystem",
+                    env: [:],
+                    tools: MCPUpstreamToolPolicy(allow: ["read_file"]),
+                    catalog: [MCPUpstreamToolDescriptor(name: "read_file")]
+                ),
+            ]
+        )
+
+        try WorkspaceConfigStore.write(config, toWorkspaceRoot: root)
+
+        let loaded = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        #expect(loaded.mcpUpstreams.first?.env.isEmpty == true)
+        #expect(loaded.mcpUpstreams.first?.name == "filesystem")
+    }
+
     @Test("HTTP-only upstream round-trips without command env tools or catalog")
     func httpOnlyUpstreamRoundTripsThroughReadAndStatus() async throws {
         let root = try makeWorkspaceRoot()

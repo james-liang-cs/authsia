@@ -52,20 +52,49 @@ struct MCPCommand: AsyncParsableCommand {
         var client: MCPClient
 
         mutating func run() throws {
+            let upstreams = Self.upstreams(
+                environment: ProcessInfo.processInfo.environment,
+                currentDirectoryPath: FileManager.default.currentDirectoryPath
+            )
             print(try MCPClientConfiguration.render(
                 client: client,
                 executableURL: Authsia.currentExecutableURL(),
-                upstreamNames: Self.upstreamNames(
-                    environment: ProcessInfo.processInfo.environment,
-                    currentDirectoryPath: FileManager.default.currentDirectoryPath
-                )
+                upstreamNames: upstreams.map(\.name)
             ))
+            let declared = upstreams.compactMap { upstream -> MCPDeclaredLocalServer? in
+                guard upstream.transport == .stdio, let command = upstream.command else { return nil }
+                return MCPDeclaredLocalServer(
+                    name: upstream.name,
+                    command: command,
+                    arguments: upstream.args
+                )
+            }
+            let locations = MCPClientConfigLocation.knownLocations(
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+            )
+            let findings = MCPClientConfigScanner().scan(
+                declaredServers: declared,
+                locations: locations
+            )
+            if let report = MCPClientConfiguration.scanReport(findings) {
+                print("\n\(report)")
+            }
         }
 
         static func upstreamNames(
             environment: [String: String],
             currentDirectoryPath: String
         ) -> [String] {
+            upstreams(
+                environment: environment,
+                currentDirectoryPath: currentDirectoryPath
+            ).map(\.name)
+        }
+
+        private static func upstreams(
+            environment: [String: String],
+            currentDirectoryPath: String
+        ) -> [MCPUpstreamConfig] {
             let startingDirectory = Serve.startingDirectory(
                 workspace: nil,
                 environment: environment,
@@ -76,7 +105,7 @@ struct MCPCommand: AsyncParsableCommand {
                   let config = try? WorkspaceConfigStore.read(fromWorkspaceRoot: root) else {
                 return []
             }
-            return config.mcpUpstreams.map(\.name)
+            return config.mcpUpstreams
         }
     }
 
