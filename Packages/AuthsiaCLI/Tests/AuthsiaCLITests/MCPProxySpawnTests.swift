@@ -24,6 +24,7 @@ struct MCPProxySpawnTests {
                 "AUTHSIA_ACCESS_CREDENTIAL": "must-not-survive",
                 "AUTHSIA_MCP_PROCESS_GROUP": "1",
                 "AUTHSIA_MCP_FAILURE_FILE": "/tmp/failure",
+                "AUTHSIA_MCP_UPSTREAM": "jira",
             ],
             declared: [
                 "JIRA_URL": "https://example.atlassian.net",
@@ -45,6 +46,7 @@ struct MCPProxySpawnTests {
         #expect(child["AUTHSIA_ACCESS_CREDENTIAL"] == nil)
         #expect(child["AUTHSIA_MCP_PROCESS_GROUP"] == nil)
         #expect(child["AUTHSIA_MCP_FAILURE_FILE"] == nil)
+        #expect(child["AUTHSIA_MCP_UPSTREAM"] == nil)
         #expect(child[AutomationAccessResolver.environmentKey] == nil)
     }
 

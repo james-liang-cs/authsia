@@ -24,7 +24,8 @@ public enum MCPLocalMCPWrapRecipe {
 
         2. Replace the client launch with:
         command: \(authsia)
-        args: ["mcp", "proxy", "--upstream", \(jsonString(finding.serverName))]
+        args: ["mcp", "proxy"]
+        env: { \(jsonString(MCPProxyClientLaunch.environmentKey)): \(jsonString(finding.serverName)) }
 
         Authsia does not edit the client file. The first permitted tool call requests local MCP admission.
         """

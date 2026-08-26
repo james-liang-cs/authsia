@@ -11,8 +11,10 @@ struct MCPCommand: AsyncParsableCommand {
             Most users should configure a supported client, which launches the server
             automatically and supplies its active workspace when supported.
             Enable MCP Integrations in Authsia Settings > Developer Access first.
-            `mcp proxy --upstream` wraps one named workspace upstream as a separate
-            stdio process; it does not add tools to `mcp serve`.
+            `mcp proxy` wraps one named workspace upstream as a separate stdio
+            process; it does not add tools to `mcp serve`. Clients launch a stable
+            `mcp proxy` argv and set AUTHSIA_MCP_UPSTREAM; `--upstream` is optional
+            for terminal use.
 
             Examples:
               authsia mcp configure --client codex
@@ -150,31 +152,68 @@ struct MCPCommand: AsyncParsableCommand {
             abstract: "Proxy a named workspace upstream over local stdio"
         )
 
-        @Option(help: "Named workspace MCP upstream")
-        var upstream: String
+        @Option(help: "Named workspace MCP upstream (or AUTHSIA_MCP_UPSTREAM)")
+        var upstream: String?
 
         @Option(help: "Explicit workspace binding (otherwise uses tool input or launch context)")
         var workspace: String?
 
         mutating func validate() throws {
-            guard WorkspaceConfigStore.isValidMCPUpstreamName(upstream) else {
-                throw ValidationError("--upstream must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
-            }
+            _ = try Self.resolveUpstreamName(
+                flag: upstream,
+                environment: ProcessInfo.processInfo.environment
+            )
         }
 
         mutating func run() async throws {
+            let environment = ProcessInfo.processInfo.environment
+            let upstreamName = try Self.resolveUpstreamName(
+                flag: upstream,
+                environment: environment
+            )
             let startingDirectory = MCPCommand.startingDirectory(
                 workspace: workspace,
-                environment: ProcessInfo.processInfo.environment,
+                environment: environment,
                 currentDirectoryPath: FileManager.default.currentDirectoryPath
             )
             let proxy = AuthsiaMCPProxy(
                 version: Authsia.version(),
-                upstreamName: upstream,
+                upstreamName: upstreamName,
                 runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
                 mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
             )
             try await proxy.runStdio()
+        }
+
+        static func resolveUpstreamName(
+            flag: String?,
+            environment: [String: String]
+        ) throws -> String {
+            let fromFlag = trimmed(flag)
+            let fromEnv = trimmed(environment[MCPProxyClientLaunch.environmentKey])
+            if let fromFlag, let fromEnv, fromFlag != fromEnv {
+                throw ValidationError(
+                    "--upstream and AUTHSIA_MCP_UPSTREAM must name the same upstream."
+                )
+            }
+            let name = fromFlag ?? fromEnv
+            guard let name else {
+                throw ValidationError(
+                    "Pass --upstream or set AUTHSIA_MCP_UPSTREAM to a workspace mcpUpstreams name."
+                )
+            }
+            guard WorkspaceConfigStore.isValidMCPUpstreamName(name) else {
+                throw ValidationError(
+                    "Upstream name must match [A-Za-z][A-Za-z0-9_-]{0,31}."
+                )
+            }
+            return name
+        }
+
+        private static func trimmed(_ value: String?) -> String? {
+            guard let value else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
         }
     }
 }

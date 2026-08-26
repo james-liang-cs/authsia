@@ -416,9 +416,12 @@ reviewing and revoking historical or orphaned MCP grants.
 
 ## Upstream Proxy
 
-`authsia mcp proxy --upstream <name> [--workspace <path>]` runs a separate
+`authsia mcp proxy [--upstream <name>] [--workspace <path>]` runs a separate
 local `stdio` MCP server that wraps one named upstream declared by the bound
-workspace. It does not add tools to `authsia mcp serve`, change the frozen
+workspace. The name comes from `--upstream` or from `AUTHSIA_MCP_UPSTREAM`.
+Client configuration uses a stable `mcp proxy` argv plus that environment
+variable so a company MCP allowlist can name Authsia once instead of every
+child. It does not add tools to `authsia mcp serve`, change the frozen
 six-tool Authsia catalog, or make Authsia an implementation of the upstream
 service.
 
@@ -504,7 +507,26 @@ scanned stdio server into a known workspace `mcpUpstreams` array after
 confirmation, or copy a wrap recipe (PATH basename or workspace-relative
 command). Both paths are print-or-policy only for the client: Authsia still
 does not edit third-party MCP configuration. The user pastes or replaces the
-client launch with `authsia mcp proxy --upstream <name>`.
+client launch with the installed Authsia binary, argv `mcp proxy`, and
+`AUTHSIA_MCP_UPSTREAM` set to the workspace name. `--upstream` remains valid
+for terminal launches and for existing client files.
+
+### Company Local MCP Allowlist
+
+Company policy allowlists Authsia, not each local tool. Child names belong in
+workspace `mcpUpstreams` and are admitted through Authsia. Claude Code
+`allowedMcpServers` `serverCommand` matches the exact client argv, so Authsia
+does not put `--upstream <name>` in that argv.
+
+A Claude Code managed `serverCommand` allowlist is two entries: the installed
+Authsia binary with `mcp serve`, and the same binary with `mcp proxy`. Users
+may add further client entries that share that proxy argv. Do not list
+Playwright, Codegraph, or other child names in the company file.
+
+Do not enable Claude Code `allowManagedMcpServersOnly` (exclusive managed
+catalog) if users should adopt new local tools through Authsia. That mode
+blocks user-added servers even when the argv matches. Remote HTTP/SSE company
+gateways remain a separate lane; they do not see this local stdio path.
 
 ### Preconditions
 
@@ -560,15 +582,15 @@ authsia mcp configure --client <codex|claude|cursor|devin|vscode>
 ```
 
 Configure always prints the `authsia mcp serve` entry. With declared
-upstreams it also prints one `authsia mcp proxy --upstream <name>` entry per
-name, with no repository path and no resolved secret references. Codex,
-Claude Code, and VS Code receive a direct installation command plus a manual
-fallback. Cursor and Devin Desktop receive only the manual user-global
-configuration.
+upstreams it also prints one `authsia mcp proxy` entry per name, with
+`AUTHSIA_MCP_UPSTREAM` set to that name, no repository path, and no resolved
+secret references. Codex, Claude Code, and VS Code receive a direct
+installation command plus a manual fallback. Cursor and Devin Desktop receive
+only the manual user-global configuration.
 
 Apply the printed **proxy** form so the client launches the installed Authsia
-binary with argv `mcp proxy --upstream <name>`. A remaining direct
-command/argv entry bypasses admission, redacted call evidence, and
+binary with argv `mcp proxy` and `AUTHSIA_MCP_UPSTREAM=<name>`. A remaining
+direct command/argv entry bypasses admission, redacted call evidence, and
 revoke-kill.
 
 After printing, configure scans known user-global client files read-only:
@@ -797,8 +819,9 @@ The user procedure for wrapping a declared local server is
 deterministic user-global local-stdio configuration for the exact installed
 Authsia binary. It always prints the `authsia mcp serve` entry. When its safe
 launch context resolves a managed workspace, it also prints one separate
-`authsia mcp proxy --upstream <name>` entry for each declared upstream. With no
-declared upstream it prints guidance explaining where proxy blocks come from.
+`authsia mcp proxy` entry per declared upstream, with `AUTHSIA_MCP_UPSTREAM`
+set to that name. With no declared upstream it prints guidance explaining
+where proxy blocks come from.
 V1 does not edit third-party configuration, launch the client, add credentials,
 or use a shell wrapper.
 
@@ -815,8 +838,10 @@ configuration because they do not expose a documented equivalent command.
 Generated configuration must:
 
 - pass `mcp serve` as an argv array;
-- pass each declared proxy as `mcp proxy --upstream <name>` argv without a
-  fixed repository path;
+- pass each declared proxy as argv `mcp proxy` plus `AUTHSIA_MCP_UPSTREAM`
+  without a fixed repository path;
+- omit `--upstream` from generated client argv so company command allowlists
+  can match one proxy launch;
 - omit fixed repository paths so one user-global entry works across managed
   workspaces;
 - contain no secret, bearer token, automation credential, or private endpoint;
@@ -842,11 +867,12 @@ After printing configuration for a managed workspace, `mcp configure` also
 performs a best-effort read-only scan of the known user-global client paths:
 Codex `~/.codex/config.toml`, Claude `~/.claude.json`, Cursor
 `~/.cursor/mcp.json`, Devin `~/.config/devin/mcp_config.json`, and VS Code's
-user `mcp.json`. It reads only server name, command, and argv; environment
-values and raw protocol frames are neither retained nor reported. Findings are:
+user `mcp.json`. It reads server name, command, argv, and the
+`AUTHSIA_MCP_UPSTREAM` name only; other environment values and raw protocol
+frames are neither retained nor reported. Findings are:
 
-- **wrapped**: the client launches `authsia mcp proxy --upstream <name>` for a
-  workspace-declared upstream;
+- **wrapped**: the client launches `authsia mcp proxy` for a workspace-declared
+  upstream (via `AUTHSIA_MCP_UPSTREAM` or a legacy `--upstream` argv);
 - **direct bypass**: the declared command/argv exists, but the client launches
   it directly; and
 - **unadmitted**: no known workspace declaration matches the observed launch.
@@ -859,7 +885,9 @@ displayed finding. Command/argv matching is an identity hint, not executable
 attestation; pin a local binary instead of a drifting package launcher when
 stronger identity matters. This local layer complements a company MCP gateway:
 the gateway can own SSO and remote policy while Authsia covers proxy-wrapped
-local stdio admission, agent attribution, and revoke-kill.
+local stdio admission, agent attribution, and revoke-kill. Company local MCP
+policy allowlists the Authsia binary; workspace `mcpUpstreams` names the
+children.
 
 ## Compatibility And Upgrade Policy
 

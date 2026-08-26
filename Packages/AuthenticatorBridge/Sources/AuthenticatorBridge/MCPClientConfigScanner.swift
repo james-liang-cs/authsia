@@ -218,14 +218,14 @@ public struct MCPClientConfigScanner {
             return nil
         }
 
-        let wrappedUpstream: String?
-        if executableName == "authsia",
-           entry.arguments.count == 4,
-           Array(entry.arguments.prefix(3)) == ["mcp", "proxy", "--upstream"] {
-            wrappedUpstream = Self.validUpstreamName(entry.arguments[3])
-        } else {
-            wrappedUpstream = nil
-        }
+        let wrappedUpstream = executableName == "authsia"
+            ? MCPProxyClientLaunch.wrappedUpstreamName(
+                arguments: entry.arguments,
+                environmentName: entry.upstreamEnvironmentName
+            )
+            : nil
+        let isAuthsiaProxyLaunch = executableName == "authsia"
+            && MCPProxyClientLaunch.isProxyLaunch(arguments: entry.arguments)
         let declaredNames = Set(declaredServers.map(\.name))
         let directMatch = declaredServers.first { declared in
             declared.name == entry.name
@@ -249,7 +249,7 @@ public struct MCPClientConfigScanner {
             command: entry.command,
             arguments: entry.arguments,
             status: status,
-            isAuthsiaProxyLaunch: wrappedUpstream != nil
+            isAuthsiaProxyLaunch: isAuthsiaProxyLaunch
         )
         return MCPClientServerFinding(
             source: entry.location.source,
@@ -332,10 +332,12 @@ public struct MCPClientConfigScanner {
             } else {
                 arguments = []
             }
+            let upstreamEnvironmentName = proxyUpstreamEnvironmentName(value["env"])
             return ObservedServer(
                 name: name,
                 command: command,
                 arguments: arguments,
+                upstreamEnvironmentName: upstreamEnvironmentName,
                 location: location
             )
         }
@@ -350,6 +352,8 @@ public struct MCPClientConfigScanner {
         var name: String?
         var command: String?
         var arguments: [String] = []
+        var upstreamEnvironmentName: String?
+        var readingEnvTable = false
 
         func flush() {
             if let name, let command {
@@ -357,6 +361,7 @@ public struct MCPClientConfigScanner {
                     name: name,
                     command: command,
                     arguments: arguments,
+                    upstreamEnvironmentName: upstreamEnvironmentName,
                     location: location
                 ))
             }
@@ -365,20 +370,44 @@ public struct MCPClientConfigScanner {
         for rawLine in text.split(whereSeparator: \.isNewline) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("[mcp_servers."), line.hasSuffix("]") {
-                flush()
                 let start = line.index(line.startIndex, offsetBy: "[mcp_servers.".count)
                 let rawName = String(line[start..<line.index(before: line.endIndex)])
-                name = parseTOMLString(rawName) ?? rawName
+                let heading = parseTOMLString(rawName) ?? rawName
+                if heading.hasSuffix(".env"), let current = name {
+                    let envOwner = String(heading.dropLast(4))
+                    readingEnvTable = envOwner == current
+                    continue
+                }
+                flush()
+                name = heading
                 command = nil
                 arguments = []
-            } else if name != nil, let value = assignmentValue(in: line, key: "command") {
+                upstreamEnvironmentName = nil
+                readingEnvTable = false
+            } else if readingEnvTable,
+                      let value = assignmentValue(
+                        in: line,
+                        key: MCPProxyClientLaunch.environmentKey
+                      ) {
+                upstreamEnvironmentName = parseTOMLString(value)
+            } else if !readingEnvTable, name != nil,
+                      let value = assignmentValue(in: line, key: "command") {
                 command = parseTOMLString(value)
-            } else if name != nil, let value = assignmentValue(in: line, key: "args") {
+            } else if !readingEnvTable, name != nil,
+                      let value = assignmentValue(in: line, key: "args") {
                 arguments = parseTOMLStringArray(value) ?? []
             }
         }
         flush()
         return entries
+    }
+
+    private static func proxyUpstreamEnvironmentName(_ rawEnv: Any?) -> String? {
+        guard let env = rawEnv as? [String: Any],
+              let value = env[MCPProxyClientLaunch.environmentKey] as? String else {
+            return nil
+        }
+        return value
     }
 
     private static func assignmentValue(in line: String, key: String) -> String? {
@@ -436,6 +465,7 @@ public struct MCPClientConfigScanner {
         let name: String
         let command: String
         let arguments: [String]
+        let upstreamEnvironmentName: String?
         let location: MCPClientConfigLocation
     }
 }

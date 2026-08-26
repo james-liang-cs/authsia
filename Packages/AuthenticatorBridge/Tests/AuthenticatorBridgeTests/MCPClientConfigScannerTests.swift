@@ -179,7 +179,9 @@ final class MCPClientConfigScannerTests: XCTestCase {
 
         XCTAssertTrue(text?.contains("\"name\": \"playwright\"") == true)
         XCTAssertTrue(text?.contains("\"command\": \"npx\"") == true)
-        XCTAssertTrue(text?.contains("\"--upstream\"") == true)
+        XCTAssertTrue(text?.contains("args: [\"mcp\", \"proxy\"]") == true)
+        XCTAssertTrue(text?.contains("AUTHSIA_MCP_UPSTREAM") == true)
+        XCTAssertFalse(text?.contains("--upstream") == true)
         XCTAssertTrue(text?.contains("does not edit the client file") == true)
         XCTAssertFalse(text?.contains("TOKEN") == true)
         XCTAssertNil(MCPLocalMCPWrapRecipe.clipboardText(
@@ -193,6 +195,62 @@ final class MCPClientConfigScannerTests: XCTestCase {
             ),
             authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
         ))
+    }
+
+    func testStableProxyArgvWithUpstreamEnvironmentIsWrapped() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let claude = root.appendingPathComponent("claude.json")
+        let codex = root.appendingPathComponent("codex.toml")
+        try writeJSON([
+            "mcpServers": [
+                "playwright": [
+                    "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                    "args": ["mcp", "proxy"],
+                    "env": [
+                        "AUTHSIA_MCP_UPSTREAM": "playwright",
+                        "TOKEN": "must-not-appear",
+                    ],
+                ],
+                "bare-proxy": [
+                    "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                    "args": ["mcp", "proxy"],
+                ],
+            ],
+        ], to: claude)
+        try """
+        [mcp_servers.codegraph]
+        command = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        args = ["mcp", "proxy"]
+
+        [mcp_servers.codegraph.env]
+        AUTHSIA_MCP_UPSTREAM = "codegraph"
+        TOKEN = "must-not-appear"
+        """.write(to: codex, atomically: true, encoding: .utf8)
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [
+                MCPDeclaredLocalServer(name: "playwright", command: "npx", arguments: ["-y", "@playwright/mcp"]),
+                MCPDeclaredLocalServer(name: "codegraph", command: "codegraph", arguments: ["mcp"]),
+            ],
+            locations: [
+                MCPClientConfigLocation(source: .claude, fileURL: claude, displayPath: "~/.claude.json"),
+                MCPClientConfigLocation(source: .codex, fileURL: codex, displayPath: "~/.codex/config.toml"),
+            ]
+        )
+
+        XCTAssertEqual(findings.map { "\($0.source.rawValue):\($0.serverName):\($0.status.rawValue)" }, [
+            "claude:bare-proxy:unadmitted",
+            "claude:playwright:admitted-wrapped",
+            "codex:codegraph:admitted-wrapped",
+        ])
+        XCTAssertEqual(findings.first { $0.serverName == "playwright" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "bare-proxy" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "bare-proxy" }?.shouldShowInAccessCenter, false)
+        let encoded = String(decoding: try JSONEncoder().encode(findings), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("must-not-appear"))
+        XCTAssertFalse(encoded.contains("TOKEN"))
     }
 
     private func writeJSON(_ object: [String: Any], to url: URL) throws {

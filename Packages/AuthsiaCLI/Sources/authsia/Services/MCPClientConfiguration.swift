@@ -104,7 +104,8 @@ enum MCPClientConfiguration {
             + upstreams.map {
                 ServerConfiguration(
                     name: $0,
-                    arguments: ["mcp", "proxy", "--upstream", $0]
+                    arguments: MCPProxyClientLaunch.arguments,
+                    environment: MCPProxyClientLaunch.environment(upstreamName: $0)
                 )
             }
 
@@ -118,7 +119,7 @@ enum MCPClientConfiguration {
         switch client {
         case .codex:
             let direct = servers.map { server in
-                "codex mcp add \(server.name) -- \(shellQuoted(binaryPath)) \(server.arguments.joined(separator: " "))"
+                "codex mcp add \(server.name)\(envFlags(server.environment)) -- \(shellQuoted(binaryPath)) \(server.arguments.joined(separator: " "))"
             }.joined(separator: "\n")
             let manual = servers.map { server in
                 var table = """
@@ -128,6 +129,12 @@ enum MCPClientConfiguration {
                 """
                 if server.name == "authsia" {
                     table += "\nenv_vars = [\"REQUESTS_CA_BUNDLE\", \"SSL_CERT_FILE\"]"
+                }
+                if !server.environment.isEmpty {
+                    table += "\n\n[mcp_servers.\(server.name).env]\n"
+                    table += server.environment.keys.sorted().map { key in
+                        "\(key) = \"\(tomlEscaped(server.environment[key] ?? ""))\""
+                    }.joined(separator: "\n")
                 }
                 return table
             }.joined(separator: "\n\n")
@@ -152,7 +159,7 @@ enum MCPClientConfiguration {
                 warning: warning + hint
             )
             let direct = servers.map { server in
-                "claude mcp add --scope user \(server.name) -- \(shellQuoted(binaryPath)) " +
+                "claude mcp add --scope user\(envFlags(server.environment)) \(server.name) -- \(shellQuoted(binaryPath)) " +
                     server.arguments.joined(separator: " ")
             }.joined(separator: "\n")
             return """
@@ -194,6 +201,9 @@ enum MCPClientConfiguration {
                     "command": binaryPath,
                     "name": server.name,
                 ]
+                if !server.environment.isEmpty {
+                    object["env"] = server.environment
+                }
                 if server.name != "authsia" { object["type"] = "stdio" }
                 let data = try JSONSerialization.data(
                     withJSONObject: object,
@@ -225,6 +235,9 @@ enum MCPClientConfiguration {
                 "command": binaryPath,
             ]
             if includeType { server["type"] = "stdio" }
+            if !configuration.environment.isEmpty {
+                server["env"] = configuration.environment
+            }
             renderedServers[configuration.name] = server
         }
         let object: [String: Any] = [rootKey: renderedServers]
@@ -243,6 +256,12 @@ enum MCPClientConfiguration {
 
     private static func tomlStringArray(_ values: [String]) -> String {
         "[" + values.map { "\"\(tomlEscaped($0))\"" }.joined(separator: ", ") + "]"
+    }
+
+    private static func envFlags(_ environment: [String: String]) -> String {
+        environment.keys.sorted().map { key in
+            " --env \(key)=\(environment[key] ?? "")"
+        }.joined()
     }
 
     private static func shellQuoted(_ value: String) -> String {
@@ -266,4 +285,5 @@ enum MCPClientConfiguration {
 private struct ServerConfiguration {
     let name: String
     let arguments: [String]
+    var environment: [String: String] = [:]
 }

@@ -72,8 +72,11 @@ authsia mcp configure --client vscode
 ```
 
 The command prints configuration for the exact Authsia binary; it does not edit
-client files. For Codex, Claude Code, and VS Code, it also prints a direct MCP
-installation command; other clients retain manual configuration guidance.
+client files. Generated proxy entries use a stable `mcp proxy` argv and set
+`AUTHSIA_MCP_UPSTREAM` to the workspace name so a company MCP allowlist can
+match Authsia without enumerating child tools. For Codex, Claude Code, and
+VS Code, it also prints a direct MCP installation command; other clients
+retain manual configuration guidance.
 The generated Codex manual configuration forwards optional local
 `REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` TLS trust settings without forwarding
 credentials or other ambient variables. Use that manual entry on a network with

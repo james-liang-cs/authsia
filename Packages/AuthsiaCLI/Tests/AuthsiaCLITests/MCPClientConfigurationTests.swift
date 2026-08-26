@@ -51,7 +51,8 @@ struct MCPClientConfigurationTests {
             )
             #expect(output.contains("mcp"))
             #expect(output.contains("proxy"))
-            #expect(output.contains("--upstream"))
+            #expect(!output.contains("--upstream"))
+            #expect(output.contains("AUTHSIA_MCP_UPSTREAM"))
             #expect(output.contains("jira"))
             #expect(!output.contains("--workspace"))
             #expect(!output.contains("authsia://"))
@@ -65,16 +66,20 @@ struct MCPClientConfigurationTests {
             upstreamNames: ["jira"]
         )
         #expect(codex.contains("codex mcp add jira --"))
+        #expect(codex.contains("--env AUTHSIA_MCP_UPSTREAM=jira"))
         #expect(codex.contains("[mcp_servers.jira]"))
-        #expect(codex.contains("args = [\"mcp\", \"proxy\", \"--upstream\", \"jira\"]"))
+        #expect(codex.contains("args = [\"mcp\", \"proxy\"]"))
+        #expect(codex.contains("AUTHSIA_MCP_UPSTREAM = \"jira\""))
+        #expect(!codex.contains("--upstream"))
 
         let claude = try MCPClientConfiguration.render(
             client: .claude,
             executableURL: fixture.binary,
             upstreamNames: ["jira"]
         )
-        #expect(claude.contains("claude mcp add --scope user jira --"))
+        #expect(claude.contains("claude mcp add --scope user --env AUTHSIA_MCP_UPSTREAM=jira jira --"))
         #expect(claude.contains("\"jira\""))
+        #expect(claude.contains("\"AUTHSIA_MCP_UPSTREAM\""))
 
         let cursor = try MCPClientConfiguration.render(
             client: .cursor,
@@ -304,6 +309,35 @@ struct MCPClientConfigurationTests {
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "windsurf"])
         _ = try Authsia.parseAsRoot(["mcp", "serve", "--workspace", "/tmp/project"])
         _ = try Authsia.parseAsRoot(["mcp", "proxy", "--upstream", "jira"])
+    }
+
+    @Test("proxy selects upstream from --upstream or AUTHSIA_MCP_UPSTREAM")
+    func proxyUpstreamSelection() throws {
+        #expect(try MCPCommand.Proxy.resolveUpstreamName(flag: "jira", environment: [:]) == "jira")
+        #expect(
+            try MCPCommand.Proxy.resolveUpstreamName(
+                flag: nil,
+                environment: ["AUTHSIA_MCP_UPSTREAM": "jira"]
+            ) == "jira"
+        )
+        #expect(
+            try MCPCommand.Proxy.resolveUpstreamName(
+                flag: "jira",
+                environment: ["AUTHSIA_MCP_UPSTREAM": "jira"]
+            ) == "jira"
+        )
+        #expect(throws: (any Error).self) {
+            try MCPCommand.Proxy.resolveUpstreamName(flag: nil, environment: [:])
+        }
+        #expect(throws: (any Error).self) {
+            try MCPCommand.Proxy.resolveUpstreamName(
+                flag: "jira",
+                environment: ["AUTHSIA_MCP_UPSTREAM": "other"]
+            )
+        }
+        #expect(throws: (any Error).self) {
+            try MCPCommand.Proxy.resolveUpstreamName(flag: "jira.injected", environment: [:])
+        }
     }
 
     private func render(

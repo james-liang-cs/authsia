@@ -73,7 +73,7 @@ struct MCPProxyCommandTests {
         let rootHelp = Authsia.helpMessage(columns: 160)
 
         #expect(mcpHelp.contains("proxy"))
-        #expect(mcpHelp.contains("mcp proxy --upstream"))
+        #expect(mcpHelp.contains("AUTHSIA_MCP_UPSTREAM"))
         #expect(mcpHelp.contains("does not add tools to `mcp serve`"))
         #expect(proxyHelp.contains("--upstream"))
         #expect(proxyHelp.contains("--workspace"))
