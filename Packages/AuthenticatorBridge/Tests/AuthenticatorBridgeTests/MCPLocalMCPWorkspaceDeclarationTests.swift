@@ -1,0 +1,162 @@
+import XCTest
+@testable import AuthenticatorBridge
+
+final class MCPLocalMCPWorkspaceDeclarationTests: XCTestCase {
+    func testDeclareAppendsCredentialLessUpstreamAndLeavesClientFilesUntouched() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let authsia = root.appendingPathComponent(".authsia")
+        try FileManager.default.createDirectory(at: authsia, withIntermediateDirectories: true)
+        let config = authsia.appendingPathComponent("workspace.json")
+        let client = root.appendingPathComponent("mcp.json")
+        try writeJSON([
+            "schemaVersion": 2,
+            "workspace": ["name": "Demo", "authsiaFolder": "Demo"],
+            "mcpUpstreams": [
+                ["name": "echo", "command": "tools/echo-mcp", "env": [:] as [String: String]],
+            ],
+        ], to: config)
+        try writeJSON(["mcpServers": ["playwright": ["command": "npx"]]], to: client)
+        let originalClient = try Data(contentsOf: client)
+
+        let outcome = try MCPLocalMCPWorkspaceDeclaration.declare(
+            finding: wrapFinding(),
+            workspaceRoot: root
+        )
+
+        XCTAssertEqual(outcome, .declared)
+        let loaded = try JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any]
+        let upstreams = loaded?["mcpUpstreams"] as? [[String: Any]]
+        XCTAssertEqual(upstreams?.count, 2)
+        XCTAssertEqual(upstreams?.last?["name"] as? String, "playwright")
+        XCTAssertEqual(upstreams?.last?["command"] as? String, "npx")
+        XCTAssertEqual(upstreams?.last?["args"] as? [String], ["-y", "@playwright/mcp"])
+        XCTAssertEqual((loaded?["workspace"] as? [String: Any])?["name"] as? String, "Demo")
+        XCTAssertEqual(try Data(contentsOf: client), originalClient)
+        let text = String(decoding: try Data(contentsOf: config), as: UTF8.self)
+        XCTAssertFalse(text.contains("TOKEN"))
+        XCTAssertFalse(text.contains("authsia://"))
+    }
+
+    func testDeclareIsIdempotentForTheSameCommandAndRejectsNameCollision() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".authsia"),
+            withIntermediateDirectories: true
+        )
+        let config = root.appendingPathComponent(".authsia/workspace.json")
+        try writeJSON([
+            "schemaVersion": 2,
+            "workspace": ["name": "Demo", "authsiaFolder": "Demo"],
+        ], to: config)
+
+        XCTAssertEqual(
+            try MCPLocalMCPWorkspaceDeclaration.declare(finding: wrapFinding(), workspaceRoot: root),
+            .declared
+        )
+        XCTAssertEqual(
+            try MCPLocalMCPWorkspaceDeclaration.declare(finding: wrapFinding(), workspaceRoot: root),
+            .alreadyDeclared
+        )
+
+        var collision = wrapFinding()
+        collision = MCPClientServerFinding(
+            source: .codex,
+            serverName: "playwright",
+            commandLabel: "uvx",
+            status: .unadmitted,
+            declaredUpstreamName: nil,
+            configPathLabel: "~/.codex/config.toml",
+            wrapCommand: "uvx",
+            wrapArguments: ["playwright"],
+            isWrapEligible: true
+        )
+        XCTAssertThrowsError(
+            try MCPLocalMCPWorkspaceDeclaration.declare(finding: collision, workspaceRoot: root)
+        ) { error in
+            XCTAssertEqual(
+                error as? MCPLocalMCPWorkspaceDeclaration.DeclarationError,
+                .duplicateName("playwright")
+            )
+        }
+    }
+
+    func testDeclareDoesNotCreateAWorkspaceAndSkipsIneligibleFindings() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(
+            try MCPLocalMCPWorkspaceDeclaration.declare(finding: wrapFinding(), workspaceRoot: root)
+        ) { error in
+            XCTAssertEqual(
+                error as? MCPLocalMCPWorkspaceDeclaration.DeclarationError,
+                .missingConfig
+            )
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: root.appendingPathComponent(".authsia/workspace.json").path)
+        )
+
+        XCTAssertNil(MCPLocalMCPWorkspaceDeclaration.candidateWorkspaceRoot(
+            knownRoots: [root.path],
+            grantWorkingDirectories: []
+        ))
+
+        let wrapped = MCPClientServerFinding(
+            source: .codex,
+            serverName: "jira",
+            commandLabel: "authsia",
+            status: .admittedWrapped,
+            declaredUpstreamName: "jira",
+            configPathLabel: "~/.codex/config.toml"
+        )
+        XCTAssertThrowsError(
+            try MCPLocalMCPWorkspaceDeclaration.declare(finding: wrapped, workspaceRoot: root)
+        ) { error in
+            XCTAssertEqual(
+                error as? MCPLocalMCPWorkspaceDeclaration.DeclarationError,
+                .notWrapEligible
+            )
+        }
+    }
+
+    func testCandidateWorkspaceRootWalksFromAGrantWorkingDirectory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let nested = root.appendingPathComponent("Sources/Feature")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".authsia"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: root.appendingPathComponent(".authsia/workspace.json"))
+
+        XCTAssertEqual(
+            MCPLocalMCPWorkspaceDeclaration.candidateWorkspaceRoot(
+                knownRoots: [],
+                grantWorkingDirectories: [nested.path]
+            )?.path,
+            root.standardizedFileURL.path
+        )
+    }
+
+    private func wrapFinding() -> MCPClientServerFinding {
+        MCPClientServerFinding(
+            source: .codex,
+            serverName: "playwright",
+            commandLabel: "npx",
+            status: .unadmitted,
+            declaredUpstreamName: nil,
+            configPathLabel: "~/.codex/config.toml",
+            wrapCommand: "npx",
+            wrapArguments: ["-y", "@playwright/mcp"],
+            isWrapEligible: true
+        )
+    }
+
+    private func writeJSON(_ object: [String: Any], to url: URL) throws {
+        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]).write(to: url)
+    }
+}
