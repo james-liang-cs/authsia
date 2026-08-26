@@ -10,6 +10,7 @@ Status: release-candidate implementation contract for M14; signed installed-prod
 - [Agent JIT And MCP Capability Comparison](#agent-jit-and-mcp-capability-comparison)
 - [Workspace Binding](#workspace-binding)
 - [Tool Contract](#tool-contract)
+- [Upstream Proxy](#upstream-proxy)
 - [Execution Lifecycle](#execution-lifecycle)
 - [Grant Ownership And Revocation](#grant-ownership-and-revocation)
 - [Audit And Activity Correlation](#audit-and-activity-correlation)
@@ -410,6 +411,71 @@ returns the final inactive state. It does not terminate a command that has
 already received secrets and started. Access Center is the operator surface for
 reviewing and revoking historical or orphaned MCP grants.
 
+## Upstream Proxy
+
+`authsia mcp proxy --upstream <name> [--workspace <path>]` runs a separate
+local `stdio` MCP server that wraps one named upstream declared by the bound
+workspace. It does not add tools to `authsia mcp serve`, change the frozen
+six-tool Authsia catalog, or make Authsia an implementation of the upstream
+service.
+
+The optional `mcpUpstreams` array in `.authsia/workspace.json` is commit-safe
+policy. Each entry has a unique name matching
+`[A-Za-z][A-Za-z0-9_-]{0,31}` and may declare:
+
+- a local `stdio` command as a PATH basename or workspace-relative executable,
+  plus a bounded argv array; absolute paths and shell-shaped commands are
+  rejected;
+- environment variables whose sensitive values are `authsia://` password,
+  API-key, certificate, or secure-note references; OTP and SSH references are
+  not injectable;
+- disjoint `allow`, `approve`, and `deny` tool-name lists; and
+- optional non-secret tool descriptions and object input schemas for the
+  client-visible catalog.
+
+Live credentials, tokens, private endpoints, and machine-specific paths must
+not be stored in workspace policy. HTTP, SSE, Streamable HTTP, and `url`
+entries decode for forward compatibility but are not executable in V1.
+
+The proxy starts and initializes even when it is unbound, the named upstream
+is absent, or its transport is unsupported. `tools/list` is derived only from
+workspace policy as allow plus approve minus deny. It never starts the child,
+requests approval, or consults a live child. Unknown and denied calls fail
+before JIT or spawn. An optional `--workspace` fixes the binding; otherwise
+the proxy uses one safe `WORKSPACE_FOLDER_PATHS` launch hint and then its
+process working directory, matching the launch-context fallbacks of
+`mcp serve`.
+
+When the upstream environment contains `authsia://` references, the first
+permitted call uses the existing Agent JIT `exec` preflight for those items.
+The approval identifies the MCP tool and upstream on the Mac while retaining
+the existing signed remote approval contract. The proxy then resolves the
+references, constructs a stripped child environment, starts the no-shell
+upstream in its own process group, initializes it as an outbound MCP client,
+and privately verifies its tool list. Extra child tools never become visible,
+and a policy-advertised tool missing from the child fails closed.
+
+After startup, calls may overlap through the single child. Known injected
+secret values of at least four UTF-8 bytes are concealed only inside JSON
+string values in both forwarded arguments and returned results. JSON keys,
+numbers, booleans, nulls, and structure are unchanged, and raw JSON-RPC frames
+are never written to audit or activity records.
+
+The child is associated in memory with the exact Bridge grant IDs that
+authorized its environment. The proxy checks those grants on every call and
+while the child is live. Revocation kills the upstream process group and drops
+the client, secrets, and grant association; the periodic check may take up to
+five seconds after the Bridge snapshot first reports no active associated
+grant. Graceful proxy shutdown performs the same child cleanup and revokes
+active grants owned by that proxy instance. A later call starts a fresh JIT
+session when required.
+
+Access Center remains the operator surface for proxy grants. It labels them as
+`<client> via Authsia MCP proxy <upstream>`, derives its timeline from existing
+grant and activity records without retaining raw frames, and revokes through
+the existing Bridge-owned control. The proxy does not expose the serve-only
+`authsia_access_status` or `authsia_access_revoke` tools.
+
 ## Execution Lifecycle
 
 `authsia_list` validates and bounds its input, allocates a fresh invocation,
@@ -554,6 +620,9 @@ stable structured error:
 | `cancelled` | MCP cancellation terminated or abandoned the call. |
 | `executionFailed` | Launch or mediated execution failed. |
 | `internalError` | A redacted unexpected failure occurred. |
+| `upstreamDenied` | The requested upstream tool is unknown, denied, or absent from the advertised workspace policy. |
+| `upstreamUnavailable` | The named upstream is missing, cannot start or initialize, or does not implement the advertised tool. |
+| `httpUpstreamUnsupported` | The workspace declares an HTTP, SSE, Streamable HTTP, or URL upstream, which V1 cannot execute. |
 
 Errors contain a short corrective message and invocation ID when allocated.
 They do not return raw Swift errors, stack traces, absolute paths outside the
@@ -579,6 +648,11 @@ payloads.
 | Abrupt server death leaves a reusable grant | Instance-narrowed matching prevents reuse; Bridge liveness, TTL, or Access Center revokes the orphan. |
 | Client-side auto-approval is mistaken for authority | Authsia approval remains independent and mandatory when no matching grant exists. |
 | New MCP protocol feature expands capability | Advertise only the frozen V1 capability set; require explicit spec and security review for additions. |
+| Proxy policy is mistaken for live upstream authority | Derive `tools/list` only from commit-safe policy, reject denied and unknown tools before spawn, and privately verify advertised names after child initialization. |
+| Upstream receives ambient credentials or Authsia runtime markers | Build a stripped environment, add only declared literals and freshly resolved refs, and omit `AUTHSIA_AGENT_*` and automation authority from the child. |
+| Injected values leak through proxied JSON-RPC | Parse and mask JSON string values in both directions; never patch raw frames or store them in audit or diagnostics. |
+| Revocation leaves a long-lived upstream authorized | Associate the child with exact owned grant IDs, recheck on every call and periodically, and terminate the complete process group when association fails. |
+| Approved upstream, package launcher, or unmanaged sibling MCP exfiltrates data | Treat the upstream and MCP client as untrusted; Authsia does not sandbox an approved child, police sibling client configuration, or provide OS-wide DLP. |
 
 The model does not claim to sandbox an approved child or stop it from sending a
 secret through every possible channel. Existing output masking and activity
@@ -589,8 +663,12 @@ operating-system-wide DLP.
 
 `authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints a
 deterministic user-global local-stdio configuration for the exact installed
-Authsia binary. V1 does not edit third-party configuration, launch the client,
-add credentials, or use a shell wrapper.
+Authsia binary. It always prints the `authsia mcp serve` entry. When its safe
+launch context resolves a managed workspace, it also prints one separate
+`authsia mcp proxy --upstream <name>` entry for each declared upstream. With no
+declared upstream it prints guidance explaining where proxy blocks come from.
+V1 does not edit third-party configuration, launch the client, add credentials,
+or use a shell wrapper.
 
 Before using the configured client, the user explicitly enables **MCP
 Integrations** under Authsia **Settings > Developer Access**. Client
@@ -605,6 +683,8 @@ configuration because they do not expose a documented equivalent command.
 Generated configuration must:
 
 - pass `mcp serve` as an argv array;
+- pass each declared proxy as `mcp proxy --upstream <name>` argv without a
+  fixed repository path;
 - omit fixed repository paths so one user-global entry works across managed
   workspaces;
 - contain no secret, bearer token, automation credential, or private endpoint;
@@ -682,6 +762,16 @@ Implementation is not complete until automated tests prove:
   environment, approval source, and OS-observed caller;
 - HMAC audit verification passes and exported records contain neither the
   synthetic secret nor raw JSON-RPC payloads;
+- proxy catalog listing does not JIT or spawn, denied tools fail before JIT,
+  and missing/unbound/HTTP declarations return their stable errors;
+- a permitted proxy call starts one no-shell child with only declared
+  environment, masks JSON string values in both directions, and rejects live
+  catalog drift without exposing extra child tools;
+- Access Center revocation removes the associated child process group within
+  the documented polling window, while restart cannot reuse the old instance's
+  grant;
+- client configuration remains byte-stable without upstream declarations and
+  prints one client-native block per declared upstream when present;
 - existing human CLI, normal Agent JIT, automation credential, SSH, Chrome, and
   iOS builds remain unchanged.
 
