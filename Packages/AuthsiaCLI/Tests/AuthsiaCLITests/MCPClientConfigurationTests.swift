@@ -33,7 +33,99 @@ struct MCPClientConfigurationTests {
             #expect(!first.lowercased().contains("bearer"))
             #expect(!first.contains("sh -c"))
             #expect(!first.contains("bash -c"))
+            #expect(first.contains("Proxy blocks appear here when mcpUpstreams are declared"))
         }
+    }
+
+    @Test("declared upstreams receive client-native proxy configuration")
+    func declaredUpstreamConfiguration() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        for client in MCPClient.allCases {
+            let output = try MCPClientConfiguration.render(
+                client: client,
+                executableURL: fixture.binary,
+                upstreamNames: ["jira"]
+            )
+            #expect(output.contains("mcp"))
+            #expect(output.contains("proxy"))
+            #expect(output.contains("--upstream"))
+            #expect(output.contains("jira"))
+            #expect(!output.contains("--workspace"))
+            #expect(!output.contains("authsia://"))
+            #expect(!output.contains("synthetic-token"))
+            #expect(!output.contains("Proxy blocks appear here"))
+        }
+
+        let codex = try MCPClientConfiguration.render(
+            client: .codex,
+            executableURL: fixture.binary,
+            upstreamNames: ["jira"]
+        )
+        #expect(codex.contains("codex mcp add jira --"))
+        #expect(codex.contains("[mcp_servers.jira]"))
+        #expect(codex.contains("args = [\"mcp\", \"proxy\", \"--upstream\", \"jira\"]"))
+
+        let claude = try MCPClientConfiguration.render(
+            client: .claude,
+            executableURL: fixture.binary,
+            upstreamNames: ["jira"]
+        )
+        #expect(claude.contains("claude mcp add --scope user jira --"))
+        #expect(claude.contains("\"jira\""))
+
+        let cursor = try MCPClientConfiguration.render(
+            client: .cursor,
+            executableURL: fixture.binary,
+            upstreamNames: ["jira"]
+        )
+        #expect(cursor.contains("\"authsia\""))
+        #expect(cursor.contains("\"jira\""))
+
+        let vscode = try MCPClientConfiguration.render(
+            client: .vscode,
+            executableURL: fixture.binary,
+            upstreamNames: ["jira"]
+        )
+        #expect(vscode.contains("\"name\":\"jira\""))
+        #expect(vscode.contains("\"jira\""))
+        #expect(vscode.contains("\"type\":\"stdio\""))
+    }
+
+    @Test("configure discovers upstreams from the client workspace")
+    func configureWorkspaceDiscovery() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                workspace: .init(name: "client", authsiaFolder: "Workspaces/client"),
+                managedEnvFiles: [],
+                agents: nil,
+                mcpUpstreams: [
+                    MCPUpstreamConfig(
+                        name: "jira",
+                        command: "mcp-atlassian",
+                        tools: MCPUpstreamToolPolicy(allow: ["jira_get_issue"])
+                    )
+                ]
+            ),
+            toWorkspaceRoot: root
+        )
+        let nested = root.appendingPathComponent("Sources/Feature", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        #expect(MCPCommand.Configure.upstreamNames(
+            environment: ["WORKSPACE_FOLDER_PATHS": nested.path],
+            currentDirectoryPath: "/tmp/fallback"
+        ) == ["jira"])
+
+        let empty = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: empty) }
+        #expect(MCPCommand.Configure.upstreamNames(
+            environment: [:],
+            currentDirectoryPath: empty.path
+        ).isEmpty)
     }
 
     @Test("client shapes match their documented configuration surfaces")
@@ -150,6 +242,13 @@ struct MCPClientConfigurationTests {
             try MCPClientConfiguration.render(
                 clientName: "unsupported",
                 executableURL: safeBinary
+            )
+        }
+        #expect(throws: MCPClientConfigurationError.self) {
+            try MCPClientConfiguration.render(
+                client: .codex,
+                executableURL: safeBinary,
+                upstreamNames: ["jira.injected"]
             )
         }
     }

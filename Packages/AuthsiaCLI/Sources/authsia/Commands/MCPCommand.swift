@@ -54,8 +54,29 @@ struct MCPCommand: AsyncParsableCommand {
         mutating func run() throws {
             print(try MCPClientConfiguration.render(
                 client: client,
-                executableURL: Authsia.currentExecutableURL()
+                executableURL: Authsia.currentExecutableURL(),
+                upstreamNames: Self.upstreamNames(
+                    environment: ProcessInfo.processInfo.environment,
+                    currentDirectoryPath: FileManager.default.currentDirectoryPath
+                )
             ))
+        }
+
+        static func upstreamNames(
+            environment: [String: String],
+            currentDirectoryPath: String
+        ) -> [String] {
+            let startingDirectory = Serve.startingDirectory(
+                workspace: nil,
+                environment: environment,
+                currentDirectoryPath: currentDirectoryPath
+            )
+            let context = MCPRuntimeContext(startingDirectory: startingDirectory)
+            guard let root = context.workspaceRoot,
+                  let config = try? WorkspaceConfigStore.read(fromWorkspaceRoot: root) else {
+                return []
+            }
+            return config.mcpUpstreams.map(\.name)
         }
     }
 

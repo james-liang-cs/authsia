@@ -49,7 +49,8 @@ enum MCPClientConfigurationError: LocalizedError, Equatable {
 enum MCPClientConfiguration {
     static func render(
         clientName: String,
-        executableURL: URL
+        executableURL: URL,
+        upstreamNames: [String] = []
     ) throws -> String {
         guard isSafe(clientName), let client = MCPClient(argument: clientName) else {
             throw isSafe(clientName)
@@ -58,38 +59,65 @@ enum MCPClientConfiguration {
         }
         return try render(
             client: client,
-            executableURL: executableURL
+            executableURL: executableURL,
+            upstreamNames: upstreamNames
         )
     }
 
     static func render(
         client: MCPClient,
-        executableURL: URL
+        executableURL: URL,
+        upstreamNames: [String] = []
     ) throws -> String {
         let binaryPath = executableURL.resolvingSymlinksInPath().path
-        guard binaryPath.hasPrefix("/"), isSafe(binaryPath) else {
+        guard binaryPath.hasPrefix("/"), isSafe(binaryPath),
+              upstreamNames.allSatisfy(isSafeServerName) else {
             throw MCPClientConfigurationError.unsafeValue
         }
+
+        var seen = Set<String>()
+        let upstreams = upstreamNames.filter { seen.insert($0).inserted }
+        let servers = [ServerConfiguration(name: "authsia", arguments: ["mcp", "serve"])]
+            + upstreams.map {
+                ServerConfiguration(
+                    name: $0,
+                    arguments: ["mcp", "proxy", "--upstream", $0]
+                )
+            }
 
         let warning = "Machine-specific absolute path for user-global configuration; do not commit or share it. " +
             "The server can start from any directory and accepts an optional workspaceRoot tool argument from " +
             "IDE clients, with safe launch context as fallback; workspace tools remain unavailable until an " +
             "initialized Authsia workspace is selected."
+        let hint = upstreams.isEmpty
+            ? "\n\nProxy blocks appear here when mcpUpstreams are declared in a managed workspace."
+            : ""
         switch client {
         case .codex:
+            let direct = servers.map { server in
+                "codex mcp add \(server.name) -- \(shellQuoted(binaryPath)) \(server.arguments.joined(separator: " "))"
+            }.joined(separator: "\n")
+            let manual = servers.map { server in
+                var table = """
+                [mcp_servers.\(server.name)]
+                command = "\(tomlEscaped(binaryPath))"
+                args = \(tomlStringArray(server.arguments))
+                """
+                if server.name == "authsia" {
+                    table += "\nenv_vars = [\"REQUESTS_CA_BUNDLE\", \"SSL_CERT_FILE\"]"
+                }
+                return table
+            }.joined(separator: "\n\n")
             return """
             Configure directly:
-            codex mcp add authsia -- \(shellQuoted(binaryPath)) mcp serve
+            \(direct)
 
             For a custom TLS CA, use the manual configuration below.
 
             Or add to user-global ~/.codex/config.toml:
-            [mcp_servers.authsia]
-            command = "\(tomlEscaped(binaryPath))"
-            args = ["mcp", "serve"]
-            env_vars = ["REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"]
+            \(manual)
 
-            \(warning)
+            \(warning)\(hint)
             """
         case .claude:
             let configuration = try jsonConfiguration(
@@ -97,11 +125,16 @@ enum MCPClientConfiguration {
                 rootKey: "mcpServers",
                 binaryPath: binaryPath,
                 includeType: false,
-                warning: warning
+                servers: servers,
+                warning: warning + hint
             )
+            let direct = servers.map { server in
+                "claude mcp add --scope user \(server.name) -- \(shellQuoted(binaryPath)) " +
+                    server.arguments.joined(separator: " ")
+            }.joined(separator: "\n")
             return """
             Configure directly:
-            claude mcp add --scope user authsia -- \(shellQuoted(binaryPath)) mcp serve
+            \(direct)
 
             \(configuration)
             """
@@ -111,7 +144,8 @@ enum MCPClientConfiguration {
                 rootKey: "mcpServers",
                 binaryPath: binaryPath,
                 includeType: false,
-                warning: warning
+                servers: servers,
+                warning: warning + hint
             )
         case .devin:
             return try jsonConfiguration(
@@ -119,7 +153,8 @@ enum MCPClientConfiguration {
                 rootKey: "mcpServers",
                 binaryPath: binaryPath,
                 includeType: false,
-                warning: warning
+                servers: servers,
+                warning: warning + hint
             )
         case .vscode:
             let configuration = try jsonConfiguration(
@@ -127,20 +162,25 @@ enum MCPClientConfiguration {
                 rootKey: "servers",
                 binaryPath: binaryPath,
                 includeType: true,
-                warning: warning
+                servers: servers,
+                warning: warning + hint
             )
-            let directConfiguration: [String: Any] = [
-                "args": ["mcp", "serve"],
-                "command": binaryPath,
-                "name": "authsia",
-            ]
-            let directData = try JSONSerialization.data(
-                withJSONObject: directConfiguration,
-                options: [.sortedKeys, .withoutEscapingSlashes]
-            )
+            let direct = try servers.map { server in
+                var object: [String: Any] = [
+                    "args": server.arguments,
+                    "command": binaryPath,
+                    "name": server.name,
+                ]
+                if server.name != "authsia" { object["type"] = "stdio" }
+                let data = try JSONSerialization.data(
+                    withJSONObject: object,
+                    options: [.sortedKeys, .withoutEscapingSlashes]
+                )
+                return "code --add-mcp \(shellQuoted(String(decoding: data, as: UTF8.self)))"
+            }.joined(separator: "\n")
             return """
             Configure directly:
-            code --add-mcp \(shellQuoted(String(decoding: directData, as: UTF8.self)))
+            \(direct)
 
             \(configuration)
             """
@@ -152,15 +192,19 @@ enum MCPClientConfiguration {
         rootKey: String,
         binaryPath: String,
         includeType: Bool,
-        arguments: [String] = ["mcp", "serve"],
+        servers: [ServerConfiguration],
         warning: String
     ) throws -> String {
-        var server: [String: Any] = [
-            "args": arguments,
-            "command": binaryPath,
-        ]
-        if includeType { server["type"] = "stdio" }
-        let object: [String: Any] = [rootKey: ["authsia": server]]
+        var renderedServers: [String: Any] = [:]
+        for configuration in servers {
+            var server: [String: Any] = [
+                "args": configuration.arguments,
+                "command": binaryPath,
+            ]
+            if includeType { server["type"] = "stdio" }
+            renderedServers[configuration.name] = server
+        }
+        let object: [String: Any] = [rootKey: renderedServers]
         let data = try JSONSerialization.data(
             withJSONObject: object,
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -174,6 +218,10 @@ enum MCPClientConfiguration {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
+    private static func tomlStringArray(_ values: [String]) -> String {
+        "[" + values.map { "\"\(tomlEscaped($0))\"" }.joined(separator: ", ") + "]"
+    }
+
     private static func shellQuoted(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
@@ -183,4 +231,16 @@ enum MCPClientConfiguration {
             !CharacterSet.controlCharacters.contains($0)
         }
     }
+
+    private static func isSafeServerName(_ value: String) -> Bool {
+        value.range(
+            of: #"^[A-Za-z][A-Za-z0-9_-]{0,31}$"#,
+            options: .regularExpression
+        ) != nil
+    }
+}
+
+private struct ServerConfiguration {
+    let name: String
+    let arguments: [String]
 }
