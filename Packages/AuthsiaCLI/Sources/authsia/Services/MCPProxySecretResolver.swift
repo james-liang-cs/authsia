@@ -123,6 +123,13 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
                 agentRuntimeContext: agentRuntimeContext,
                 workspaceRoot: workspaceRoot
             )
+            // Preflight can succeed without opening Agent JIT (a paired human
+            // terminal, for one). The proxy child is long-lived, so a grant it
+            // can watch is the only thing that makes revocation reach it.
+            // Refuse before resolving, so no plaintext leaves the vault.
+            guard !preflight.grantIDs.isEmpty else {
+                throw MCPProxySpawnError.grantUnavailable
+            }
             let resolved = try SecretReferenceResolver(client: resolver).resolveEnvironment(declared)
             return (resolved.resolved, resolved.secrets, preflight.grantIDs)
         }

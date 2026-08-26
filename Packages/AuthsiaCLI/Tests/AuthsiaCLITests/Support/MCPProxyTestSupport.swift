@@ -35,6 +35,22 @@ func mcpProxyStdioScript() -> String {
         with open(extra_path, "w") as handle:
             handle.write(inherited)
 
+    stderr_text = os.environ.get("AUTHSIA_TEST_STDERR")
+    if stderr_text:
+        sys.stderr.write(os.path.expandvars(stderr_text) + "\n")
+        sys.stderr.flush()
+
+    caught_path = os.environ.get("AUTHSIA_TEST_SIGTERM_CAUGHT")
+    if caught_path:
+        import signal
+
+        def record_sigterm(signum, frame):
+            with open(caught_path, "w") as handle:
+                handle.write("SIGTERM")
+            os._exit(0)
+
+        signal.signal(signal.SIGTERM, record_sigterm)
+
     if os.environ.get("AUTHSIA_TEST_HANG"):
         time.sleep(3)
         raise SystemExit(0)
@@ -368,4 +384,93 @@ final class RecordingMCPProxyBridgeSession: MCPProxyBridgeSession, @unchecked Se
         }
         return secret
     }
+}
+
+final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshot: AgentJITGrantSnapshotPayload
+    private var storedRevokedIDs: [UUID] = []
+
+    init(snapshot: AgentJITGrantSnapshotPayload) {
+        self.snapshot = snapshot
+    }
+
+    var revokedIDs: [UUID] {
+        lock.withLock { storedRevokedIDs }
+    }
+
+    func setSnapshot(_ snapshot: AgentJITGrantSnapshotPayload) {
+        lock.withLock { self.snapshot = snapshot }
+    }
+
+    func agentJITSnapshot(
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITGrantSnapshotPayload {
+        _ = agentRuntimeContext
+        return lock.withLock { snapshot }
+    }
+
+    func revokeAgentJITGrant(
+        id: UUID,
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITGrantMutationPayload {
+        _ = agentRuntimeContext
+        lock.withLock { storedRevokedIDs.append(id) }
+        return AgentJITGrantMutationPayload(revokedGrantIDs: [id])
+    }
+}
+
+func mcpProxyGrant(
+    id: UUID,
+    serverID: UUID,
+    revokedAt: Date? = nil
+) -> AgentJITGrant {
+    AgentJITGrant(
+        id: id,
+        agentName: "Codex",
+        callerFingerprint: AgentJITCallerFingerprint(
+            processName: "authsia",
+            bundleIdentifier: "app.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID",
+            parentProcessName: "Codex",
+            parentBundleIdentifier: "com.openai.codex",
+            sessionScope: nil,
+            workingDirectory: "/tmp/project"
+        ),
+        folderScope: .folder("Team/API"),
+        capabilities: [.exec],
+        createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+        expiresAt: Date.distantFuture,
+        revokedAt: revokedAt,
+        lastUsedAt: nil,
+        requestedItems: [],
+        agentRuntimeContext: AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:\(serverID.uuidString)",
+            turnID: "mcp-call:test",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:test"
+        ),
+        approvedBy: "mac-panel",
+        environmentScope: nil
+    )
+}
+
+func mcpProxyProcessGroupIsAlive(_ processGroupID: pid_t) -> Bool {
+    Darwin.kill(-processGroupID, 0) == 0 || errno == EPERM
+}
+
+func waitForMCPProxyProcessGroupExit(
+    _ processGroupID: pid_t,
+    timeoutSeconds: Double = 2
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while Date() < deadline {
+        if !mcpProxyProcessGroupIsAlive(processGroupID) {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return !mcpProxyProcessGroupIsAlive(processGroupID)
 }

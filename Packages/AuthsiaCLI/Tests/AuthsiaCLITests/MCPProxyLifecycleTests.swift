@@ -107,7 +107,6 @@ struct MCPProxyLifecycleTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true }
         )
         let transports = await InMemoryTransport.createConnectedPair()
@@ -273,7 +272,6 @@ struct MCPProxyLifecycleTests {
             version: "test",
             upstreamName: upstreamName,
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: mcpAccessEnabled
         )
         return (proxy, root)

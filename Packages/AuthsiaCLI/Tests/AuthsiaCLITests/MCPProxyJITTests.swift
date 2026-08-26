@@ -144,7 +144,6 @@ struct MCPProxyJITTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
@@ -217,12 +216,21 @@ struct MCPProxyJITTests {
         let script = bin.appendingPathComponent("mcp-atlassian")
         try writeExecutableMCPProxyScript(at: script)
 
+        let serverID = UUID()
+        let grantID = UUID()
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: grantID, serverID: serverID)],
+                history: []
+            )
+        )
         let sessionClient = RecordingMCPProxySessionClient(
             environment: [
                 "JIRA_API_TOKEN": "synthetic-token",
                 "JIRA_URL": "https://example.atlassian.net",
             ],
-            secrets: ["synthetic-token"]
+            secrets: ["synthetic-token"],
+            grantIDs: [grantID]
         )
         let launcher = RecordingMCPProxyChildLauncher()
         let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
@@ -230,8 +238,7 @@ struct MCPProxyJITTests {
         let proxy = AuthsiaMCPProxy(
             version: "test",
             upstreamName: "jira",
-            runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             childLauncher: launcher,
@@ -239,7 +246,8 @@ struct MCPProxyJITTests {
                 "PATH": "\(bin.path):/usr/bin:/bin",
                 "HOME": "/synthetic/home",
             ],
-            initializeTimeoutSeconds: 15
+            initializeTimeoutSeconds: 15,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
         )
         let connection = try await connectMCPProxy(proxy, clientName: "Cursor")
 
@@ -288,7 +296,6 @@ struct MCPProxyJITTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             childLauncher: launcher,
@@ -322,7 +329,6 @@ struct MCPProxyJITTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],

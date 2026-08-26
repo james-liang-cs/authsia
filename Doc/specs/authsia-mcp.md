@@ -459,11 +459,17 @@ After startup, calls may overlap through the single child. Known injected
 secret values of at least four UTF-8 bytes are concealed only inside JSON
 string values in both forwarded arguments and returned results. JSON keys,
 numbers, booleans, nulls, and structure are unchanged, and raw JSON-RPC frames
-are never written to audit or activity records.
+are never written to audit or activity records. The child's standard error is
+relayed to the proxy's own standard error under the same concealment and a
+bounded volume, because an upstream can echo its injected environment into a
+diagnostic.
 
 The child is associated in memory with the exact Bridge grant IDs that
-authorized its environment. The proxy checks those grants on every call and
-while the child is live. Revocation kills the upstream process group and drops
+authorized its environment. That association is what makes revocation reach a
+long-lived child, so a preflight that returns no owned grant fails the call
+with `grantUnavailable` before any reference is resolved and before the child
+starts. The proxy checks those grants on every call and while the child is
+live. Revocation kills the upstream process group and drops
 the client, secrets, and grant association; the periodic check may take up to
 five seconds after the Bridge snapshot first reports no active associated
 grant. Graceful proxy shutdown performs the same child cleanup and revokes
@@ -613,7 +619,7 @@ stable structured error:
 | `mcpAccessDisabled` | MCP integrations are disabled in Authsia Developer Access settings. |
 | `cliAccessDisabled` | Authsia CLI access is disabled. |
 | `approvalDenied` | The user denied or cancelled Authsia approval. |
-| `grantUnavailable` | Required grant is absent, expired, revoked, or no longer matches. |
+| `grantUnavailable` | Required grant is absent, expired, revoked, or no longer matches. For the upstream proxy, also returned when a preflight authorizes the call without issuing an owned grant, since the child would then be unrevokable. |
 | `grantNotOwned` | Status/revoke target is not owned by this MCP instance. |
 | `busy` | This server already has an active JIT-mediated list or execution operation. |
 | `timedOut` | Execution exceeded the requested timeout, or a listing exceeded the server deadline. |

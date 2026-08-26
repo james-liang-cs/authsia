@@ -143,7 +143,6 @@ struct MCPCommand: AsyncParsableCommand {
                 version: Authsia.version(),
                 upstreamName: upstream,
                 runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
-                acceptsToolWorkspace: workspace == nil,
                 mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
             )
             try await proxy.runStdio()

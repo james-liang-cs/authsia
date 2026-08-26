@@ -130,7 +130,6 @@ struct MCPProxySpawnTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: [
@@ -197,7 +196,6 @@ struct MCPProxySpawnTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             childLauncher: launcher,
@@ -255,7 +253,6 @@ struct MCPProxySpawnTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             childLauncher: launcher,
@@ -305,7 +302,6 @@ struct MCPProxySpawnTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             childLauncher: launcher,
@@ -363,7 +359,6 @@ struct MCPProxySpawnTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "/usr/bin:/bin"],
@@ -407,7 +402,6 @@ struct MCPProxySpawnTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            acceptsToolWorkspace: true,
             mcpAccessEnabled: { true },
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
@@ -542,93 +536,95 @@ struct MCPProxySpawnTests {
         #expect(waitForMCPProxyTestFile(sigtermFile) == "DEFAULT")
         #expect(waitForMCPProxyTestFile(inheritedFile) == "closed")
     }
-}
 
-private final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
-    private let lock = NSLock()
-    private var snapshot: AgentJITGrantSnapshotPayload
-    private var storedRevokedIDs: [UUID] = []
+    @Test("teardown sends SIGTERM to the group before escalating to SIGKILL")
+    func teardownTerminatesGroupGracefully() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let caught = bin.appendingPathComponent("sigterm-caught")
+        let serverID = UUID()
+        let grantID = UUID()
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: grantID, serverID: serverID)],
+                history: []
+            )
+        )
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: [
+                "JIRA_API_TOKEN": "synthetic-token",
+                "AUTHSIA_TEST_SIGTERM_CAUGHT": caught.path,
+            ],
+            secrets: ["synthetic-token"],
+            grantIDs: [grantID]
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            grantPollIntervalSeconds: 5,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP graceful stop test")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        let spawned = try #require(launcher.lastSpawned)
 
-    init(snapshot: AgentJITGrantSnapshotPayload) {
-        self.snapshot = snapshot
+        await proxy.stop()
+
+        // The child only writes this file from its own SIGTERM handler, so an
+        // unconditional SIGKILL would leave it absent.
+        #expect(waitForMCPProxyTestFile(caught) == "SIGTERM")
+        #expect(waitForMCPProxyProcessGroupExit(spawned.processGroupID))
+        await connection.client.disconnect()
     }
 
-    var revokedIDs: [UUID] {
-        lock.withLock { storedRevokedIDs }
+    @Test("resolved refs with no owned grant are refused before the child starts")
+    func secretsWithoutOwnedGrantRefuseToSpawn() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["JIRA_API_TOKEN": "synthetic-token"],
+            secrets: ["synthetic-token"],
+            grantIDs: []
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP ungranted test")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let result = try await call.value
+
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == "grantUnavailable")
+        // Nothing to revoke means nothing may hold the secrets.
+        #expect(launcher.spawnCount == 0)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
     }
-
-    func setSnapshot(_ snapshot: AgentJITGrantSnapshotPayload) {
-        lock.withLock { self.snapshot = snapshot }
-    }
-
-    func agentJITSnapshot(
-        agentRuntimeContext: AgentRuntimeContext
-    ) throws -> AgentJITGrantSnapshotPayload {
-        _ = agentRuntimeContext
-        return lock.withLock { snapshot }
-    }
-
-    func revokeAgentJITGrant(
-        id: UUID,
-        agentRuntimeContext: AgentRuntimeContext
-    ) throws -> AgentJITGrantMutationPayload {
-        _ = agentRuntimeContext
-        lock.withLock { storedRevokedIDs.append(id) }
-        return AgentJITGrantMutationPayload(revokedGrantIDs: [id])
-    }
-}
-
-private func mcpProxyGrant(
-    id: UUID,
-    serverID: UUID,
-    revokedAt: Date? = nil
-) -> AgentJITGrant {
-    AgentJITGrant(
-        id: id,
-        agentName: "Codex",
-        callerFingerprint: AgentJITCallerFingerprint(
-            processName: "authsia",
-            bundleIdentifier: "app.authsia.cli",
-            signingTeamId: "TEAM",
-            signingIdentity: "Developer ID",
-            parentProcessName: "Codex",
-            parentBundleIdentifier: "com.openai.codex",
-            sessionScope: nil,
-            workingDirectory: "/tmp/project"
-        ),
-        folderScope: .folder("Team/API"),
-        capabilities: [.exec],
-        createdAt: Date(timeIntervalSince1970: 1_700_000_000),
-        expiresAt: Date.distantFuture,
-        revokedAt: revokedAt,
-        lastUsedAt: nil,
-        requestedItems: [],
-        agentRuntimeContext: AgentRuntimeContext(
-            platform: "Codex",
-            sessionID: "mcp:\(serverID.uuidString)",
-            turnID: "mcp-call:test",
-            agentType: "authsia-mcp",
-            toolUseID: "mcp-call:test"
-        ),
-        approvedBy: "mac-panel",
-        environmentScope: nil
-    )
-}
-
-private func mcpProxyProcessGroupIsAlive(_ processGroupID: pid_t) -> Bool {
-    Darwin.kill(-processGroupID, 0) == 0 || errno == EPERM
-}
-
-private func waitForMCPProxyProcessGroupExit(
-    _ processGroupID: pid_t,
-    timeoutSeconds: Double = 2
-) -> Bool {
-    let deadline = Date().addingTimeInterval(timeoutSeconds)
-    while Date() < deadline {
-        if !mcpProxyProcessGroupIsAlive(processGroupID) {
-            return true
-        }
-        Thread.sleep(forTimeInterval: 0.02)
-    }
-    return !mcpProxyProcessGroupIsAlive(processGroupID)
 }

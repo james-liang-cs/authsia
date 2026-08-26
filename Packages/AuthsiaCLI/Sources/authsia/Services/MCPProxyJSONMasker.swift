@@ -5,10 +5,14 @@ struct MCPProxyJSONMasker {
 
     private let masker: OutputMasker
 
+    /// Injected values long enough to conceal. Shorter values would substitute
+    /// common words, so they are dropped from every proxy masking surface.
+    static func maskable(_ secrets: [String]) -> [String] {
+        secrets.filter { $0.utf8.count >= minimumSecretByteCount }
+    }
+
     init(secrets: [String]) {
-        masker = OutputMasker(exactSecrets: secrets.filter {
-            $0.utf8.count >= Self.minimumSecretByteCount
-        })
+        masker = OutputMasker(exactSecrets: Self.maskable(secrets))
     }
 
     func mask<Value: Codable>(_ value: Value) throws -> Value {

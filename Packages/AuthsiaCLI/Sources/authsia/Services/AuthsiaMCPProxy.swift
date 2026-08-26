@@ -13,7 +13,6 @@ actor AuthsiaMCPProxy {
     private let proxyVersion: String
     private let upstreamName: String
     private let runtimeContext: MCPRuntimeContext
-    private let acceptsToolWorkspace: Bool
     private let mcpAccessEnabled: @Sendable () -> Bool
     private let sessionClient: any MCPProxySessionClient
     private let childLauncher: any MCPProxyChildLaunching
@@ -22,6 +21,7 @@ actor AuthsiaMCPProxy {
     private let killGraceSeconds: Double
     private let grantPollIntervalSeconds: Double
     private let grantService: MCPGrantService
+    private let stderrOutput: FileHandle
     private var handlersRegistered = false
     private var childSession: ChildSession?
     private var spawnTask: Task<ChildSession, Error>?
@@ -33,7 +33,6 @@ actor AuthsiaMCPProxy {
         version: String,
         upstreamName: String,
         runtimeContext: MCPRuntimeContext,
-        acceptsToolWorkspace: Bool,
         mcpAccessEnabled: @escaping @Sendable () -> Bool,
         sessionClient: (any MCPProxySessionClient)? = nil,
         childLauncher: (any MCPProxyChildLaunching)? = nil,
@@ -41,7 +40,8 @@ actor AuthsiaMCPProxy {
         initializeTimeoutSeconds: Double = 30,
         killGraceSeconds: Double = 2,
         grantPollIntervalSeconds: Double = 2,
-        grantService: MCPGrantService? = nil
+        grantService: MCPGrantService? = nil,
+        stderrOutput: FileHandle = .standardError
     ) {
         self.server = Server(
             name: "authsia-mcp-proxy",
@@ -54,7 +54,6 @@ actor AuthsiaMCPProxy {
         self.proxyVersion = version
         self.upstreamName = upstreamName
         self.runtimeContext = runtimeContext
-        self.acceptsToolWorkspace = acceptsToolWorkspace
         self.mcpAccessEnabled = mcpAccessEnabled
         self.sessionClient = sessionClient ?? LiveMCPProxySessionClient()
         self.childLauncher = childLauncher ?? MCPProxyPosixLauncher()
@@ -65,6 +64,7 @@ actor AuthsiaMCPProxy {
         self.grantService = grantService ?? MCPGrantService(
             serverInstanceID: runtimeContext.instanceID
         )
+        self.stderrOutput = stderrOutput
     }
 
     func start(transport: any Transport) async throws {
@@ -178,6 +178,11 @@ actor AuthsiaMCPProxy {
                 return try Self.errorResult(
                     code: MCPChildFailureReporter.code(for: error),
                     message: error.localizedDescription
+                )
+            } catch MCPProxySpawnError.grantUnavailable {
+                return try Self.errorResult(
+                    code: .grantUnavailable,
+                    message: "No revocable Authsia grant covers this upstream's secret references."
                 )
             } catch is MCPProxySpawnError {
                 return try Self.errorResult(
@@ -298,6 +303,12 @@ actor AuthsiaMCPProxy {
         }.value
         try Task.checkCancellation()
         guard !isStopped else { throw CancellationError() }
+        // Revocation is the only thing that stops a long-lived child, and it
+        // works by watching owned grant IDs. Injected secrets with no grant to
+        // watch would be unrevokable, so refuse instead of spawning.
+        guard prepared.secrets.isEmpty || !prepared.grantIDs.isEmpty else {
+            throw MCPProxySpawnError.grantUnavailable
+        }
         let childEnvironment = MCPProxyChildEnvironment.make(
             parent: parentEnvironment,
             declared: prepared.environment
@@ -313,7 +324,11 @@ actor AuthsiaMCPProxy {
             environment: childEnvironment,
             currentDirectory: workspaceRoot
         )
-        MCPProxyStderrDrain.start(fileDescriptor: spawned.stderrRead)
+        MCPProxyStderrDrain.start(
+            fileDescriptor: spawned.stderrRead,
+            secrets: prepared.secrets,
+            output: stderrOutput
+        )
         let terminator = MCPProcessTerminator(
             processID: spawned.processID,
             processGroupID: spawned.processGroupID,
@@ -325,7 +340,6 @@ actor AuthsiaMCPProxy {
             configuration: .default
         )
         inFlight = InFlightSpawn(
-            processGroupID: spawned.processGroupID,
             terminator: terminator,
             stdinWrite: spawned.stdinWrite,
             stdoutRead: spawned.stdoutRead,
@@ -353,7 +367,6 @@ actor AuthsiaMCPProxy {
             }
             let session = ChildSession(
                 processID: spawned.processID,
-                processGroupID: spawned.processGroupID,
                 client: client,
                 childToolNames: listed,
                 secrets: prepared.secrets,
@@ -431,7 +444,6 @@ actor AuthsiaMCPProxy {
         grantWatchTask?.cancel()
         grantWatchTask = nil
         await teardownSpawn(
-            processGroupID: session.processGroupID,
             client: session.client,
             terminator: session.terminator,
             stdinWrite: session.stdinWrite,
@@ -443,7 +455,6 @@ actor AuthsiaMCPProxy {
         guard let inFlight else { return }
         self.inFlight = nil
         await teardownSpawn(
-            processGroupID: inFlight.processGroupID,
             client: inFlight.client,
             terminator: inFlight.terminator,
             stdinWrite: inFlight.stdinWrite,
@@ -452,15 +463,15 @@ actor AuthsiaMCPProxy {
     }
 
     private func teardownSpawn(
-        processGroupID: pid_t? = nil,
         client: Client?,
         terminator: MCPProcessTerminator,
         stdinWrite: Int32,
         stdoutRead: Int32
     ) async {
-        if let processGroupID, processGroupID > 0 {
-            Darwin.kill(-processGroupID, SIGKILL)
-        }
+        // The terminator owns the whole escalation: SIGTERM to the group, a
+        // grace window, then SIGKILL. It also checks the group still exists
+        // before signalling, so a reaped leader whose pid has been recycled is
+        // never signalled here.
         terminator.start()
         await terminator.waitUntilFinished()
         if let client {
@@ -532,7 +543,6 @@ private func mcpProxyWithTimeout<T: Sendable>(
 }
 
 private struct InFlightSpawn {
-    let processGroupID: pid_t
     let terminator: MCPProcessTerminator
     let stdinWrite: Int32
     let stdoutRead: Int32
@@ -541,7 +551,6 @@ private struct InFlightSpawn {
 
 private struct ChildSession: Sendable {
     let processID: pid_t
-    let processGroupID: pid_t
     let client: Client
     let childToolNames: Set<String>
     let secrets: [String]

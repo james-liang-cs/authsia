@@ -8,6 +8,9 @@ import System
 enum MCPProxySpawnError: Error, Equatable {
     case commandNotFound
     case launchFailed
+    /// Refs resolved but no owned grant came back, so revocation would have
+    /// nothing to observe and the child could outlive an Access Center revoke.
+    case grantUnavailable
 }
 
 enum MCPProxyChildEnvironment {
@@ -153,12 +156,19 @@ struct MCPProxyPosixLauncher: MCPProxyChildLaunching {
         sigemptyset(&defaultSignals)
         sigaddset(&defaultSignals, SIGINT)
         sigaddset(&defaultSignals, SIGTERM)
+        // SETSIGDEF resets dispositions but not the mask, and the mask is
+        // inherited from whichever thread spawns. A child that starts with
+        // SIGTERM blocked cannot shut down gracefully, so clear the mask too.
+        var emptyMask = sigset_t()
+        sigemptyset(&emptyMask)
         let flags = Int16(
-            POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF
+            POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+                | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
         )
         guard posix_spawnattr_setflags(&attributes, flags) == 0,
               posix_spawnattr_setpgroup(&attributes, 0) == 0,
-              posix_spawnattr_setsigdefault(&attributes, &defaultSignals) == 0 else {
+              posix_spawnattr_setsigdefault(&attributes, &defaultSignals) == 0,
+              posix_spawnattr_setsigmask(&attributes, &emptyMask) == 0 else {
             closeAll()
             throw MCPProxySpawnError.launchFailed
         }
@@ -210,20 +220,38 @@ struct MCPProxyPosixLauncher: MCPProxyChildLaunching {
 }
 
 enum MCPProxyStderrDrain {
-    static func start(fileDescriptor: Int32, limit: Int = MCPSameBinaryRunner.outputLimit) {
+    /// Relay child diagnostics to the proxy's own stderr, concealing injected
+    /// values first. The child inherits resolved refs in its environment and a
+    /// verbose upstream can echo one in a traceback, so this stream is masked
+    /// like any other channel that leaves the child.
+    static func start(
+        fileDescriptor: Int32,
+        secrets: [String] = [],
+        limit: Int = MCPSameBinaryRunner.outputLimit,
+        output: FileHandle = .standardError
+    ) {
+        let masker = OutputMasker(exactSecrets: MCPProxyJSONMasker.maskable(secrets))
         Thread.detachNewThread {
             let handle = FileHandle(fileDescriptor: fileDescriptor, closeOnDealloc: true)
+            // Streaming hold-back so a value split across two reads still matches.
+            var stream = OutputMasker.Stream(masker: masker)
             var retained = 0
-            while true {
-                let chunk = handle.readData(ofLength: 16_384)
-                guard !chunk.isEmpty else { break }
+            func emit(_ data: Data) {
                 let remaining = limit - retained
-                if remaining > 0 {
-                    let prefix = chunk.prefix(remaining)
-                    FileHandle.standardError.write(Data(prefix))
-                    retained += prefix.count
-                }
+                guard remaining > 0, !data.isEmpty else { return }
+                let prefix = data.prefix(remaining)
+                output.write(Data(prefix))
+                retained += prefix.count
             }
+            while true {
+                // availableData returns as soon as the child writes; the
+                // fixed-length read it replaces blocked until the buffer filled,
+                // so diagnostics only surfaced once the child exited.
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { break }
+                emit(stream.mask(chunk))
+            }
+            emit(stream.flush())
         }
     }
 }
