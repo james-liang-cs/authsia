@@ -87,6 +87,14 @@ struct MCPGrantService: @unchecked Sendable {
         }
     }
 
+    func activeOwnedGrantIDs(now: Date = Date()) throws -> Set<UUID> {
+        let snapshot = try client.agentJITSnapshot(agentRuntimeContext: runtimeContext)
+        return Set(snapshot.active.compactMap { grant in
+            guard isOwned(grant), grant.status(asOf: now) == .active else { return nil }
+            return grant.id
+        })
+    }
+
     private var runtimeContext: AgentRuntimeContext {
         AgentRuntimeContext(
             sessionID: "mcp:\(serverInstanceID.uuidString)",

@@ -62,7 +62,7 @@ protocol MCPProxySessionClient: Sendable {
         mcpUpstreamName: String?,
         mcpToolName: String?,
         mcpToolPolicy: AgentJITMCPToolPolicy?
-    ) throws -> (environment: [String: String], secrets: [String])
+    ) throws -> (environment: [String: String], secrets: [String], grantIDs: [UUID])
 }
 
 struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
@@ -98,7 +98,7 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
         mcpUpstreamName: String? = nil,
         mcpToolName: String? = nil,
         mcpToolPolicy: AgentJITMCPToolPolicy? = nil
-    ) throws -> (environment: [String: String], secrets: [String]) {
+    ) throws -> (environment: [String: String], secrets: [String], grantIDs: [UUID]) {
         let unsupported = try SecretReferenceResolver.unsupportedAgentJITReferences(
             environment: declared
         )
@@ -107,7 +107,7 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
         }
         let references = try SecretReferenceResolver.preflightReferences(environment: declared)
         guard !references.isEmpty else {
-            return (declared, [])
+            return (declared, [], [])
         }
         let payload = AgentJITPreflightPayload(
             requestedCommand: "exec",
@@ -118,13 +118,13 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
         )
         let resolver = makeResolver(agentRuntimeContext, workspaceRoot)
         return try client.withRequestedCommand("exec", includeAutomationCredential: false) {
-            _ = try client.agentJITPreflight(
+            let preflight = try client.agentJITPreflight(
                 payload,
                 agentRuntimeContext: agentRuntimeContext,
                 workspaceRoot: workspaceRoot
             )
             let resolved = try SecretReferenceResolver(client: resolver).resolveEnvironment(declared)
-            return (resolved.resolved, resolved.secrets)
+            return (resolved.resolved, resolved.secrets, preflight.grantIDs)
         }
     }
 }

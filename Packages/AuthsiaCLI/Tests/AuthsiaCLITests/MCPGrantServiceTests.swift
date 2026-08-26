@@ -26,6 +26,20 @@ struct MCPGrantServiceTests {
         #expect(output.grants.first?.status == "active")
     }
 
+    @Test("active ownership is narrowed to the current MCP instance")
+    func activeOwnedGrantIDsAreInstanceNarrowed() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let owned = grant(sessionID: "mcp:\(serverID.uuidString)", expiresAt: now.addingTimeInterval(60))
+        let client = GrantClient(snapshot: .init(active: [owned], history: []))
+
+        let current = MCPGrantService(serverInstanceID: serverID, client: client)
+        let replacement = MCPGrantService(serverInstanceID: UUID(), client: client)
+
+        #expect(try current.activeOwnedGrantIDs(now: now) == [owned.id])
+        #expect(try replacement.activeOwnedGrantIDs(now: now).isEmpty)
+    }
+
     @Test("revocation rejects malformed foreign direct and history grants")
     func revokeOwnershipChecks() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import AuthenticatorBridge
 import MCP
 import Testing
 @testable import authsia
@@ -166,6 +167,178 @@ struct MCPProxySpawnTests {
         #expect(observed["AUTHSIA_ACCESS_CREDENTIAL"] == nil)
         #expect(observed["AUTHSIA_MCP_PROCESS_GROUP"] == nil)
         #expect(observed["AUTHSIA_MCP_FAILURE_FILE"] == nil)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("revoking the associated grant kills the live upstream process group")
+    func revokedGrantKillsLiveProcessGroup() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let grantID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: grantID, serverID: serverID)],
+                history: []
+            )
+        )
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["JIRA_API_TOKEN": "synthetic-token"],
+            secrets: ["synthetic-token"],
+            grantIDs: [grantID]
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            acceptsToolWorkspace: true,
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            grantPollIntervalSeconds: 0.05,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP revoke test")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        let spawned = try #require(launcher.lastSpawned)
+        #expect(mcpProxyProcessGroupIsAlive(spawned.processGroupID))
+
+        grantClient.setSnapshot(.init(
+            active: [],
+            history: [mcpProxyGrant(
+                id: grantID,
+                serverID: serverID,
+                revokedAt: Date()
+            )]
+        ))
+
+        #expect(waitForMCPProxyProcessGroupExit(spawned.processGroupID))
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("graceful stop kills the child and revokes active owned grants")
+    func gracefulStopKillsChildAndRevokesGrant() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let grantID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: grantID, serverID: serverID)],
+                history: []
+            )
+        )
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["JIRA_API_TOKEN": "synthetic-token"],
+            secrets: ["synthetic-token"],
+            grantIDs: [grantID]
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            acceptsToolWorkspace: true,
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            grantPollIntervalSeconds: 5,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP shutdown test")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        let spawned = try #require(launcher.lastSpawned)
+
+        await proxy.stop()
+
+        #expect(waitForMCPProxyProcessGroupExit(spawned.processGroupID))
+        #expect(grantClient.revokedIDs == [grantID])
+        await connection.client.disconnect()
+    }
+
+    @Test("a call after revocation starts a fresh JIT session and child")
+    func callAfterRevocationStartsFreshSession() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let oldGrantID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let newGrantID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: oldGrantID, serverID: serverID)],
+                history: []
+            )
+        )
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["JIRA_API_TOKEN": "synthetic-token"],
+            secrets: ["synthetic-token"],
+            grantIDs: [oldGrantID]
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            acceptsToolWorkspace: true,
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            grantPollIntervalSeconds: 5,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient)
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP on-call revoke test")
+        let firstCall: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await firstCall.value.isError != true)
+        let firstChild = try #require(launcher.lastSpawned)
+
+        sessionClient.grantIDs = [newGrantID]
+        grantClient.setSnapshot(.init(
+            active: [mcpProxyGrant(id: newGrantID, serverID: serverID)],
+            history: [mcpProxyGrant(
+                id: oldGrantID,
+                serverID: serverID,
+                revokedAt: Date()
+            )]
+        ))
+
+        let secondCall: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await secondCall.value.isError != true)
+        #expect(sessionClient.prepareCount == 2)
+        #expect(launcher.spawnCount == 2)
+        #expect(waitForMCPProxyProcessGroupExit(firstChild.processGroupID))
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
@@ -369,4 +542,93 @@ struct MCPProxySpawnTests {
         #expect(waitForMCPProxyTestFile(sigtermFile) == "DEFAULT")
         #expect(waitForMCPProxyTestFile(inheritedFile) == "closed")
     }
+}
+
+private final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshot: AgentJITGrantSnapshotPayload
+    private var storedRevokedIDs: [UUID] = []
+
+    init(snapshot: AgentJITGrantSnapshotPayload) {
+        self.snapshot = snapshot
+    }
+
+    var revokedIDs: [UUID] {
+        lock.withLock { storedRevokedIDs }
+    }
+
+    func setSnapshot(_ snapshot: AgentJITGrantSnapshotPayload) {
+        lock.withLock { self.snapshot = snapshot }
+    }
+
+    func agentJITSnapshot(
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITGrantSnapshotPayload {
+        _ = agentRuntimeContext
+        return lock.withLock { snapshot }
+    }
+
+    func revokeAgentJITGrant(
+        id: UUID,
+        agentRuntimeContext: AgentRuntimeContext
+    ) throws -> AgentJITGrantMutationPayload {
+        _ = agentRuntimeContext
+        lock.withLock { storedRevokedIDs.append(id) }
+        return AgentJITGrantMutationPayload(revokedGrantIDs: [id])
+    }
+}
+
+private func mcpProxyGrant(
+    id: UUID,
+    serverID: UUID,
+    revokedAt: Date? = nil
+) -> AgentJITGrant {
+    AgentJITGrant(
+        id: id,
+        agentName: "Codex",
+        callerFingerprint: AgentJITCallerFingerprint(
+            processName: "authsia",
+            bundleIdentifier: "app.authsia.cli",
+            signingTeamId: "TEAM",
+            signingIdentity: "Developer ID",
+            parentProcessName: "Codex",
+            parentBundleIdentifier: "com.openai.codex",
+            sessionScope: nil,
+            workingDirectory: "/tmp/project"
+        ),
+        folderScope: .folder("Team/API"),
+        capabilities: [.exec],
+        createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+        expiresAt: Date.distantFuture,
+        revokedAt: revokedAt,
+        lastUsedAt: nil,
+        requestedItems: [],
+        agentRuntimeContext: AgentRuntimeContext(
+            platform: "Codex",
+            sessionID: "mcp:\(serverID.uuidString)",
+            turnID: "mcp-call:test",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:test"
+        ),
+        approvedBy: "mac-panel",
+        environmentScope: nil
+    )
+}
+
+private func mcpProxyProcessGroupIsAlive(_ processGroupID: pid_t) -> Bool {
+    Darwin.kill(-processGroupID, 0) == 0 || errno == EPERM
+}
+
+private func waitForMCPProxyProcessGroupExit(
+    _ processGroupID: pid_t,
+    timeoutSeconds: Double = 2
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while Date() < deadline {
+        if !mcpProxyProcessGroupIsAlive(processGroupID) {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return !mcpProxyProcessGroupIsAlive(processGroupID)
 }

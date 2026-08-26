@@ -195,17 +195,20 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
     private(set) var mcpToolPolicies: [AgentJITMCPToolPolicy?] = []
     var environment: [String: String]
     var secrets: [String]
+    var grantIDs: [UUID]
     var error: (any Error)?
     var delayNanoseconds: UInt64
 
     init(
         environment: [String: String] = ["JIRA_URL": "https://example.atlassian.net"],
         secrets: [String] = [],
+        grantIDs: [UUID] = [],
         error: (any Error)? = nil,
         delayNanoseconds: UInt64 = 0
     ) {
         self.environment = environment
         self.secrets = secrets
+        self.grantIDs = grantIDs
         self.error = error
         self.delayNanoseconds = delayNanoseconds
     }
@@ -217,7 +220,7 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
         mcpUpstreamName: String?,
         mcpToolName: String?,
         mcpToolPolicy: AgentJITMCPToolPolicy?
-    ) throws -> (environment: [String: String], secrets: [String]) {
+    ) throws -> (environment: [String: String], secrets: [String], grantIDs: [UUID]) {
         lock.lock()
         prepareCount += 1
         contexts.append(agentRuntimeContext)
@@ -228,6 +231,7 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
         var environment = declared.merging(self.environment) { _, override in override }
         environment["PYTHONUNBUFFERED"] = "1"
         let secrets = self.secrets
+        let grantIDs = self.grantIDs
         let delay = delayNanoseconds
         lock.unlock()
         if delay > 0 {
@@ -237,7 +241,7 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
             throw error
         }
         _ = workspaceRoot
-        return (environment, secrets)
+        return (environment, secrets, grantIDs)
     }
 }
 

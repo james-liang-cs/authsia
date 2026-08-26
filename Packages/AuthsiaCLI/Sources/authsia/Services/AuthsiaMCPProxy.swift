@@ -20,11 +20,13 @@ actor AuthsiaMCPProxy {
     private let parentEnvironment: [String: String]
     private let initializeTimeoutSeconds: Double
     private let killGraceSeconds: Double
+    private let grantPollIntervalSeconds: Double
     private let grantService: MCPGrantService
     private var handlersRegistered = false
     private var childSession: ChildSession?
     private var spawnTask: Task<ChildSession, Error>?
     private var inFlight: InFlightSpawn?
+    private var grantWatchTask: Task<Void, Never>?
     private var isStopped = false
 
     init(
@@ -38,6 +40,7 @@ actor AuthsiaMCPProxy {
         parentEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         initializeTimeoutSeconds: Double = 30,
         killGraceSeconds: Double = 2,
+        grantPollIntervalSeconds: Double = 2,
         grantService: MCPGrantService? = nil
     ) {
         self.server = Server(
@@ -58,6 +61,7 @@ actor AuthsiaMCPProxy {
         self.parentEnvironment = parentEnvironment
         self.initializeTimeoutSeconds = initializeTimeoutSeconds
         self.killGraceSeconds = killGraceSeconds
+        self.grantPollIntervalSeconds = grantPollIntervalSeconds
         self.grantService = grantService ?? MCPGrantService(
             serverInstanceID: runtimeContext.instanceID
         )
@@ -100,6 +104,8 @@ actor AuthsiaMCPProxy {
 
     private func shutdownChild() async {
         isStopped = true
+        grantWatchTask?.cancel()
+        grantWatchTask = nil
         let task = spawnTask
         task?.cancel()
         await dropChild()
@@ -351,6 +357,7 @@ actor AuthsiaMCPProxy {
                 client: client,
                 childToolNames: listed,
                 secrets: prepared.secrets,
+                grantIDs: Set(prepared.grantIDs),
                 terminator: terminator,
                 stdinWrite: spawned.stdinWrite,
                 stdoutRead: spawned.stdoutRead
@@ -358,6 +365,7 @@ actor AuthsiaMCPProxy {
             childSession = session
             inFlight = nil
             watchChild(session)
+            watchGrants(session)
             return session
         } catch {
             await consumeInFlight()
@@ -371,7 +379,35 @@ actor AuthsiaMCPProxy {
             await dropChild()
             return nil
         }
+        guard associatedGrantsRemainActive(for: session) else {
+            await dropChild(processID: session.processID)
+            return nil
+        }
         return session
+    }
+
+    private func associatedGrantsRemainActive(for session: ChildSession) -> Bool {
+        guard !session.grantIDs.isEmpty else { return true }
+        guard let active = try? grantService.activeOwnedGrantIDs() else { return false }
+        return session.grantIDs.isSubset(of: active)
+    }
+
+    private func watchGrants(_ session: ChildSession) {
+        guard !session.grantIDs.isEmpty else { return }
+        grantWatchTask?.cancel()
+        let processID = session.processID
+        let interval = max(grantPollIntervalSeconds, 0.01)
+        grantWatchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                guard !Task.isCancelled, let self else { return }
+                guard await self.childSession?.processID == processID else { return }
+                guard await self.associatedGrantsRemainActive(for: session) else {
+                    await self.dropChild(processID: processID)
+                    return
+                }
+            }
+        }
     }
 
     private func watchChild(_ session: ChildSession) {
@@ -388,9 +424,12 @@ actor AuthsiaMCPProxy {
         await dropChild()
     }
 
-    private func dropChild() async {
-        guard let session = childSession else { return }
+    private func dropChild(processID: pid_t? = nil) async {
+        guard let session = childSession,
+              processID == nil || processID == session.processID else { return }
         childSession = nil
+        grantWatchTask?.cancel()
+        grantWatchTask = nil
         await teardownSpawn(
             processGroupID: session.processGroupID,
             client: session.client,
@@ -506,6 +545,7 @@ private struct ChildSession: Sendable {
     let client: Client
     let childToolNames: Set<String>
     let secrets: [String]
+    let grantIDs: Set<UUID>
     let terminator: MCPProcessTerminator
     let stdinWrite: Int32
     let stdoutRead: Int32
