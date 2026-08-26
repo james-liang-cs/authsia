@@ -83,17 +83,19 @@ struct CompletionCommandTests {
         #expect(fish.contains("-fa 'unguard' -d 'Restart the current tab in normal terminal mode'"))
     }
 
-    @Test("all shell scripts complete MCP serve command")
-    func allShellScriptsCompleteMCPServeCommand() {
+    @Test("all shell scripts complete MCP serve and proxy commands")
+    func allShellScriptsCompleteMCPCommands() {
         let zsh = Completion.completionScript(for: .zsh)
         #expect(zsh.contains("'serve:Serve Authsia tools over local stdio'"))
+        #expect(zsh.contains("'proxy:Proxy a named workspace upstream over local stdio'"))
 
         let bash = Completion.completionScript(for: .bash)
-        #expect(bash.contains("configure|serve"))
-        #expect(bash.contains("compgen -W 'configure serve'"))
+        #expect(bash.contains("configure|serve|proxy"))
+        #expect(bash.contains("compgen -W 'configure serve proxy'"))
 
         let fish = Completion.completionScript(for: .fish)
         #expect(fish.contains("-fa 'serve' -d 'Serve Authsia tools over local stdio'"))
+        #expect(fish.contains("-fa 'proxy' -d 'Proxy a named workspace upstream over local stdio'"))
     }
 
     @Test("get query uses dynamic item metadata completion")
