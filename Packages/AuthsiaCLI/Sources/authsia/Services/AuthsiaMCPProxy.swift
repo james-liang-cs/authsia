@@ -196,12 +196,15 @@ actor AuthsiaMCPProxy {
         _ parameters: CallTool.Parameters,
         using session: ChildSession
     ) async throws -> CallTool.Result {
+        let masker = MCPProxyJSONMasker(secrets: session.secrets)
+        let maskedParameters: CallTool.Parameters = try masker.mask(parameters)
         let request: RequestContext<CallTool.Result> = try await session.client.callTool(
-            name: parameters.name,
-            arguments: parameters.arguments
+            name: maskedParameters.name,
+            arguments: maskedParameters.arguments
         )
         return try await withTaskCancellationHandler {
-            try await request.value
+            let result = try await request.value
+            return try masker.mask(result)
         } onCancel: {
             Task { try? await session.client.cancelRequest(request.requestID) }
         }
@@ -347,6 +350,7 @@ actor AuthsiaMCPProxy {
                 processGroupID: spawned.processGroupID,
                 client: client,
                 childToolNames: listed,
+                secrets: prepared.secrets,
                 terminator: terminator,
                 stdinWrite: spawned.stdinWrite,
                 stdoutRead: spawned.stdoutRead
@@ -501,6 +505,7 @@ private struct ChildSession: Sendable {
     let processGroupID: pid_t
     let client: Client
     let childToolNames: Set<String>
+    let secrets: [String]
     let terminator: MCPProcessTerminator
     let stdinWrite: Int32
     let stdoutRead: Int32

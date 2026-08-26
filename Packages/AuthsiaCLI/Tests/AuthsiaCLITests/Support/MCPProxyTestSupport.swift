@@ -86,17 +86,28 @@ func mcpProxyStdioScript() -> String {
                 },
             }
         if method == "tools/call":
-            name = ((request.get("params") or {}).get("name")) or ""
+            params = request.get("params") or {}
+            name = params.get("name") or ""
             if arrival:
                 with open(arrival, "a") as handle:
                     handle.write("%s %.6f\n" % (name, time.time()))
             if name == "slow":
                 time.sleep(0.4)
+            text = name
+            if os.environ.get("AUTHSIA_TEST_ECHO_ARGUMENTS"):
+                text += " request=" + json.dumps(
+                    params.get("arguments") or {},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            result_secret = os.environ.get("AUTHSIA_TEST_RESULT_SECRET")
+            if result_secret:
+                text += " result=" + result_secret
             return {
                 "jsonrpc": "2.0",
                 "id": ident,
                 "result": {
-                    "content": [{"type": "text", "text": name}],
+                    "content": [{"type": "text", "text": text}],
                     "isError": False,
                 },
             }
