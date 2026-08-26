@@ -499,7 +499,10 @@ the existing Bridge-owned control. The proxy does not expose the serve-only
 There is no client setting that routes an existing local MCP server through
 Authsia. The client must launch Authsia's proxy instead of the upstream
 command. Authsia never rewrites third-party configuration. Workspace Setup
-does not write `mcpUpstreams`.
+does not write `mcpUpstreams`. Access Center can copy a wrap recipe for a
+wrap-eligible scanned stdio server (PATH basename or workspace-relative
+command). That recipe is print-only: the user pastes policy and replaces the
+client launch.
 
 ### Preconditions
 

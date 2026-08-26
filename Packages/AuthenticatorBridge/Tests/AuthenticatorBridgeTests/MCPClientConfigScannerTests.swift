@@ -73,7 +73,15 @@ final class MCPClientConfigScannerTests: XCTestCase {
             "vscode:invalid-wrapper:unadmitted",
             "vscode:stale:unadmitted",
         ])
-        XCTAssertEqual(findings.first { $0.serverName == "jira" }?.declaredUpstreamName, "jira")
+        XCTAssertEqual(findings.first { $0.serverName == "filesystem" && $0.source == .cursor }?.isWrapEligible, true)
+        XCTAssertEqual(findings.first { $0.serverName == "filesystem" && $0.source == .cursor }?.wrapCommand, "npx")
+        XCTAssertEqual(
+            findings.first { $0.serverName == "rogue" }?.wrapArguments,
+            ["rogue-server"]
+        )
+        XCTAssertEqual(findings.first { $0.serverName == "jira" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "stale" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "invalid-wrapper" }?.shouldShowInAccessCenter, false)
         XCTAssertEqual(findings.first { $0.serverName == "rogue" }?.commandLabel, "uvx")
         XCTAssertNil(findings.first { $0.serverName == "invalid-wrapper" }?.declaredUpstreamName)
         let encoded = String(decoding: try JSONEncoder().encode(findings), as: UTF8.self)
@@ -106,6 +114,9 @@ final class MCPClientConfigScannerTests: XCTestCase {
 
         XCTAssertEqual(findings.count, 1)
         XCTAssertEqual(findings.first?.status, .unadmitted)
+        XCTAssertEqual(findings.first?.isWrapEligible, true)
+        XCTAssertEqual(findings.first?.wrapCommand, "node")
+        XCTAssertTrue(findings.first?.shouldShowInAccessCenter == true)
         XCTAssertEqual(try Data(contentsOf: cursor), original)
         XCTAssertEqual(try Data(contentsOf: malformed), Data("{not-json".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
@@ -123,6 +134,65 @@ final class MCPClientConfigScannerTests: XCTestCase {
             "/Users/example/.config/devin/mcp_config.json",
             "/Users/example/Library/Application Support/Code/User/mcp.json",
         ])
+    }
+
+    func testAbsoluteAndShellCommandsAreNotWrapEligible() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let cursor = root.appendingPathComponent("cursor.json")
+        try writeJSON([
+            "mcpServers": [
+                "abs": ["command": "/usr/bin/node", "args": ["server.js"]],
+                "shell": ["command": "bash", "args": ["-c", "node server.js"]],
+            ],
+        ], to: cursor)
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: [
+                MCPClientConfigLocation(source: .cursor, fileURL: cursor, displayPath: "cursor"),
+            ]
+        )
+
+        XCTAssertEqual(Set(findings.map(\.serverName)), ["abs", "shell"])
+        XCTAssertTrue(findings.allSatisfy { !$0.isWrapEligible && !$0.shouldShowInAccessCenter })
+    }
+
+    func testWrapRecipeOmitsSecretsAndUsesProxyArgv() {
+        let finding = MCPClientServerFinding(
+            source: .codex,
+            serverName: "playwright",
+            commandLabel: "npx",
+            status: .unadmitted,
+            declaredUpstreamName: nil,
+            configPathLabel: "~/.codex/config.toml",
+            wrapCommand: "npx",
+            wrapArguments: ["-y", "@playwright/mcp"],
+            isWrapEligible: true
+        )
+
+        let text = MCPLocalMCPWrapRecipe.clipboardText(
+            for: finding,
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
+        )
+
+        XCTAssertTrue(text?.contains("\"name\": \"playwright\"") == true)
+        XCTAssertTrue(text?.contains("\"command\": \"npx\"") == true)
+        XCTAssertTrue(text?.contains("\"--upstream\"") == true)
+        XCTAssertTrue(text?.contains("does not edit the client file") == true)
+        XCTAssertFalse(text?.contains("TOKEN") == true)
+        XCTAssertNil(MCPLocalMCPWrapRecipe.clipboardText(
+            for: MCPClientServerFinding(
+                source: .codex,
+                serverName: "jira",
+                commandLabel: "authsia",
+                status: .admittedWrapped,
+                declaredUpstreamName: "jira",
+                configPathLabel: "~/.codex/config.toml"
+            ),
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
+        ))
     }
 
     private func writeJSON(_ object: [String: Any], to url: URL) throws {

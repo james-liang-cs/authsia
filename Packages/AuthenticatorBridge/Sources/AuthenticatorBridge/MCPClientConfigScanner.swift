@@ -85,9 +85,16 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     public let status: MCPClientServerAdmissionStatus
     public let declaredUpstreamName: String?
     public let configPathLabel: String
+    public let wrapCommand: String?
+    public let wrapArguments: [String]
+    public let isWrapEligible: Bool
 
     public var id: String {
         "\(source.rawValue):\(serverName):\(configPathLabel)"
+    }
+
+    public var shouldShowInAccessCenter: Bool {
+        status == .admittedWrapped || isWrapEligible
     }
 
     public init(
@@ -96,7 +103,10 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         commandLabel: String,
         status: MCPClientServerAdmissionStatus,
         declaredUpstreamName: String?,
-        configPathLabel: String
+        configPathLabel: String,
+        wrapCommand: String? = nil,
+        wrapArguments: [String] = [],
+        isWrapEligible: Bool = false
     ) {
         self.source = source
         self.serverName = serverName
@@ -104,6 +114,51 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         self.status = status
         self.declaredUpstreamName = declaredUpstreamName
         self.configPathLabel = configPathLabel
+        self.wrapCommand = wrapCommand
+        self.wrapArguments = wrapArguments
+        self.isWrapEligible = isWrapEligible
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case serverName
+        case commandLabel
+        case status
+        case declaredUpstreamName
+        case configPathLabel
+        case wrapCommand
+        case wrapArguments
+        case isWrapEligible
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        source = try container.decode(MCPClientConfigSource.self, forKey: .source)
+        serverName = try container.decode(String.self, forKey: .serverName)
+        commandLabel = try container.decode(String.self, forKey: .commandLabel)
+        status = try container.decode(MCPClientServerAdmissionStatus.self, forKey: .status)
+        declaredUpstreamName = try container.decodeIfPresent(String.self, forKey: .declaredUpstreamName)
+        configPathLabel = try container.decode(String.self, forKey: .configPathLabel)
+        wrapCommand = try container.decodeIfPresent(String.self, forKey: .wrapCommand)
+        wrapArguments = try container.decodeIfPresent([String].self, forKey: .wrapArguments) ?? []
+        isWrapEligible = try container.decodeIfPresent(Bool.self, forKey: .isWrapEligible) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(source, forKey: .source)
+        try container.encode(serverName, forKey: .serverName)
+        try container.encode(commandLabel, forKey: .commandLabel)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(declaredUpstreamName, forKey: .declaredUpstreamName)
+        try container.encode(configPathLabel, forKey: .configPathLabel)
+        try container.encodeIfPresent(wrapCommand, forKey: .wrapCommand)
+        if !wrapArguments.isEmpty {
+            try container.encode(wrapArguments, forKey: .wrapArguments)
+        }
+        if isWrapEligible {
+            try container.encode(isWrapEligible, forKey: .isWrapEligible)
+        }
     }
 }
 
@@ -189,14 +244,71 @@ public struct MCPClientConfigScanner {
             status = .unadmitted
             declaredUpstreamName = wrappedUpstream
         }
+        let wrap = Self.wrapTarget(
+            name: serverName,
+            command: entry.command,
+            arguments: entry.arguments,
+            status: status,
+            isAuthsiaProxyLaunch: wrappedUpstream != nil
+        )
         return MCPClientServerFinding(
             source: entry.location.source,
             serverName: serverName,
             commandLabel: commandLabel,
             status: status,
             declaredUpstreamName: declaredUpstreamName,
-            configPathLabel: configPathLabel
+            configPathLabel: configPathLabel,
+            wrapCommand: wrap?.command,
+            wrapArguments: wrap?.arguments ?? [],
+            isWrapEligible: wrap != nil
         )
+    }
+
+    private static let shellExecutableNames: Set<String> = [
+        "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "sh", "tcsh", "zsh",
+    ]
+
+    private static func wrapTarget(
+        name: String,
+        command: String,
+        arguments: [String],
+        status: MCPClientServerAdmissionStatus,
+        isAuthsiaProxyLaunch: Bool
+    ) -> (command: String, arguments: [String])? {
+        guard status != .admittedWrapped,
+              !isAuthsiaProxyLaunch,
+              validUpstreamName(name) != nil else {
+            return nil
+        }
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !trimmed.hasPrefix("/"),
+              trimmed != ".",
+              trimmed != "..",
+              !trimmed.contains("\0"),
+              trimmed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+        else {
+            return nil
+        }
+        if trimmed.contains("/") {
+            let parts = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+            guard !parts.contains(where: { $0 == ".." || $0.isEmpty }) else {
+                return nil
+            }
+        }
+        guard arguments.count <= 64 else { return nil }
+        for argument in arguments {
+            guard argument.utf8.count <= 32 * 1_024,
+                  argument.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+                  !argument.lowercased().contains("authsia://") else {
+                return nil
+            }
+        }
+        let executable = URL(fileURLWithPath: trimmed).lastPathComponent.lowercased()
+        if shellExecutableNames.contains(executable) {
+            return nil
+        }
+        return (trimmed, arguments)
     }
 
     private static func jsonEntries(
