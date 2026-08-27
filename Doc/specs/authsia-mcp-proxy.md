@@ -405,7 +405,11 @@ After printing configuration for a managed workspace, `mcp configure` also
 performs a best-effort read-only scan of the known user-global client paths:
 Codex `~/.codex/config.toml`, Claude `~/.claude.json`, Cursor
 `~/.cursor/mcp.json`, Devin `~/.config/devin/mcp_config.json`, and VS Code's
-user `mcp.json`. It reads server name, command, argv, and the
+user `mcp.json`. It also scans the bound workspace root for the project-scoped
+files that outrank those: Claude `.mcp.json`, Cursor `.cursor/mcp.json`, and
+VS Code `.vscode/mcp.json`. Codex and Devin have no project scope. Project
+scanning stays inside managed workspace roots and opens no new discovery
+surface. It reads server name, command, argv, and the
 `AUTHSIA_MCP_UPSTREAM` name only; other environment values and raw protocol
 frames are neither retained nor reported. Findings are:
 

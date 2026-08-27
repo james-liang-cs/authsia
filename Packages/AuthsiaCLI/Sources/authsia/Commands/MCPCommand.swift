@@ -71,8 +71,18 @@ struct MCPCommand: AsyncParsableCommand {
                     arguments: upstream.args
                 )
             }
+            let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+            // The bound workspace's project config outranks the user-global one
+            // this command prints, so report it too.
+            let workspaceRoot = Self.boundWorkspaceRoot(
+                environment: ProcessInfo.processInfo.environment,
+                currentDirectoryPath: FileManager.default.currentDirectoryPath
+            )
             let locations = MCPClientConfigLocation.knownLocations(
-                homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+                homeDirectory: homeDirectory
+            ) + MCPClientConfigLocation.projectLocations(
+                workspaceRoots: workspaceRoot.map { [$0] } ?? [],
+                homeDirectory: homeDirectory
             )
             let findings = MCPClientConfigScanner().scan(
                 declaredServers: declared,
@@ -93,17 +103,27 @@ struct MCPCommand: AsyncParsableCommand {
             ).map(\.name)
         }
 
+        static func boundWorkspaceRoot(
+            environment: [String: String],
+            currentDirectoryPath: String
+        ) -> URL? {
+            MCPRuntimeContext(
+                startingDirectory: Serve.startingDirectory(
+                    workspace: nil,
+                    environment: environment,
+                    currentDirectoryPath: currentDirectoryPath
+                )
+            ).workspaceRoot
+        }
+
         private static func upstreams(
             environment: [String: String],
             currentDirectoryPath: String
         ) -> [MCPUpstreamConfig] {
-            let startingDirectory = Serve.startingDirectory(
-                workspace: nil,
+            guard let root = boundWorkspaceRoot(
                 environment: environment,
                 currentDirectoryPath: currentDirectoryPath
-            )
-            let context = MCPRuntimeContext(startingDirectory: startingDirectory)
-            guard let root = context.workspaceRoot,
+            ),
                   let config = try? WorkspaceConfigStore.read(fromWorkspaceRoot: root) else {
                 return []
             }

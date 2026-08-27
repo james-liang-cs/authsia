@@ -29,6 +29,45 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
         self.displayPath = displayPath
     }
 
+    /// Repository-scoped client config files, which take precedence over the
+    /// user-global ones for the clients that support them. A wrapped
+    /// user-global entry with an unwrapped project entry beside it resolves to
+    /// the unwrapped one, so leaving these unscanned reports the opposite of
+    /// what runs. Codex and Devin have no project scope.
+    public static func projectLocations(
+        workspaceRoots: [URL],
+        homeDirectory: URL
+    ) -> [Self] {
+        let relativePaths: [(MCPClientConfigSource, String)] = [
+            (.claude, ".mcp.json"),
+            (.cursor, ".cursor/mcp.json"),
+            (.vscode, ".vscode/mcp.json"),
+        ]
+        var seen = Set<String>()
+        var locations: [Self] = []
+        for root in workspaceRoots {
+            let standardized = root.standardizedFileURL
+            for (source, relativePath) in relativePaths {
+                let fileURL = standardized.appendingPathComponent(relativePath)
+                guard seen.insert(fileURL.path).inserted else { continue }
+                locations.append(Self(
+                    source: source,
+                    fileURL: fileURL,
+                    displayPath: abbreviated(fileURL.path, homeDirectory: homeDirectory)
+                ))
+            }
+        }
+        return locations
+    }
+
+    /// Project display paths keep the full location so two repositories that
+    /// share a basename stay distinct findings.
+    private static func abbreviated(_ path: String, homeDirectory: URL) -> String {
+        let home = homeDirectory.standardizedFileURL.path
+        guard path == home || path.hasPrefix(home + "/") else { return path }
+        return "~" + path.dropFirst(home.count)
+    }
+
     public static func knownLocations(homeDirectory: URL) -> [Self] {
         [
             Self(

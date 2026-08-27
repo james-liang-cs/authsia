@@ -317,4 +317,74 @@ final class MCPClientConfigScannerTests: XCTestCase {
     private func writeJSON(_ object: [String: Any], to url: URL) throws {
         try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]).write(to: url)
     }
+    func testProjectLocationsCoverClientsThatOutrankUserGlobalConfig() {
+        let home = URL(fileURLWithPath: "/Users/dev", isDirectory: true)
+        let locations = MCPClientConfigLocation.projectLocations(
+            workspaceRoots: [URL(fileURLWithPath: "/Users/dev/repo", isDirectory: true)],
+            homeDirectory: home
+        )
+
+        XCTAssertEqual(locations.map(\.source), [.claude, .cursor, .vscode])
+        XCTAssertEqual(locations.map(\.displayPath), [
+            "~/repo/.mcp.json",
+            "~/repo/.cursor/mcp.json",
+            "~/repo/.vscode/mcp.json",
+        ])
+        // Codex and Devin have no project scope; inventing paths for them would
+        // report findings from files those clients never read.
+        XCTAssertFalse(locations.contains { $0.source == .codex || $0.source == .devin })
+    }
+
+    func testProjectLocationsKeepFullPathOutsideHomeAndDeduplicate() {
+        let home = URL(fileURLWithPath: "/Users/dev", isDirectory: true)
+        let root = URL(fileURLWithPath: "/srv/repo", isDirectory: true)
+        let locations = MCPClientConfigLocation.projectLocations(
+            workspaceRoots: [root, root],
+            homeDirectory: home
+        )
+
+        XCTAssertEqual(locations.count, 3)
+        XCTAssertEqual(locations.first?.displayPath, "/srv/repo/.mcp.json")
+    }
+
+    func testProjectScopedDirectLaunchIsReportedBesideWrappedUserGlobalEntry() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let root = home.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        // User-global holds the wrapped proxy entry.
+        try JSONSerialization.data(withJSONObject: [
+            "mcpServers": [
+                "codegraph": [
+                    "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                    "args": ["mcp", "proxy"],
+                    "env": ["AUTHSIA_MCP_UPSTREAM": "codegraph"],
+                ],
+            ],
+        ]).write(to: home.appendingPathComponent(".claude.json"))
+
+        // The repository holds an unwrapped entry, and it wins at runtime.
+        try JSONSerialization.data(withJSONObject: [
+            "mcpServers": [
+                "codegraph": ["command": "codegraph", "args": ["serve", "--mcp"]],
+            ],
+        ]).write(to: root.appendingPathComponent(".mcp.json"))
+
+        let declared = [
+            MCPDeclaredLocalServer(name: "codegraph", command: "codegraph", arguments: ["serve", "--mcp"]),
+        ]
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: declared,
+            locations: MCPClientConfigLocation.knownLocations(homeDirectory: home)
+                + MCPClientConfigLocation.projectLocations(workspaceRoots: [root], homeDirectory: home)
+        )
+
+        let byPath = Dictionary(uniqueKeysWithValues: findings.map { ($0.configPathLabel, $0) })
+        XCTAssertEqual(byPath["~/.claude.json"]?.status, .admittedWrapped)
+        // Without the project scan this row is missing and Access Center shows
+        // only "wrapped", which is the opposite of what actually runs.
+        XCTAssertEqual(byPath["~/repo/.mcp.json"]?.status, .directBypass)
+    }
+
 }
