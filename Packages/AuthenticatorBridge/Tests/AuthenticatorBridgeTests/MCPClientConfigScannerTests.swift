@@ -177,13 +177,46 @@ final class MCPClientConfigScannerTests: XCTestCase {
             authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
         )
 
-        XCTAssertTrue(text?.contains("\"name\": \"playwright\"") == true)
-        XCTAssertTrue(text?.contains("\"command\": \"npx\"") == true)
-        XCTAssertTrue(text?.contains("args: [\"mcp\", \"proxy\"]") == true)
-        XCTAssertTrue(text?.contains("AUTHSIA_MCP_UPSTREAM") == true)
+        XCTAssertTrue(text?.contains("Replace the Codex playwright entry in ~/.codex/config.toml.") == true)
+        XCTAssertTrue(text?.contains("Open ~/.codex/config.toml") == true)
+        XCTAssertTrue(text?.contains("codex mcp add playwright --env AUTHSIA_MCP_UPSTREAM=playwright --") == true)
+        XCTAssertTrue(text?.contains("[mcp_servers.playwright]") == true)
+        XCTAssertTrue(text?.contains("args = [\"mcp\", \"proxy\"]") == true)
+        XCTAssertTrue(text?.contains("AUTHSIA_MCP_UPSTREAM = \"playwright\"") == true)
+        XCTAssertTrue(text?.contains("\"name\" : \"playwright\"") == true || text?.contains("\"name\": \"playwright\"") == true)
+        XCTAssertTrue(text?.contains("mcpUpstreams") == true)
+        XCTAssertTrue(text?.contains("\"command\" : \"npx\"") == true || text?.contains("\"command\": \"npx\"") == true)
         XCTAssertFalse(text?.contains("--upstream") == true)
         XCTAssertTrue(text?.contains("does not edit the client file") == true)
         XCTAssertFalse(text?.contains("TOKEN") == true)
+
+        let afterDeclare = MCPLocalMCPWrapRecipe.clipboardText(
+            for: finding,
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia",
+            includeWorkspacePolicy: false
+        )
+        XCTAssertTrue(afterDeclare?.contains("Open ~/.codex/config.toml") == true)
+        XCTAssertFalse(afterDeclare?.contains("mcpUpstreams") == true)
+        XCTAssertFalse(afterDeclare?.contains("\"command\": \"npx\"") == true)
+        XCTAssertFalse(afterDeclare?.contains("\"command\" : \"npx\"") == true)
+
+        let cursor = MCPLocalMCPWrapRecipe.clipboardText(
+            for: MCPClientServerFinding(
+                source: .cursor,
+                serverName: "codegraph",
+                commandLabel: "codegraph",
+                status: .directBypass,
+                declaredUpstreamName: "codegraph",
+                configPathLabel: "~/.cursor/mcp.json",
+                wrapCommand: "codegraph",
+                wrapArguments: ["serve", "--mcp"],
+                isWrapEligible: true
+            ),
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
+        )
+        XCTAssertTrue(cursor?.contains("Open ~/.cursor/mcp.json") == true)
+        XCTAssertTrue(cursor?.contains("\"mcpServers\"") == true || cursor?.contains("under \"mcpServers\"") == true)
+        XCTAssertFalse(cursor?.contains("mcpUpstreams") == true)
         XCTAssertNil(MCPLocalMCPWrapRecipe.clipboardText(
             for: MCPClientServerFinding(
                 source: .codex,

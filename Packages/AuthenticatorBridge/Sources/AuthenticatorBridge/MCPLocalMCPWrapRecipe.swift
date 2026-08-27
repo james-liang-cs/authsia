@@ -5,30 +5,217 @@ public enum MCPLocalMCPWrapRecipe {
         for finding: MCPClientServerFinding,
         authsiaCommand: String
     ) -> String? {
+        clipboardText(
+            for: finding,
+            authsiaCommand: authsiaCommand,
+            includeWorkspacePolicy: finding.status == .unadmitted
+        )
+    }
+
+    public static func clipboardText(
+        for finding: MCPClientServerFinding,
+        authsiaCommand: String,
+        includeWorkspacePolicy: Bool
+    ) -> String? {
         guard finding.isWrapEligible,
               let command = finding.wrapCommand,
-              let authsia = sanitizedCommand(authsiaCommand) else {
+              let authsia = sanitizedCommand(authsiaCommand),
+              let replacement = clientReplacement(for: finding, authsiaCommand: authsia) else {
             return nil
         }
-        let argsJSON = jsonArray(finding.wrapArguments)
-        return """
-        Route \(finding.source.displayName) \(finding.serverName) through Authsia.
 
-        1. Add this object to mcpUpstreams in .authsia/workspace.json:
-        {
-          "name": \(jsonString(finding.serverName)),
-          "command": \(jsonString(command)),
-          "args": \(argsJSON),
-          "env": {}
+        var sections: [String] = [
+            clientLaunchInstruction(for: finding),
+            "",
+            replacement,
+        ]
+        if includeWorkspacePolicy {
+            sections.append(contentsOf: [
+                "",
+                "Workspace policy is already written if you used Declare in workspace. Otherwise add this object to mcpUpstreams in .authsia/workspace.json:",
+                policyObject(
+                    name: finding.serverName,
+                    command: command,
+                    arguments: finding.wrapArguments
+                ),
+            ])
         }
+        sections.append(contentsOf: [
+            "",
+            "Authsia does not edit the client file. The first permitted tool call requests local MCP admission.",
+        ])
+        return sections.joined(separator: "\n")
+    }
 
-        2. Replace the client launch with:
-        command: \(authsia)
-        args: ["mcp", "proxy"]
-        env: { \(jsonString(MCPProxyClientLaunch.environmentKey)): \(jsonString(finding.serverName)) }
+    public static func clientLaunchInstruction(for finding: MCPClientServerFinding) -> String {
+        "Replace the \(finding.source.displayName) \(finding.serverName) entry in \(finding.configPathLabel)."
+    }
 
-        Authsia does not edit the client file. The first permitted tool call requests local MCP admission.
+    private static func clientReplacement(
+        for finding: MCPClientServerFinding,
+        authsiaCommand: String
+    ) -> String? {
+        guard MCPProxyClientLaunch.validUpstreamName(finding.serverName) != nil else {
+            return nil
+        }
+        let name = finding.serverName
+        let env = MCPProxyClientLaunch.environment(upstreamName: name)
+        switch finding.source {
+        case .codex:
+            return """
+            Open \(finding.configPathLabel) and replace the existing [mcp_servers.\(name)] table.
+
+            Configure directly:
+            \(codexAddCommand(name: name, authsiaCommand: authsiaCommand, environment: env))
+
+            Or paste this table:
+            \(codexTable(name: name, authsiaCommand: authsiaCommand, environment: env))
+            """
+        case .claude:
+            return """
+            Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object.
+
+            Configure directly:
+            \(claudeAddCommand(name: name, authsiaCommand: authsiaCommand, environment: env))
+
+            Or paste this object:
+            \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
+            """
+        case .cursor:
+            return """
+            Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object with:
+
+            \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
+            """
+        case .devin:
+            return """
+            Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object with:
+
+            \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
+            """
+        case .vscode:
+            return """
+            In VS Code, run MCP: Open User Configuration (\(finding.configPathLabel)). Find "\(name)" under "servers" and replace that object.
+
+            Configure directly:
+            \(vscodeAddCommand(name: name, authsiaCommand: authsiaCommand, environment: env))
+
+            Or paste this object:
+            \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: true))
+            """
+        }
+    }
+
+    private static func policyObject(name: String, command: String, arguments: [String]) -> String {
+        var object: [String: Any] = [
+            "name": name,
+            "command": command,
+            "env": [:] as [String: String],
+        ]
+        if !arguments.isEmpty {
+            object["args"] = arguments
+        }
+        return jsonObject(object)
+    }
+
+    private static func jsonServerObject(
+        authsiaCommand: String,
+        environment: [String: String],
+        includeType: Bool
+    ) -> String {
+        var object: [String: Any] = [
+            "command": authsiaCommand,
+            "args": MCPProxyClientLaunch.arguments,
+            "env": environment,
+        ]
+        if includeType {
+            object["type"] = "stdio"
+        }
+        return jsonObject(object)
+    }
+
+    private static func jsonObject(_ object: [String: Any]) -> String {
+        let data = try? JSONSerialization.data(
+            withJSONObject: object,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        )
+        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
+    private static func codexTable(
+        name: String,
+        authsiaCommand: String,
+        environment: [String: String]
+    ) -> String {
+        var table = """
+        [mcp_servers.\(name)]
+        command = "\(tomlEscaped(authsiaCommand))"
+        args = \(tomlStringArray(MCPProxyClientLaunch.arguments))
         """
+        if !environment.isEmpty {
+            table += "\n\n[mcp_servers.\(name).env]\n"
+            table += environment.keys.sorted().map { key in
+                "\(key) = \"\(tomlEscaped(environment[key] ?? ""))\""
+            }.joined(separator: "\n")
+        }
+        return table
+    }
+
+    private static func codexAddCommand(
+        name: String,
+        authsiaCommand: String,
+        environment: [String: String]
+    ) -> String {
+        "codex mcp add \(name)\(envFlags(environment)) -- \(shellQuoted(authsiaCommand)) "
+            + MCPProxyClientLaunch.arguments.joined(separator: " ")
+    }
+
+    private static func claudeAddCommand(
+        name: String,
+        authsiaCommand: String,
+        environment: [String: String]
+    ) -> String {
+        "claude mcp add --scope user\(envFlags(environment)) \(name) -- \(shellQuoted(authsiaCommand)) "
+            + MCPProxyClientLaunch.arguments.joined(separator: " ")
+    }
+
+    private static func vscodeAddCommand(
+        name: String,
+        authsiaCommand: String,
+        environment: [String: String]
+    ) -> String {
+        let object: [String: Any] = [
+            "args": MCPProxyClientLaunch.arguments,
+            "command": authsiaCommand,
+            "env": environment,
+            "name": name,
+            "type": "stdio",
+        ]
+        let data = (try? JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        return "code --add-mcp \(shellQuoted(data))"
+    }
+
+    private static func envFlags(_ environment: [String: String]) -> String {
+        environment.keys.sorted().map { key in
+            " --env \(key)=\(environment[key] ?? "")"
+        }.joined()
+    }
+
+    private static func tomlEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private static func tomlStringArray(_ values: [String]) -> String {
+        "[" + values.map { "\"\(tomlEscaped($0))\"" }.joined(separator: ", ") + "]"
+    }
+
+    private static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private static func sanitizedCommand(_ value: String) -> String? {
@@ -38,14 +225,5 @@ public enum MCPLocalMCPWrapRecipe {
             return nil
         }
         return trimmed
-    }
-
-    private static func jsonString(_ value: String) -> String {
-        jsonArray([value]).dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
-    }
-
-    private static func jsonArray(_ values: [String]) -> String {
-        let data = try? JSONSerialization.data(withJSONObject: values)
-        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
     }
 }

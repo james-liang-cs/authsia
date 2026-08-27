@@ -16,6 +16,7 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         case configTooLarge
         case malformedConfig
         case duplicateName(String)
+        case writeFailed
 
         public var errorDescription: String? {
             switch self {
@@ -31,7 +32,37 @@ public enum MCPLocalMCPWorkspaceDeclaration {
                 return "Workspace config is not valid JSON."
             case .duplicateName(let name):
                 return "mcpUpstreams already has a different entry named \(name)."
+            case .writeFailed:
+                return "Could not write workspace config."
             }
+        }
+    }
+
+    public struct CandidateWorkspace: Equatable, Identifiable, Sendable {
+        public let root: URL
+        public let displayName: String
+        public let isPreferred: Bool
+
+        public var id: String { root.path }
+
+        public var configPathLabel: String {
+            root.appendingPathComponent(MCPLocalMCPWorkspaceDeclaration.relativeConfigPath).path
+        }
+
+        public init(root: URL, displayName: String, isPreferred: Bool) {
+            self.root = root
+            self.displayName = displayName
+            self.isPreferred = isPreferred
+        }
+    }
+
+    public struct WorkspaceDeclaration: Equatable, Sendable {
+        public let workspaceRoot: URL
+        public let outcome: Result<Outcome, DeclarationError>
+
+        public init(workspaceRoot: URL, outcome: Result<Outcome, DeclarationError>) {
+            self.workspaceRoot = workspaceRoot
+            self.outcome = outcome
         }
     }
 
@@ -40,15 +71,83 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         grantWorkingDirectories: [String],
         fileManager: FileManager = .default
     ) -> URL? {
+        candidateWorkspaces(
+            knownRoots: knownRoots,
+            grantWorkingDirectories: grantWorkingDirectories,
+            fileManager: fileManager
+        ).first?.root
+    }
+
+    public static func candidateWorkspaces(
+        knownRoots: [String],
+        grantWorkingDirectories: [String],
+        fileManager: FileManager = .default
+    ) -> [CandidateWorkspace] {
+        var preferred: [CandidateWorkspace] = []
+        var others: [CandidateWorkspace] = []
         var seen = Set<String>()
-        for path in knownRoots + grantWorkingDirectories {
+
+        func append(path: String, isPreferred: Bool) {
             guard let root = workspaceRoot(startingAt: path, fileManager: fileManager),
                   seen.insert(root.path).inserted else {
-                continue
+                return
             }
-            return root
+            let candidate = CandidateWorkspace(
+                root: root,
+                displayName: displayName(at: root, fileManager: fileManager),
+                isPreferred: isPreferred
+            )
+            if isPreferred {
+                preferred.append(candidate)
+            } else {
+                others.append(candidate)
+            }
         }
-        return nil
+
+        for path in grantWorkingDirectories {
+            append(path: path, isPreferred: true)
+        }
+        for path in knownRoots {
+            append(path: path, isPreferred: false)
+        }
+        return preferred + others
+    }
+
+    public static func preselectedRootPaths(in candidates: [CandidateWorkspace]) -> Set<String> {
+        let preferred = candidates.filter(\.isPreferred).map(\.root.path)
+        if !preferred.isEmpty {
+            return Set(preferred)
+        }
+        if let first = candidates.first {
+            return [first.root.path]
+        }
+        return []
+    }
+
+    public static func declare(
+        finding: MCPClientServerFinding,
+        workspaceRoots: [URL],
+        fileManager: FileManager = .default
+    ) -> [WorkspaceDeclaration] {
+        var seen = Set<String>()
+        var results: [WorkspaceDeclaration] = []
+        for root in workspaceRoots {
+            let standardized = root.standardizedFileURL
+            guard seen.insert(standardized.path).inserted else { continue }
+            do {
+                let outcome = try declare(
+                    finding: finding,
+                    workspaceRoot: standardized,
+                    fileManager: fileManager
+                )
+                results.append(WorkspaceDeclaration(workspaceRoot: standardized, outcome: .success(outcome)))
+            } catch let error as DeclarationError {
+                results.append(WorkspaceDeclaration(workspaceRoot: standardized, outcome: .failure(error)))
+            } catch {
+                results.append(WorkspaceDeclaration(workspaceRoot: standardized, outcome: .failure(.writeFailed)))
+            }
+        }
+        return results
     }
 
     public static func declare(
@@ -110,7 +209,11 @@ public enum MCPLocalMCPWorkspaceDeclaration {
             withJSONObject: root,
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         )
-        try encoded.write(to: configURL, options: .atomic)
+        do {
+            try encoded.write(to: configURL, options: .atomic)
+        } catch {
+            throw DeclarationError.writeFailed
+        }
         return .declared
     }
 
@@ -131,6 +234,22 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         return nil
     }
 
+    private static func displayName(at root: URL, fileManager: FileManager) -> String {
+        let fallback = root.lastPathComponent
+        let configURL = root.appendingPathComponent(relativeConfigPath)
+        guard let attributes = try? fileManager.attributesOfItem(atPath: configURL.path),
+              let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              size <= maximumConfigBytes,
+              let data = try? Data(contentsOf: configURL, options: .mappedIfSafe),
+              let identity = try? JSONDecoder().decode(ConfigIdentity.self, from: data),
+              let name = identity.workspace?.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty,
+              name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+            return fallback
+        }
+        return String(name.prefix(128))
+    }
+
     private static func stringArray(_ value: Any?) -> [String]? {
         if let strings = value as? [String] {
             return strings
@@ -138,5 +257,13 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         guard let values = value as? [Any] else { return nil }
         let strings = values.compactMap { $0 as? String }
         return strings.count == values.count ? strings : nil
+    }
+
+    private struct ConfigIdentity: Decodable {
+        struct Workspace: Decodable {
+            let name: String?
+        }
+
+        let workspace: Workspace?
     }
 }
