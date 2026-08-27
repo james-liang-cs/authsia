@@ -444,13 +444,18 @@ not be stored in workspace policy. HTTP, SSE, Streamable HTTP, and `url`
 entries decode for forward compatibility but are not executable in V1.
 
 The proxy starts and initializes even when it is unbound, the named upstream
-is absent, or its transport is unsupported. `tools/list` is derived only from
-workspace policy as allow plus approve minus deny. It never starts the child,
-requests approval, or consults a live child. Unknown and denied calls fail
-before JIT or spawn. An optional `--workspace` fixes the binding; otherwise
-the proxy uses one safe `WORKSPACE_FOLDER_PATHS` launch hint and then its
-process working directory, matching the launch-context fallbacks of
-`mcp serve`.
+is absent, or its transport is unsupported. When `allow` or `approve` is set,
+`tools/list` is derived only from workspace policy as allow plus approve minus
+deny. That named-policy list never starts the child, requests approval, or
+consults a live child. When both `allow` and `approve` are empty on a
+credential-less stdio upstream, first `tools/list` may briefly start the child
+to discover a bounded catalog (no admission, no secret resolution), then kill
+it and cache names plus sanitized schemas minus `deny`. Secret-bearing env
+(`authsia://`) still requires explicit `allow`/`approve`; listing must not
+resolve references. Unknown and denied calls fail before JIT or the long-lived
+spawn. An optional `--workspace` fixes the binding; otherwise the proxy uses
+one safe `WORKSPACE_FOLDER_PATHS` launch hint and then its process working
+directory, matching the launch-context fallbacks of `mcp serve`.
 
 When the upstream environment contains `authsia://` references, the first
 permitted call uses the existing Agent JIT `exec` preflight for those items.
@@ -458,14 +463,16 @@ The approval identifies the MCP tool and upstream on the Mac while retaining
 the existing signed remote approval contract. The proxy then resolves the
 references, constructs a stripped child environment, starts the no-shell
 upstream in its own process group, initializes it as an outbound MCP client,
-and privately verifies its tool list. Extra child tools never become visible,
-and a policy-advertised tool missing from the child fails closed.
+and privately verifies its tool list. When `allow` or `approve` is set, extra
+child tools never become visible. Empty-policy credential-less discovery is
+the only path that advertises extra child tools (minus `deny`). A
+policy-advertised or discovered tool missing from the child fails closed.
 
 When the upstream declares no `authsia://` references, the first permitted call
 instead requests a dedicated local `mcp-admission` grant, narrowed to the same
 caller, workspace, proxy name, and MCP server-instance ID. This grant carries no
 Vault items and authorizes neither `list` nor `exec`. Declining admission means
-the child never starts. An approved credential-less child follows the same
+the long-lived child never starts. An approved credential-less child follows the same
 audit, liveness, process-group termination, and revoke-kill lifecycle as a
 credentialed child. Admission approval is local-Mac only and is not encoded in
 the paired-iPhone remote approval protocol.
@@ -553,13 +560,19 @@ write `mcpUpstreams`.
   credential-less server uses an empty `env` object and is still an admission
   allowlist entry.
 - Disjoint `allow`, `approve`, and `deny` tool-name lists plus optional
-  non-secret catalog schemas shape the client-visible tools. `tools/list`
-  comes from this policy without starting the child.
+  non-secret catalog schemas pin the client-visible tools. When `allow` or
+  `approve` is set, `tools/list` comes from this policy without starting the
+  child. When both are omitted on a credential-less stdio entry, Authsia
+  discovers the child's tool names and sanitized schemas on first
+  `tools/list` (short-lived spawn, no admission) and subtracts `deny`.
+  Secret-bearing env still requires explicit `allow`/`approve`. Access Center
+  **Declare in workspace** writes command and argv only; it does not require
+  operators to enumerate tools.
 - Do not store live credentials, tokens, private endpoints, or
   machine-specific paths. HTTP, SSE, Streamable HTTP, and `url` entries decode
   for forward compatibility but are not executable in V1.
 
-Credential-less example (no secret bytes):
+Credential-less example with pinned tools (no secret bytes):
 
 ```json
 {
@@ -571,6 +584,21 @@ Credential-less example (no secret bytes):
       "tools": {
         "allow": ["read_file", "list_directory"]
       }
+    }
+  ]
+}
+```
+
+Credential-less example that lets Authsia discover the child catalog:
+
+```json
+{
+  "mcpUpstreams": [
+    {
+      "name": "codegraph",
+      "command": "codegraph",
+      "args": ["serve", "--mcp"],
+      "env": {}
     }
   ]
 }
@@ -801,7 +829,7 @@ payloads.
 | Abrupt server death leaves a reusable grant | Instance-narrowed matching prevents reuse; Bridge liveness, TTL, or Access Center revokes the orphan. |
 | Client-side auto-approval is mistaken for authority | Authsia approval remains independent and mandatory when no matching grant exists. |
 | New MCP protocol feature expands capability | Advertise only the frozen V1 capability set; require explicit spec and security review for additions. |
-| Proxy policy is mistaken for live upstream authority | Derive `tools/list` only from commit-safe policy, reject denied and unknown tools before spawn, and privately verify advertised names after child initialization. |
+| Proxy policy is mistaken for live upstream authority | Derive `tools/list` from commit-safe policy when `allow` or `approve` is set. When both are empty on a credential-less stdio upstream, discover a bounded child catalog without admission, then reject deny and unknown tools before the long-lived spawn, and privately verify advertised names after child initialization. |
 | Upstream receives ambient credentials or Authsia runtime markers | Build a stripped environment, add only declared literals and freshly resolved refs, and omit `AUTHSIA_AGENT_*` and automation authority from the child. |
 | Injected values leak through proxied JSON-RPC | Parse and mask JSON string values in both directions; never patch raw frames or store them in audit or diagnostics. |
 | Revocation leaves a long-lived upstream authorized | Associate the child with exact owned grant IDs, recheck on every call and periodically, and terminate the complete process group when association fails. |

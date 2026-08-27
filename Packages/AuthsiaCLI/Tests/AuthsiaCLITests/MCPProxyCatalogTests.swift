@@ -56,6 +56,82 @@ struct MCPProxyCatalogTests {
         #expect(MCPProxyCatalog.listedTools(for: upstream).isEmpty)
     }
 
+    @Test("credential-less empty policy is eligible for child catalog discovery")
+    func emptyPolicyIsEligibleForChildDiscovery() {
+        let codegraph = MCPUpstreamConfig(
+            name: "codegraph",
+            command: "codegraph",
+            args: ["serve", "--mcp"],
+            tools: MCPUpstreamToolPolicy(deny: ["hidden_tool"])
+        )
+        #expect(MCPProxyCatalog.shouldDiscoverChildCatalog(codegraph))
+
+        let named = MCPUpstreamConfig(
+            name: "codegraph",
+            command: "codegraph",
+            tools: MCPUpstreamToolPolicy(allow: ["codegraph_explore"])
+        )
+        #expect(!MCPProxyCatalog.shouldDiscoverChildCatalog(named))
+
+        let secret = MCPUpstreamConfig(
+            name: "jira",
+            command: "mcp-atlassian",
+            env: ["JIRA_API_TOKEN": "authsia://api-key/Atlassian/key"],
+            tools: MCPUpstreamToolPolicy()
+        )
+        #expect(!MCPProxyCatalog.shouldDiscoverChildCatalog(secret))
+        #expect(secret.containsSecretReferences)
+
+        let http = MCPUpstreamConfig(
+            name: "rovo",
+            transport: .http,
+            url: "https://example.atlassian.net/mcp"
+        )
+        #expect(!MCPProxyCatalog.shouldDiscoverChildCatalog(http))
+    }
+
+    @Test("discovered child tools omit deny, invalid names, and unsanitary schemas")
+    func discoveredChildToolsAreBoundedAndSanitized() {
+        let child: [Tool] = [
+            Tool(
+                name: "codegraph_explore",
+                description: "Explore\u{0007} symbols",
+                inputSchema: .object([
+                    "type": "object",
+                    "$ref": "#/defs/query",
+                    "properties": .object([
+                        "query": .object(["type": "string"]),
+                    ]),
+                ])
+            ),
+            Tool(
+                name: "hidden_tool",
+                description: "must not leak",
+                inputSchema: MCPProxyCatalog.defaultInputSchema
+            ),
+            Tool(
+                name: "bad\nname",
+                description: "",
+                inputSchema: MCPProxyCatalog.defaultInputSchema
+            ),
+            Tool(
+                name: "",
+                description: "",
+                inputSchema: MCPProxyCatalog.defaultInputSchema
+            ),
+            Tool(
+                name: String(repeating: "x", count: MCPProxyCatalog.maximumToolNameLength + 1),
+                description: "",
+                inputSchema: MCPProxyCatalog.defaultInputSchema
+            ),
+        ]
+        let listed = MCPProxyCatalog.listedTools(fromChild: child, deny: ["hidden_tool"])
+        #expect(listed.map(\.name) == ["codegraph_explore"])
+        #expect(listed[0].description == "Explore symbols")
+        #expect(listed[0].inputSchema.objectValue?["$ref"] == nil)
+        #expect(listed[0].inputSchema.objectValue?["properties"]?.objectValue?["query"] != nil)
+    }
+
     @Test("unbound and HTTP upstreams advertise an empty list")
     func unboundAndHTTPAdvertiseNothing() {
         #expect(MCPProxyCatalog.listedTools(for: nil).isEmpty)

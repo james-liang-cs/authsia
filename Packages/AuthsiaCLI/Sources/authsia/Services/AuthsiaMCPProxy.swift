@@ -29,6 +29,8 @@ actor AuthsiaMCPProxy {
     private var inFlight: InFlightSpawn?
     private var grantWatchTask: Task<Void, Never>?
     private var isStopped = false
+    private var discoveredChildTools: [Tool]?
+    private var didAttemptCatalogDiscovery = false
 
     init(
         version: String,
@@ -124,8 +126,7 @@ actor AuthsiaMCPProxy {
         handlersRegistered = true
 
         await server.withMethodHandler(ListTools.self) { _ in
-            let upstream = await self.stdioUpstream()
-            return ListTools.Result(tools: MCPProxyCatalog.listedTools(for: upstream))
+            ListTools.Result(tools: await self.listedTools())
         }
         await server.withMethodHandler(CallTool.self) { parameters in
             try await self.callTool(parameters)
@@ -156,7 +157,7 @@ actor AuthsiaMCPProxy {
                 message: "HTTP MCP upstreams are not supported."
             )
         case .stdio(let upstream):
-            let advertised = Set(MCPProxyCatalog.advertisedNames(in: upstream.tools))
+            let advertised = await advertisedNames(for: upstream)
             guard advertised.contains(parameters.name) else {
                 return try Self.errorResult(
                     code: .upstreamDenied,
@@ -500,6 +501,118 @@ actor AuthsiaMCPProxy {
         }
         Darwin.close(stdinWrite)
         Darwin.close(stdoutRead)
+    }
+
+    private func listedTools() async -> [Tool] {
+        let upstream = stdioUpstream()
+        let policyTools = MCPProxyCatalog.listedTools(for: upstream)
+        if !policyTools.isEmpty {
+            return policyTools
+        }
+        guard let upstream,
+              MCPProxyCatalog.shouldDiscoverChildCatalog(upstream),
+              mcpAccessEnabled() else {
+            return []
+        }
+        return await discoveredTools(for: upstream)
+    }
+
+    private func advertisedNames(for upstream: MCPUpstreamConfig) async -> Set<String> {
+        let names = MCPProxyCatalog.advertisedNames(in: upstream.tools)
+        if !names.isEmpty {
+            return Set(names)
+        }
+        guard MCPProxyCatalog.shouldDiscoverChildCatalog(upstream) else {
+            return []
+        }
+        return Set((await discoveredTools(for: upstream)).map(\.name))
+    }
+
+    private func discoveredTools(for upstream: MCPUpstreamConfig) async -> [Tool] {
+        if didAttemptCatalogDiscovery {
+            return discoveredChildTools ?? []
+        }
+        didAttemptCatalogDiscovery = true
+        let tools = await probeChildCatalog(upstream)
+        discoveredChildTools = tools
+        return tools
+    }
+
+    private func probeChildCatalog(_ upstream: MCPUpstreamConfig) async -> [Tool] {
+        guard !isStopped, let workspaceRoot = runtimeContext.workspaceRoot else { return [] }
+        let command = upstream.command?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !command.isEmpty else { return [] }
+        let childEnvironment = MCPProxyChildEnvironment.make(
+            parent: parentEnvironment,
+            declared: upstream.env
+        )
+        let executable: URL
+        let spawned: MCPProxySpawnedChild
+        do {
+            executable = try MCPProxyCommandResolver.resolve(
+                command: command,
+                workspaceRoot: workspaceRoot,
+                path: childEnvironment["PATH"] ?? ""
+            )
+            spawned = try childLauncher.spawn(
+                executable: executable,
+                arguments: upstream.args,
+                environment: childEnvironment,
+                currentDirectory: workspaceRoot
+            )
+        } catch {
+            return []
+        }
+        MCPProxyStderrDrain.start(
+            fileDescriptor: spawned.stderrRead,
+            secrets: [],
+            output: stderrOutput
+        )
+        let terminator = MCPProcessTerminator(
+            processID: spawned.processID,
+            processGroupID: spawned.processGroupID,
+            killGraceSeconds: killGraceSeconds
+        )
+        let client = Client(
+            name: "authsia-mcp-proxy",
+            version: proxyVersion,
+            configuration: .default
+        )
+        if isStopped {
+            await teardownSpawn(
+                client: client,
+                terminator: terminator,
+                stdinWrite: spawned.stdinWrite,
+                stdoutRead: spawned.stdoutRead
+            )
+            return []
+        }
+        let transport = StdioTransport(
+            input: FileDescriptor(rawValue: spawned.stdoutRead),
+            output: FileDescriptor(rawValue: spawned.stdinWrite)
+        )
+        do {
+            let listed = try await mcpProxyWithTimeout(initializeTimeoutSeconds) {
+                _ = try await client.connect(transport: transport)
+                return try await client.listTools()
+            }
+            let tools = MCPProxyCatalog.listedTools(fromChild: listed.tools, deny: upstream.tools.deny)
+            await teardownSpawn(
+                client: client,
+                terminator: terminator,
+                stdinWrite: spawned.stdinWrite,
+                stdoutRead: spawned.stdoutRead
+            )
+            return tools
+        } catch {
+            await teardownSpawn(
+                client: client,
+                terminator: terminator,
+                stdinWrite: spawned.stdinWrite,
+                stdoutRead: spawned.stdoutRead
+            )
+            return []
+        }
     }
 
     private func stdioUpstream() -> MCPUpstreamConfig? {

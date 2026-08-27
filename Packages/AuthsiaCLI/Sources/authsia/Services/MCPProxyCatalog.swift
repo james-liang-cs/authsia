@@ -7,11 +7,22 @@ enum MCPProxyCatalog {
         "type": "object",
     ])
 
+    static let maximumDiscoveredToolCount = 256
+    static let maximumToolNameLength = 128
+    static let maximumDescriptionLength = 1_024
+
     private static let schemaJSONLimit = 64 * 1_024
 
     static func listedTools(for upstream: MCPUpstreamConfig?) -> [Tool] {
         guard let upstream, upstream.requiresStdioPolicy else { return [] }
         return advertisedTools(from: upstream)
+    }
+
+    static func shouldDiscoverChildCatalog(_ upstream: MCPUpstreamConfig) -> Bool {
+        upstream.requiresStdioPolicy
+            && upstream.tools.allow.isEmpty
+            && upstream.tools.approve.isEmpty
+            && !upstream.containsSecretReferences
     }
 
     static func advertisedNames(in policy: MCPUpstreamToolPolicy) -> [String] {
@@ -24,6 +35,49 @@ enum MCPProxyCatalog {
             }
         }
         return names
+    }
+
+    static func listedTools(fromChild tools: [Tool], deny: [String]) -> [Tool] {
+        let denied = Set(deny)
+        var seen = Set<String>()
+        var advertised: [Tool] = []
+        advertised.reserveCapacity(min(tools.count, maximumDiscoveredToolCount))
+        for tool in tools {
+            guard advertised.count < maximumDiscoveredToolCount else { break }
+            guard isAdvertisableToolName(tool.name),
+                  !denied.contains(tool.name),
+                  seen.insert(tool.name).inserted else {
+                continue
+            }
+            advertised.append(advertisedChildTool(tool))
+        }
+        return advertised
+    }
+
+    private static func advertisedChildTool(_ tool: Tool) -> Tool {
+        let schema: Value
+        if let data = try? JSONEncoder().encode(tool.inputSchema),
+           let json = try? JSONDecoder().decode(MCPJSONValue.self, from: data) {
+            schema = advertisedSchema(json)
+        } else {
+            schema = defaultInputSchema
+        }
+        return Tool(
+            name: tool.name,
+            description: sanitizedDescription(tool.description ?? ""),
+            inputSchema: schema
+        )
+    }
+
+    static func isAdvertisableToolName(_ name: String) -> Bool {
+        !name.isEmpty
+            && name.count <= maximumToolNameLength
+            && name.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) }
+    }
+
+    static func sanitizedDescription(_ value: String) -> String {
+        let stripped = String(value.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+        return String(stripped.prefix(maximumDescriptionLength))
     }
 
     static func advertisedTools(from upstream: MCPUpstreamConfig) -> [Tool] {

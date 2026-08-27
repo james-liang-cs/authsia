@@ -147,6 +147,12 @@ struct MCPUpstreamConfig: Codable, Equatable, Sendable {
         transport == .stdio && url == nil
     }
 
+    var containsSecretReferences: Bool {
+        env.values.contains {
+            $0.range(of: "authsia://", options: [.caseInsensitive]) != nil
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case name
         case transport

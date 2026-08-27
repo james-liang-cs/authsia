@@ -252,6 +252,162 @@ struct MCPProxyLifecycleTests {
         await fixture.proxy.waitUntilCompleted()
     }
 
+    @Test("empty credential-less policy discovers child tools on list without JIT")
+    func emptyPolicyDiscoversChildCatalogWithoutJIT() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
+        let sessionClient = RecordingMCPProxySessionClient(environment: [:])
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                MCPUpstreamConfig(
+                    name: "codegraph",
+                    command: "codegraph",
+                    args: ["serve", "--mcp"],
+                    env: [
+                        "AUTHSIA_TEST_TOOLS": "codegraph_explore,hidden_tool,extra_tool",
+                        "PYTHONUNBUFFERED": "1",
+                    ],
+                    tools: MCPUpstreamToolPolicy(deny: ["hidden_tool"])
+                ),
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "codegraph",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+
+        let listed = try await connection.client.listTools()
+        #expect(listed.tools.map(\.name) == ["codegraph_explore", "extra_tool"])
+        #expect(!listed.tools.map(\.name).contains("hidden_tool"))
+        #expect(sessionClient.prepareCount == 0)
+        #expect(launcher.spawnCount == 1)
+
+        let listedAgain = try await connection.client.listTools()
+        #expect(listedAgain.tools.map(\.name) == ["codegraph_explore", "extra_tool"])
+        #expect(launcher.spawnCount == 1)
+
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "codegraph_explore"
+        )
+        let result = try await call.value
+        #expect(result.isError != true)
+        #expect(sessionClient.prepareCount == 1)
+        #expect(launcher.spawnCount == 2)
+
+        let denied: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "hidden_tool"
+        )
+        let deniedResult = try await denied.value
+        #expect(deniedResult.isError == true)
+        #expect(
+            deniedResult.structuredContent?.objectValue?["code"]?.stringValue
+                == MCPToolErrorCode.upstreamDenied.rawValue
+        )
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("empty policy does not discover a child catalog when MCP access is disabled")
+    func emptyPolicySkipsDiscoveryWhenAccessDisabled() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                MCPUpstreamConfig(
+                    name: "codegraph",
+                    command: "codegraph",
+                    env: ["PYTHONUNBUFFERED": "1"]
+                ),
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "codegraph",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { false },
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+        let listed = try await connection.client.listTools()
+        #expect(listed.tools.isEmpty)
+        #expect(launcher.spawnCount == 0)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("empty policy does not discover when env contains authsia references")
+    func emptyPolicySkipsDiscoveryWhenEnvHasSecretRefs() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let launcher = RecordingMCPProxyChildLauncher()
+        let sessionClient = RecordingMCPProxySessionClient()
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                MCPUpstreamConfig(
+                    name: "jira",
+                    command: "mcp-atlassian",
+                    env: [
+                        "JIRA_API_TOKEN": "authsia://api-key/Atlassian/key?folder=Workspaces%2Fproxy",
+                    ]
+                ),
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+        let listed = try await connection.client.listTools()
+        #expect(listed.tools.isEmpty)
+        #expect(launcher.spawnCount == 0)
+        #expect(sessionClient.prepareCount == 0)
+
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let result = try await call.value
+        #expect(result.isError == true)
+        #expect(
+            result.structuredContent?.objectValue?["code"]?.stringValue
+                == MCPToolErrorCode.upstreamDenied.rawValue
+        )
+        #expect(sessionClient.prepareCount == 0)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
     private func makeProxy(
         upstreamName: String = "jira",
         mcpAccessEnabled: @escaping @Sendable () -> Bool = { true },
