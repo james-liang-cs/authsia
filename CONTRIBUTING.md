@@ -93,7 +93,9 @@ constrained tools for status, workspace inspection, scoped metadata listing,
 mediated execution, grant status, and grant revocation. It never exposes a
 raw-secret or global-audit tool. See the
 [Local Authsia MCP Server specification](Doc/specs/authsia-mcp.md) for the tool,
-JIT authorization, audit-correlation, and Access Center contracts.
+JIT authorization, audit-correlation, and Access Center contracts. Wrapping
+another local stdio MCP server is specified in
+[Local Authsia MCP Proxy](Doc/specs/authsia-mcp-proxy.md).
 
 ## Release artifacts and verification
 

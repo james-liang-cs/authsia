@@ -7,7 +7,8 @@ execution contract, storage semantics, privacy posture, Chrome autofill
 boundaries, and remote JIT approval protocols.
 
 Local agent-tool integration begins with [`authsia-mcp.md`](authsia-mcp.md);
-its authorization rules extend, but do not replace, the JIT and security-model
+wrapping another local stdio server is [`authsia-mcp-proxy.md`](authsia-mcp-proxy.md).
+Their authorization rules extend, but do not replace, the JIT and security-model
 contracts in this directory.
 
 Private app operations (build, packaging, release, LaunchAgent repair, and

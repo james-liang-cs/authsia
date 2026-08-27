@@ -504,7 +504,8 @@ The MCP client receives only masked, bounded command output. Existing Bridge
 audit and agent activity stores carry the grant, server-instance, and tool-call
 correlation; MCP adds no separate approval authority, bearer, or log. Full tool,
 lifecycle, threat, and compatibility rules are in
-[`authsia-mcp.md`](authsia-mcp.md).
+[`authsia-mcp.md`](authsia-mcp.md). Wrapping another local stdio MCP server is
+[`authsia-mcp-proxy.md`](authsia-mcp-proxy.md).
 
 ## SSH-Agent Path
 

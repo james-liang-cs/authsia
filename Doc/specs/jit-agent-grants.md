@@ -658,8 +658,9 @@ revocation an unambiguous current-instance boundary. Abruptly orphaned grants
 remain visible to Access Center until revoked, expired, or closed by Bridge
 liveness handling, but cannot authorize a different MCP instance.
 
-The complete MCP tool and lifecycle contract is
-[`authsia-mcp.md`](authsia-mcp.md).
+The complete MCP serve tool and lifecycle contract is
+[`authsia-mcp.md`](authsia-mcp.md). Wrapping another local stdio MCP server is
+[`authsia-mcp-proxy.md`](authsia-mcp-proxy.md).
 
 ## TTL And Revocation
 
