@@ -225,6 +225,8 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
     public let requestIssuedAtMilliseconds: Int64
     public let grantExpiresAtMilliseconds: Int64
     public let mcpUpstreamName: String?
+    /// Display-only argv of the declared child this admission would start.
+    public let mcpUpstreamCommand: String?
     public let mcpToolName: String?
     public let mcpToolPolicy: AgentJITMCPToolPolicy?
 
@@ -237,6 +239,7 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
         requestIssuedAtMilliseconds: Int64,
         grantExpiresAtMilliseconds: Int64,
         mcpUpstreamName: String? = nil,
+        mcpUpstreamCommand: String? = nil,
         mcpToolName: String? = nil,
         mcpToolPolicy: AgentJITMCPToolPolicy? = nil
     ) {
@@ -248,6 +251,7 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
         self.requestIssuedAtMilliseconds = requestIssuedAtMilliseconds
         self.grantExpiresAtMilliseconds = grantExpiresAtMilliseconds
         self.mcpUpstreamName = Self.optionalDisplay(mcpUpstreamName)
+        self.mcpUpstreamCommand = Self.optionalDisplay(mcpUpstreamCommand)
         self.mcpToolName = Self.optionalDisplay(mcpToolName)
         self.mcpToolPolicy = mcpToolPolicy
     }

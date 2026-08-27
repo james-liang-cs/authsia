@@ -60,6 +60,7 @@ protocol MCPProxySessionClient: Sendable {
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL,
         mcpUpstreamName: String?,
+        mcpUpstreamCommand: String?,
         mcpToolName: String?,
         mcpToolPolicy: AgentJITMCPToolPolicy?
     ) throws -> (environment: [String: String], secrets: [String], grantIDs: [UUID])
@@ -96,6 +97,7 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL,
         mcpUpstreamName: String? = nil,
+        mcpUpstreamCommand: String? = nil,
         mcpToolName: String? = nil,
         mcpToolPolicy: AgentJITMCPToolPolicy? = nil
     ) throws -> (environment: [String: String], secrets: [String], grantIDs: [UUID]) {
@@ -110,6 +112,7 @@ struct LiveMCPProxySessionClient: MCPProxySessionClient, @unchecked Sendable {
             requestedCommand: "exec",
             references: references,
             mcpUpstreamName: mcpUpstreamName,
+            mcpUpstreamCommand: mcpUpstreamCommand,
             mcpToolName: mcpToolName,
             mcpToolPolicy: mcpToolPolicy,
             mcpAdmissionRequested: references.isEmpty

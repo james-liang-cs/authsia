@@ -424,6 +424,9 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
     public let references: [AgentJITPreflightReference]
     public let environmentScope: EnvironmentAccessScope?
     public let mcpUpstreamName: String?
+    /// Display-only argv of the declared child, so the human approving an
+    /// admission sees which binary is about to start, not only its policy name.
+    public let mcpUpstreamCommand: String?
     public let mcpToolName: String?
     public let mcpToolPolicy: AgentJITMCPToolPolicy?
     public let mcpAdmissionRequested: Bool
@@ -433,6 +436,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         references: [AgentJITPreflightReference],
         environmentScope: EnvironmentAccessScope? = nil,
         mcpUpstreamName: String? = nil,
+        mcpUpstreamCommand: String? = nil,
         mcpToolName: String? = nil,
         mcpToolPolicy: AgentJITMCPToolPolicy? = nil,
         mcpAdmissionRequested: Bool = false
@@ -441,6 +445,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         self.references = references
         self.environmentScope = environmentScope
         self.mcpUpstreamName = mcpUpstreamName
+        self.mcpUpstreamCommand = mcpUpstreamCommand
         self.mcpToolName = mcpToolName
         self.mcpToolPolicy = mcpToolPolicy
         self.mcpAdmissionRequested = mcpAdmissionRequested
@@ -451,6 +456,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         case references
         case environmentScope
         case mcpUpstreamName
+        case mcpUpstreamCommand
         case mcpToolName
         case mcpToolPolicy
         case mcpAdmissionRequested
@@ -465,6 +471,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
             forKey: .environmentScope
         )
         mcpUpstreamName = try container.decodeIfPresent(String.self, forKey: .mcpUpstreamName)
+        mcpUpstreamCommand = try container.decodeIfPresent(String.self, forKey: .mcpUpstreamCommand)
         mcpToolName = try container.decodeIfPresent(String.self, forKey: .mcpToolName)
         if let rawPolicy = try container.decodeIfPresent(String.self, forKey: .mcpToolPolicy) {
             mcpToolPolicy = AgentJITMCPToolPolicy(rawValue: rawPolicy)
@@ -483,6 +490,7 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
         try container.encode(references, forKey: .references)
         try container.encodeIfPresent(environmentScope, forKey: .environmentScope)
         try container.encodeIfPresent(mcpUpstreamName, forKey: .mcpUpstreamName)
+        try container.encodeIfPresent(mcpUpstreamCommand, forKey: .mcpUpstreamCommand)
         try container.encodeIfPresent(mcpToolName, forKey: .mcpToolName)
         try container.encodeIfPresent(mcpToolPolicy, forKey: .mcpToolPolicy)
         try container.encode(mcpAdmissionRequested, forKey: .mcpAdmissionRequested)

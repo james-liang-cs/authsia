@@ -252,12 +252,15 @@ struct MCPProxyLifecycleTests {
         await fixture.proxy.waitUntilCompleted()
     }
 
-    @Test("empty credential-less policy discovers child tools on list without JIT")
-    func emptyPolicyDiscoversChildCatalogWithoutJIT() async throws {
+    @Test("empty credential-less policy discovers child tools on list after admission")
+    func emptyPolicyDiscoversChildCatalogAfterAdmission() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
         try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
-        let sessionClient = RecordingMCPProxySessionClient(environment: [:])
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: [:],
+            grantIDs: [UUID()]
+        )
         let launcher = RecordingMCPProxyChildLauncher()
         let root = try makeMCPProxyWorkspace(
             upstreams: [
@@ -291,11 +294,18 @@ struct MCPProxyLifecycleTests {
         let listed = try await connection.client.listTools()
         #expect(listed.tools.map(\.name) == ["codegraph_explore", "extra_tool"])
         #expect(!listed.tools.map(\.name).contains("hidden_tool"))
-        #expect(sessionClient.prepareCount == 0)
+        // Discovery starts the child, so it takes admission first, with no tool
+        // name because no tool has been called yet.
+        #expect(sessionClient.prepareCount == 1)
+        #expect(sessionClient.mcpToolNames == [nil])
+        #expect(sessionClient.mcpUpstreamNames == ["codegraph"])
+        // The approval has to name the binary, not just the policy label.
+        #expect(sessionClient.mcpUpstreamCommands == ["codegraph serve --mcp"])
         #expect(launcher.spawnCount == 1)
 
         let listedAgain = try await connection.client.listTools()
         #expect(listedAgain.tools.map(\.name) == ["codegraph_explore", "extra_tool"])
+        #expect(sessionClient.prepareCount == 1)
         #expect(launcher.spawnCount == 1)
 
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -303,7 +313,10 @@ struct MCPProxyLifecycleTests {
         )
         let result = try await call.value
         #expect(result.isError != true)
-        #expect(sessionClient.prepareCount == 1)
+        // The Bridge reuses the admission grant for this caller, workspace,
+        // upstream, and instance, so this preflight does not prompt again.
+        #expect(sessionClient.prepareCount == 2)
+        #expect(sessionClient.mcpToolNames == [nil, "codegraph_explore"])
         #expect(launcher.spawnCount == 2)
 
         let denied: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -315,6 +328,111 @@ struct MCPProxyLifecycleTests {
             deniedResult.structuredContent?.objectValue?["code"]?.stringValue
                 == MCPToolErrorCode.upstreamDenied.rawValue
         )
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("declined admission blocks catalog discovery and does not re-prompt")
+    func declinedAdmissionBlocksCatalogDiscovery() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: [:],
+            error: BridgeClientError.bridgeError(
+                code: "notAuthorized",
+                message: "Access denied",
+                query: nil
+            )
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                MCPUpstreamConfig(
+                    name: "codegraph",
+                    command: "codegraph",
+                    env: ["AUTHSIA_TEST_TOOLS": "codegraph_explore"]
+                ),
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "codegraph",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+
+        let listed = try await connection.client.listTools()
+        #expect(listed.tools.isEmpty)
+        #expect(launcher.spawnCount == 0)
+        #expect(sessionClient.prepareCount == 1)
+
+        // A decline is cached, so a client that lists on every turn cannot turn
+        // discovery into an approval-prompt loop.
+        let listedAgain = try await connection.client.listTools()
+        #expect(listedAgain.tools.isEmpty)
+        #expect(sessionClient.prepareCount == 1)
+        #expect(launcher.spawnCount == 0)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("concurrent lists join one in-flight catalog discovery")
+    func concurrentListsJoinOneCatalogDiscovery() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: [:],
+            grantIDs: [UUID()],
+            delayNanoseconds: 200_000_000
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                MCPUpstreamConfig(
+                    name: "codegraph",
+                    command: "codegraph",
+                    env: ["AUTHSIA_TEST_TOOLS": "codegraph_explore"]
+                ),
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "codegraph",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+
+        async let first = connection.client.listTools()
+        async let second = connection.client.listTools()
+        let results = try await [first, second]
+
+        // The second list must wait for the in-flight probe instead of reading a
+        // cache that was published before the probe finished.
+        for result in results {
+            #expect(result.tools.map(\.name) == ["codegraph_explore"])
+        }
+        #expect(launcher.spawnCount == 1)
+        #expect(sessionClient.prepareCount == 1)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()

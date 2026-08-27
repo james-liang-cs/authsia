@@ -459,8 +459,10 @@ directory, matching the launch-context fallbacks of `mcp serve`.
 
 When the upstream environment contains `authsia://` references, the first
 permitted call uses the existing Agent JIT `exec` preflight for those items.
-The approval identifies the MCP tool and upstream on the Mac while retaining
-the existing signed remote approval contract. The proxy then resolves the
+The approval identifies the MCP tool, the upstream, and the declared child
+argv on the Mac while retaining the existing signed remote approval contract.
+The upstream name is committed repository content, so the argv is what names
+the binary the approval actually starts. The proxy then resolves the
 references, constructs a stripped child environment, starts the no-shell
 upstream in its own process group, initializes it as an outbound MCP client,
 and privately verifies its tool list. When `allow` or `approve` is set, extra
@@ -471,8 +473,12 @@ policy-advertised or discovered tool missing from the child fails closed.
 When the upstream declares no `authsia://` references, the first permitted call
 instead requests a dedicated local `mcp-admission` grant, narrowed to the same
 caller, workspace, proxy name, and MCP server-instance ID. This grant carries no
-Vault items and authorizes neither `list` nor `exec`. Declining admission means
-the long-lived child never starts. An approved credential-less child follows the same
+Vault items and authorizes neither `list` nor `exec`. Empty-policy catalog
+discovery starts the same child, so it takes the same admission grant before
+probing; the Bridge reuses that grant, so a discovered list followed by a call
+prompts once, not twice. Declining admission means no child starts, and the
+decline is cached for the proxy process so a client that lists on every turn
+cannot turn discovery into an approval-prompt loop. An approved credential-less child follows the same
 audit, liveness, process-group termination, and revoke-kill lifecycle as a
 credentialed child. Admission approval is local-Mac only and is not encoded in
 the paired-iPhone remote approval protocol.
@@ -638,14 +644,17 @@ identity hint, not executable attestation.
 
 ### First Use And Revoke
 
-Open the managed workspace. The client starts the proxy process. The upstream
-child does not start until the first permitted `tools/call`.
+Open the managed workspace. The client starts the proxy process. No upstream
+child starts until an approval covers it: the first permitted `tools/call`, or
+the first `tools/list` that has to discover an empty-policy credential-less
+catalog.
 
 - Declared `authsia://` references use the existing Agent JIT `exec` path.
   Approval may be local Mac or paired iPhone.
 - No references request a local-Mac `mcp-admission` grant with no Vault items,
   and no `list` or `exec` authority. Admission is not on paired-iPhone remote
   approval v2.
+- Both approvals name the declared child argv, not only the upstream name.
 
 Decline prevents spawn. An approved grant is reusable only by that caller,
 workspace, upstream, and MCP server instance. Access Center labels proxy

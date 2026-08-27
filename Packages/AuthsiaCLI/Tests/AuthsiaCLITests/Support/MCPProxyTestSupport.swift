@@ -207,6 +207,7 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
     private(set) var prepareCount = 0
     private(set) var contexts: [AgentRuntimeContext] = []
     private(set) var mcpUpstreamNames: [String?] = []
+    private(set) var mcpUpstreamCommands: [String?] = []
     private(set) var mcpToolNames: [String?] = []
     private(set) var mcpToolPolicies: [AgentJITMCPToolPolicy?] = []
     var environment: [String: String]
@@ -234,6 +235,7 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL,
         mcpUpstreamName: String?,
+        mcpUpstreamCommand: String?,
         mcpToolName: String?,
         mcpToolPolicy: AgentJITMCPToolPolicy?
     ) throws -> (environment: [String: String], secrets: [String], grantIDs: [UUID]) {
@@ -241,6 +243,7 @@ final class RecordingMCPProxySessionClient: MCPProxySessionClient, @unchecked Se
         prepareCount += 1
         contexts.append(agentRuntimeContext)
         mcpUpstreamNames.append(mcpUpstreamName)
+        mcpUpstreamCommands.append(mcpUpstreamCommand)
         mcpToolNames.append(mcpToolName)
         mcpToolPolicies.append(mcpToolPolicy)
         let error = self.error

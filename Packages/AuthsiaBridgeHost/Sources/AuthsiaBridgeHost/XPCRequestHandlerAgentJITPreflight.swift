@@ -356,6 +356,7 @@ extension XPCRequestHandler {
                 environmentScope: payload.environmentScope,
                 resolutions: pendingResolutions,
                 mcpUpstreamName: payload.mcpUpstreamName,
+                mcpUpstreamCommand: payload.mcpUpstreamCommand,
                 mcpToolName: payload.mcpToolName,
                 mcpToolPolicy: payload.mcpToolPolicy
             )
@@ -440,6 +441,7 @@ extension XPCRequestHandler {
                     environmentScope: payload.environmentScope,
                     resolutions: [resolution],
                     mcpUpstreamName: payload.mcpUpstreamName,
+                    mcpUpstreamCommand: payload.mcpUpstreamCommand,
                     mcpToolName: payload.mcpToolName,
                     mcpToolPolicy: payload.mcpToolPolicy
                 )
@@ -741,13 +743,18 @@ extension XPCRequestHandler {
             requestIssuedAtMilliseconds: timing.issuedAtMilliseconds,
             grantExpiresAtMilliseconds: timing.grantExpiresAtMilliseconds,
             mcpUpstreamName: upstreamName,
+            mcpUpstreamCommand: payload.mcpUpstreamCommand,
             mcpToolName: payload.mcpToolName,
             mcpToolPolicy: payload.mcpToolPolicy
         )
+        // The upstream name comes from workspace policy, which is committed
+        // repository content. Naming the argv keeps the decision about the
+        // binary rather than about a label the repository chose.
+        let commandClause = descriptor.mcpUpstreamCommand.map { " (\($0))" } ?? ""
         let outcome = await requestAgentJITApproval(
-            prompt: "Allow \(caller.displayName) to start local MCP server \(upstreamName) for workspace "
-                + "\(descriptor.workspaceLabel) for \(durationDescription(for: ttl)). Revoking this admission "
-                + "stops the wrapped server.",
+            prompt: "Allow \(caller.displayName) to start local MCP server \(upstreamName)\(commandClause) "
+                + "for workspace \(descriptor.workspaceLabel) for \(durationDescription(for: ttl)). "
+                + "Revoking this admission stops the wrapped server.",
             command: .agentJITPreflight,
             itemLabel: upstreamName,
             field: nil,
@@ -957,6 +964,7 @@ extension XPCRequestHandler {
         environmentScope: EnvironmentAccessScope?,
         resolutions: [AgentJITScopeResolution],
         mcpUpstreamName: String? = nil,
+        mcpUpstreamCommand: String? = nil,
         mcpToolName: String? = nil,
         mcpToolPolicy: AgentJITMCPToolPolicy? = nil
     ) -> [AgentJITApprovalDescriptor] {
@@ -970,6 +978,7 @@ extension XPCRequestHandler {
                 requestIssuedAtMilliseconds: timing.issuedAtMilliseconds,
                 grantExpiresAtMilliseconds: timing.grantExpiresAtMilliseconds,
                 mcpUpstreamName: mcpUpstreamName,
+                mcpUpstreamCommand: mcpUpstreamCommand,
                 mcpToolName: mcpToolName,
                 mcpToolPolicy: mcpToolPolicy
             )

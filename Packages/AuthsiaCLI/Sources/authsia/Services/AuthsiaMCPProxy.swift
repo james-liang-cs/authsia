@@ -30,7 +30,7 @@ actor AuthsiaMCPProxy {
     private var grantWatchTask: Task<Void, Never>?
     private var isStopped = false
     private var discoveredChildTools: [Tool]?
-    private var didAttemptCatalogDiscovery = false
+    private var discoveryTask: Task<[Tool]?, Never>?
 
     init(
         version: String,
@@ -305,6 +305,7 @@ actor AuthsiaMCPProxy {
         let declaredEnv = upstream.env
         let sessionClient = self.sessionClient
         let upstreamName = self.upstreamName
+        let commandLabel = Self.commandLabel(for: upstream)
         let mcpToolPolicy: AgentJITMCPToolPolicy?
         if upstream.tools.approve.contains(toolName) {
             mcpToolPolicy = .approve
@@ -319,6 +320,7 @@ actor AuthsiaMCPProxy {
                 agentRuntimeContext: agentRuntimeContext,
                 workspaceRoot: workspaceRoot,
                 mcpUpstreamName: upstreamName,
+                mcpUpstreamCommand: commandLabel,
                 mcpToolName: toolName,
                 mcpToolPolicy: mcpToolPolicy
             )
@@ -529,19 +531,45 @@ actor AuthsiaMCPProxy {
     }
 
     private func discoveredTools(for upstream: MCPUpstreamConfig) async -> [Tool] {
-        if didAttemptCatalogDiscovery {
-            return discoveredChildTools ?? []
+        if let discoveredChildTools {
+            return discoveredChildTools
         }
-        didAttemptCatalogDiscovery = true
-        let tools = await probeChildCatalog(upstream)
-        discoveredChildTools = tools
-        return tools
+        // Probing suspends, so a concurrent list or call must join the in-flight
+        // probe. Publishing the cache before it finished would answer those with
+        // an empty catalog and fail their calls as policy-denied.
+        if let discoveryTask {
+            return await discoveryTask.value ?? []
+        }
+        let task = Task { await self.probeChildCatalog(upstream) }
+        discoveryTask = task
+        let discovered = await task.value
+        discoveryTask = nil
+        // A transient probe failure caches nothing so a later list retries. A
+        // declined admission and a genuinely empty child both cache.
+        if let discovered {
+            discoveredChildTools = discovered
+        }
+        return discovered ?? []
     }
 
-    private func probeChildCatalog(_ upstream: MCPUpstreamConfig) async -> [Tool] {
-        guard !isStopped, let workspaceRoot = runtimeContext.workspaceRoot else { return [] }
+    private func probeChildCatalog(_ upstream: MCPUpstreamConfig) async -> [Tool]? {
+        guard !isStopped, let workspaceRoot = runtimeContext.workspaceRoot else { return nil }
         let command = upstream.command?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !command.isEmpty else { return [] }
+        // Discovery starts the declared child, so it takes the same admission
+        // grant the long-lived spawn takes. The Bridge reuses that grant for
+        // this caller, workspace, upstream, and server instance, so the first
+        // tools/call after a discovered list does not prompt a second time.
+        do {
+            try await admitCatalogDiscovery(upstream: upstream, workspaceRoot: workspaceRoot)
+        } catch {
+            // A denial is a decision, not a transient fault: cache it so a
+            // client that lists repeatedly cannot re-prompt on every list.
+            let denied = BridgeClientError.isApprovalDenied(error)
+                || error is MCPProxySpawnError
+            return denied ? [] : nil
+        }
+        guard !isStopped else { return nil }
         let childEnvironment = MCPProxyChildEnvironment.make(
             parent: parentEnvironment,
             declared: upstream.env
@@ -561,7 +589,7 @@ actor AuthsiaMCPProxy {
                 currentDirectory: workspaceRoot
             )
         } catch {
-            return []
+            return nil
         }
         MCPProxyStderrDrain.start(
             fileDescriptor: spawned.stderrRead,
@@ -585,7 +613,7 @@ actor AuthsiaMCPProxy {
                 stdinWrite: spawned.stdinWrite,
                 stdoutRead: spawned.stdoutRead
             )
-            return []
+            return nil
         }
         let transport = StdioTransport(
             input: FileDescriptor(rawValue: spawned.stdoutRead),
@@ -611,8 +639,48 @@ actor AuthsiaMCPProxy {
                 stdinWrite: spawned.stdinWrite,
                 stdoutRead: spawned.stdoutRead
             )
-            return []
+            return nil
         }
+    }
+
+    /// Takes the local `mcp-admission` grant that authorizes starting the
+    /// declared child. Discovery only runs for upstreams with no `authsia://`
+    /// references, so this never resolves a secret.
+    private func admitCatalogDiscovery(
+        upstream: MCPUpstreamConfig,
+        workspaceRoot: URL
+    ) async throws {
+        let agentRuntimeContext = await runtimeContext.makeProxyAgentRuntimeContext(
+            upstreamName: upstreamName,
+            invocationID: UUID()
+        )
+        let sessionClient = self.sessionClient
+        let upstreamName = self.upstreamName
+        let commandLabel = Self.commandLabel(for: upstream)
+        let prepared = try await Task.detached {
+            try sessionClient.prepareChildEnvironment(
+                declared: [:],
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot,
+                mcpUpstreamName: upstreamName,
+                mcpUpstreamCommand: commandLabel,
+                mcpToolName: nil,
+                mcpToolPolicy: nil
+            )
+        }.value
+        guard !prepared.grantIDs.isEmpty else {
+            throw MCPProxySpawnError.grantUnavailable
+        }
+    }
+
+    /// The argv the admission prompt shows. Policy names the child, but the
+    /// name is repo-supplied, so the human needs the binary it resolves to.
+    private static func commandLabel(for upstream: MCPUpstreamConfig) -> String? {
+        guard let command = upstream.command?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !command.isEmpty else {
+            return nil
+        }
+        return ([command] + upstream.args).joined(separator: " ")
     }
 
     private func stdioUpstream() -> MCPUpstreamConfig? {
