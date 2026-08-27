@@ -563,9 +563,6 @@ enum WorkspaceConfigStore {
     private static let maxArgCount = 64
     private static let maxArgBytes = 32 * 1_024
     private static let maxToolNameLength = 128
-    private static let shellExecutableNames: Set<String> = [
-        "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "sh", "tcsh", "zsh",
-    ]
 
     static func isValidMCPUpstreamName(_ name: String) -> Bool {
         let range = NSRange(name.startIndex..<name.endIndex, in: name)
@@ -614,7 +611,7 @@ enum WorkspaceConfigStore {
             || !command.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
             throw WorkspaceConfigError.invalidMCPUpstreamCommand(command)
         }
-        if containsShellCommandString([command] + args) {
+        if MCPUpstreamCommandRules.containsShellCommandString([command] + args) {
             throw WorkspaceConfigError.invalidMCPUpstreamCommand(command)
         }
     }
@@ -721,42 +718,6 @@ enum WorkspaceConfigStore {
         case .number, .bool, .null:
             return false
         }
-    }
-
-    private static func containsShellCommandString(_ argv: [String]) -> Bool {
-        guard let first = argv.first else { return false }
-        let executable = URL(fileURLWithPath: first).lastPathComponent.lowercased()
-        if shellExecutableNames.contains(executable) {
-            return containsCommandStringOption(argv.dropFirst())
-        }
-        guard executable == "env" else { return false }
-        if argv.dropFirst().contains(where: {
-            $0 == "-S" || $0 == "--split-string" || $0.hasPrefix("--split-string=")
-        }) {
-            return true
-        }
-        guard let shellIndex = argv.indices.dropFirst().first(where: {
-            shellExecutableNames.contains(
-                URL(fileURLWithPath: argv[$0]).lastPathComponent.lowercased()
-            )
-        }) else {
-            return false
-        }
-        return containsCommandStringOption(argv[argv.index(after: shellIndex)...])
-    }
-
-    private static func containsCommandStringOption<S: Sequence>(_ arguments: S) -> Bool
-    where S.Element == String {
-        for argument in arguments {
-            if argument == "--" { return false }
-            if argument == "-c" || argument == "--command" { return true }
-            if argument.hasPrefix("-"),
-               !argument.hasPrefix("--"),
-               argument.dropFirst().contains("c") {
-                return true
-            }
-        }
-        return false
     }
 }
 

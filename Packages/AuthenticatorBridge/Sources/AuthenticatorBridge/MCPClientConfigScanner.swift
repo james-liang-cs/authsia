@@ -264,10 +264,6 @@ public struct MCPClientConfigScanner {
         )
     }
 
-    private static let shellExecutableNames: Set<String> = [
-        "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "sh", "tcsh", "zsh",
-    ]
-
     private static func wrapTarget(
         name: String,
         command: String,
@@ -304,8 +300,12 @@ public struct MCPClientConfigScanner {
                 return nil
             }
         }
-        let executable = URL(fileURLWithPath: trimmed).lastPathComponent.lowercased()
-        if shellExecutableNames.contains(executable) {
+        // Must match what WorkspaceConfigStore will accept when it reads the
+        // declared entry back, or declaring writes a config that no longer
+        // loads.
+        if MCPUpstreamCommandRules.shellExecutableNames.contains(
+            URL(fileURLWithPath: trimmed).lastPathComponent.lowercased()
+        ) || MCPUpstreamCommandRules.containsShellCommandString([trimmed] + arguments) {
             return nil
         }
         return (trimmed, arguments)

