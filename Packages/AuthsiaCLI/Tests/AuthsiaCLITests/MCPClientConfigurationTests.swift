@@ -77,7 +77,9 @@ struct MCPClientConfigurationTests {
             executableURL: fixture.binary,
             upstreamNames: ["jira"]
         )
-        #expect(claude.contains("claude mcp add --scope user --env AUTHSIA_MCP_UPSTREAM=jira jira --"))
+        // The name precedes the variadic `--env`; the other order makes
+        // `claude mcp add` read the server name as another KEY=value.
+        #expect(claude.contains("claude mcp add --scope user jira --env AUTHSIA_MCP_UPSTREAM=jira --"))
         #expect(claude.contains("\"jira\""))
         #expect(claude.contains("\"AUTHSIA_MCP_UPSTREAM\""))
 

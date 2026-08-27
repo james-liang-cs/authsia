@@ -175,7 +175,10 @@ public enum MCPLocalMCPWrapRecipe {
         authsiaCommand: String,
         environment: [String: String]
     ) -> String {
-        "claude mcp add --scope user\(envFlags(environment)) \(name) -- \(shellQuoted(authsiaCommand)) "
+        // `claude mcp add` declares `-e, --env <env...>` as variadic, so the
+        // server name has to come before it or the parser collects the name as
+        // another KEY=value.
+        "claude mcp add --scope user \(name)\(envFlags(environment)) -- \(shellQuoted(authsiaCommand)) "
             + MCPProxyClientLaunch.arguments.joined(separator: " ")
     }
 

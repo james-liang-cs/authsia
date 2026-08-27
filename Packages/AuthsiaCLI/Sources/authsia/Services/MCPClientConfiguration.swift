@@ -159,7 +159,9 @@ enum MCPClientConfiguration {
                 warning: warning + hint
             )
             let direct = servers.map { server in
-                "claude mcp add --scope user\(envFlags(server.environment)) \(server.name) -- \(shellQuoted(binaryPath)) " +
+                // `-e, --env <env...>` is variadic, so the server name must
+                // precede it or `claude mcp add` reads the name as a KEY=value.
+                "claude mcp add --scope user \(server.name)\(envFlags(server.environment)) -- \(shellQuoted(binaryPath)) " +
                     server.arguments.joined(separator: " ")
             }.joined(separator: "\n")
             return """

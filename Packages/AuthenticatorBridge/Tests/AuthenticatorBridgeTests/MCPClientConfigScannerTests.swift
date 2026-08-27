@@ -180,6 +180,10 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertTrue(text?.contains("Replace the Codex playwright entry in ~/.codex/config.toml.") == true)
         XCTAssertTrue(text?.contains("Open ~/.codex/config.toml") == true)
         XCTAssertTrue(text?.contains("codex mcp add playwright --env AUTHSIA_MCP_UPSTREAM=playwright --") == true)
+        // `-e, --env <env...>` is variadic in both CLIs, so a recipe that puts
+        // the server name after the env flags makes the client read the name as
+        // another KEY=value and reject the command.
+        XCTAssertFalse(text?.contains("--env AUTHSIA_MCP_UPSTREAM=playwright playwright") == true)
         XCTAssertTrue(text?.contains("[mcp_servers.playwright]") == true)
         XCTAssertTrue(text?.contains("args = [\"mcp\", \"proxy\"]") == true)
         XCTAssertTrue(text?.contains("AUTHSIA_MCP_UPSTREAM = \"playwright\"") == true)
@@ -189,6 +193,27 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertFalse(text?.contains("--upstream") == true)
         XCTAssertTrue(text?.contains("does not edit the client file") == true)
         XCTAssertFalse(text?.contains("TOKEN") == true)
+
+        let claudeFinding = MCPClientServerFinding(
+            source: .claude,
+            serverName: "codegraph",
+            commandLabel: "codegraph",
+            status: .unadmitted,
+            declaredUpstreamName: nil,
+            configPathLabel: "~/.claude.json",
+            wrapCommand: "codegraph",
+            wrapArguments: ["serve", "--mcp"],
+            isWrapEligible: true
+        )
+        let claudeText = MCPLocalMCPWrapRecipe.clipboardText(
+            for: claudeFinding,
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
+        )
+        XCTAssertTrue(
+            claudeText?.contains(
+                "claude mcp add --scope user codegraph --env AUTHSIA_MCP_UPSTREAM=codegraph -- "
+            ) == true
+        )
 
         let afterDeclare = MCPLocalMCPWrapRecipe.clipboardText(
             for: finding,
