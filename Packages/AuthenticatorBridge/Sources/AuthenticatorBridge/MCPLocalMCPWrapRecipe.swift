@@ -175,10 +175,13 @@ public enum MCPLocalMCPWrapRecipe {
         authsiaCommand: String,
         environment: [String: String]
     ) -> String {
-        // `claude mcp add` declares `-e, --env <env...>` as variadic, so the
-        // server name has to come before it or the parser collects the name as
-        // another KEY=value.
-        "claude mcp add --scope user \(name)\(envFlags(environment)) -- \(shellQuoted(authsiaCommand)) "
+        // This recipe always replaces an entry the scan just found, and
+        // `claude mcp add` refuses a name that already exists, so the remove
+        // comes first. `claude mcp add` also declares `-e, --env <env...>` as
+        // variadic, so the server name has to precede it or the parser collects
+        // the name as another KEY=value.
+        "claude mcp remove --scope user \(name)\n"
+            + "claude mcp add --scope user \(name)\(envFlags(environment)) -- \(shellQuoted(authsiaCommand)) "
             + MCPProxyClientLaunch.arguments.joined(separator: " ")
     }
 

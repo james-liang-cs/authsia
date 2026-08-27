@@ -209,9 +209,12 @@ final class MCPClientConfigScannerTests: XCTestCase {
             for: claudeFinding,
             authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
         )
+        // The recipe replaces an entry the scan found, and `claude mcp add`
+        // refuses an existing name, so the remove has to lead.
         XCTAssertTrue(
             claudeText?.contains(
-                "claude mcp add --scope user codegraph --env AUTHSIA_MCP_UPSTREAM=codegraph -- "
+                "claude mcp remove --scope user codegraph\n"
+                    + "claude mcp add --scope user codegraph --env AUTHSIA_MCP_UPSTREAM=codegraph -- "
             ) == true
         )
 

@@ -168,6 +168,10 @@ enum MCPClientConfiguration {
             Configure directly:
             \(direct)
 
+            Claude Code refuses a name that already exists. To replace a server
+            you launch directly today, run `claude mcp remove --scope user <name>`
+            first.
+
             \(configuration)
             """
         case .cursor:
