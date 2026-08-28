@@ -135,6 +135,13 @@ final class MCPClientConfigScannerTests: XCTestCase {
             "/Users/example/.config/devin/mcp_config.json",
             "/Users/example/Library/Application Support/Code/User/mcp.json",
         ])
+        XCTAssertEqual(locations.map(\.displayPath), [
+            "~/.codex/config.toml",
+            "~/.claude.json",
+            "~/.cursor/mcp.json",
+            "~/.config/devin/mcp_config.json",
+            "~/Library/Application Support/Code/User/mcp.json",
+        ])
         XCTAssertTrue(locations.allSatisfy { $0.scope == .userGlobal })
         XCTAssertTrue(locations.allSatisfy { $0.workspaceRoot == nil })
     }
@@ -396,6 +403,28 @@ final class MCPClientConfigScannerTests: XCTestCase {
 
         XCTAssertEqual(locations.count, 3)
         XCTAssertEqual(locations.first?.displayPath, "/srv/repo/.mcp.json")
+    }
+
+    func testFindingPreservesExactLongConfigPath() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let config = root.appendingPathComponent("mcp.json")
+        try writeJSON([
+            "mcpServers": ["filesystem": ["command": "npx"]],
+        ], to: config)
+        let exactPath = "/" + String(repeating: "long-path/", count: 40) + "mcp.json"
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: [MCPClientConfigLocation(
+                source: .cursor,
+                fileURL: config,
+                displayPath: exactPath
+            )]
+        )
+
+        XCTAssertEqual(findings.first?.configPathLabel, exactPath)
     }
 
     func testProjectScopedDirectLaunchIsReportedBesideWrappedUserGlobalEntry() throws {

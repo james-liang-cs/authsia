@@ -138,7 +138,7 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
             Self(
                 source: .vscode,
                 fileURL: homeDirectory.appendingPathComponent("Library/Application Support/Code/User/mcp.json"),
-                displayPath: "VS Code user mcp.json"
+                displayPath: "~/Library/Application Support/Code/User/mcp.json"
             ),
         ]
     }
@@ -399,10 +399,7 @@ public struct MCPClientConfigScanner {
     ) -> MCPClientServerFinding? {
         guard let serverName = Self.safeLabel(entry.name, maximumLength: 128),
               let commandLabel = Self.commandLabel(entry.command),
-              let configPathLabel = Self.safeLabel(
-                entry.location.displayPath,
-                maximumLength: 256
-              ) else {
+              let configPathLabel = Self.safeExactPath(entry.location.displayPath) else {
             return nil
         }
         let executableName = URL(fileURLWithPath: entry.command).lastPathComponent
@@ -661,6 +658,14 @@ public struct MCPClientConfigScanner {
             return nil
         }
         return String(trimmed.prefix(maximumLength))
+    }
+
+    private static func safeExactPath(_ value: String) -> String? {
+        guard !value.isEmpty,
+              value.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+            return nil
+        }
+        return value
     }
 
     private struct ObservedServer {

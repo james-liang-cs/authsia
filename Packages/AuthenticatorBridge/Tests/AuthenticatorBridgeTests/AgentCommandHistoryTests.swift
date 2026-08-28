@@ -1533,6 +1533,39 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(toRecord.map(\.id), [restartedSameCommand.id, newCommand.id])
     }
 
+    func testUnrecordedProcessEventsDoNotDeduplicateWithoutStableProcessIdentity() {
+        let grantID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let stored = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 10),
+            agentPlatform: "codex",
+            agentJITGrantID: grantID,
+            captureSource: .process,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "git",
+            arguments: ["git", "status"],
+            command: "git status"
+        )
+        let live = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 40),
+            agentPlatform: "codex",
+            agentJITGrantID: grantID,
+            captureSource: .process,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "git",
+            arguments: ["git", "status"],
+            command: "git status"
+        )
+
+        let toRecord = AgentCommandHistoryQuery.unrecordedProcessEvents(
+            from: [live],
+            alreadyStored: [stored]
+        )
+
+        XCTAssertEqual(toRecord.map(\.id), [live.id])
+    }
+
     func testProcessMonitorLabelsVSCodeCopilotExtensionAncestryAsCopilot() {
         let grantID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
         let grant = AgentJITGrant(

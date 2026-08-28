@@ -508,12 +508,12 @@ private extension AgentCommandEvent {
             guard let platform = agentPlatform, let toolUseID else { return nil }
             return [platform, sessionID ?? "", toolUseID, command].joined(separator: "\u{1f}")
         case .process:
-            guard let terminalSessionScope else { return nil }
+            guard let terminalSessionScope, let processIdentifier else { return nil }
             return [
                 "process",
                 agentJITGrantID?.uuidString ?? "",
                 terminalSessionScope,
-                processIdentifier ?? "",
+                processIdentifier,
                 workingDirectory ?? "",
                 executable ?? "",
                 command,
