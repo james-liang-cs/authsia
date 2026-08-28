@@ -252,8 +252,8 @@ struct MCPProxyLifecycleTests {
         await fixture.proxy.waitUntilCompleted()
     }
 
-    @Test("empty credential-less policy discovers child tools on list after admission")
-    func emptyPolicyDiscoversChildCatalogAfterAdmission() async throws {
+    @Test("empty credential-less policy discovers child tools on list without admission")
+    func emptyPolicyDiscoversChildCatalogWithoutAdmission() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
         try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
@@ -294,18 +294,14 @@ struct MCPProxyLifecycleTests {
         let listed = try await connection.client.listTools()
         #expect(listed.tools.map(\.name) == ["codegraph_explore", "extra_tool"])
         #expect(!listed.tools.map(\.name).contains("hidden_tool"))
-        // Discovery starts the child, so it takes admission first, with no tool
-        // name because no tool has been called yet.
-        #expect(sessionClient.prepareCount == 1)
-        #expect(sessionClient.mcpToolNames == [nil])
-        #expect(sessionClient.mcpUpstreamNames == ["codegraph"])
-        // The approval has to name the binary, not just the policy label.
-        #expect(sessionClient.mcpUpstreamCommands == ["codegraph serve --mcp"])
+        // Listing probes the child without admission so an IDE open does not
+        // prompt. The probe is killed after listTools.
+        #expect(sessionClient.prepareCount == 0)
         #expect(launcher.spawnCount == 1)
 
         let listedAgain = try await connection.client.listTools()
         #expect(listedAgain.tools.map(\.name) == ["codegraph_explore", "extra_tool"])
-        #expect(sessionClient.prepareCount == 1)
+        #expect(sessionClient.prepareCount == 0)
         #expect(launcher.spawnCount == 1)
 
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -313,10 +309,12 @@ struct MCPProxyLifecycleTests {
         )
         let result = try await call.value
         #expect(result.isError != true)
-        // The Bridge reuses the admission grant for this caller, workspace,
-        // upstream, and instance, so this preflight does not prompt again.
-        #expect(sessionClient.prepareCount == 2)
-        #expect(sessionClient.mcpToolNames == [nil, "codegraph_explore"])
+        // The long-lived child is what takes mcp-admission, named by the
+        // invoked tool and the declared argv.
+        #expect(sessionClient.prepareCount == 1)
+        #expect(sessionClient.mcpToolNames == ["codegraph_explore"])
+        #expect(sessionClient.mcpUpstreamNames == ["codegraph"])
+        #expect(sessionClient.mcpUpstreamCommands == ["codegraph serve --mcp"])
         #expect(launcher.spawnCount == 2)
 
         let denied: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -333,8 +331,8 @@ struct MCPProxyLifecycleTests {
         await proxy.waitUntilCompleted()
     }
 
-    @Test("declined admission blocks catalog discovery and does not re-prompt")
-    func declinedAdmissionBlocksCatalogDiscovery() async throws {
+    @Test("declined admission blocks the long-lived spawn, not catalog listing")
+    func declinedAdmissionBlocksLongLivedSpawnNotCatalogList() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
         try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
@@ -372,16 +370,24 @@ struct MCPProxyLifecycleTests {
         let connection = try await connectMCPProxy(proxy, clientName: "Codex")
 
         let listed = try await connection.client.listTools()
-        #expect(listed.tools.isEmpty)
-        #expect(launcher.spawnCount == 0)
-        #expect(sessionClient.prepareCount == 1)
+        #expect(listed.tools.map(\.name) == ["codegraph_explore"])
+        #expect(launcher.spawnCount == 1)
+        #expect(sessionClient.prepareCount == 0)
 
-        // A decline is cached, so a client that lists on every turn cannot turn
-        // discovery into an approval-prompt loop.
-        let listedAgain = try await connection.client.listTools()
-        #expect(listedAgain.tools.isEmpty)
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "codegraph_explore"
+        )
+        let result = try await call.value
+        #expect(result.isError == true)
         #expect(sessionClient.prepareCount == 1)
-        #expect(launcher.spawnCount == 0)
+        #expect(launcher.spawnCount == 1)
+
+        // Listing still does not prompt, so an IDE that lists every turn cannot
+        // turn discovery into an approval loop.
+        let listedAgain = try await connection.client.listTools()
+        #expect(listedAgain.tools.map(\.name) == ["codegraph_explore"])
+        #expect(sessionClient.prepareCount == 1)
+        #expect(launcher.spawnCount == 1)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
@@ -432,7 +438,7 @@ struct MCPProxyLifecycleTests {
             #expect(result.tools.map(\.name) == ["codegraph_explore"])
         }
         #expect(launcher.spawnCount == 1)
-        #expect(sessionClient.prepareCount == 1)
+        #expect(sessionClient.prepareCount == 0)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()

@@ -87,8 +87,11 @@ parity, executable attestation, or DLP.
                                             Authsia mcp proxy +
                                             AUTHSIA_MCP_UPSTREAM=<name>
                                          4. Open the managed workspace
-                                         5. Approve the Mac prompt
-                                            (tool, upstream, child argv)
+                                            (tools/list may probe without
+                                            a prompt)
+                                         5. On the first tools/call, approve
+                                            the Mac prompt (tool, upstream,
+                                            child argv)
                                          6. Use the child's tools
                                          7. Revoke in Access Center when done
 ```
@@ -112,8 +115,10 @@ parity, executable attestation, or DLP.
    <codex|claude|cursor|devin|vscode>`, or copy the Access Center wrap recipe.
 5. Replace the direct launch in the named user-global client file. Authsia
    never edits that file.
-6. Open the managed workspace. The client starts the proxy. No upstream child
-   starts until an approval covers it.
+6. Open the managed workspace. The client starts the proxy. Empty-policy
+   `tools/list` may run a short-lived credential-less probe with no prompt.
+   The long-lived child starts only after the first permitted `tools/call`
+   is approved.
 
 Access Center **Copy wrap recipe** pastes a client-native replacement for the
 scanned file. After Declare, that copy is only the client-launch replacement,
@@ -169,8 +174,10 @@ write `mcpUpstreams`.
   `allow` or `approve` is set, `tools/list` comes from this policy without
   starting the child. When both are omitted on a credential-less stdio entry,
   Authsia discovers the child's tool names and sanitized schemas on first
-  `tools/list` behind the same admission grant, then subtracts `deny`.
-  Secret-bearing env still requires explicit `allow`/`approve`.
+  `tools/list` with a short-lived probe that does not take admission, then
+  subtracts `deny`. The long-lived child still requires local `mcp-admission`
+  on the first permitted `tools/call`. Secret-bearing env still requires
+  explicit `allow`/`approve`.
 - Do not store live credentials, tokens, private endpoints, or
   machine-specific paths. HTTP, SSE, Streamable HTTP, and `url` entries decode
   for forward compatibility but are not executable in V1.
@@ -279,7 +286,9 @@ launch the client, add credentials, or use a shell wrapper.
        +-- missing / HTTP / secrets without allow|approve
        |     -> fail closed, no child
        |
-       +-- credential-less stdio  -----> mcp-admission (local Mac)
+       +-- credential-less stdio  -----> mcp-admission on first
+                                         permitted tools/call
+                                         (local Mac)
        |
        +-- authsia:// env  ------------> Agent JIT exec
                                          (Mac or paired iPhone)
@@ -316,27 +325,26 @@ fails closed.
        |     YES: answer from workspace.json (never start child)
        |
        +-- empty policy, credential-less stdio?
-             YES: mcp-admission, then short-lived probe
-                  spawn, listTools, kill, cache names minus deny
-             decline: cache empty catalog for this proxy process
-                      (no re-prompt loop)
+             YES: short-lived probe spawn, listTools, kill,
+                  cache names minus deny (no admission)
              transient probe failure: cache nothing; later list retries
 ```
 
-Discovery starts the declared child, so it takes the same local `mcp-admission`
-grant the long-lived spawn takes. The Bridge reuses that grant for the caller,
-workspace, upstream, and MCP server instance, so a discovered list followed by
-a call prompts once, not twice. Concurrent list or call joins an in-flight
-probe instead of publishing an empty catalog.
+Discovery starts a short-lived declared child so the client can see tool names
+when the workspace opens. That probe does not take `mcp-admission`. The
+long-lived spawn still takes that grant on the first permitted `tools/call`.
+Concurrent list or call joins an in-flight probe instead of publishing an empty
+catalog.
 
 Secret-bearing env (`authsia://`) never discovers a catalog. Listing must not
 resolve references. Those upstreams still require explicit `allow`/`approve`.
 
 ## Approval And Grants
 
-No upstream child starts until an approval covers it: the first permitted
-`tools/call`, or the first `tools/list` that has to discover an empty-policy
-credential-less catalog.
+No long-lived upstream child starts until an approval covers it: the first
+permitted `tools/call`. Empty-policy `tools/list` may start a short-lived
+credential-less probe without admission so the client can advertise tool names
+when the workspace opens. That probe is killed after `listTools`.
 
 - Declared `authsia://` references use the existing Agent JIT `exec` path.
   Approval may be local Mac or paired iPhone.
@@ -346,27 +354,31 @@ credential-less catalog.
 - Both approvals name the declared child argv, not only the upstream name. The
   upstream name is committed repository content; the argv is what the approval
   actually starts.
+- A denied or missing admission grant prevents the long-lived spawn. Listing
+  still advertises a credential-less discovered catalog so the client does not
+  re-prompt on every `tools/list`.
 
 ```text
   client          proxy                         Bridge / Access Center
     |               |                                  |
     | initialize    |  (child not started)             |
     | tools/list    |                                  |
-    |-------------->|  policy catalog or admit+probe   |
+    |-------------->|  policy catalog or list-only     |
+    |               |  credential-less probe (no admit)|
+    | tools/call    |                                  |
+    |-------------->|  mcp-admission / exec JIT        |
     |               |--------------------------------->|
     |               |              Mac prompt:         |
     |               |              MCP tool, upstream, |
     |               |              child argv          |
     |               |<----- grant / decline -----------|
-    | tools/call    |                                  |
-    |-------------->|  reuse SAME grant                |
     |               |  long-lived child, forward call  |
     |               |  redact tool name to activity    |
     | Access Center revoke ----------------------------|
     |               |  kill process group (up to 5s)   |
 ```
 
-Decline prevents spawn. An approved grant is reusable only by that caller,
+Decline prevents the long-lived spawn. An approved grant is reusable only by that caller,
 workspace, upstream, and MCP server instance. A preflight that authorizes the
 call without issuing an owned grant returns `grantUnavailable` before any
 reference is resolved and before the child starts, because a child that no
@@ -458,7 +470,7 @@ grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call
 **MCP tool called** and shows the child basename plus the tool name. Direct
 and unadmitted client launches produce no call events.
 
-`tools/list`, including the admission discovery probe, is not per-tool command
+`tools/list`, including the credential-less discovery probe, is not per-tool command
 activity. File, network, and Process Tree tabs remain the existing
 Authsia-mediated exec stores; they are not a transcript of a generic MCP child.
 
@@ -499,8 +511,8 @@ Shared codes such as `mcpAccessDisabled`, `approvalDenied`, and
 
 | Threat | Required control |
 | --- | --- |
-| Proxy policy is mistaken for live upstream authority | Derive `tools/list` from commit-safe policy when `allow` or `approve` is set. When both are empty on a credential-less stdio upstream, take admission before a bounded discovery probe, then reject deny and unknown tools before the long-lived spawn, and privately verify advertised names after child initialization. |
-| Empty-policy `tools/list` starts a child with no prompt | Discovery uses the same `mcp-admission` grant as the long-lived spawn. Decline is cached for this proxy process so a client that lists every turn cannot re-prompt. |
+| Proxy policy is mistaken for live upstream authority | Derive `tools/list` from commit-safe policy when `allow` or `approve` is set. When both are empty on a credential-less stdio upstream, run a bounded listing probe without admission, then reject deny and unknown tools before the long-lived spawn, and privately verify advertised names after child initialization. |
+| Empty-policy `tools/list` starts a child with no prompt | The listing probe is credential-less, short-lived, and killed after `listTools`. It never resolves `authsia://` refs. The long-lived child still requires `mcp-admission` on the first `tools/call`. |
 | Upstream receives ambient credentials or Authsia runtime markers | Build a stripped environment, add only declared literals and freshly resolved refs, and omit `AUTHSIA_AGENT_*` and automation authority from the child. |
 | Injected values leak through proxied JSON-RPC | Parse and mask JSON string values in both directions; never patch raw frames or store them in audit or diagnostics. |
 | Revocation leaves a long-lived upstream authorized | Associate the child with exact owned grant IDs, recheck on every call and periodically, and terminate the complete process group when association fails. |
@@ -518,10 +530,10 @@ operating-system-wide DLP.
 Implementation is not complete until automated tests prove:
 
 - proxy catalog listing with `allow` or `approve` does not JIT or spawn;
-- empty-policy credential-less `tools/list` takes admission before probing, and
-  a later call reuses that grant;
-- a declined discovery admission is cached for the process; a transient probe
-  failure is not;
+- empty-policy credential-less `tools/list` probes without admission, and
+  the first permitted `tools/call` takes `mcp-admission`;
+- a declined call admission does not empty the listed catalog or re-prompt
+  `tools/list`; a transient probe failure is not cached;
 - denied tools fail before JIT, and missing/unbound/HTTP declarations return
   their stable errors;
 - a permitted proxy call starts one no-shell child with only declared
