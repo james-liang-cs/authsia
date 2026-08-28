@@ -37,21 +37,28 @@ enum MCPProxyCatalog {
         return names
     }
 
-    static func listedTools(fromChild tools: [Tool], deny: [String]) -> [Tool] {
-        let denied = Set(deny)
+    /// Sanitizes and caps what a child advertised. `deny` is not applied here:
+    /// the result is cached for the proxy session, and policy may add a deny
+    /// after the probe, so `subtractingDeny` runs on every read instead.
+    static func listedTools(fromChild tools: [Tool]) -> [Tool] {
         var seen = Set<String>()
         var advertised: [Tool] = []
         advertised.reserveCapacity(min(tools.count, maximumDiscoveredToolCount))
         for tool in tools {
             guard advertised.count < maximumDiscoveredToolCount else { break }
             guard isAdvertisableToolName(tool.name),
-                  !denied.contains(tool.name),
                   seen.insert(tool.name).inserted else {
                 continue
             }
             advertised.append(advertisedChildTool(tool))
         }
         return advertised
+    }
+
+    static func subtractingDeny(_ tools: [Tool], deny: [String]) -> [Tool] {
+        guard !deny.isEmpty else { return tools }
+        let denied = Set(deny)
+        return tools.filter { !denied.contains($0.name) }
     }
 
     private static func advertisedChildTool(_ tool: Tool) -> Tool {

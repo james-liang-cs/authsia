@@ -18,6 +18,7 @@ actor AuthsiaMCPProxy {
     private let childLauncher: any MCPProxyChildLaunching
     private let parentEnvironment: [String: String]
     private let initializeTimeoutSeconds: Double
+    private let callTimeoutSeconds: Double
     private let killGraceSeconds: Double
     private let grantPollIntervalSeconds: Double
     private let grantService: MCPGrantService
@@ -29,6 +30,7 @@ actor AuthsiaMCPProxy {
     private var inFlight: InFlightSpawn?
     private var grantWatchTask: Task<Void, Never>?
     private var isStopped = false
+    /// What the child advertised, sanitized and capped, before `deny`.
     private var discoveredChildTools: [Tool]?
     private var discoveryTask: Task<[Tool]?, Never>?
 
@@ -41,6 +43,7 @@ actor AuthsiaMCPProxy {
         childLauncher: (any MCPProxyChildLaunching)? = nil,
         parentEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         initializeTimeoutSeconds: Double = 30,
+        callTimeoutSeconds: Double = 120,
         killGraceSeconds: Double = 2,
         grantPollIntervalSeconds: Double = 2,
         grantService: MCPGrantService? = nil,
@@ -63,6 +66,7 @@ actor AuthsiaMCPProxy {
         self.childLauncher = childLauncher ?? MCPProxyPosixLauncher()
         self.parentEnvironment = parentEnvironment
         self.initializeTimeoutSeconds = initializeTimeoutSeconds
+        self.callTimeoutSeconds = callTimeoutSeconds
         self.killGraceSeconds = killGraceSeconds
         self.grantPollIntervalSeconds = grantPollIntervalSeconds
         self.grantService = grantService ?? MCPGrantService(
@@ -210,6 +214,11 @@ actor AuthsiaMCPProxy {
                     code: .upstreamUnavailable,
                     message: "The upstream MCP server could not be started."
                 )
+            } catch is MCPProxyCallError {
+                return try Self.errorResult(
+                    code: .timedOut,
+                    message: "The upstream MCP server did not answer this tool call in time."
+                )
             } catch is CancellationError {
                 return try Self.errorResult(
                     code: .cancelled,
@@ -234,8 +243,23 @@ actor AuthsiaMCPProxy {
             name: maskedParameters.name,
             arguments: maskedParameters.arguments
         )
+        let callTimeout = callTimeoutSeconds
         return try await withTaskCancellationHandler {
-            let result = try await request.value
+            let result: CallTool.Result
+            do {
+                // The SDK has no per-request deadline over stdio, so a wedged
+                // child would hold the caller until the grant expires. Bound
+                // the wait, then tell the child to drop the request.
+                result = try await mcpProxyWithTimeout(
+                    callTimeout,
+                    timeoutError: MCPProxyCallError.timedOut
+                ) {
+                    try await request.value
+                }
+            } catch let error as MCPProxyCallError {
+                try? await session.client.cancelRequest(request.requestID)
+                throw error
+            }
             return try masker.mask(result)
         } onCancel: {
             Task { try? await session.client.cancelRequest(request.requestID) }
@@ -379,7 +403,10 @@ actor AuthsiaMCPProxy {
         )
         let timeout = initializeTimeoutSeconds
         do {
-            let listed = try await mcpProxyWithTimeout(timeout) {
+            let listed = try await mcpProxyWithTimeout(
+                timeout,
+                timeoutError: MCPProxySpawnError.launchFailed
+            ) {
                 _ = try await client.connect(transport: transport)
                 let tools = try await client.listTools()
                 return Set(tools.tools.map(\.name))
@@ -444,6 +471,13 @@ actor AuthsiaMCPProxy {
                     return
                 }
             }
+        }
+    }
+
+    private static func reapChild(_ processID: pid_t) {
+        Thread.detachNewThread {
+            var status: Int32 = 0
+            _ = waitpid(processID, &status, 0)
         }
     }
 
@@ -531,6 +565,16 @@ actor AuthsiaMCPProxy {
     }
 
     private func discoveredTools(for upstream: MCPUpstreamConfig) async -> [Tool] {
+        // `deny` is subtracted on every read, not baked into the cache, so a
+        // deny added to workspace policy after the probe takes effect without
+        // restarting the proxy.
+        MCPProxyCatalog.subtractingDeny(
+            await discoveredChildCatalog(upstream),
+            deny: upstream.tools.deny
+        )
+    }
+
+    private func discoveredChildCatalog(_ upstream: MCPUpstreamConfig) async -> [Tool] {
         if let discoveredChildTools {
             return discoveredChildTools
         }
@@ -591,6 +635,11 @@ actor AuthsiaMCPProxy {
         } catch {
             return nil
         }
+        // Nothing else waits on the probe child. Unreaped, it stays a zombie
+        // whose process group still answers `kill(-pgid, 0)` with EPERM, so the
+        // terminator could never observe its death and would burn the whole
+        // grace and force window on every discovery.
+        Self.reapChild(spawned.processID)
         MCPProxyStderrDrain.start(
             fileDescriptor: spawned.stderrRead,
             secrets: [],
@@ -620,11 +669,14 @@ actor AuthsiaMCPProxy {
             output: FileDescriptor(rawValue: spawned.stdinWrite)
         )
         do {
-            let listed = try await mcpProxyWithTimeout(initializeTimeoutSeconds) {
+            let listed = try await mcpProxyWithTimeout(
+                initializeTimeoutSeconds,
+                timeoutError: MCPProxySpawnError.launchFailed
+            ) {
                 _ = try await client.connect(transport: transport)
                 return try await client.listTools()
             }
-            let tools = MCPProxyCatalog.listedTools(fromChild: listed.tools, deny: upstream.tools.deny)
+            let tools = MCPProxyCatalog.listedTools(fromChild: listed.tools)
             await teardownSpawn(
                 client: client,
                 terminator: terminator,
@@ -726,8 +778,13 @@ actor AuthsiaMCPProxy {
 
 }
 
-private func mcpProxyWithTimeout<T: Sendable>(
+enum MCPProxyCallError: Error, Equatable, Sendable {
+    case timedOut
+}
+
+private func mcpProxyWithTimeout<T: Sendable, Failure: Error & Sendable>(
     _ seconds: Double,
+    timeoutError: Failure,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
@@ -736,7 +793,7 @@ private func mcpProxyWithTimeout<T: Sendable>(
         }
         group.addTask {
             try await Task.sleep(for: .seconds(max(seconds, 0)))
-            throw MCPProxySpawnError.launchFailed
+            throw timeoutError
         }
         let result = try await group.next()!
         group.cancelAll()

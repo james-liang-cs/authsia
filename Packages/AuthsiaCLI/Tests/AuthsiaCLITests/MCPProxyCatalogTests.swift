@@ -132,11 +132,28 @@ struct MCPProxyCatalogTests {
                 inputSchema: MCPProxyCatalog.defaultInputSchema
             ),
         ]
-        let listed = MCPProxyCatalog.listedTools(fromChild: child, deny: ["hidden_tool"])
+        let listed = MCPProxyCatalog.subtractingDeny(
+            MCPProxyCatalog.listedTools(fromChild: child),
+            deny: ["hidden_tool"]
+        )
         #expect(listed.map(\.name) == ["codegraph_explore"])
         #expect(listed[0].description == "Explore symbols")
         #expect(listed[0].inputSchema.objectValue?["$ref"] == nil)
         #expect(listed[0].inputSchema.objectValue?["properties"]?.objectValue?["query"] != nil)
+    }
+
+    @Test("child listing keeps deny out of the cached catalog")
+    func childListingDefersDeny() {
+        let child = [
+            Tool(name: "read", description: "", inputSchema: MCPProxyCatalog.defaultInputSchema),
+            Tool(name: "write", description: "", inputSchema: MCPProxyCatalog.defaultInputSchema),
+        ]
+        // What gets cached is what the child advertised. Subtraction happens on
+        // read, so a deny added later still applies.
+        let discovered = MCPProxyCatalog.listedTools(fromChild: child)
+        #expect(discovered.map(\.name) == ["read", "write"])
+        #expect(MCPProxyCatalog.subtractingDeny(discovered, deny: []).map(\.name) == ["read", "write"])
+        #expect(MCPProxyCatalog.subtractingDeny(discovered, deny: ["write"]).map(\.name) == ["read"])
     }
 
     @Test("unbound and HTTP upstreams advertise an empty list")

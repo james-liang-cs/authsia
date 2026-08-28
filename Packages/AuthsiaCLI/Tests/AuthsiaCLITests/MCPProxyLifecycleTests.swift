@@ -519,6 +519,114 @@ struct MCPProxyLifecycleTests {
         await proxy.waitUntilCompleted()
     }
 
+    @Test("catalog discovery reaps the probe child instead of leaving a zombie")
+    func catalogDiscoveryReapsProbeChild() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
+        let sessionClient = RecordingMCPProxySessionClient(environment: [:], grantIDs: [UUID()])
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [MCPUpstreamConfig(name: "codegraph", command: "codegraph")]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "codegraph",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+
+        let listed = try await connection.client.listTools()
+        #expect(!listed.tools.isEmpty)
+        let probeProcessID = try #require(launcher.lastSpawned?.processID)
+
+        // An unreaped probe child stays a zombie whose process group still
+        // answers kill(-pgid, 0) with EPERM, so the terminator would never see
+        // it die and would burn the whole grace and force window. Nothing left
+        // to wait for means the proxy reaped it.
+        var status: Int32 = 0
+        let reaped = waitpid(probeProcessID, &status, WNOHANG)
+        let reapErrno = errno
+        #expect(reaped == -1)
+        #expect(reapErrno == ECHILD)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("a deny added after discovery applies without a second probe")
+    func denyAddedAfterDiscoveryApplies() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
+        let sessionClient = RecordingMCPProxySessionClient(environment: [:], grantIDs: [UUID()])
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [MCPUpstreamConfig(name: "codegraph", command: "codegraph")]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "codegraph",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+
+        let first = try await connection.client.listTools()
+        #expect(first.tools.map(\.name) == ["jira_get_issue", "jira_search", "jira_create_issue"])
+        #expect(launcher.spawnCount == 1)
+
+        // Policy is committed repository content and can change while the
+        // client is still connected. The discovered catalog is cached for the
+        // proxy session, so deny has to be re-read, not baked into the cache.
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                schemaVersion: 2,
+                workspace: .init(name: "proxy", authsiaFolder: "Workspaces/proxy"),
+                managedEnvFiles: [],
+                agents: nil,
+                mcpUpstreams: [
+                    MCPUpstreamConfig(
+                        name: "codegraph",
+                        command: "codegraph",
+                        tools: MCPUpstreamToolPolicy(deny: ["jira_search"])
+                    ),
+                ]
+            ),
+            toWorkspaceRoot: root
+        )
+
+        let second = try await connection.client.listTools()
+        #expect(second.tools.map(\.name) == ["jira_get_issue", "jira_create_issue"])
+        #expect(launcher.spawnCount == 1)
+
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_search"
+        )
+        let result = try await call.value
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.upstreamDenied.rawValue)
+        #expect(launcher.spawnCount == 1)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
     private func makeProxy(
         upstreamName: String = "jira",
         mcpAccessEnabled: @escaping @Sendable () -> Bool = { true },

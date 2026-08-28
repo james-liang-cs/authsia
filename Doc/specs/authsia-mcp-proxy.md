@@ -177,8 +177,10 @@ write `mcpUpstreams`.
   `allow` or `approve` is set, `tools/list` comes from this policy without
   starting the child. When both are omitted on a credential-less stdio entry,
   Authsia discovers the child's tool names and sanitized schemas on first
-  `tools/list` with a short-lived probe only after local `mcp-admission`, then
-  subtracts `deny`. Automatic discovery requires the entire declared `env` to
+  `tools/list` with a short-lived probe only after local `mcp-admission`. The
+  cache holds what the child advertised; `deny` is read from workspace policy
+  and subtracted on every list and call, so a `deny` added while a client is
+  connected applies without restarting the proxy. Automatic discovery requires the entire declared `env` to
   be empty; literal values as well as `authsia://` references disable it. The
   long-lived child also requires admission before the first permitted
   `tools/call`, reusing a matching grant. Any non-empty env requires explicit
@@ -338,7 +340,8 @@ fails closed.
        |
        +-- empty policy, credential-less stdio?
              YES: request mcp-admission; if granted, short-lived
-                  probe spawn, listTools, kill, cache names minus deny
+                  probe spawn, listTools, kill, reap, cache child
+                  names; subtract deny on every read
              declined admission: cache empty for this proxy session
              transient probe failure: cache nothing; later list retries
 ```
@@ -532,6 +535,7 @@ specific to wrapping:
 | `upstreamDenied` | The requested upstream tool is unknown, denied, or absent from the advertised workspace policy. |
 | `upstreamUnavailable` | The named upstream is missing, cannot start or initialize, or does not implement the advertised tool. |
 | `httpUpstreamUnsupported` | The workspace declares an HTTP, SSE, Streamable HTTP, or URL upstream, which V1 cannot execute. |
+| `timedOut` | The child did not answer a forwarded `tools/call` before the proxy's call deadline. The proxy cancels the request upstream and leaves the child running for the next call. |
 
 Shared codes such as `mcpAccessDisabled`, `approvalDenied`, and
 `workspaceUnavailable` keep the meanings in [`authsia-mcp.md`](authsia-mcp.md#errors-and-output).
@@ -547,6 +551,9 @@ Shared codes such as `mcpAccessDisabled`, `approvalDenied`, and
 | Upstream receives ambient credentials or Authsia runtime markers | Build a stripped environment, add only declared literals and freshly resolved refs, and omit `AUTHSIA_AGENT_*` and automation authority from the child. |
 | Injected values leak through proxied JSON-RPC | Parse and mask JSON string values in both directions; never patch raw frames or store them in audit or diagnostics. |
 | Revocation leaves a long-lived upstream authorized | Associate the child with exact owned grant IDs, recheck on every call and periodically, and terminate the complete process group when association fails. |
+| A `deny` added mid-session keeps answering from a stale catalog | Cache only what the child advertised and subtract `deny` from live workspace policy on every list and call. |
+| A wedged child holds the caller until its grant expires | Bound every forwarded `tools/call` with a proxy-side deadline, cancel the request upstream on expiry, and return `timedOut`. |
+| A terminated child cannot be observed dying | Reap every child the proxy starts, including the discovery probe. An unreaped process group still answers `kill(-pgid, 0)`, so termination would wait out the whole grace and force window. |
 | Company policy must enumerate every local tool | Generated client argv is `mcp proxy`; the name is `AUTHSIA_MCP_UPSTREAM`. Workspace `mcpUpstreams` is the child allowlist. |
 | Approved upstream, package launcher, or unmanaged sibling MCP exfiltrates data | Treat the upstream and MCP client as untrusted; Authsia does not sandbox an approved child, police sibling client configuration, or provide OS-wide DLP. |
 | Read-only config detection is mistaken for launch enforcement | Label direct launches as existence-only findings; never claim call audit, revoke-kill, or blocking outside the proxy. |
@@ -574,6 +581,12 @@ Implementation is not complete until automated tests prove:
 - both admission and exec prompts carry the declared child argv;
 - client scan findings preserve user-global/project scope, resolve project
   precedence per workspace, and never reuse another workspace's declaration;
+- a `deny` added after discovery is subtracted from the next `tools/list` and
+  rejects the next `tools/call`, without a second probe;
+- the discovery probe child is reaped, so nothing is left waiting after
+  `tools/list` returns;
+- a forwarded `tools/call` that outruns the call deadline returns `timedOut`
+  and leaves the child usable for the next call;
 - Access Center revocation removes the associated child process group within
   the documented polling window, while restart cannot reuse the old instance's
   grant;
