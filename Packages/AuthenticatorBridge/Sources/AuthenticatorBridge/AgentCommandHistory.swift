@@ -21,6 +21,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
     public let contextExpiresAt: Date?
     public let workingDirectory: String?
     public let terminalSessionScope: String?
+    public let processIdentifier: String?
     public let executable: String?
     public let arguments: [String]
     public let command: String?
@@ -43,6 +44,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         contextExpiresAt: Date? = nil,
         workingDirectory: String? = nil,
         terminalSessionScope: String? = nil,
+        processIdentifier: String? = nil,
         executable: String? = nil,
         arguments: [String] = [],
         command: String? = nil,
@@ -64,6 +66,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         self.contextExpiresAt = contextExpiresAt
         self.workingDirectory = AgentCommandRedactor.sanitized(workingDirectory, maxLength: 2048)
         self.terminalSessionScope = AgentCommandRedactor.sanitized(terminalSessionScope, maxLength: 1024)
+        self.processIdentifier = AgentCommandRedactor.sanitized(processIdentifier, maxLength: 128)
         self.executable = AgentCommandRedactor.sanitized(executable, maxLength: 1024)
         self.arguments = AgentCommandRedactor.redactedArguments(arguments)
         self.command = AgentCommandRedactor.redactedCommand(command)
@@ -510,6 +513,7 @@ private extension AgentCommandEvent {
                 "process",
                 agentJITGrantID?.uuidString ?? "",
                 terminalSessionScope,
+                processIdentifier ?? "",
                 workingDirectory ?? "",
                 executable ?? "",
                 command,

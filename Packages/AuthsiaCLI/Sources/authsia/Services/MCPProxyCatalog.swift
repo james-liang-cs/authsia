@@ -22,6 +22,7 @@ enum MCPProxyCatalog {
         upstream.requiresStdioPolicy
             && upstream.tools.allow.isEmpty
             && upstream.tools.approve.isEmpty
+            && upstream.env.isEmpty
             && !upstream.containsSecretReferences
     }
 

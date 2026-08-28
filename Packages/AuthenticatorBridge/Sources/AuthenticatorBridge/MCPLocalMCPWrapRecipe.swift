@@ -42,7 +42,7 @@ public enum MCPLocalMCPWrapRecipe {
         }
         sections.append(contentsOf: [
             "",
-            "Authsia does not edit the client file. The first permitted tool call requests local MCP admission.",
+            "Authsia does not edit the client file. Catalog discovery or the first permitted tool call requests local MCP admission.",
         ])
         return sections.joined(separator: "\n")
     }
@@ -72,6 +72,13 @@ public enum MCPLocalMCPWrapRecipe {
             \(codexTable(name: name, authsiaCommand: authsiaCommand, environment: env))
             """
         case .claude:
+            if finding.configScope == .project {
+                return """
+                Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object with:
+
+                \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
+                """
+            }
             return """
             Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object.
 
@@ -94,6 +101,13 @@ public enum MCPLocalMCPWrapRecipe {
             \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
             """
         case .vscode:
+            if finding.configScope == .project {
+                return """
+                Open \(finding.configPathLabel). Find "\(name)" under "servers" and replace that object with:
+
+                \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: true))
+                """
+            }
             return """
             In VS Code, run MCP: Open User Configuration (\(finding.configPathLabel)). Find "\(name)" under "servers" and replace that object.
 

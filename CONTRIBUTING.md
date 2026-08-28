@@ -72,7 +72,9 @@ authsia mcp configure --client vscode
 ```
 
 The command prints configuration for the exact Authsia binary; it does not edit
-client files. Generated proxy entries use a stable `mcp proxy` argv and set
+client files. It labels the exact config path, user-global/project scope,
+workspace context, and effective precedence when existing entries are found.
+Generated proxy entries use a stable `mcp proxy` argv and set
 `AUTHSIA_MCP_UPSTREAM` to the workspace name so a company MCP allowlist can
 match Authsia without enumerating child tools. For Codex, Claude Code, and
 VS Code, it also prints a direct MCP installation command; other clients

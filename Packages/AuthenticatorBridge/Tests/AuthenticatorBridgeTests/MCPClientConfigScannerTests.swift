@@ -81,6 +81,7 @@ final class MCPClientConfigScannerTests: XCTestCase {
         )
         XCTAssertEqual(findings.first { $0.serverName == "jira" }?.isWrapEligible, false)
         XCTAssertEqual(findings.first { $0.serverName == "stale" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "stale" }?.shouldShowInAccessCenter, true)
         XCTAssertEqual(findings.first { $0.serverName == "invalid-wrapper" }?.shouldShowInAccessCenter, false)
         XCTAssertEqual(findings.first { $0.serverName == "rogue" }?.commandLabel, "uvx")
         XCTAssertNil(findings.first { $0.serverName == "invalid-wrapper" }?.declaredUpstreamName)
@@ -134,6 +135,8 @@ final class MCPClientConfigScannerTests: XCTestCase {
             "/Users/example/.config/devin/mcp_config.json",
             "/Users/example/Library/Application Support/Code/User/mcp.json",
         ])
+        XCTAssertTrue(locations.allSatisfy { $0.scope == .userGlobal })
+        XCTAssertTrue(locations.allSatisfy { $0.workspaceRoot == nil })
     }
 
     func testAbsoluteAndShellCommandsAreNotWrapEligible() throws {
@@ -232,6 +235,47 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertFalse(afterDeclare?.contains("mcpUpstreams") == true)
         XCTAssertFalse(afterDeclare?.contains("\"command\": \"npx\"") == true)
         XCTAssertFalse(afterDeclare?.contains("\"command\" : \"npx\"") == true)
+
+        let projectClaude = MCPLocalMCPWrapRecipe.clipboardText(
+            for: MCPClientServerFinding(
+                source: .claude,
+                serverName: "codegraph",
+                commandLabel: "codegraph",
+                status: .directBypass,
+                declaredUpstreamName: "codegraph",
+                configPathLabel: "~/repo/.mcp.json",
+                configScope: .project,
+                precedence: .effective,
+                workspacePathLabel: "~/repo",
+                wrapCommand: "codegraph",
+                wrapArguments: ["serve", "--mcp"],
+                isWrapEligible: true
+            ),
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
+        )
+        XCTAssertTrue(projectClaude?.contains("Open ~/repo/.mcp.json") == true)
+        XCTAssertFalse(projectClaude?.contains("--scope user") == true)
+
+        let projectVSCode = MCPLocalMCPWrapRecipe.clipboardText(
+            for: MCPClientServerFinding(
+                source: .vscode,
+                serverName: "codegraph",
+                commandLabel: "codegraph",
+                status: .directBypass,
+                declaredUpstreamName: "codegraph",
+                configPathLabel: "~/repo/.vscode/mcp.json",
+                configScope: .project,
+                precedence: .effective,
+                workspacePathLabel: "~/repo",
+                wrapCommand: "codegraph",
+                wrapArguments: ["serve", "--mcp"],
+                isWrapEligible: true
+            ),
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
+        )
+        XCTAssertTrue(projectVSCode?.contains("Open ~/repo/.vscode/mcp.json") == true)
+        XCTAssertFalse(projectVSCode?.contains("Open User Configuration") == true)
+        XCTAssertFalse(projectVSCode?.contains("code --add-mcp") == true)
 
         let cursor = MCPLocalMCPWrapRecipe.clipboardText(
             for: MCPClientServerFinding(
@@ -335,6 +379,8 @@ final class MCPClientConfigScannerTests: XCTestCase {
             "~/repo/.cursor/mcp.json",
             "~/repo/.vscode/mcp.json",
         ])
+        XCTAssertTrue(locations.allSatisfy { $0.scope == .project })
+        XCTAssertTrue(locations.allSatisfy { $0.workspaceRoot == URL(fileURLWithPath: "/Users/dev/repo", isDirectory: true).standardizedFileURL })
         // Codex and Devin have no project scope; inventing paths for them would
         // report findings from files those clients never read.
         XCTAssertFalse(locations.contains { $0.source == .codex || $0.source == .devin })
@@ -377,7 +423,12 @@ final class MCPClientConfigScannerTests: XCTestCase {
         ]).write(to: root.appendingPathComponent(".mcp.json"))
 
         let declared = [
-            MCPDeclaredLocalServer(name: "codegraph", command: "codegraph", arguments: ["serve", "--mcp"]),
+            MCPDeclaredLocalServer(
+                name: "codegraph",
+                command: "codegraph",
+                arguments: ["serve", "--mcp"],
+                workspaceRoot: root
+            ),
         ]
         let findings = MCPClientConfigScanner().scan(
             declaredServers: declared,
@@ -387,9 +438,66 @@ final class MCPClientConfigScannerTests: XCTestCase {
 
         let byPath = Dictionary(uniqueKeysWithValues: findings.map { ($0.configPathLabel, $0) })
         XCTAssertEqual(byPath["~/.claude.json"]?.status, .admittedWrapped)
+        XCTAssertEqual(byPath["~/.claude.json"]?.configScope, .userGlobal)
+        XCTAssertEqual(byPath["~/.claude.json"]?.precedence, .overridden)
+        XCTAssertEqual(byPath["~/.claude.json"]?.workspacePathLabel, "~/repo")
         // Without the project scan this row is missing and Access Center shows
         // only "wrapped", which is the opposite of what actually runs.
         XCTAssertEqual(byPath["~/repo/.mcp.json"]?.status, .directBypass)
+        XCTAssertEqual(byPath["~/repo/.mcp.json"]?.configScope, .project)
+        XCTAssertEqual(byPath["~/repo/.mcp.json"]?.precedence, .effective)
+    }
+
+    func testDeclarationsDoNotCrossWorkspaceBoundaries() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let rootA = home.appendingPathComponent("repo-a", isDirectory: true)
+        let rootB = home.appendingPathComponent("repo-b", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: rootB, withIntermediateDirectories: true)
+
+        try JSONSerialization.data(withJSONObject: [
+            "mcpServers": [
+                "codegraph": [
+                    "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                    "args": ["mcp", "proxy"],
+                    "env": ["AUTHSIA_MCP_UPSTREAM": "codegraph"],
+                ],
+            ],
+        ]).write(to: home.appendingPathComponent(".claude.json"))
+        try JSONSerialization.data(withJSONObject: [
+            "mcpServers": [
+                "codegraph": [
+                    "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                    "args": ["mcp", "proxy"],
+                    "env": ["AUTHSIA_MCP_UPSTREAM": "codegraph"],
+                ],
+            ],
+        ]).write(to: rootB.appendingPathComponent(".mcp.json"))
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [
+                MCPDeclaredLocalServer(
+                    name: "codegraph",
+                    command: "codegraph",
+                    arguments: ["serve", "--mcp"],
+                    workspaceRoot: rootA
+                ),
+            ],
+            locations: MCPClientConfigLocation.knownLocations(homeDirectory: home)
+                + MCPClientConfigLocation.projectLocations(
+                    workspaceRoots: [rootA, rootB],
+                    homeDirectory: home
+                )
+        )
+
+        let rootBFinding = try XCTUnwrap(findings.first {
+            $0.configPathLabel == "~/repo-b/.mcp.json"
+        })
+        XCTAssertEqual(rootBFinding.workspacePathLabel, "~/repo-b")
+        XCTAssertEqual(rootBFinding.status, .unadmitted)
+        XCTAssertEqual(rootBFinding.precedence, .effective)
+        XCTAssertTrue(rootBFinding.shouldShowInAccessCenter)
     }
 
 }

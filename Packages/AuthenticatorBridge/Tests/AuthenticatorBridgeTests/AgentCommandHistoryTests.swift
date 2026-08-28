@@ -1380,6 +1380,7 @@ final class AgentCommandHistoryTests: XCTestCase {
             [
                 AgentCommandProcessSnapshot(
                     pid: 10,
+                    processStartTime: 90,
                     processName: "swift",
                     arguments: ["swift", "test"],
                     workingDirectory: "/tmp/project",
@@ -1424,6 +1425,7 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(events[0].agentPlatform, "codex")
         XCTAssertEqual(events[0].captureSource, .process)
         XCTAssertEqual(events[0].command, "swift test")
+        XCTAssertEqual(events[0].processIdentifier, "10:90")
     }
 
     func testProcessMonitorDoesNotRecordAgentProcessItselfAsCommand() {
@@ -1479,6 +1481,7 @@ final class AgentCommandHistoryTests: XCTestCase {
             captureSource: .process,
             workingDirectory: "/tmp/project",
             terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            processIdentifier: "10:100",
             executable: "authsia",
             arguments: ["authsia", "mcp", "serve"],
             command: "authsia mcp serve"
@@ -1491,6 +1494,7 @@ final class AgentCommandHistoryTests: XCTestCase {
             captureSource: .process,
             workingDirectory: "/tmp/project",
             terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            processIdentifier: "10:100",
             executable: "authsia",
             arguments: ["authsia", "mcp", "serve"],
             command: "authsia mcp serve"
@@ -1507,13 +1511,26 @@ final class AgentCommandHistoryTests: XCTestCase {
             arguments: ["git", "status"],
             command: "git status"
         )
+        let restartedSameCommand = AgentCommandEvent(
+            id: UUID(uuidString: "44444444-5555-6666-7777-888888888888")!,
+            recordedAt: Date(timeIntervalSince1970: 40),
+            agentPlatform: "codex",
+            agentJITGrantID: grantID,
+            captureSource: .process,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            processIdentifier: "11:101",
+            executable: "authsia",
+            arguments: ["authsia", "mcp", "serve"],
+            command: "authsia mcp serve"
+        )
 
         let toRecord = AgentCommandHistoryQuery.unrecordedProcessEvents(
-            from: [stillRunning, newCommand],
+            from: [stillRunning, restartedSameCommand, newCommand],
             alreadyStored: [stored]
         )
 
-        XCTAssertEqual(toRecord.map(\.id), [newCommand.id])
+        XCTAssertEqual(toRecord.map(\.id), [restartedSameCommand.id, newCommand.id])
     }
 
     func testProcessMonitorLabelsVSCodeCopilotExtensionAncestryAsCopilot() {

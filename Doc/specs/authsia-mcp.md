@@ -629,6 +629,10 @@ For Codex, Claude Code, and VS Code, the output includes a shell-safe direct
 command using the client's supported user-global MCP installation surface, plus
 the manual configuration fallback. Cursor and Devin Desktop receive only the
 manual configuration because they do not expose a documented equivalent command.
+Printed proxy entries are user-global fallbacks derived from the bound managed
+workspace. Project-scoped Claude, Cursor, and VS Code entries may override
+them; the configure report names scope, workspace, exact path, and precedence.
+See the proxy contract for workspace-local matching rules.
 
 Generated serve configuration must:
 

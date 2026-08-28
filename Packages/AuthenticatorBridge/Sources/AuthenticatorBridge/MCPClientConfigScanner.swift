@@ -18,15 +18,54 @@ public enum MCPClientConfigSource: String, Codable, CaseIterable, Equatable, Sen
     }
 }
 
+public enum MCPClientConfigScope: String, Codable, Equatable, Sendable {
+    case userGlobal = "user-global"
+    case project
+
+    public var displayName: String {
+        switch self {
+        case .userGlobal: return "User-global"
+        case .project: return "Project"
+        }
+    }
+}
+
+public enum MCPClientConfigPrecedence: String, Codable, Equatable, Sendable {
+    case effective
+    case overridden
+    case conditional
+
+    public var displayName: String {
+        switch self {
+        case .effective: return "Effective"
+        case .overridden: return "Overridden"
+        case .conditional: return "Conditional"
+        }
+    }
+}
+
 public struct MCPClientConfigLocation: Equatable, Sendable {
     public let source: MCPClientConfigSource
     public let fileURL: URL
     public let displayPath: String
+    public let scope: MCPClientConfigScope
+    public let workspaceRoot: URL?
+    public let workspacePathLabel: String?
 
-    public init(source: MCPClientConfigSource, fileURL: URL, displayPath: String) {
+    public init(
+        source: MCPClientConfigSource,
+        fileURL: URL,
+        displayPath: String,
+        scope: MCPClientConfigScope = .userGlobal,
+        workspaceRoot: URL? = nil,
+        workspacePathLabel: String? = nil
+    ) {
         self.source = source
         self.fileURL = fileURL
         self.displayPath = displayPath
+        self.scope = scope
+        self.workspaceRoot = workspaceRoot?.standardizedFileURL
+        self.workspacePathLabel = workspacePathLabel
     }
 
     /// Repository-scoped client config files, which take precedence over the
@@ -53,7 +92,13 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
                 locations.append(Self(
                     source: source,
                     fileURL: fileURL,
-                    displayPath: abbreviated(fileURL.path, homeDirectory: homeDirectory)
+                    displayPath: abbreviated(fileURL.path, homeDirectory: homeDirectory),
+                    scope: .project,
+                    workspaceRoot: standardized,
+                    workspacePathLabel: abbreviated(
+                        standardized.path,
+                        homeDirectory: homeDirectory
+                    )
                 ))
             }
         }
@@ -103,11 +148,18 @@ public struct MCPDeclaredLocalServer: Equatable, Sendable {
     public let name: String
     public let command: String
     public let arguments: [String]
+    public let workspaceRoot: URL?
 
-    public init(name: String, command: String, arguments: [String]) {
+    public init(
+        name: String,
+        command: String,
+        arguments: [String],
+        workspaceRoot: URL? = nil
+    ) {
         self.name = name
         self.command = command
         self.arguments = arguments
+        self.workspaceRoot = workspaceRoot?.standardizedFileURL
     }
 }
 
@@ -124,16 +176,20 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     public let status: MCPClientServerAdmissionStatus
     public let declaredUpstreamName: String?
     public let configPathLabel: String
+    public let configScope: MCPClientConfigScope
+    public let precedence: MCPClientConfigPrecedence
+    public let workspacePathLabel: String?
+    public let isAuthsiaProxyLaunch: Bool
     public let wrapCommand: String?
     public let wrapArguments: [String]
     public let isWrapEligible: Bool
 
     public var id: String {
-        "\(source.rawValue):\(serverName):\(configPathLabel)"
+        "\(workspacePathLabel ?? ""):\(source.rawValue):\(serverName):\(configPathLabel)"
     }
 
     public var shouldShowInAccessCenter: Bool {
-        status == .admittedWrapped || isWrapEligible
+        status == .admittedWrapped || isAuthsiaProxyLaunch || isWrapEligible
     }
 
     public init(
@@ -143,6 +199,10 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         status: MCPClientServerAdmissionStatus,
         declaredUpstreamName: String?,
         configPathLabel: String,
+        configScope: MCPClientConfigScope = .userGlobal,
+        precedence: MCPClientConfigPrecedence = .conditional,
+        workspacePathLabel: String? = nil,
+        isAuthsiaProxyLaunch: Bool = false,
         wrapCommand: String? = nil,
         wrapArguments: [String] = [],
         isWrapEligible: Bool = false
@@ -153,6 +213,10 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         self.status = status
         self.declaredUpstreamName = declaredUpstreamName
         self.configPathLabel = configPathLabel
+        self.configScope = configScope
+        self.precedence = precedence
+        self.workspacePathLabel = workspacePathLabel
+        self.isAuthsiaProxyLaunch = isAuthsiaProxyLaunch
         self.wrapCommand = wrapCommand
         self.wrapArguments = wrapArguments
         self.isWrapEligible = isWrapEligible
@@ -165,6 +229,10 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         case status
         case declaredUpstreamName
         case configPathLabel
+        case configScope
+        case precedence
+        case workspacePathLabel
+        case isAuthsiaProxyLaunch
         case wrapCommand
         case wrapArguments
         case isWrapEligible
@@ -178,6 +246,13 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         status = try container.decode(MCPClientServerAdmissionStatus.self, forKey: .status)
         declaredUpstreamName = try container.decodeIfPresent(String.self, forKey: .declaredUpstreamName)
         configPathLabel = try container.decode(String.self, forKey: .configPathLabel)
+        configScope = try container.decodeIfPresent(MCPClientConfigScope.self, forKey: .configScope)
+            ?? .userGlobal
+        precedence = try container.decodeIfPresent(MCPClientConfigPrecedence.self, forKey: .precedence)
+            ?? .conditional
+        workspacePathLabel = try container.decodeIfPresent(String.self, forKey: .workspacePathLabel)
+        isAuthsiaProxyLaunch = try container.decodeIfPresent(Bool.self, forKey: .isAuthsiaProxyLaunch)
+            ?? false
         wrapCommand = try container.decodeIfPresent(String.self, forKey: .wrapCommand)
         wrapArguments = try container.decodeIfPresent([String].self, forKey: .wrapArguments) ?? []
         isWrapEligible = try container.decodeIfPresent(Bool.self, forKey: .isWrapEligible) ?? false
@@ -191,6 +266,12 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         try container.encode(status, forKey: .status)
         try container.encodeIfPresent(declaredUpstreamName, forKey: .declaredUpstreamName)
         try container.encode(configPathLabel, forKey: .configPathLabel)
+        try container.encode(configScope, forKey: .configScope)
+        try container.encode(precedence, forKey: .precedence)
+        try container.encodeIfPresent(workspacePathLabel, forKey: .workspacePathLabel)
+        if isAuthsiaProxyLaunch {
+            try container.encode(isAuthsiaProxyLaunch, forKey: .isAuthsiaProxyLaunch)
+        }
         try container.encodeIfPresent(wrapCommand, forKey: .wrapCommand)
         if !wrapArguments.isEmpty {
             try container.encode(wrapArguments, forKey: .wrapArguments)
@@ -214,9 +295,78 @@ public struct MCPClientConfigScanner {
         locations: [MCPClientConfigLocation]
     ) -> [MCPClientServerFinding] {
         let observedServers = locations.flatMap { entries(at: $0) }
-        return observedServers.compactMap { entry in
-            finding(for: entry, declaredServers: declaredServers)
+        var rootsByPath: [String: URL] = [:]
+        var labelsByRootPath: [String: String] = [:]
+        for location in locations {
+            guard let root = location.workspaceRoot else { continue }
+            rootsByPath[root.path] = root
+            labelsByRootPath[root.path] = location.workspacePathLabel ?? root.path
+        }
+        for declared in declaredServers {
+            guard let root = declared.workspaceRoot else { continue }
+            rootsByPath[root.path] = root
+            if labelsByRootPath[root.path] == nil {
+                labelsByRootPath[root.path] = root.path
+            }
+        }
+        let workspaceRoots = rootsByPath.values.sorted { $0.path < $1.path }
+        let projectKeys = Set(observedServers.compactMap { entry -> PrecedenceKey? in
+            guard entry.location.scope == .project,
+                  let root = entry.location.workspaceRoot else {
+                return nil
+            }
+            return PrecedenceKey(
+                source: entry.location.source,
+                serverName: entry.name,
+                workspacePath: root.path
+            )
+        })
+
+        let contextualServers = observedServers.flatMap { entry -> [ContextualObservedServer] in
+            if entry.location.scope == .project {
+                let root = entry.location.workspaceRoot
+                return [ContextualObservedServer(
+                    entry: entry,
+                    workspaceRoot: root,
+                    workspacePathLabel: entry.location.workspacePathLabel ?? root?.path,
+                    precedence: .effective
+                )]
+            }
+            guard !workspaceRoots.isEmpty else {
+                return [ContextualObservedServer(
+                    entry: entry,
+                    workspaceRoot: nil,
+                    workspacePathLabel: nil,
+                    precedence: .conditional
+                )]
+            }
+            return workspaceRoots.map { root in
+                let key = PrecedenceKey(
+                    source: entry.location.source,
+                    serverName: entry.name,
+                    workspacePath: root.path
+                )
+                return ContextualObservedServer(
+                    entry: entry,
+                    workspaceRoot: root,
+                    workspacePathLabel: labelsByRootPath[root.path] ?? root.path,
+                    precedence: projectKeys.contains(key) ? .overridden : .effective
+                )
+            }
+        }
+
+        return contextualServers.compactMap { contextual in
+            finding(
+                for: contextual.entry,
+                declaredServers: declaredServers,
+                workspaceRoot: contextual.workspaceRoot,
+                workspacePathLabel: contextual.workspacePathLabel,
+                precedence: contextual.precedence
+            )
         }.sorted { lhs, rhs in
+            if lhs.workspacePathLabel != rhs.workspacePathLabel {
+                return (lhs.workspacePathLabel ?? "") < (rhs.workspacePathLabel ?? "")
+            }
             if lhs.source.rawValue != rhs.source.rawValue {
                 return lhs.source.rawValue < rhs.source.rawValue
             }
@@ -242,7 +392,10 @@ public struct MCPClientConfigScanner {
 
     private func finding(
         for entry: ObservedServer,
-        declaredServers: [MCPDeclaredLocalServer]
+        declaredServers: [MCPDeclaredLocalServer],
+        workspaceRoot: URL?,
+        workspacePathLabel: String?,
+        precedence: MCPClientConfigPrecedence
     ) -> MCPClientServerFinding? {
         guard let serverName = Self.safeLabel(entry.name, maximumLength: 128),
               let commandLabel = Self.commandLabel(entry.command),
@@ -265,8 +418,12 @@ public struct MCPClientConfigScanner {
             : nil
         let isAuthsiaProxyLaunch = executableName == "authsia"
             && MCPProxyClientLaunch.isProxyLaunch(arguments: entry.arguments)
-        let declaredNames = Set(declaredServers.map(\.name))
-        let directMatch = declaredServers.first { declared in
+            && wrappedUpstream != nil
+        let applicableDeclarations = declaredServers.filter { declared in
+            declared.workspaceRoot?.path == workspaceRoot?.path
+        }
+        let declaredNames = Set(applicableDeclarations.map(\.name))
+        let directMatch = applicableDeclarations.first { declared in
             declared.name == entry.name
                 && URL(fileURLWithPath: declared.command).lastPathComponent == executableName
                 && declared.arguments == entry.arguments
@@ -297,6 +454,12 @@ public struct MCPClientConfigScanner {
             status: status,
             declaredUpstreamName: declaredUpstreamName,
             configPathLabel: configPathLabel,
+            configScope: entry.location.scope,
+            precedence: precedence,
+            workspacePathLabel: workspacePathLabel.flatMap {
+                Self.safeLabel($0, maximumLength: 512)
+            },
+            isAuthsiaProxyLaunch: isAuthsiaProxyLaunch,
             wrapCommand: wrap?.command,
             wrapArguments: wrap?.arguments ?? [],
             isWrapEligible: wrap != nil
@@ -506,5 +669,18 @@ public struct MCPClientConfigScanner {
         let arguments: [String]
         let upstreamEnvironmentName: String?
         let location: MCPClientConfigLocation
+    }
+
+    private struct ContextualObservedServer {
+        let entry: ObservedServer
+        let workspaceRoot: URL?
+        let workspacePathLabel: String?
+        let precedence: MCPClientConfigPrecedence
+    }
+
+    private struct PrecedenceKey: Hashable {
+        let source: MCPClientConfigSource
+        let serverName: String
+        let workspacePath: String
     }
 }

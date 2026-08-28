@@ -252,8 +252,8 @@ struct MCPProxyLifecycleTests {
         await fixture.proxy.waitUntilCompleted()
     }
 
-    @Test("empty credential-less policy discovers child tools on list without admission")
-    func emptyPolicyDiscoversChildCatalogWithoutAdmission() async throws {
+    @Test("empty credential-less policy discovers child tools on list after admission")
+    func emptyPolicyDiscoversChildCatalogAfterAdmission() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
         try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
@@ -268,11 +268,7 @@ struct MCPProxyLifecycleTests {
                     name: "codegraph",
                     command: "codegraph",
                     args: ["serve", "--mcp"],
-                    env: [
-                        "AUTHSIA_TEST_TOOLS": "codegraph_explore,hidden_tool,extra_tool",
-                        "PYTHONUNBUFFERED": "1",
-                    ],
-                    tools: MCPUpstreamToolPolicy(deny: ["hidden_tool"])
+                    tools: MCPUpstreamToolPolicy(deny: ["jira_search"])
                 ),
             ]
         )
@@ -292,33 +288,34 @@ struct MCPProxyLifecycleTests {
         let connection = try await connectMCPProxy(proxy, clientName: "Codex")
 
         let listed = try await connection.client.listTools()
-        #expect(listed.tools.map(\.name) == ["codegraph_explore", "extra_tool"])
-        #expect(!listed.tools.map(\.name).contains("hidden_tool"))
-        // Listing probes the child without admission so an IDE open does not
-        // prompt. The probe is killed after listTools.
-        #expect(sessionClient.prepareCount == 0)
+        #expect(listed.tools.map(\.name) == ["jira_get_issue", "jira_create_issue"])
+        #expect(!listed.tools.map(\.name).contains("jira_search"))
+        // The repository-declared executable is never spawned until Authsia
+        // admits this discovery request.
+        #expect(sessionClient.prepareCount == 1)
+        #expect(sessionClient.mcpToolNames == [nil])
         #expect(launcher.spawnCount == 1)
 
         let listedAgain = try await connection.client.listTools()
-        #expect(listedAgain.tools.map(\.name) == ["codegraph_explore", "extra_tool"])
-        #expect(sessionClient.prepareCount == 0)
+        #expect(listedAgain.tools.map(\.name) == ["jira_get_issue", "jira_create_issue"])
+        #expect(sessionClient.prepareCount == 1)
         #expect(launcher.spawnCount == 1)
 
         let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
-            name: "codegraph_explore"
+            name: "jira_get_issue"
         )
         let result = try await call.value
         #expect(result.isError != true)
         // The long-lived child is what takes mcp-admission, named by the
         // invoked tool and the declared argv.
-        #expect(sessionClient.prepareCount == 1)
-        #expect(sessionClient.mcpToolNames == ["codegraph_explore"])
-        #expect(sessionClient.mcpUpstreamNames == ["codegraph"])
-        #expect(sessionClient.mcpUpstreamCommands == ["codegraph serve --mcp"])
+        #expect(sessionClient.prepareCount == 2)
+        #expect(sessionClient.mcpToolNames == [nil, "jira_get_issue"])
+        #expect(sessionClient.mcpUpstreamNames == ["codegraph", "codegraph"])
+        #expect(sessionClient.mcpUpstreamCommands == ["codegraph serve --mcp", "codegraph serve --mcp"])
         #expect(launcher.spawnCount == 2)
 
         let denied: RequestContext<CallTool.Result> = try await connection.client.callTool(
-            name: "hidden_tool"
+            name: "jira_search"
         )
         let deniedResult = try await denied.value
         #expect(deniedResult.isError == true)
@@ -331,8 +328,8 @@ struct MCPProxyLifecycleTests {
         await proxy.waitUntilCompleted()
     }
 
-    @Test("declined admission blocks the long-lived spawn, not catalog listing")
-    func declinedAdmissionBlocksLongLivedSpawnNotCatalogList() async throws {
+    @Test("declined admission blocks catalog discovery before spawn")
+    func declinedAdmissionBlocksCatalogDiscoveryBeforeSpawn() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
         try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("codegraph"))
@@ -349,8 +346,7 @@ struct MCPProxyLifecycleTests {
             upstreams: [
                 MCPUpstreamConfig(
                     name: "codegraph",
-                    command: "codegraph",
-                    env: ["AUTHSIA_TEST_TOOLS": "codegraph_explore"]
+                    command: "codegraph"
                 ),
             ]
         )
@@ -370,24 +366,16 @@ struct MCPProxyLifecycleTests {
         let connection = try await connectMCPProxy(proxy, clientName: "Codex")
 
         let listed = try await connection.client.listTools()
-        #expect(listed.tools.map(\.name) == ["codegraph_explore"])
-        #expect(launcher.spawnCount == 1)
-        #expect(sessionClient.prepareCount == 0)
-
-        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
-            name: "codegraph_explore"
-        )
-        let result = try await call.value
-        #expect(result.isError == true)
+        #expect(listed.tools.isEmpty)
+        #expect(launcher.spawnCount == 0)
         #expect(sessionClient.prepareCount == 1)
-        #expect(launcher.spawnCount == 1)
 
-        // Listing still does not prompt, so an IDE that lists every turn cannot
-        // turn discovery into an approval loop.
+        // The declined result is cached for this proxy session, avoiding an
+        // approval loop when an IDE lists repeatedly.
         let listedAgain = try await connection.client.listTools()
-        #expect(listedAgain.tools.map(\.name) == ["codegraph_explore"])
+        #expect(listedAgain.tools.isEmpty)
         #expect(sessionClient.prepareCount == 1)
-        #expect(launcher.spawnCount == 1)
+        #expect(launcher.spawnCount == 0)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
@@ -408,8 +396,7 @@ struct MCPProxyLifecycleTests {
             upstreams: [
                 MCPUpstreamConfig(
                     name: "codegraph",
-                    command: "codegraph",
-                    env: ["AUTHSIA_TEST_TOOLS": "codegraph_explore"]
+                    command: "codegraph"
                 ),
             ]
         )
@@ -435,10 +422,10 @@ struct MCPProxyLifecycleTests {
         // The second list must wait for the in-flight probe instead of reading a
         // cache that was published before the probe finished.
         for result in results {
-            #expect(result.tools.map(\.name) == ["codegraph_explore"])
+            #expect(result.tools.map(\.name) == ["jira_get_issue", "jira_search", "jira_create_issue"])
         }
         #expect(launcher.spawnCount == 1)
-        #expect(sessionClient.prepareCount == 0)
+        #expect(sessionClient.prepareCount == 1)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()

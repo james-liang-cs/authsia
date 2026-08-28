@@ -82,6 +82,14 @@ struct MCPProxyCatalogTests {
         #expect(!MCPProxyCatalog.shouldDiscoverChildCatalog(secret))
         #expect(secret.containsSecretReferences)
 
+        let literalEnvironment = MCPUpstreamConfig(
+            name: "codegraph",
+            command: "codegraph",
+            env: ["PYTHONUNBUFFERED": "1"],
+            tools: MCPUpstreamToolPolicy()
+        )
+        #expect(!MCPProxyCatalog.shouldDiscoverChildCatalog(literalEnvironment))
+
         let http = MCPUpstreamConfig(
             name: "rovo",
             transport: .http,

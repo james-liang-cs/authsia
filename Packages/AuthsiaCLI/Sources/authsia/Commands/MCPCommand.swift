@@ -47,7 +47,7 @@ struct MCPCommand: AsyncParsableCommand {
 
     struct Configure: ParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Print user-global MCP client configuration"
+            abstract: "Print a user-global MCP fallback and effective config report"
         )
 
         @Option(help: "Client: codex, claude, cursor, devin, or vscode")
@@ -63,21 +63,22 @@ struct MCPCommand: AsyncParsableCommand {
                 executableURL: Authsia.currentExecutableURL(),
                 upstreamNames: upstreams.map(\.name)
             ))
+            let workspaceRoot = Self.boundWorkspaceRoot(
+                environment: ProcessInfo.processInfo.environment,
+                currentDirectoryPath: FileManager.default.currentDirectoryPath
+            )
             let declared = upstreams.compactMap { upstream -> MCPDeclaredLocalServer? in
                 guard upstream.transport == .stdio, let command = upstream.command else { return nil }
                 return MCPDeclaredLocalServer(
                     name: upstream.name,
                     command: command,
-                    arguments: upstream.args
+                    arguments: upstream.args,
+                    workspaceRoot: workspaceRoot
                 )
             }
             let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
             // The bound workspace's project config outranks the user-global one
             // this command prints, so report it too.
-            let workspaceRoot = Self.boundWorkspaceRoot(
-                environment: ProcessInfo.processInfo.environment,
-                currentDirectoryPath: FileManager.default.currentDirectoryPath
-            )
             let locations = MCPClientConfigLocation.knownLocations(
                 homeDirectory: homeDirectory
             ) + MCPClientConfigLocation.projectLocations(

@@ -87,11 +87,12 @@ parity, executable attestation, or DLP.
                                             Authsia mcp proxy +
                                             AUTHSIA_MCP_UPSTREAM=<name>
                                          4. Open the managed workspace
-                                            (tools/list may probe without
-                                            a prompt)
-                                         5. On the first tools/call, approve
-                                            the Mac prompt (tool, upstream,
-                                            child argv)
+                                            (pinned tools list without child;
+                                            empty policy requests admission
+                                            before discovery)
+                                         5. Approve the first operation that
+                                            must start the child (discovery or
+                                            tools/call)
                                          6. Use the child's tools
                                          7. Revoke in Access Center when done
 ```
@@ -113,12 +114,14 @@ parity, executable attestation, or DLP.
 3. Enable **MCP Integrations**.
 4. From that workspace, run `authsia mcp configure --client
    <codex|claude|cursor|devin|vscode>`, or copy the Access Center wrap recipe.
-5. Replace the direct launch in the named user-global client file. Authsia
-   never edits that file.
-6. Open the managed workspace. The client starts the proxy. Empty-policy
-   `tools/list` may run a short-lived credential-less probe with no prompt.
-   The long-lived child starts only after the first permitted `tools/call`
-   is approved.
+5. Replace the direct launch in the printed user-global client file, or use an
+   Access Center recipe to replace the exact scanned user-global or project
+   file. Project-scoped Claude, Cursor, and VS Code entries override matching
+   user-global entries. Authsia never edits either file.
+6. Open the managed workspace. Pinned policy lists without starting the child.
+   Empty-policy discovery requests local MCP admission before starting its
+   short-lived child. A permitted call also requires admission before the
+   long-lived child starts; an existing matching grant is reused.
 
 Access Center **Copy wrap recipe** pastes a client-native replacement for the
 scanned file. After Declare, that copy is only the client-launch replacement,
@@ -174,10 +177,12 @@ write `mcpUpstreams`.
   `allow` or `approve` is set, `tools/list` comes from this policy without
   starting the child. When both are omitted on a credential-less stdio entry,
   Authsia discovers the child's tool names and sanitized schemas on first
-  `tools/list` with a short-lived probe that does not take admission, then
-  subtracts `deny`. The long-lived child still requires local `mcp-admission`
-  on the first permitted `tools/call`. Secret-bearing env still requires
-  explicit `allow`/`approve`.
+  `tools/list` with a short-lived probe only after local `mcp-admission`, then
+  subtracts `deny`. Automatic discovery requires the entire declared `env` to
+  be empty; literal values as well as `authsia://` references disable it. The
+  long-lived child also requires admission before the first permitted
+  `tools/call`, reusing a matching grant. Any non-empty env requires explicit
+  `allow`/`approve`.
 - Do not store live credentials, tokens, private endpoints, or
   machine-specific paths. HTTP, SSE, Streamable HTTP, and `url` entries decode
   for forward compatibility but are not executable in V1.
@@ -234,6 +239,13 @@ binary with argv `mcp proxy` and `AUTHSIA_MCP_UPSTREAM=<name>`. A remaining
 direct command/argv entry bypasses admission, redacted call evidence, and
 revoke-kill.
 
+The printed form is a user-global fallback derived from the currently bound
+workspace. It is effective only when that workspace declares the named
+upstream and no project-scoped entry overrides it. For Claude, Cursor, and VS
+Code, inspect and replace a matching project entry as well; Access Center copy
+recipes target the exact scanned scope and never emit a user-global install
+command for a project file.
+
 ```text
   ~/.claude.json  (user-global; same argv for every local tool)
 
@@ -286,8 +298,8 @@ launch the client, add credentials, or use a shell wrapper.
        +-- missing / HTTP / secrets without allow|approve
        |     -> fail closed, no child
        |
-       +-- credential-less stdio  -----> mcp-admission on first
-                                         permitted tools/call
+       +-- credential-less stdio  -----> mcp-admission before first
+                                         discovery or permitted tools/call
                                          (local Mac)
        |
        +-- authsia:// env  ------------> Agent JIT exec
@@ -325,26 +337,29 @@ fails closed.
        |     YES: answer from workspace.json (never start child)
        |
        +-- empty policy, credential-less stdio?
-             YES: short-lived probe spawn, listTools, kill,
-                  cache names minus deny (no admission)
+             YES: request mcp-admission; if granted, short-lived
+                  probe spawn, listTools, kill, cache names minus deny
+             declined admission: cache empty for this proxy session
              transient probe failure: cache nothing; later list retries
 ```
 
 Discovery starts a short-lived declared child so the client can see tool names
-when the workspace opens. That probe does not take `mcp-admission`. The
-long-lived spawn still takes that grant on the first permitted `tools/call`.
-Concurrent list or call joins an in-flight probe instead of publishing an empty
-catalog.
+when the workspace opens. Because the executable comes from repository policy,
+the probe takes `mcp-admission` before resolution or spawn. The long-lived spawn
+also requires that grant on the first permitted `tools/call`; the Bridge can
+reuse a matching grant. Concurrent list or call joins an in-flight probe
+instead of publishing an empty catalog.
 
-Secret-bearing env (`authsia://`) never discovers a catalog. Listing must not
-resolve references. Those upstreams still require explicit `allow`/`approve`.
+Any non-empty declared env, whether literal or `authsia://`, disables automatic
+catalog discovery. Listing must not resolve or forward environment values.
+Those upstreams require explicit `allow`/`approve`.
 
 ## Approval And Grants
 
-No long-lived upstream child starts until an approval covers it: the first
-permitted `tools/call`. Empty-policy `tools/list` may start a short-lived
-credential-less probe without admission so the client can advertise tool names
-when the workspace opens. That probe is killed after `listTools`.
+No upstream child starts until an approval covers it. Empty-policy `tools/list`
+requests local admission before a short-lived discovery probe; a permitted
+`tools/call` requires the same authority before the long-lived child starts.
+The discovery probe is killed after `listTools`.
 
 - Declared `authsia://` references use the existing Agent JIT `exec` path.
   Approval may be local Mac or paired iPhone.
@@ -354,19 +369,19 @@ when the workspace opens. That probe is killed after `listTools`.
 - Both approvals name the declared child argv, not only the upstream name. The
   upstream name is committed repository content; the argv is what the approval
   actually starts.
-- A denied or missing admission grant prevents the long-lived spawn. Listing
-  still advertises a credential-less discovered catalog so the client does not
-  re-prompt on every `tools/list`.
+- A denied or missing admission grant prevents both discovery and the
+  long-lived spawn. A declined discovery caches an empty catalog for that proxy
+  session so the client does not re-prompt on every `tools/list`.
 
 ```text
   client          proxy                         Bridge / Access Center
     |               |                                  |
     | initialize    |  (child not started)             |
     | tools/list    |                                  |
-    |-------------->|  policy catalog or list-only     |
-    |               |  credential-less probe (no admit)|
+    |-------------->|  policy catalog, or admission    |
+    |               |  then credential-less probe      |
     | tools/call    |                                  |
-    |-------------->|  mcp-admission / exec JIT        |
+    |-------------->|  reuse/admit / exec JIT          |
     |               |--------------------------------->|
     |               |              Mac prompt:         |
     |               |              MCP tool, upstream, |
@@ -426,11 +441,23 @@ VS Code `.vscode/mcp.json`. Codex and Devin have no project scope. Project
 scanning stays inside managed workspace roots and opens no new discovery
 surface. It reads server name, command, argv, and the
 `AUTHSIA_MCP_UPSTREAM` name only; other environment values and raw protocol
-frames are neither retained nor reported. Findings are:
+frames are neither retained nor reported. Every finding names its config scope,
+workspace context, exact path, and precedence:
+
+| Precedence | Meaning |
+| --- | --- |
+| effective | This is the entry the client resolves for the named workspace. |
+| overridden | A project-scoped entry with the same client/server name wins for this workspace. |
+| conditional | A user-global fallback is visible, but no managed workspace is selected to evaluate its declaration or project override. |
+
+Admission matching is workspace-local. A declaration from repository A never
+makes the same server name in repository B appear admitted. User-global entries
+are evaluated once per known workspace; project entries are evaluated only
+against their owning root. Findings are:
 
 | Scan result | Meaning |
 | --- | --- |
-| wrapped | The client launches `authsia mcp proxy` for a workspace-declared upstream (via `AUTHSIA_MCP_UPSTREAM` or a legacy `--upstream` argv). |
+| wrapped | The client launches `authsia mcp proxy` for an upstream declared by that finding's workspace (via `AUTHSIA_MCP_UPSTREAM` or a legacy `--upstream` argv). This is declared, not pre-approved; admission is still required before discovery or a first call. |
 | direct bypass | The declared command/argv exists, but the client launches it directly. |
 | unadmitted | No known workspace declaration matches the observed launch. |
 
@@ -451,11 +478,13 @@ the existing Bridge-owned control. A long-lived proxy observes the revoked
 snapshot and terminates its child process group; Access Center does not signal
 the child directly.
 
-The **MCP proxy** filter shows wrap-eligible scanned stdio cards plus admission
-and `proxy:<upstream>` grants. It hides absolute commands, shell wrappers, and
-an Authsia proxy launch with no child command. Presentation rules live in the
-Access Center spec; this document owns the wrap, admission, and revoke-kill
-contract those cards display.
+The **MCP proxy** filter groups findings by workspace, shows config scope and
+effective/overridden/conditional precedence, and includes valid Authsia proxy
+entries even when their upstream is not declared in that workspace. It shows
+wrap-eligible scanned stdio cards plus admission and `proxy:<upstream>` grants.
+It hides absolute commands, shell wrappers, and an Authsia proxy launch with no
+valid upstream name. Presentation rules live in the Access Center spec; this
+document owns the wrap, admission, and revoke-kill contract those cards display.
 
 ## Observability
 
@@ -470,8 +499,8 @@ grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call
 **MCP tool called** and shows the child basename plus the tool name. Direct
 and unadmitted client launches produce no call events.
 
-`tools/list`, including the credential-less discovery probe, is not per-tool command
-activity. File, network, and Process Tree tabs remain the existing
+`tools/list`, including the admitted credential-less discovery probe, is not
+per-tool command activity. File, network, and Process Tree tabs remain the existing
 Authsia-mediated exec stores; they are not a transcript of a generic MCP child.
 
 Operator guidance:
@@ -511,8 +540,10 @@ Shared codes such as `mcpAccessDisabled`, `approvalDenied`, and
 
 | Threat | Required control |
 | --- | --- |
-| Proxy policy is mistaken for live upstream authority | Derive `tools/list` from commit-safe policy when `allow` or `approve` is set. When both are empty on a credential-less stdio upstream, run a bounded listing probe without admission, then reject deny and unknown tools before the long-lived spawn, and privately verify advertised names after child initialization. |
-| Empty-policy `tools/list` starts a child with no prompt | The listing probe is credential-less, short-lived, and killed after `listTools`. It never resolves `authsia://` refs. The long-lived child still requires `mcp-admission` on the first `tools/call`. |
+| Proxy policy is mistaken for live upstream authority | Derive `tools/list` from commit-safe policy when `allow` or `approve` is set. When both are empty and `env` is empty on a credential-less stdio upstream, take admission before a bounded listing probe, then reject deny and unknown tools before the long-lived spawn, and privately verify advertised names after child initialization. |
+| Empty-policy `tools/list` starts repository code before approval | Require `mcp-admission` before resolving or spawning the declared child. Allow automatic discovery only when declared `env` is entirely empty, and kill the probe after `listTools`. |
+| One workspace declaration makes another workspace look admitted | Match declarations by standardized workspace root, report the workspace on every finding, and evaluate user-global fallbacks separately for each root. |
+| Project config silently overrides a protected user-global entry | Report both entries with user-global/project scope and effective/overridden precedence; generate project wrap recipes for the exact project file without user-global CLI commands. |
 | Upstream receives ambient credentials or Authsia runtime markers | Build a stripped environment, add only declared literals and freshly resolved refs, and omit `AUTHSIA_AGENT_*` and automation authority from the child. |
 | Injected values leak through proxied JSON-RPC | Parse and mask JSON string values in both directions; never patch raw frames or store them in audit or diagnostics. |
 | Revocation leaves a long-lived upstream authorized | Associate the child with exact owned grant IDs, recheck on every call and periodically, and terminate the complete process group when association fails. |
@@ -530,16 +561,19 @@ operating-system-wide DLP.
 Implementation is not complete until automated tests prove:
 
 - proxy catalog listing with `allow` or `approve` does not JIT or spawn;
-- empty-policy credential-less `tools/list` probes without admission, and
-  the first permitted `tools/call` takes `mcp-admission`;
-- a declined call admission does not empty the listed catalog or re-prompt
-  `tools/list`; a transient probe failure is not cached;
+- empty-policy credential-less `tools/list` takes `mcp-admission` before the
+  probe, and any non-empty declared env disables automatic discovery;
+- a declined discovery admission starts no child, caches empty for the proxy
+  session, and does not re-prompt `tools/list`; a transient probe failure is
+  not cached;
 - denied tools fail before JIT, and missing/unbound/HTTP declarations return
   their stable errors;
 - a permitted proxy call starts one no-shell child with only declared
   environment, masks JSON string values in both directions, and rejects live
   catalog drift without exposing extra child tools when policy pins the catalog;
 - both admission and exec prompts carry the declared child argv;
+- client scan findings preserve user-global/project scope, resolve project
+  precedence per workspace, and never reuse another workspace's declaration;
 - Access Center revocation removes the associated child process group within
   the documented polling window, while restart cannot reuse the old instance's
   grant;

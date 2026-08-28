@@ -146,7 +146,10 @@ struct MCPClientConfigurationTests {
                 commandLabel: "authsia",
                 status: .admittedWrapped,
                 declaredUpstreamName: "jira",
-                configPathLabel: "~/.codex/config.toml"
+                configPathLabel: "~/.codex/config.toml",
+                configScope: .userGlobal,
+                precedence: .effective,
+                workspacePathLabel: "~/repo"
             ),
             MCPClientServerFinding(
                 source: .cursor,
@@ -154,7 +157,10 @@ struct MCPClientConfigurationTests {
                 commandLabel: "npx",
                 status: .directBypass,
                 declaredUpstreamName: "filesystem",
-                configPathLabel: "~/.cursor/mcp.json"
+                configPathLabel: "~/.cursor/mcp.json",
+                configScope: .userGlobal,
+                precedence: .conditional,
+                workspacePathLabel: nil
             ),
             MCPClientServerFinding(
                 source: .vscode,
@@ -162,18 +168,23 @@ struct MCPClientConfigurationTests {
                 commandLabel: "node",
                 status: .unadmitted,
                 declaredUpstreamName: nil,
-                configPathLabel: "VS Code user mcp.json"
+                configPathLabel: "VS Code user mcp.json",
+                configScope: .project,
+                precedence: .overridden,
+                workspacePathLabel: "~/repo"
             ),
         ]
 
         let report = try #require(MCPClientConfiguration.scanReport(findings))
 
-        #expect(report.contains("wrapped and admitted"))
+        #expect(report.contains("wrapped and declared"))
+        #expect(report.contains("approval is required before discovery or first call"))
         #expect(report.contains("bypasses admission"))
         #expect(report.contains("not on the current workspace allowlist"))
         #expect(report.contains("visibility only"))
         #expect(report.contains("does not edit client files or block them"))
-        #expect(!report.contains("config.toml"))
+        #expect(report.contains("User-global / Effective / ~/repo / ~/.codex/config.toml"))
+        #expect(report.contains("Project / Overridden / ~/repo / VS Code user mcp.json"))
         #expect(MCPClientConfiguration.scanReport([]) == nil)
     }
 

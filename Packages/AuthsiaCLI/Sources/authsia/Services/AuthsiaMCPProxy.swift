@@ -545,7 +545,7 @@ actor AuthsiaMCPProxy {
         let discovered = await task.value
         discoveryTask = nil
         // A transient probe failure caches nothing so a later list retries. A
-        // genuinely empty child caches an empty catalog.
+        // declined admission and a genuinely empty child both cache.
         if let discovered {
             discoveredChildTools = discovered
         }
@@ -556,9 +556,20 @@ actor AuthsiaMCPProxy {
         guard !isStopped, let workspaceRoot = runtimeContext.workspaceRoot else { return nil }
         let command = upstream.command?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !command.isEmpty else { return [] }
-        // Listing must not prompt. A short-lived credential-less probe fills
-        // the catalog so the client can see tool names; mcp-admission is taken
-        // on the first permitted tools/call before the long-lived spawn.
+        // Discovery starts the declared child, so it takes the same admission
+        // grant the long-lived spawn takes. The Bridge reuses that grant for
+        // this caller, workspace, upstream, and server instance, so the first
+        // tools/call after a discovered list does not prompt a second time.
+        do {
+            try await admitCatalogDiscovery(upstream: upstream, workspaceRoot: workspaceRoot)
+        } catch {
+            // A denial is a decision, not a transient fault: cache it so a
+            // client that lists repeatedly cannot re-prompt on every list.
+            let denied = BridgeClientError.isApprovalDenied(error)
+                || error is MCPProxySpawnError
+            return denied ? [] : nil
+        }
+        guard !isStopped else { return nil }
         let childEnvironment = MCPProxyChildEnvironment.make(
             parent: parentEnvironment,
             declared: upstream.env
@@ -629,6 +640,36 @@ actor AuthsiaMCPProxy {
                 stdoutRead: spawned.stdoutRead
             )
             return nil
+        }
+    }
+
+    /// Takes the local `mcp-admission` grant that authorizes starting the
+    /// declared child. Discovery only runs for upstreams with an empty
+    /// environment, so it never resolves or forwards a credential.
+    private func admitCatalogDiscovery(
+        upstream: MCPUpstreamConfig,
+        workspaceRoot: URL
+    ) async throws {
+        let agentRuntimeContext = await runtimeContext.makeProxyAgentRuntimeContext(
+            upstreamName: upstreamName,
+            invocationID: UUID()
+        )
+        let sessionClient = self.sessionClient
+        let upstreamName = self.upstreamName
+        let commandLabel = Self.commandLabel(for: upstream)
+        let prepared = try await Task.detached {
+            try sessionClient.prepareChildEnvironment(
+                declared: [:],
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot,
+                mcpUpstreamName: upstreamName,
+                mcpUpstreamCommand: commandLabel,
+                mcpToolName: nil,
+                mcpToolPolicy: nil
+            )
+        }.value
+        guard !prepared.grantIDs.isEmpty else {
+            throw MCPProxySpawnError.grantUnavailable
         }
     }
 

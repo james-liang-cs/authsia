@@ -51,16 +51,31 @@ enum MCPClientConfiguration {
     static func scanReport(_ findings: [MCPClientServerFinding]) -> String? {
         guard !findings.isEmpty else { return nil }
         let rows = findings.map { finding in
-            let state: String
+            let shape: String
             switch finding.status {
             case .admittedWrapped:
-                state = "wrapped and admitted"
+                shape = "wrapped and declared; approval is required before discovery or first call"
             case .directBypass:
-                state = "declared, but launches directly and bypasses admission"
+                shape = "declared, but launches directly and bypasses admission"
             case .unadmitted:
-                state = "not on the current workspace allowlist"
+                shape = "not on the current workspace allowlist"
             }
-            return "- \(finding.source.displayName) / \(finding.serverName) "
+            let state: String
+            switch finding.precedence {
+            case .effective:
+                state = shape
+            case .overridden:
+                state = "overridden by project config; observed entry is \(shape)"
+            case .conditional:
+                state = "conditional until a managed workspace is selected; observed entry is \(shape)"
+            }
+            let context = [
+                finding.configScope.displayName,
+                finding.precedence.displayName,
+                finding.workspacePathLabel ?? "no workspace selected",
+                finding.configPathLabel,
+            ].joined(separator: " / ")
+            return "- \(finding.source.displayName) / \(finding.serverName) / \(context) "
                 + "(\(finding.commandLabel)): \(state)"
         }
         return ([
@@ -110,6 +125,8 @@ enum MCPClientConfiguration {
             }
 
         let warning = "Machine-specific absolute path for user-global configuration; do not commit or share it. " +
+            "These entries are the user-global fallback; project-scoped client config overrides matching entries. " +
+            "Proxy entries are derived from the current managed workspace and apply only while that workspace is selected. " +
             "The server can start from any directory and accepts an optional workspaceRoot tool argument from " +
             "IDE clients, with safe launch context as fallback; workspace tools remain unavailable until an " +
             "initialized Authsia workspace is selected."
@@ -127,7 +144,7 @@ enum MCPClientConfiguration {
                 command = "\(tomlEscaped(binaryPath))"
                 args = \(tomlStringArray(server.arguments))
                 """
-                table += "\nenv_vars = [\(MCPInheritedEnvironment.codexEnvVarsLiteral)]"
+                table += "\nenv_vars = \(tomlStringArray(MCPProxyClientLaunch.tlsTrustEnvironmentNames))"
                 if !server.environment.isEmpty {
                     table += "\n\n[mcp_servers.\(server.name).env]\n"
                     table += server.environment.keys.sorted().map { key in

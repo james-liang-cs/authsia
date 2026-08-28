@@ -5,6 +5,7 @@ import Darwin
 
 public struct AgentCommandProcessSnapshot: Equatable, Sendable {
     public let pid: Int32
+    public let processStartTime: UInt64?
     public let processName: String
     public let arguments: [String]
     public let workingDirectory: String?
@@ -13,6 +14,7 @@ public struct AgentCommandProcessSnapshot: Equatable, Sendable {
 
     public init(
         pid: Int32,
+        processStartTime: UInt64? = nil,
         processName: String,
         arguments: [String],
         workingDirectory: String?,
@@ -20,6 +22,7 @@ public struct AgentCommandProcessSnapshot: Equatable, Sendable {
         ancestry: [AgenticProcessReference]
     ) {
         self.pid = pid
+        self.processStartTime = processStartTime
         self.processName = processName
         self.arguments = arguments
         self.workingDirectory = workingDirectory
@@ -65,6 +68,7 @@ public struct AgentCommandProcessMonitor: Sendable {
                 contextExpiresAt: grant.expiresAt,
                 workingDirectory: snapshot.workingDirectory,
                 terminalSessionScope: snapshot.terminalSessionScope,
+                processIdentifier: snapshot.processStartTime.map { "\(snapshot.pid):\($0)" },
                 executable: snapshot.processName,
                 arguments: snapshot.arguments,
                 command: command,
@@ -80,6 +84,7 @@ public struct AgentCommandProcessMonitor: Sendable {
             guard let currentProcess = ancestry.first else { return nil }
             return AgentCommandProcessSnapshot(
                 pid: pid,
+                processStartTime: TerminalSessionScope.startTimeSeconds(pid: pid),
                 processName: currentProcess.processName,
                 arguments: currentProcess.arguments,
                 workingDirectory: nil,

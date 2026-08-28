@@ -17,8 +17,4 @@ enum MCPInheritedEnvironment {
     static func filtered(_ environment: [String: String]) -> [String: String] {
         environment.filter { names.contains($0.key) || $0.key.hasPrefix("LC_") }
     }
-
-    static var codexEnvVarsLiteral: String {
-        MCPProxyClientLaunch.tlsTrustEnvironmentNames.map { "\"\($0)\"" }.joined(separator: ", ")
-    }
 }
