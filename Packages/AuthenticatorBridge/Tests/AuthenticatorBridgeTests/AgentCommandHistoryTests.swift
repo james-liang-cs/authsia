@@ -1469,6 +1469,53 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertTrue(monitor.events(for: [grant], now: Date(timeIntervalSince1970: 100)).isEmpty)
     }
 
+    func testUnrecordedProcessEventsSkipStillRunningCommandIdentity() {
+        let grantID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let stored = AgentCommandEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            recordedAt: Date(timeIntervalSince1970: 10),
+            agentPlatform: "codex",
+            agentJITGrantID: grantID,
+            captureSource: .process,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "authsia",
+            arguments: ["authsia", "mcp", "serve"],
+            command: "authsia mcp serve"
+        )
+        let stillRunning = AgentCommandEvent(
+            id: UUID(uuidString: "22222222-3333-4444-5555-666666666666")!,
+            recordedAt: Date(timeIntervalSince1970: 40),
+            agentPlatform: "codex",
+            agentJITGrantID: grantID,
+            captureSource: .process,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "authsia",
+            arguments: ["authsia", "mcp", "serve"],
+            command: "authsia mcp serve"
+        )
+        let newCommand = AgentCommandEvent(
+            id: UUID(uuidString: "33333333-4444-5555-6666-777777777777")!,
+            recordedAt: Date(timeIntervalSince1970: 40),
+            agentPlatform: "codex",
+            agentJITGrantID: grantID,
+            captureSource: .process,
+            workingDirectory: "/tmp/project",
+            terminalSessionScope: "tty:/dev/ttys002:sid:84",
+            executable: "git",
+            arguments: ["git", "status"],
+            command: "git status"
+        )
+
+        let toRecord = AgentCommandHistoryQuery.unrecordedProcessEvents(
+            from: [stillRunning, newCommand],
+            alreadyStored: [stored]
+        )
+
+        XCTAssertEqual(toRecord.map(\.id), [newCommand.id])
+    }
+
     func testProcessMonitorLabelsVSCodeCopilotExtensionAncestryAsCopilot() {
         let grantID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
         let grant = AgentJITGrant(

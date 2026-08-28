@@ -85,6 +85,25 @@ public enum AgentCommandHistoryQuery {
             .sorted { $0.recordedAt < $1.recordedAt }
     }
 
+    /// Access Center process-fallback polls must not append another Commands row
+    /// for a still-running process that already has the same grant, terminal
+    /// scope, working directory, executable, and command.
+    public static func unrecordedProcessEvents(
+        from liveEvents: [AgentCommandEvent],
+        alreadyStored storedEvents: [AgentCommandEvent]
+    ) -> [AgentCommandEvent] {
+        let storedKeys = Set(
+            storedEvents
+                .filter { $0.captureSource == .process }
+                .compactMap(\.mergeKey)
+        )
+        return liveEvents.filter { event in
+            guard event.captureSource == .process else { return true }
+            guard let key = event.mergeKey else { return true }
+            return !storedKeys.contains(key)
+        }
+    }
+
     private static func matchesRuntimeContext(event: AgentCommandEvent, grant: AgentJITGrant) -> Bool {
         guard let context = grant.agentRuntimeContext else { return false }
         guard let eventPlatform = normalizedPlatform(event.agentPlatform),
