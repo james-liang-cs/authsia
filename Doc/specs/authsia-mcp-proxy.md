@@ -26,6 +26,7 @@ in the private Access Center spec.
 - [Child Lifecycle](#child-lifecycle)
 - [Client Configuration Scan](#client-configuration-scan)
 - [Access Center](#access-center)
+- [Observability](#observability)
 - [Errors](#errors)
 - [Threat Model](#threat-model)
 - [Verification Contract](#verification-contract)
@@ -442,6 +443,41 @@ an Authsia proxy launch with no child command. Presentation rules live in the
 Access Center spec; this document owns the wrap, admission, and revoke-kill
 contract those cards display.
 
+## Observability
+
+The proxy can see wrapped `tools/call` traffic at runtime. Persistence is a
+redacted Agent command event only: proxy source, grant ID, workspace/runtime
+correlation, and the MCP tool name. If that record cannot be saved, the call
+fails before it reaches the child. Raw JSON-RPC, tool arguments, results, and
+child stderr are never written to audit or activity stores.
+
+Review that event on the owning grant in Access Center: **MCP proxy** filter →
+grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call
+**MCP tool called** and shows the child basename plus the tool name. Direct
+and unadmitted client launches produce no call events.
+
+`tools/list`, including the admission discovery probe, is not per-tool command
+activity. File, network, and Process Tree tabs remain the existing
+Authsia-mediated exec stores; they are not a transcript of a generic MCP child.
+
+Operator guidance:
+
+1. Wrap every local stdio server that should be auditable. Visibility and
+   revoke-kill exist only when the client starts `authsia mcp proxy` with
+   `AUTHSIA_MCP_UPSTREAM`. Keep the **MCP proxy** filter on Wrapped, not Direct
+   launch.
+2. Review by grant. Expect *which tool ran*, not *what it was asked*.
+3. Treat the client-config scan as detective. A direct entry is a finding, not
+   a block, and is not a call log.
+4. Keep remote HTTP, SSE, Streamable HTTP, and URL MCP on the company gateway.
+   This local ladder does not replace gateway audit.
+5. Do not persist proxied JSON. Argument or result logging would become a
+   secret and PII store. A child that needs richer traces uses its own redacted
+   logs.
+
+Approved wording remains: preventive for proxy-wrapped local servers, detective
+for known direct configuration. Do not claim “all local MCP is logged.”
+
 ## Errors
 
 Proxy calls use the same structured MCP tool-error envelope as serve. Codes
@@ -497,7 +533,9 @@ Implementation is not complete until automated tests prove:
   prints one client-native `mcp proxy` block plus `AUTHSIA_MCP_UPSTREAM` per
   declared upstream when present, with no `--upstream` in generated argv;
 - the scanner reports wrapped, direct bypass, and unadmitted without retaining
-  other environment values.
+  other environment values;
+- Access Center presents a wrapped `tools/call` as the child basename plus MCP
+  tool name, and does not persist arguments, results, or JSON-RPC.
 
 Installed-product validation must exercise at least Codex, Claude Code, Cursor,
 and VS Code from a real managed workspace before M14 is marked delivered.

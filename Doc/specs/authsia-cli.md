@@ -1734,7 +1734,9 @@ authsia mcp configure --client vscode
 See [`authsia-mcp.md`](authsia-mcp.md) for the closed tool schemas, lifecycle,
 JIT ownership, audit correlation, and compatibility policy. Wrapping another
 local stdio MCP server is specified in
-[`authsia-mcp-proxy.md`](authsia-mcp-proxy.md).
+[`authsia-mcp-proxy.md`](authsia-mcp-proxy.md). Wrapped `tools/call` activity
+is the MCP tool name on the grant’s Access Center timeline; arguments are not
+stored.
 
 ### `authsia access` — Automation credentials
 
