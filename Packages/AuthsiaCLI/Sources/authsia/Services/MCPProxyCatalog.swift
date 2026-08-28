@@ -23,7 +23,6 @@ enum MCPProxyCatalog {
             && upstream.tools.allow.isEmpty
             && upstream.tools.approve.isEmpty
             && upstream.env.isEmpty
-            && !upstream.containsSecretReferences
     }
 
     static func advertisedNames(in policy: MCPUpstreamToolPolicy) -> [String] {

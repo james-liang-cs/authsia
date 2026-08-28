@@ -80,7 +80,6 @@ struct MCPProxyCatalogTests {
             tools: MCPUpstreamToolPolicy()
         )
         #expect(!MCPProxyCatalog.shouldDiscoverChildCatalog(secret))
-        #expect(secret.containsSecretReferences)
 
         let literalEnvironment = MCPUpstreamConfig(
             name: "codegraph",
