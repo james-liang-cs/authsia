@@ -151,6 +151,7 @@ public enum MCPLocalMCPWrapRecipe {
         [mcp_servers.\(name)]
         command = "\(tomlEscaped(authsiaCommand))"
         args = \(tomlStringArray(MCPProxyClientLaunch.arguments))
+        env_vars = [\(MCPProxyClientLaunch.tlsTrustEnvironmentNames.map { "\"\($0)\"" }.joined(separator: ", "))]
         """
         if !environment.isEmpty {
             table += "\n\n[mcp_servers.\(name).env]\n"

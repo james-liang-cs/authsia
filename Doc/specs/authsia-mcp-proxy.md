@@ -383,7 +383,9 @@ relayed to the proxy's own standard error under the same concealment and a
 bounded volume.
 
 The child environment is a stripped allowlist plus declared literals and
-freshly resolved refs. `AUTHSIA_AGENT_*`, automation authority, and
+freshly resolved refs. The allowlist includes basic process variables and the
+non-secret TLS trust settings `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, and
+`SSL_CERT_FILE`. `AUTHSIA_AGENT_*`, automation authority, and
 `AUTHSIA_MCP_UPSTREAM` are omitted from the child.
 
 The child is associated in memory with the exact Bridge grant IDs that

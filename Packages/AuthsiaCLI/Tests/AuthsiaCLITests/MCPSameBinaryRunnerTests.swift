@@ -26,6 +26,7 @@ struct MCPSameBinaryRunnerTests {
                 "PATH": "/usr/bin",
                 "LANG": "en_US.UTF-8",
                 "LC_CTYPE": "UTF-8",
+                "NODE_EXTRA_CA_CERTS": "/synthetic/trust/node.pem",
                 "REQUESTS_CA_BUNDLE": "/synthetic/trust/requests.pem",
                 "SSL_CERT_FILE": "/synthetic/trust/openssl.pem",
                 "GITHUB_TOKEN": "synthetic-token-must-not-survive",
@@ -48,6 +49,7 @@ struct MCPSameBinaryRunnerTests {
         #expect(process.environment?["PATH"] == "/usr/bin")
         #expect(process.environment?["LANG"] == "en_US.UTF-8")
         #expect(process.environment?["LC_CTYPE"] == "UTF-8")
+        #expect(process.environment?["NODE_EXTRA_CA_CERTS"] == "/synthetic/trust/node.pem")
         #expect(process.environment?["REQUESTS_CA_BUNDLE"] == "/synthetic/trust/requests.pem")
         #expect(process.environment?["SSL_CERT_FILE"] == "/synthetic/trust/openssl.pem")
         #expect(process.environment?["GITHUB_TOKEN"] == nil)

@@ -1693,10 +1693,11 @@ receive only their manual configuration because they do not expose a documented
 equivalent command.
 
 The generated Codex manual configuration also forwards the optional local
-`REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` TLS trust settings. They are ignored
-when unset; credentials and all other ambient variables remain excluded. On a
-network with a custom CA, use that manual entry rather than only Codex's direct
-installer command, which cannot express local environment forwarding.
+`NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, and `SSL_CERT_FILE` TLS trust
+settings. They are ignored when unset; credentials and all other ambient
+variables remain excluded. On a network with a custom CA, use that manual entry
+rather than only Codex's direct installer command, which cannot express local
+environment forwarding.
 
 The generated client starts the `authsia mcp serve` stdio process without a
 fixed repository path. An explicit `--workspace` wins. Otherwise the server

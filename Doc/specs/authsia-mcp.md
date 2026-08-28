@@ -109,7 +109,7 @@ MCP V1 is JIT-only. Before launching the wrapper, the server constructs a new
 environment from a fixed set of basic process variables (`HOME`, `LANG`,
 `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `USER`,
 `__CF_USER_TEXT_ENCODING`, and `LC_*`) plus the non-secret TLS trust settings
-`REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE`, and server-generated MCP runtime
+`NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, and `SSL_CERT_FILE`, and server-generated MCP runtime
 context. It does not copy the rest of the MCP server environment, including
 cloud credentials, access tokens, stale Authsia runtime context, or Authsia
 automation credentials. The internal process-control and error-status markers

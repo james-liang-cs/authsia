@@ -186,6 +186,11 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertFalse(text?.contains("--env AUTHSIA_MCP_UPSTREAM=playwright playwright") == true)
         XCTAssertTrue(text?.contains("[mcp_servers.playwright]") == true)
         XCTAssertTrue(text?.contains("args = [\"mcp\", \"proxy\"]") == true)
+        XCTAssertTrue(
+            text?.contains(
+                "env_vars = [\"NODE_EXTRA_CA_CERTS\", \"REQUESTS_CA_BUNDLE\", \"SSL_CERT_FILE\"]"
+            ) == true
+        )
         XCTAssertTrue(text?.contains("AUTHSIA_MCP_UPSTREAM = \"playwright\"") == true)
         XCTAssertTrue(text?.contains("\"name\" : \"playwright\"") == true || text?.contains("\"name\": \"playwright\"") == true)
         XCTAssertTrue(text?.contains("mcpUpstreams") == true)

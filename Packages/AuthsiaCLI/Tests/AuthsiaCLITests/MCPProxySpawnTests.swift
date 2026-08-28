@@ -15,6 +15,7 @@ struct MCPProxySpawnTests {
                 "PATH": "/usr/bin",
                 "LANG": "en_US.UTF-8",
                 "LC_CTYPE": "UTF-8",
+                "NODE_EXTRA_CA_CERTS": "/synthetic/trust/node.pem",
                 "GITHUB_TOKEN": "synthetic-token-must-not-survive",
                 "AWS_SECRET_ACCESS_KEY": "synthetic-key-must-not-survive",
                 "AUTHSIA_AGENT_ID": "stale-agent-must-not-survive",
@@ -35,6 +36,7 @@ struct MCPProxySpawnTests {
         #expect(child["PATH"] == "/usr/bin")
         #expect(child["LANG"] == "en_US.UTF-8")
         #expect(child["LC_CTYPE"] == "UTF-8")
+        #expect(child["NODE_EXTRA_CA_CERTS"] == "/synthetic/trust/node.pem")
         #expect(child["JIRA_URL"] == "https://example.atlassian.net")
         #expect(child["JIRA_API_TOKEN"] == "synthetic-token")
         #expect(child["GITHUB_TOKEN"] == nil)

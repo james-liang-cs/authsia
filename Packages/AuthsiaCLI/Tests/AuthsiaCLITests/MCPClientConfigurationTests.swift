@@ -69,6 +69,7 @@ struct MCPClientConfigurationTests {
         #expect(codex.contains("--env AUTHSIA_MCP_UPSTREAM=jira"))
         #expect(codex.contains("[mcp_servers.jira]"))
         #expect(codex.contains("args = [\"mcp\", \"proxy\"]"))
+        #expect(codex.contains("env_vars = [\"NODE_EXTRA_CA_CERTS\", \"REQUESTS_CA_BUNDLE\", \"SSL_CERT_FILE\"]"))
         #expect(codex.contains("AUTHSIA_MCP_UPSTREAM = \"jira\""))
         #expect(!codex.contains("--upstream"))
 
@@ -186,7 +187,7 @@ struct MCPClientConfigurationTests {
         #expect(codex.contains("~/.codex/config.toml"))
         #expect(codex.contains("[mcp_servers.authsia]"))
         #expect(codex.contains("args = [\"mcp\", \"serve\"]"))
-        #expect(codex.contains("env_vars = [\"REQUESTS_CA_BUNDLE\", \"SSL_CERT_FILE\"]"))
+        #expect(codex.contains("env_vars = [\"NODE_EXTRA_CA_CERTS\", \"REQUESTS_CA_BUNDLE\", \"SSL_CERT_FILE\"]"))
         #expect(codex.contains("For a custom TLS CA, use the manual configuration below."))
         #expect(!codex.contains("cwd ="))
 

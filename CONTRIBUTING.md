@@ -78,9 +78,10 @@ match Authsia without enumerating child tools. For Codex, Claude Code, and
 VS Code, it also prints a direct MCP installation command; other clients
 retain manual configuration guidance.
 The generated Codex manual configuration forwards optional local
-`REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` TLS trust settings without forwarding
-credentials or other ambient variables. Use that manual entry on a network with
-a custom CA; Codex's direct installer cannot forward local environment names.
+`NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, and `SSL_CERT_FILE` TLS trust
+settings without forwarding credentials or other ambient variables. Use that
+manual entry on a network with a custom CA; Codex's direct installer cannot
+forward local environment names.
 `authsia mcp serve` runs the same local stdio server directly and
 is included in CLI help and shell completion. One global client configuration
 can serve every repository: workspace-dependent tools accept the active

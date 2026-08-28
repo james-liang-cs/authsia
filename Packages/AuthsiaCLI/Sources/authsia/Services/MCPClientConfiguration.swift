@@ -127,9 +127,7 @@ enum MCPClientConfiguration {
                 command = "\(tomlEscaped(binaryPath))"
                 args = \(tomlStringArray(server.arguments))
                 """
-                if server.name == "authsia" {
-                    table += "\nenv_vars = [\"REQUESTS_CA_BUNDLE\", \"SSL_CERT_FILE\"]"
-                }
+                table += "\nenv_vars = [\(MCPInheritedEnvironment.codexEnvVarsLiteral)]"
                 if !server.environment.isEmpty {
                     table += "\n\n[mcp_servers.\(server.name).env]\n"
                     table += server.environment.keys.sorted().map { key in
