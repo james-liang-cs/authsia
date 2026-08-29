@@ -486,13 +486,15 @@ the existing Bridge-owned control. A long-lived proxy observes the revoked
 snapshot and terminates its child process group; Access Center does not signal
 the child directly.
 
-The **MCP proxy** filter groups findings by workspace, shows config scope and
-effective/overridden/conditional precedence, and includes valid Authsia proxy
-entries even when their upstream is not declared in that workspace. It shows
-wrap-eligible scanned stdio cards plus admission and `proxy:<upstream>` grants.
-It hides absolute commands, shell wrappers, and an Authsia proxy launch with no
-valid upstream name. Presentation rules live in the Access Center spec; this
-document owns the wrap, admission, and revoke-kill contract those cards display.
+The **MCP proxy** filter lists admission and `proxy:<upstream>` grants first.
+Scan findings sit in a collapsed coverage strip grouped by wrap status, not
+workspace path. Workspace is a chip filter when more than one managed root is
+in view. The strip includes wrap-eligible Direct launch and Not wrapped rows,
+wrapped entries with no live grant, and valid Authsia proxy entries even when
+their upstream is not declared in that workspace. It hides absolute commands,
+shell wrappers, and an Authsia proxy launch with no valid upstream name.
+Presentation rules live in the Access Center spec; this document owns the wrap,
+admission, and revoke-kill contract those rows display.
 
 ## Observability
 
@@ -520,8 +522,8 @@ Operator guidance:
 
 1. Wrap every local stdio server that should be auditable. Visibility and
    revoke-kill exist only when the client starts `authsia mcp proxy` with
-   `AUTHSIA_MCP_UPSTREAM`. Keep the **MCP proxy** filter on Wrapped, not Direct
-   launch.
+   `AUTHSIA_MCP_UPSTREAM`. On **MCP proxy**, review grants first; wrap remaining
+   Direct launch and Not wrapped rows from Coverage.
 2. Review by grant. Expect *which tool ran*, not *what it was asked*.
 3. Treat the client-config scan as detective. A direct entry is a finding, not
    a block, and is not a call log.
