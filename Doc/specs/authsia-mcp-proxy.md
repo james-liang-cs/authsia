@@ -488,8 +488,9 @@ the child directly.
 
 The **MCP proxy** filter lists admission and `proxy:<upstream>` grants first.
 Scan findings sit in a collapsed coverage strip grouped by wrap status, not
-workspace path. Workspace is a chip filter when more than one managed root is
-in view. The strip includes wrap-eligible Direct launch and Not wrapped rows,
+workspace path. The Agent grants Workspace menu filters every source tab when
+more than one managed root is in view. The strip includes wrap-eligible Direct
+launch and Not wrapped rows,
 wrapped entries with no live grant, and valid Authsia proxy entries even when
 their upstream is not declared in that workspace. It hides absolute commands,
 shell wrappers, and an Authsia proxy launch with no valid upstream name.
