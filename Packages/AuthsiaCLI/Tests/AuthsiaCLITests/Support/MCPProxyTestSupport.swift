@@ -313,11 +313,19 @@ func toolErrorCode(_ result: CallTool.Result) -> String? {
     result.structuredContent?.objectValue?["code"]?.stringValue
 }
 
-func waitForMCPProxyTestFile(_ url: URL, timeoutSeconds: Double = 5) -> String {
+func toolErrorInvocationID(_ result: CallTool.Result) -> String? {
+    result.structuredContent?.objectValue?["invocationID"]?.stringValue
+}
+
+func waitForMCPProxyTestFile(
+    _ url: URL,
+    minimumLineCount: Int = 1,
+    timeoutSeconds: Double = 5
+) -> String {
     let deadline = Date().addingTimeInterval(timeoutSeconds)
     while Date() < deadline {
         if let contents = try? String(contentsOf: url, encoding: .utf8),
-           !contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+           contents.split(whereSeparator: \.isNewline).count >= minimumLineCount {
             return contents.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         Thread.sleep(forTimeInterval: 0.02)

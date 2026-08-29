@@ -141,6 +141,7 @@ Key properties:
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
 | `authsia mcp configure` | Print a user-global MCP fallback plus an effective scope report, without editing client files | `authsia mcp configure --client codex` |
 | `authsia mcp serve` | Run the local stdio MCP server, discovering one client workspace or using an explicit override | `authsia mcp serve --workspace /path/to/repo` |
+| `authsia mcp doctor` | Scan known MCP client configs and fail on effective or conditional bypasses | `authsia mcp doctor --json` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
@@ -1738,7 +1739,26 @@ authsia mcp configure --client claude
 authsia mcp configure --client cursor
 authsia mcp configure --client devin
 authsia mcp configure --client vscode
+authsia mcp doctor --json
+authsia mcp doctor --workspace /path/to/repository --json
 ```
+
+`authsia mcp doctor [--client <client>] [--workspace <path> ...] [--json]`
+scans the same known user-global and project MCP client locations as
+`mcp configure`. `--client` is optional; omit it to scan every known location.
+`--workspace` is repeatable and is what makes the verdict precise: user-global
+fallbacks become effective or overridden for those roots. When omitted,
+doctor uses the same bound-workspace fallback as configure. A fleet check
+from an unbound working directory therefore sees user-global entries as
+conditional.
+
+A violation is a `direct-bypass` or `unadmitted` finding. Effective and
+conditional violations fail the command; overridden violations are reported
+and do not fail. Exit `0` when the policy is clean and `2` when it is
+violated. Exit `1` is reserved for ArgumentParser input errors. `--json` prints
+a versioned object with `schemaVersion`, `workspaceRoots`, `violationCount`,
+and `findings`. An empty `workspaceRoots` array means the conservative
+conditional path.
 
 See [`authsia-mcp.md`](authsia-mcp.md) for the closed tool schemas, lifecycle,
 JIT ownership, audit correlation, and compatibility policy. Wrapping another

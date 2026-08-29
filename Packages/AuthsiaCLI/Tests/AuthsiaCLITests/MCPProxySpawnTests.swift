@@ -384,8 +384,8 @@ struct MCPProxySpawnTests {
         await proxy.waitUntilCompleted()
     }
 
-    @Test("SDK Client multiplexes overlapping tools/call against the in-repo stdio double")
-    func sdkClientSpikeAgainstStdioDouble() async throws {
+    @Test("the default cap admits eight overlapping calls, rejects the ninth, and drains")
+    func defaultConcurrentCallCeiling() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
         try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
@@ -418,26 +418,25 @@ struct MCPProxySpawnTests {
             toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP sdk spike")
-        let slow: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "slow")
-        let fast: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "fast")
-        let fastResult = try await fast.value
-        let slowResult = try await slow.value
-        #expect(fastResult.isError != true)
-        #expect(slowResult.isError != true)
+        var admitted: [RequestContext<CallTool.Result>] = []
+        for _ in 0..<8 {
+            admitted.append(try await connection.client.callTool(name: "slow"))
+        }
+        let arrivals = waitForMCPProxyTestFile(arrival, minimumLineCount: 8)
+        #expect(arrivals.split(whereSeparator: \.isNewline).count == 8)
 
-        let log = try String(contentsOf: arrival, encoding: .utf8)
-        let lines = log.split(whereSeparator: \.isNewline)
-        #expect(lines.contains { $0.hasPrefix("slow ") })
-        #expect(lines.contains { $0.hasPrefix("fast ") })
-        let arrivals = lines.compactMap { line -> (String, Double)? in
-            let parts = line.split(separator: " ")
-            guard parts.count == 2, let time = Double(parts[1]) else { return nil }
-            return (String(parts[0]), time)
+        let ninth: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "fast")
+        let ninthResult = try await ninth.value
+        #expect(ninthResult.isError == true)
+        #expect(toolErrorCode(ninthResult) == MCPToolErrorCode.busy.rawValue)
+        #expect(toolErrorInvocationID(ninthResult) == nil)
+
+        for call in admitted {
+            #expect((try await call.value).isError != true)
         }
-        if let slowTime = arrivals.first(where: { $0.0 == "slow" })?.1,
-           let fastTime = arrivals.first(where: { $0.0 == "fast" })?.1 {
-            #expect(abs(fastTime - slowTime) < 0.4)
-        }
+
+        let later: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "fast")
+        #expect((try await later.value).isError != true)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
@@ -490,6 +489,53 @@ struct MCPProxySpawnTests {
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
+    }
+
+    @Test("a second overlapping call is busy when the concurrency cap is 1")
+    func overlappingCallIsBusyAtCap() async throws {
+        let fixture = try await makeConcurrentCallFixture(maximumConcurrentCalls: 1)
+        defer { fixture.tearDown() }
+        let slow: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "slow"
+        )
+        #expect(!waitForMCPProxyTestFile(fixture.arrival).isEmpty)
+        let overlapping: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "fast"
+        )
+        let overlappingResult = try await overlapping.value
+        #expect(overlappingResult.isError == true)
+        #expect(toolErrorCode(overlappingResult) == MCPToolErrorCode.busy.rawValue)
+        #expect(toolErrorInvocationID(overlappingResult) == nil)
+
+        let slowResult = try await slow.value
+        #expect(slowResult.isError != true)
+
+        await fixture.connection.client.disconnect()
+        await fixture.proxy.waitUntilCompleted()
+    }
+
+    @Test("the concurrent-call counter drains after a busy rejection")
+    func concurrentCallCounterDrains() async throws {
+        let fixture = try await makeConcurrentCallFixture(maximumConcurrentCalls: 1)
+        defer { fixture.tearDown() }
+        let slow: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "slow"
+        )
+        #expect(!waitForMCPProxyTestFile(fixture.arrival).isEmpty)
+        let overlapping: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "fast"
+        )
+        #expect(toolErrorCode(try await overlapping.value) == MCPToolErrorCode.busy.rawValue)
+        #expect((try await slow.value).isError != true)
+
+        let later: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "fast"
+        )
+        let laterResult = try await later.value
+        #expect(laterResult.isError != true)
+
+        await fixture.connection.client.disconnect()
+        await fixture.proxy.waitUntilCompleted()
     }
 
     @Test("relative non-executable command is commandNotFound")
@@ -688,4 +734,60 @@ struct MCPProxySpawnTests {
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
     }
+}
+
+private struct ConcurrentCallFixture {
+    let bin: URL
+    let root: URL
+    let arrival: URL
+    let proxy: AuthsiaMCPProxy
+    let connection: (client: Client, serverTransport: InMemoryTransport)
+
+    func tearDown() {
+        try? FileManager.default.removeItem(at: bin)
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+private func makeConcurrentCallFixture(
+    maximumConcurrentCalls: Int
+) async throws -> ConcurrentCallFixture {
+    let bin = try makeWorkspaceRoot()
+    try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+    let arrival = bin.appendingPathComponent("arrival.log")
+    let sessionClient = RecordingMCPProxySessionClient(
+        environment: [
+            "AUTHSIA_TEST_TOOLS": "slow,fast",
+            "AUTHSIA_TEST_ARRIVAL": arrival.path,
+        ]
+    )
+    let root = try makeMCPProxyWorkspace(
+        upstreams: [
+            stdioJiraUpstream(
+                env: [:],
+                allow: ["slow", "fast"],
+                approve: [],
+                deny: []
+            )
+        ]
+    )
+    let proxy = AuthsiaMCPProxy(
+        version: "test",
+        upstreamName: "jira",
+        runtimeContext: MCPRuntimeContext(startingDirectory: root),
+        mcpAccessEnabled: { true },
+        sessionClient: sessionClient,
+        parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+        initializeTimeoutSeconds: 15,
+        maximumConcurrentCalls: maximumConcurrentCalls,
+        toolCallRecorder: NoopMCPProxyToolCallRecorder()
+    )
+    let connection = try await connectMCPProxy(proxy, clientName: "MCP concurrent cap")
+    return ConcurrentCallFixture(
+        bin: bin,
+        root: root,
+        arrival: arrival,
+        proxy: proxy,
+        connection: connection
+    )
 }

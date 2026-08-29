@@ -20,8 +20,9 @@ struct MCPCommand: AsyncParsableCommand {
               authsia mcp configure --client codex
               authsia mcp serve --workspace /path/to/repository
               authsia mcp proxy --upstream jira
+              authsia mcp doctor --json
             """,
-        subcommands: [Configure.self, Serve.self, Proxy.self]
+        subcommands: [Configure.self, Serve.self, Proxy.self, Doctor.self]
     )
 
     static func startingDirectory(
@@ -67,15 +68,10 @@ struct MCPCommand: AsyncParsableCommand {
                 environment: ProcessInfo.processInfo.environment,
                 currentDirectoryPath: FileManager.default.currentDirectoryPath
             )
-            let declared = upstreams.compactMap { upstream -> MCPDeclaredLocalServer? in
-                guard upstream.transport == .stdio, let command = upstream.command else { return nil }
-                return MCPDeclaredLocalServer(
-                    name: upstream.name,
-                    command: command,
-                    arguments: upstream.args,
-                    workspaceRoot: workspaceRoot
-                )
-            }
+            let declared = Self.declaredServers(
+                from: upstreams,
+                workspaceRoot: workspaceRoot
+            )
             let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
             // The bound workspace's project config outranks the user-global one
             // this command prints, so report it too.
@@ -117,7 +113,22 @@ struct MCPCommand: AsyncParsableCommand {
             ).workspaceRoot
         }
 
-        private static func upstreams(
+        static func declaredServers(
+            from upstreams: [MCPUpstreamConfig],
+            workspaceRoot: URL?
+        ) -> [MCPDeclaredLocalServer] {
+            upstreams.compactMap { upstream -> MCPDeclaredLocalServer? in
+                guard upstream.transport == .stdio, let command = upstream.command else { return nil }
+                return MCPDeclaredLocalServer(
+                    name: upstream.name,
+                    command: command,
+                    arguments: upstream.args,
+                    workspaceRoot: workspaceRoot
+                )
+            }
+        }
+
+        static func upstreams(
             environment: [String: String],
             currentDirectoryPath: String
         ) -> [MCPUpstreamConfig] {
@@ -237,4 +248,116 @@ struct MCPCommand: AsyncParsableCommand {
             return trimmed.isEmpty ? nil : trimmed
         }
     }
+
+    struct Doctor: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Report whether known MCP client configs comply with the Authsia allowlist",
+            discussion: """
+                Scan user-global and project MCP client files and exit 2 when an
+                effective or conditional entry bypasses Authsia or is unadmitted.
+                Overridden entries are reported and do not fail. Pass --workspace
+                to resolve user-global fallbacks as effective or overridden.
+
+                Examples:
+                  authsia mcp doctor
+                  authsia mcp doctor --json
+                  authsia mcp doctor --workspace /path/to/repository --json
+                """
+        )
+
+        @Option(help: "Client: codex, claude, cursor, devin, or vscode")
+        var client: MCPClient?
+
+        @Option(help: "Workspace root used to resolve effective vs overridden findings. Repeatable.")
+        var workspace: [String] = []
+
+        @Flag(name: .customLong("json"), help: "Print a machine-readable compliance verdict")
+        var json = false
+
+        var homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        var currentDirectoryPath = FileManager.default.currentDirectoryPath
+        var environment = ProcessInfo.processInfo.environment
+
+        func run() throws {
+            try run { print($0) }
+        }
+
+        func run(output: (String) -> Void) throws {
+            let report = try makeReport()
+            if json {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(report)
+                output(String(decoding: data, as: UTF8.self))
+            } else if let text = MCPClientConfiguration.scanReport(report.findings) {
+                output(text)
+            }
+            if report.violationCount > 0 {
+                throw ExitCode(2)
+            }
+        }
+
+        func makeReport() throws -> MCPDoctorReport {
+            let workspaceRoots = resolvedWorkspaceRoots()
+            var locations = MCPClientConfigLocation.knownLocations(
+                homeDirectory: homeDirectory
+            ) + MCPClientConfigLocation.projectLocations(
+                workspaceRoots: workspaceRoots,
+                homeDirectory: homeDirectory
+            )
+            if let client {
+                locations = locations.filter { $0.source.rawValue == client.rawValue }
+            }
+            let findings = MCPClientConfigScanner().scan(
+                declaredServers: declaredServers(workspaceRoots: workspaceRoots),
+                locations: locations
+            ).sorted { $0.id < $1.id }
+            return MCPDoctorReport(
+                schemaVersion: 1,
+                workspaceRoots: workspaceRoots.map(\.path).sorted(),
+                violationCount: findings.filter(Self.isFailingViolation).count,
+                findings: findings
+            )
+        }
+
+        private func resolvedWorkspaceRoots() -> [URL] {
+            if !workspace.isEmpty {
+                return workspace.map { path in
+                    let url = URL(fileURLWithPath: path, isDirectory: true)
+                    return MCPRuntimeContext(startingDirectory: url).workspaceRoot
+                        ?? url.standardizedFileURL
+                }
+            }
+            if let root = Configure.boundWorkspaceRoot(
+                environment: environment,
+                currentDirectoryPath: currentDirectoryPath
+            ) {
+                return [root]
+            }
+            return []
+        }
+
+        private func declaredServers(workspaceRoots: [URL]) -> [MCPDeclaredLocalServer] {
+            return workspaceRoots.flatMap { root in
+                let upstreams = (try? WorkspaceConfigStore.read(fromWorkspaceRoot: root))?.mcpUpstreams ?? []
+                return Configure.declaredServers(from: upstreams, workspaceRoot: root)
+            }
+        }
+
+        static func isFailingViolation(_ finding: MCPClientServerFinding) -> Bool {
+            switch finding.status {
+            case .admittedWrapped:
+                return false
+            case .directBypass, .unadmitted:
+                return finding.precedence != .overridden
+            }
+        }
+    }
+}
+
+struct MCPDoctorReport: Codable, Equatable, Sendable {
+    let schemaVersion: Int
+    let workspaceRoots: [String]
+    let violationCount: Int
+    let findings: [MCPClientServerFinding]
 }

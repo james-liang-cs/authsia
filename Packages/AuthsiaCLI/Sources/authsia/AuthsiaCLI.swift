@@ -42,7 +42,7 @@ struct Authsia: AsyncParsableCommand {
               delete      Delete vault items
               scrape      Scan files and migrate secrets
               completion  Generate shell completion script
-              mcp         Configure, serve, or proxy local MCP connections
+              mcp         Configure, serve, proxy, or doctor local MCP connections
 
             Examples:
               authsia list passwords --format table

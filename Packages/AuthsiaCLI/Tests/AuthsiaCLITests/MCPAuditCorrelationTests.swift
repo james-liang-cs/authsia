@@ -1,5 +1,6 @@
 import AuthenticatorBridge
 import Foundation
+import MCP
 import Testing
 @testable import authsia
 
@@ -126,9 +127,127 @@ struct MCPAuditCorrelationTests {
         #expect(!text.contains("\"method\""))
         #expect(!text.contains("\"params\""))
     }
+
+    @Test("post-audit timeout envelope matches the recorded audit turnID")
+    func postAuditTimeoutCarriesInvocationID() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let recorder = RecordingMCPProxyToolCallRecorder()
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["AUTHSIA_TEST_TOOLS": "slow,fast"]
+        )
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                stdioJiraUpstream(
+                    env: [:],
+                    allow: ["slow", "fast"],
+                    approve: [],
+                    deny: []
+                )
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            callTimeoutSeconds: 0.1,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: recorder
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP audit timeout")
+        let slow: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "slow")
+        let slowResult = try await slow.value
+        #expect(slowResult.isError == true)
+        #expect(toolErrorCode(slowResult) == MCPToolErrorCode.timedOut.rawValue)
+
+        let envelopeID = try #require(toolErrorInvocationID(slowResult))
+        #expect(UUID(uuidString: envelopeID) != nil)
+        let recorded = try #require(recorder.calls.first)
+        #expect(recorded.agentRuntimeContext.turnID == "mcp-call:\(envelopeID)")
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("an audit persistence failure omits the invocationID")
+    func auditPersistenceFailureOmitsInvocationID() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let recorder = RecordingMCPProxyToolCallRecorder()
+        recorder.error = CorrelationTestError.recordingFailed
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["AUTHSIA_TEST_TOOLS": "fast"]
+        )
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                stdioJiraUpstream(
+                    env: [:],
+                    allow: ["fast"],
+                    approve: [],
+                    deny: []
+                )
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            toolCallRecorder: recorder
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP failed audit")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "fast")
+        let result = try await call.value
+
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.upstreamUnavailable.rawValue)
+        #expect(toolErrorInvocationID(result) == nil)
+        #expect(recorder.calls.isEmpty)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("pre-invocation workspace failure has no invocationID")
+    func preInvocationFailureOmitsInvocationID() async throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true }
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP unbound audit")
+        let context: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let result = try await context.value
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.workspaceUnavailable.rawValue)
+        #expect(toolErrorInvocationID(result) == nil)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
 }
 
 private struct CorrelationFixture: Codable {
     let audit: BridgeAuditRecord
     let activity: AgentCommandEvent
+}
+
+private enum CorrelationTestError: Error {
+    case recordingFailed
 }

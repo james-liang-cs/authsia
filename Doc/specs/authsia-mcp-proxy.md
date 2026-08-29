@@ -330,6 +330,11 @@ credential-less discovery is the only path that advertises extra child tools
 (minus `deny`). A policy-advertised or discovered tool missing from the child
 fails closed.
 
+Overlapping forwarded `tools/call` requests are multiplexed against one child.
+At most eight calls may be in flight at once; a ninth is rejected with `busy`
+rather than queued. Each forwarded call is also bounded by the proxy-side
+deadline documented under Errors.
+
 ## Catalog Listing And Discovery
 
 ```text
@@ -497,6 +502,11 @@ correlation, and the MCP tool name. If that record cannot be saved, the call
 fails before it reaches the child. Raw JSON-RPC, tool arguments, results, and
 child stderr are never written to audit or activity stores.
 
+An error envelope carries the invocation UUID only after the redacted command
+event has been saved. The matching audit row's `turnID` (and `toolUseID`) is
+`mcp-call:` followed by that UUID. Failures before or during audit persistence
+omit the key; an identifier with no audit row would be misleading.
+
 Review that event on the owning grant in Access Center: **MCP proxy** filter →
 grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call
 **MCP tool called** and shows the child basename plus the tool name. Direct
@@ -536,6 +546,7 @@ specific to wrapping:
 | `upstreamUnavailable` | The named upstream is missing, cannot start or initialize, or does not implement the advertised tool. |
 | `httpUpstreamUnsupported` | The workspace declares an HTTP, SSE, Streamable HTTP, or URL upstream, which V1 cannot execute. |
 | `timedOut` | The child did not answer a forwarded `tools/call` before the proxy's call deadline. The proxy cancels the request upstream and leaves the child running for the next call. |
+| `busy` | Too many forwarded `tools/call` requests are already in flight for this upstream. The proxy rejects rather than queues. |
 
 Shared codes such as `mcpAccessDisabled`, `approvalDenied`, and
 `workspaceUnavailable` keep the meanings in [`authsia-mcp.md`](authsia-mcp.md#errors-and-output).
@@ -587,6 +598,10 @@ Implementation is not complete until automated tests prove:
   `tools/list` returns;
 - a forwarded `tools/call` that outruns the call deadline returns `timedOut`
   and leaves the child usable for the next call;
+- a ninth overlapping forwarded call is rejected with `busy` while eight are
+  in flight, and the counter drains so a later call succeeds;
+- an error after audit persistence carries the UUID prefix of the recorded
+  audit `turnID`, while an audit-write failure omits `invocationID`;
 - Access Center revocation removes the associated child process group within
   the documented polling window, while restart cannot reuse the old instance's
   grant;

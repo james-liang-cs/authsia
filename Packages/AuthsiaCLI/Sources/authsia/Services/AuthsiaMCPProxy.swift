@@ -19,6 +19,7 @@ actor AuthsiaMCPProxy {
     private let parentEnvironment: [String: String]
     private let initializeTimeoutSeconds: Double
     private let callTimeoutSeconds: Double
+    private let maximumConcurrentCalls: Int
     private let killGraceSeconds: Double
     private let grantPollIntervalSeconds: Double
     private let grantService: MCPGrantService
@@ -30,6 +31,7 @@ actor AuthsiaMCPProxy {
     private var inFlight: InFlightSpawn?
     private var grantWatchTask: Task<Void, Never>?
     private var isStopped = false
+    private var inFlightCallCount = 0
     /// What the child advertised, sanitized and capped, before `deny`.
     private var discoveredChildTools: [Tool]?
     private var discoveryTask: Task<[Tool]?, Never>?
@@ -44,6 +46,7 @@ actor AuthsiaMCPProxy {
         parentEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         initializeTimeoutSeconds: Double = 30,
         callTimeoutSeconds: Double = 120,
+        maximumConcurrentCalls: Int = 8,
         killGraceSeconds: Double = 2,
         grantPollIntervalSeconds: Double = 2,
         grantService: MCPGrantService? = nil,
@@ -67,6 +70,7 @@ actor AuthsiaMCPProxy {
         self.parentEnvironment = parentEnvironment
         self.initializeTimeoutSeconds = initializeTimeoutSeconds
         self.callTimeoutSeconds = callTimeoutSeconds
+        self.maximumConcurrentCalls = maximumConcurrentCalls
         self.killGraceSeconds = killGraceSeconds
         self.grantPollIntervalSeconds = grantPollIntervalSeconds
         self.grantService = grantService ?? MCPGrantService(
@@ -168,8 +172,17 @@ actor AuthsiaMCPProxy {
                     message: "This upstream tool is denied by workspace policy."
                 )
             }
+            guard inFlightCallCount < maximumConcurrentCalls else {
+                return try Self.errorResult(
+                    code: .busy,
+                    message: "Too many concurrent calls are in flight for this MCP upstream."
+                )
+            }
+            inFlightCallCount += 1
+            defer { inFlightCallCount -= 1 }
+            let invocationID = UUID()
+            var recordedInvocationID: UUID?
             do {
-                let invocationID = UUID()
                 let agentRuntimeContext = await runtimeContext.makeProxyAgentRuntimeContext(
                     upstreamName: upstreamName,
                     invocationID: invocationID
@@ -193,41 +206,49 @@ actor AuthsiaMCPProxy {
                     workspaceRoot: runtimeContext.workspaceRoot,
                     grantID: session.grantIDs.sorted { $0.uuidString < $1.uuidString }.first
                 )
+                recordedInvocationID = invocationID
                 return try await forward(parameters, using: session)
             } catch let error as MCPToolInputError {
                 return try Self.errorResult(
                     code: .invalidInput,
-                    message: error.localizedDescription
+                    message: error.localizedDescription,
+                    invocationID: recordedInvocationID
                 )
             } catch let error as BridgeClientError {
                 return try Self.errorResult(
                     code: MCPChildFailureReporter.code(for: error),
-                    message: error.localizedDescription
+                    message: error.localizedDescription,
+                    invocationID: recordedInvocationID
                 )
             } catch MCPProxySpawnError.grantUnavailable {
                 return try Self.errorResult(
                     code: .grantUnavailable,
-                    message: "No revocable Authsia grant covers this upstream's secret references."
+                    message: "No revocable Authsia grant covers this upstream's secret references.",
+                    invocationID: recordedInvocationID
                 )
             } catch is MCPProxySpawnError {
                 return try Self.errorResult(
                     code: .upstreamUnavailable,
-                    message: "The upstream MCP server could not be started."
+                    message: "The upstream MCP server could not be started.",
+                    invocationID: recordedInvocationID
                 )
             } catch is MCPProxyCallError {
                 return try Self.errorResult(
                     code: .timedOut,
-                    message: "The upstream MCP server did not answer this tool call in time."
+                    message: "The upstream MCP server did not answer this tool call in time.",
+                    invocationID: recordedInvocationID
                 )
             } catch is CancellationError {
                 return try Self.errorResult(
                     code: .cancelled,
-                    message: "The upstream tool call was cancelled."
+                    message: "The upstream tool call was cancelled.",
+                    invocationID: recordedInvocationID
                 )
             } catch {
                 return try Self.errorResult(
                     code: .upstreamUnavailable,
-                    message: "The upstream MCP server is unavailable."
+                    message: "The upstream MCP server is unavailable.",
+                    invocationID: recordedInvocationID
                 )
             }
         }
@@ -758,9 +779,14 @@ actor AuthsiaMCPProxy {
 
     private static func errorResult(
         code: MCPToolErrorCode,
-        message: String
+        message: String,
+        invocationID: UUID? = nil
     ) throws -> CallTool.Result {
-        let output = MCPToolErrorOutput(code: code, message: message, invocationID: nil)
+        let output = MCPToolErrorOutput(
+            code: code,
+            message: message,
+            invocationID: invocationID?.uuidString
+        )
         return try CallTool.Result(
             content: [.text(text: message, annotations: nil, _meta: nil)],
             structuredContent: output,

@@ -1,4 +1,5 @@
 import Foundation
+import ArgumentParser
 import AuthenticatorBridge
 import Testing
 @testable import authsia
@@ -313,16 +314,19 @@ struct MCPClientConfigurationTests {
         }
     }
 
-    @Test("configure, serve, and proxy commands are visible")
+    @Test("configure, serve, proxy, and doctor commands are visible")
     func commandRegistration() throws {
         #expect(MCPCommand.Configure.configuration.shouldDisplay)
         #expect(MCPCommand.Serve.configuration.shouldDisplay)
         #expect(MCPCommand.Proxy.configuration.shouldDisplay)
+        #expect(MCPCommand.Doctor.configuration.shouldDisplay)
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "codex"])
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "devin"])
         _ = try Authsia.parseAsRoot(["mcp", "configure", "--client", "windsurf"])
         _ = try Authsia.parseAsRoot(["mcp", "serve", "--workspace", "/tmp/project"])
         _ = try Authsia.parseAsRoot(["mcp", "proxy", "--upstream", "jira"])
+        _ = try Authsia.parseAsRoot(["mcp", "doctor", "--json"])
+        _ = try Authsia.parseAsRoot(["mcp", "doctor", "--workspace", "/tmp/project", "--client", "cursor"])
     }
 
     @Test("proxy selects upstream from --upstream or AUTHSIA_MCP_UPSTREAM")
@@ -354,6 +358,81 @@ struct MCPClientConfigurationTests {
         }
     }
 
+    @Test("doctor fails a user-global bypass when no workspace is bound")
+    func doctorFailsConditionalFleetScan() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+
+        let result = try runDoctor(
+            arguments: ["--json"],
+            home: fixture.home,
+            currentDirectory: fixture.unrelated
+        )
+        #expect(result.code == 2)
+
+        let report = try JSONDecoder().decode(MCPDoctorReport.self, from: Data(result.output.utf8))
+        #expect(report.schemaVersion == 1)
+        #expect(report.workspaceRoots.isEmpty)
+        #expect(report.violationCount == 2)
+        #expect(report.findings.map(\.id) == [
+            ":claude:filesystem:~/.claude.json",
+            ":cursor:jira:~/.cursor/mcp.json",
+        ])
+        let filesystem = try #require(report.findings.first { $0.serverName == "filesystem" })
+        #expect(filesystem.precedence == .conditional)
+        #expect(filesystem.status == .unadmitted)
+        #expect(!result.output.contains("synthetic-token"))
+        #expect(!result.output.lowercased().contains("bearer"))
+    }
+
+    @Test("doctor exits 0 when every finding is admitted-wrapped")
+    func doctorPassesWrappedEntries() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+
+        let result = try runDoctor(
+            arguments: ["--client", "cursor", "--workspace", fixture.workspace.path],
+            home: fixture.home,
+            currentDirectory: fixture.unrelated
+        )
+        #expect(result.code == 0)
+    }
+
+    @Test("doctor fails an effective direct-bypass when a workspace is supplied")
+    func doctorFailsEffectiveDirectBypass() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+
+        let result = try runDoctor(
+            arguments: ["--client", "claude", "--workspace", fixture.workspace.path],
+            home: fixture.home,
+            currentDirectory: fixture.unrelated
+        )
+        #expect(result.code == 2)
+    }
+
+    @Test("doctor does not fail an overridden user-global bypass")
+    func doctorIgnoresOverriddenBypass() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        try writeDoctorJSON([
+            "mcpServers": [
+                "filesystem": [
+                    "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                    "args": ["mcp", "proxy"],
+                    "env": ["AUTHSIA_MCP_UPSTREAM": "filesystem"],
+                ]
+            ]
+        ], to: fixture.workspace.appendingPathComponent(".mcp.json"))
+
+        let result = try runDoctor(
+            arguments: ["--client", "claude", "--workspace", fixture.workspace.path],
+            home: fixture.home,
+            currentDirectory: fixture.unrelated
+        )
+        #expect(result.code == 0)
+    }
+
     private func render(
         _ client: MCPClient,
         fixture: (root: URL, binary: URL)
@@ -372,5 +451,99 @@ struct MCPClientConfigurationTests {
             withIntermediateDirectories: true
         )
         return (root, binary)
+    }
+}
+
+private struct DoctorFixture {
+    let home: URL
+    let workspace: URL
+    let unrelated: URL
+
+    func tearDown() {
+        try? FileManager.default.removeItem(at: home)
+        try? FileManager.default.removeItem(at: workspace)
+        try? FileManager.default.removeItem(at: unrelated)
+    }
+}
+
+private func makeDoctorFixture() throws -> DoctorFixture {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "authsia-doctor-home-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let workspace = try makeWorkspaceRoot()
+    try WorkspaceConfigStore.write(
+        WorkspaceConfig(
+            workspace: .init(name: "doctor", authsiaFolder: "Workspaces/doctor"),
+            managedEnvFiles: [],
+            agents: nil,
+            mcpUpstreams: [
+                MCPUpstreamConfig(
+                    name: "jira",
+                    command: "mcp-atlassian",
+                    tools: MCPUpstreamToolPolicy(allow: ["jira_get_issue"])
+                ),
+                MCPUpstreamConfig(
+                    name: "filesystem",
+                    command: "npx",
+                    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                    tools: MCPUpstreamToolPolicy(allow: ["read_file"])
+                ),
+            ]
+        ),
+        toWorkspaceRoot: workspace
+    )
+    try writeDoctorJSON([
+        "mcpServers": [
+            "jira": [
+                "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                "args": ["mcp", "proxy"],
+                "env": ["AUTHSIA_MCP_UPSTREAM": "jira"],
+            ]
+        ]
+    ], to: home.appendingPathComponent(".cursor/mcp.json"))
+    try writeDoctorJSON([
+        "mcpServers": [
+            "filesystem": [
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            ]
+        ]
+    ], to: home.appendingPathComponent(".claude.json"))
+    return DoctorFixture(
+        home: home,
+        workspace: workspace,
+        unrelated: try makeWorkspaceRoot()
+    )
+}
+
+private func writeDoctorJSON(_ object: [String: Any], to url: URL) throws {
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try JSONSerialization.data(
+        withJSONObject: object,
+        options: [.prettyPrinted, .sortedKeys]
+    ).write(to: url)
+}
+
+private func runDoctor(
+    arguments: [String],
+    home: URL,
+    currentDirectory: URL,
+    environment: [String: String] = [:]
+) throws -> (code: Int32, output: String) {
+    var doctor = try MCPCommand.Doctor.parse(arguments)
+    doctor.homeDirectory = home
+    doctor.currentDirectoryPath = currentDirectory.path
+    doctor.environment = environment
+    var output = ""
+    do {
+        try doctor.run { output = $0 }
+        return (0, output)
+    } catch let code as ExitCode {
+        return (code.rawValue, output)
     }
 }

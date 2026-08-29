@@ -88,14 +88,16 @@ struct CompletionCommandTests {
         let zsh = Completion.completionScript(for: .zsh)
         #expect(zsh.contains("'serve:Serve Authsia tools over local stdio'"))
         #expect(zsh.contains("'proxy:Proxy a named workspace upstream over local stdio'"))
+        #expect(zsh.contains("'doctor:Report whether known MCP client configs comply with the Authsia allowlist'"))
 
         let bash = Completion.completionScript(for: .bash)
-        #expect(bash.contains("configure|serve|proxy"))
-        #expect(bash.contains("compgen -W 'configure serve proxy'"))
+        #expect(bash.contains("configure|serve|proxy|doctor"))
+        #expect(bash.contains("compgen -W 'configure serve proxy doctor'"))
 
         let fish = Completion.completionScript(for: .fish)
         #expect(fish.contains("-fa 'serve' -d 'Serve Authsia tools over local stdio'"))
         #expect(fish.contains("-fa 'proxy' -d 'Proxy a named workspace upstream over local stdio'"))
+        #expect(fish.contains("-fa 'doctor' -d 'Report whether known MCP client configs comply with the Authsia allowlist'"))
     }
 
     @Test("get query uses dynamic item metadata completion")
