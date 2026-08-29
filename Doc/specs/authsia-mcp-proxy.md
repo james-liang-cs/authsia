@@ -488,8 +488,9 @@ the child directly.
 
 The **MCP proxy** filter lists admission and `proxy:<upstream>` grants first.
 Scan findings sit in a collapsed coverage strip grouped by wrap status, not
-workspace path. The Agent grants Workspace menu filters every source tab when
-more than one managed root is in view. The strip includes wrap-eligible Direct
+workspace path. The Agent grants Workspace menu filters every source tab; it
+lists **~** for grants with no workspace and directories that still exist on
+this Mac, and omits historical paths that are gone. The strip includes wrap-eligible Direct
 launch and Not wrapped rows,
 wrapped entries with no live grant, and valid Authsia proxy entries even when
 their upstream is not declared in that workspace. It hides absolute commands,
