@@ -216,7 +216,7 @@ extension XPCRequestHandler {
         switch callerIdentityProvider()?.bundleIdentifier {
         case "app.authsia":
             return .all
-        case "com.authsia.cli":
+        case "authsia", "com.authsia.cli":
             guard let context = request.context.agentRuntimeContext,
                   context.agentType == "authsia-mcp",
                   AgentRuntimeContext.sanitize(context.sessionID) != nil else {

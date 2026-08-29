@@ -283,6 +283,33 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(revocationAudit.requestedCommand, BridgeRequestType.agentJITRevoke.rawValue)
     }
 
+    func testMCPGrantControlAcceptsSignedHelperIdentifier() async throws {
+        let context = AgentRuntimeContext(
+            sessionID: "mcp:current",
+            agentType: "authsia-mcp"
+        )
+        let owned = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/One"),
+            capabilities: [.mcpAdmission],
+            expiresAt: now.addingTimeInterval(300),
+            agentRuntimeContext: context
+        )
+        let handler = makeHandler(
+            store: MemoryAgentJITGrantStore([owned]),
+            callerIdentity: codexAppCallerIdentity,
+            clock: AgentJITApprovalClockSpy([now]).callAsFunction
+        )
+
+        let snapshot: BridgeResponse<AgentJITGrantSnapshotPayload> = try await grantSnapshot(
+            handler,
+            agentRuntimeContext: context
+        )
+
+        XCTAssertNil(snapshot.error)
+        XCTAssertEqual(snapshot.payload?.active.map(\.id), [owned.id])
+    }
+
     func testRemoteBuilderReceivesExactMappedAuthorityAndFixedTiming() async throws {
         let restoreTTL = setCLIApprovalTTL(15)
         defer { restoreTTL() }
