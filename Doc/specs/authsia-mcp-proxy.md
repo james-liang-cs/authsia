@@ -532,7 +532,8 @@ explicit **Renew admission** action. Renewal extends that grant in place: the
 same grant ID, a fresh expiry, and a wrapped server that keeps running. Only
 Authsia.app may renew, and only an active admission.
 Scan findings sit in a protection-coverage strip grouped by effective status,
-not workspace path. Coverage stays expanded while actionable rows exist.
+not workspace path. Coverage is collapsed by default; the operator expands
+it. The strip still shows progress and the next onboarding step while hidden.
 **Protect server** declares and/or writes as required by that row. It requires
 confirmation for client writes and refuses an overridden user-global row. For
 a credential-less launch whose policy still has empty `allow` and `approve`,
