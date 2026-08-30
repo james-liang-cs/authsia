@@ -1757,8 +1757,8 @@ conditional violations fail the command; overridden violations are reported
 and do not fail. Exit `0` when the policy is clean and `2` when it is
 violated. Exit `1` is reserved for ArgumentParser input errors. `--json` prints
 a versioned object with `schemaVersion`, `workspaceRoots`, `violationCount`,
-and `findings`. An empty `workspaceRoots` array means the conservative
-conditional path.
+and `findings`. Each finding includes its stable `id` for diffable automation.
+An empty `workspaceRoots` array means the conservative conditional path.
 
 See [`authsia-mcp.md`](authsia-mcp.md) for the closed tool schemas, lifecycle,
 JIT ownership, audit correlation, and compatibility policy. Wrapping another

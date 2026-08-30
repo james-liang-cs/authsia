@@ -314,6 +314,23 @@ final class MCPClientConfigScannerTests: XCTestCase {
         ))
     }
 
+    func testFindingJSONIncludesStableID() throws {
+        let finding = MCPClientServerFinding(
+            source: .cursor,
+            serverName: "filesystem",
+            commandLabel: "npx",
+            status: .unadmitted,
+            declaredUpstreamName: nil,
+            configPathLabel: "~/.cursor/mcp.json",
+            workspacePathLabel: "~/repo"
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(finding)) as? [String: Any]
+        )
+
+        XCTAssertEqual(object["id"] as? String, finding.id)
+    }
+
     func testStableProxyArgvWithUpstreamEnvironmentIsWrapped() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

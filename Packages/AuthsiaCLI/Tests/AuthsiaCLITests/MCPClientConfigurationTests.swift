@@ -371,6 +371,8 @@ struct MCPClientConfigurationTests {
         #expect(result.code == 2)
 
         let report = try JSONDecoder().decode(MCPDoctorReport.self, from: Data(result.output.utf8))
+        let object = try #require(JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any])
+        let encodedFindings = try #require(object["findings"] as? [[String: Any]])
         #expect(report.schemaVersion == 1)
         #expect(report.workspaceRoots.isEmpty)
         #expect(report.violationCount == 2)
@@ -378,6 +380,7 @@ struct MCPClientConfigurationTests {
             ":claude:filesystem:~/.claude.json",
             ":cursor:jira:~/.cursor/mcp.json",
         ])
+        #expect(encodedFindings.compactMap { $0["id"] as? String } == report.findings.map(\.id))
         let filesystem = try #require(report.findings.first { $0.serverName == "filesystem" })
         #expect(filesystem.precedence == .conditional)
         #expect(filesystem.status == .unadmitted)

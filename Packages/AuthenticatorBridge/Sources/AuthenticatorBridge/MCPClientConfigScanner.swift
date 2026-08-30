@@ -223,6 +223,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     }
 
     enum CodingKeys: String, CodingKey {
+        case id
         case source
         case serverName
         case commandLabel
@@ -260,6 +261,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
         try container.encode(source, forKey: .source)
         try container.encode(serverName, forKey: .serverName)
         try container.encode(commandLabel, forKey: .commandLabel)
