@@ -18,11 +18,18 @@ enum MCPProxyCatalog {
         return advertisedTools(from: upstream)
     }
 
+    /// What makes a probe safe to run at all: a stdio child with no declared
+    /// env, so listing never resolves or forwards a credential. `authsia mcp
+    /// catalog` re-probes an upstream whose policy it already wrote, so it
+    /// checks this rather than `shouldDiscoverChildCatalog`.
+    static func canProbeChildCatalog(_ upstream: MCPUpstreamConfig) -> Bool {
+        upstream.requiresStdioPolicy && upstream.env.isEmpty
+    }
+
     static func shouldDiscoverChildCatalog(_ upstream: MCPUpstreamConfig) -> Bool {
-        upstream.requiresStdioPolicy
+        canProbeChildCatalog(upstream)
             && upstream.tools.allow.isEmpty
             && upstream.tools.approve.isEmpty
-            && upstream.env.isEmpty
     }
 
     static func advertisedNames(in policy: MCPUpstreamToolPolicy) -> [String] {

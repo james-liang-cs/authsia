@@ -575,6 +575,29 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         return storedSession == currentSession
     }
 
+    /// Returns a copy that expires at `date`. Renewal extends the grant in
+    /// place: the same authority, the same watching proxy child, a later end.
+    /// A revoked grant is never renewed -- ending access is not reversible.
+    public func renewed(expiresAt date: Date) -> AgentJITGrant {
+        guard revokedAt == nil else { return self }
+        return AgentJITGrant(
+            id: id,
+            agentName: agentName,
+            callerFingerprint: callerFingerprint,
+            folderScope: folderScope,
+            resourceScope: resourceScope,
+            capabilities: capabilities,
+            createdAt: createdAt,
+            expiresAt: date,
+            revokedAt: nil,
+            lastUsedAt: lastUsedAt,
+            requestedItems: requestedItems,
+            agentRuntimeContext: agentRuntimeContext,
+            approvedBy: approvedBy,
+            environmentScope: environmentScope
+        )
+    }
+
     /// Returns a copy marked revoked at `date`. Used by Access Center to reflect a
     /// revocation optimistically the moment the Bridge confirms it, before the full
     /// snapshot reload lands. A no-op if the grant is already revoked.
@@ -640,5 +663,23 @@ public struct AgentJITGrantMutationPayload: Codable, Equatable, Sendable {
 
     public init(revokedGrantIDs: [UUID]) {
         self.revokedGrantIDs = revokedGrantIDs
+    }
+}
+
+public struct AgentJITGrantRenewPayload: Codable, Equatable, Sendable {
+    public let id: UUID
+
+    public init(id: UUID) {
+        self.id = id
+    }
+}
+
+/// The renewed grant, so the caller can show the new expiry without waiting for
+/// a snapshot reload.
+public struct AgentJITGrantRenewalPayload: Codable, Equatable, Sendable {
+    public let grant: AgentJITGrant
+
+    public init(grant: AgentJITGrant) {
+        self.grant = grant
     }
 }

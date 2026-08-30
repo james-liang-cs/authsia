@@ -19,11 +19,12 @@ struct MCPCommand: AsyncParsableCommand {
             Examples:
               authsia mcp configure --client codex
               authsia mcp wrap --write --server filesystem
+              authsia mcp catalog --server filesystem --write
               authsia mcp serve --workspace /path/to/repository
               authsia mcp proxy --upstream jira
               authsia mcp doctor --json
             """,
-        subcommands: [Configure.self, Wrap.self, Serve.self, Proxy.self, Doctor.self]
+        subcommands: [Configure.self, Wrap.self, Catalog.self, Serve.self, Proxy.self, Doctor.self]
     )
 
     static func startingDirectory(
@@ -141,6 +142,96 @@ struct MCPCommand: AsyncParsableCommand {
                 return []
             }
             return config.mcpUpstreams
+        }
+    }
+
+    struct Catalog: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Record what a declared local MCP server advertises into workspace policy",
+            discussion: """
+                Starts the declared child once behind local MCP admission, reads its
+                tool list, then stops it. With --write the names and schemas land in
+                .authsia/workspace.json, so opening the workspace never starts the
+                child and the admission prompt falls on the first tool call instead.
+
+                Examples:
+                  authsia mcp catalog --server codegraph
+                  authsia mcp catalog --server codegraph --write
+                """
+        )
+
+        @Option(help: "Named workspace MCP upstream to probe")
+        var server: String
+
+        @Option(help: "Explicit workspace binding (otherwise uses launch context)")
+        var workspace: String?
+
+        @Flag(name: .customLong("write"), help: "Record the probed catalog in .authsia/workspace.json")
+        var write = false
+
+        mutating func run() async throws {
+            try await run { print($0) }
+        }
+
+        func run(output: (String) -> Void) async throws {
+            guard WorkspaceConfigStore.isValidMCPUpstreamName(server) else {
+                throw ValidationError("Upstream name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
+            }
+            let runtimeContext = MCPRuntimeContext(
+                startingDirectory: MCPCommand.startingDirectory(
+                    workspace: workspace,
+                    environment: ProcessInfo.processInfo.environment,
+                    currentDirectoryPath: FileManager.default.currentDirectoryPath
+                )
+            )
+            guard let workspaceRoot = runtimeContext.workspaceRoot else {
+                throw ValidationError(WorkspaceConfigError.missingConfig.localizedDescription)
+            }
+            let proxy = AuthsiaMCPProxy(
+                version: Authsia.version(),
+                upstreamName: server,
+                runtimeContext: runtimeContext,
+                mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
+            )
+            guard let tools = await proxy.captureCatalog() else {
+                throw ValidationError(
+                    "Could not probe '\(server)'. It must be a declared stdio upstream that "
+                        + "declares no env, MCP integrations must be enabled in Authsia, and "
+                        + "the server must answer tools/list."
+                )
+            }
+            guard !tools.isEmpty else {
+                throw ValidationError(
+                    "'\(server)' advertised no tools. Admission may have been declined."
+                )
+            }
+            output("\(server) advertises \(Self.toolCount(tools.count)):")
+            for tool in tools {
+                output("  \(tool.name)")
+            }
+            guard write else {
+                output(
+                    "\nRe-run with --write to record this catalog in "
+                        + WorkspaceConfigStore.relativeConfigPath + "."
+                )
+                return
+            }
+            let outcome = try MCPCatalogCapture.apply(
+                tools: tools,
+                upstreamName: server,
+                workspaceRoot: workspaceRoot
+            )
+            output(
+                "\nRecorded \(Self.toolCount(outcome.advertised.count)) in "
+                    + WorkspaceConfigStore.relativeConfigPath + "."
+            )
+            if !outcome.wroteDescriptors {
+                output("Descriptions and schemas exceeded the committed catalog bound and were omitted.")
+            }
+        }
+
+        static func toolCount(_ count: Int) -> String {
+            "\(count) tool" + (count == 1 ? "" : "s")
         }
     }
 
@@ -434,7 +525,15 @@ struct MCPCommand: AsyncParsableCommand {
                 plan,
                 authsiaCommand: Authsia.currentExecutableURL().path
             )
-            output(message + "\n\nWrote \(finding.configPathLabel).")
+            // The proxy answers tools/list from workspace policy, so a wrapped
+            // server the workspace has no catalog for lists nothing until
+            // capture runs. Wrapping writes the scanned client file only, so
+            // name that step rather than starting the child from here.
+            output(
+                message + "\n\nWrote \(finding.configPathLabel)."
+                    + "\nNext: authsia mcp catalog --server \(finding.serverName) --write "
+                    + "records what that server advertises."
+            )
         }
     }
 }

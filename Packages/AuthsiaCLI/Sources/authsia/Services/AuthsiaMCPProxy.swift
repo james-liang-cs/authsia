@@ -35,6 +35,7 @@ actor AuthsiaMCPProxy {
     /// What the child advertised, sanitized and capped, before `deny`.
     private var discoveredChildTools: [Tool]?
     private var discoveryTask: Task<[Tool]?, Never>?
+    private var warnedMissingCatalog = false
 
     init(
         version: String,
@@ -786,18 +787,49 @@ actor AuthsiaMCPProxy {
         Darwin.close(stdoutRead)
     }
 
-    private func listedTools() async -> [Tool] {
+    private func listedTools() -> [Tool] {
         let upstream = stdioUpstream()
         let policyTools = MCPProxyCatalog.listedTools(for: upstream)
         if !policyTools.isEmpty {
             return policyTools
         }
-        guard let upstream,
-              MCPProxyCatalog.shouldDiscoverChildCatalog(upstream),
-              mcpAccessEnabled() else {
-            return []
+        // Discovery starts the declared child, so it takes admission. Clients
+        // list on connect, which would prompt the human for merely opening the
+        // workspace. Listing answers from committed policy only; the approval
+        // belongs on the first tools/call, where a tool is actually invoked.
+        if let upstream, MCPProxyCatalog.shouldDiscoverChildCatalog(upstream) {
+            warnMissingCatalog()
         }
-        return await discoveredTools(for: upstream)
+        return []
+    }
+
+    /// An upstream with no recorded catalog lists nothing, which reads as a
+    /// broken server from the client. Name the command that records one, once
+    /// per proxy session, on the stream clients surface as MCP server logs.
+    private func warnMissingCatalog() {
+        guard !warnedMissingCatalog else { return }
+        warnedMissingCatalog = true
+        let message = """
+            authsia mcp proxy: no tool catalog recorded for upstream '\(upstreamName)'. \
+            Run: authsia mcp catalog --server \(upstreamName) --write
+
+            """
+        stderrOutput.write(Data(message.utf8))
+    }
+
+    /// One-shot catalog capture for `authsia mcp catalog`. Takes the same
+    /// admission the call path takes, probes the declared child, then drops the
+    /// grant: no child outlives the command, and the next client call must
+    /// raise its own approval.
+    func captureCatalog() async -> [Tool]? {
+        guard mcpAccessEnabled() else { return nil }
+        guard let upstream = stdioUpstream(),
+              MCPProxyCatalog.canProbeChildCatalog(upstream) else {
+            return nil
+        }
+        let discovered = await probeChildCatalog(upstream)
+        grantService.revokeActiveOwnedGrants()
+        return discovered
     }
 
     private func advertisedNames(for upstream: MCPUpstreamConfig) async -> Set<String> {

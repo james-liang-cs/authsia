@@ -120,7 +120,7 @@ extension BridgeRequestType {
     var mayRequireUserApproval: Bool {
         switch self {
         case .ping, .status, .lock, .workspaceMetadata, .chromeAutofillMatches, .auditVerify, .sshAgentSign,
-             .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll,
+             .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll, .agentJITRenew,
              .listAccess, .revokeAccess, .validateAccess,
              .terminalPairingComplete, .terminalPairingRevoke:
             return false
@@ -1933,6 +1933,8 @@ final class AuthsiaBridgeClient:
                 service.revokeAgentJITGrant(requestData, replyHandler)
             case .agentJITRevokeAll:
                 service.revokeAllAgentJITGrants(requestData, replyHandler)
+            case .agentJITRenew:
+                service.renewAgentJITGrant(requestData, replyHandler)
             case .listAccess:
                 service.listAccessCredentials(requestData, replyHandler)
             case .revokeAccess:

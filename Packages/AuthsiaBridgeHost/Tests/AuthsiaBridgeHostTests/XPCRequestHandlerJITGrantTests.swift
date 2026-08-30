@@ -214,6 +214,113 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(store.grants.filter { $0.revokedAt != nil }.count, 2)
     }
 
+    func testRenewExtendsMCPAdmissionInPlaceAndAudits() async throws {
+        let restoreTTL = setMCPAdmissionApprovalTTL(1_800)
+        defer { restoreTTL() }
+        let context = AgentRuntimeContext(sessionID: "mcp:current", agentType: "authsia-mcp")
+        let admission = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .root,
+            capabilities: [.mcpAdmission],
+            createdAt: now.addingTimeInterval(-1_700),
+            expiresAt: now.addingTimeInterval(100),
+            agentRuntimeContext: context
+        )
+        let store = MemoryAgentJITGrantStore([admission])
+        let (auditLogger, auditURL, tempDir) = try makeAuditLogger()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let handler = makeHandler(
+            store: store,
+            auditLogger: auditLogger,
+            callerIdentity: appCallerIdentity,
+            clock: { self.now }
+        )
+
+        let response: BridgeResponse<AgentJITGrantRenewalPayload> = try await renewGrant(
+            handler,
+            id: admission.id
+        )
+
+        XCTAssertNil(response.error)
+        // The same grant, extended: the proxy watches grant IDs, so a new ID
+        // would kill the wrapped server this renewal is meant to keep alive.
+        XCTAssertEqual(response.payload?.grant.id, admission.id)
+        XCTAssertEqual(response.payload?.grant.expiresAt, now.addingTimeInterval(1_800))
+        XCTAssertNil(response.payload?.grant.revokedAt)
+        XCTAssertEqual(store.grants.first?.expiresAt, now.addingTimeInterval(1_800))
+        let renewalAudit = try XCTUnwrap(auditRecords(at: auditURL).last)
+        XCTAssertEqual(renewalAudit.agentJITGrantID, admission.id)
+        XCTAssertEqual(renewalAudit.approvedBy, "renewed")
+    }
+
+    func testRenewRejectsNonAdmissionAndEndedGrants() async throws {
+        let exec = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/One"),
+            capabilities: [.exec],
+            expiresAt: now.addingTimeInterval(300)
+        )
+        let ended = AgentJITGrant.fixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000012")!,
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .root,
+            capabilities: [.mcpAdmission],
+            expiresAt: now.addingTimeInterval(-1)
+        )
+        let store = MemoryAgentJITGrantStore([exec, ended])
+        let handler = makeHandler(
+            store: store,
+            callerIdentity: appCallerIdentity,
+            clock: { self.now }
+        )
+
+        let execResponse: BridgeResponse<AgentJITGrantRenewalPayload> = try await renewGrant(
+            handler,
+            id: exec.id
+        )
+        let endedResponse: BridgeResponse<AgentJITGrantRenewalPayload> = try await renewGrant(
+            handler,
+            id: ended.id
+        )
+
+        // An exec grant names the vault items it opened; extending one would
+        // widen a decision the human made about specific secrets. An admission
+        // that already ended starts again from the client, not from here.
+        XCTAssertEqual(execResponse.error?.code, .policyDenied)
+        XCTAssertEqual(endedResponse.error?.code, .policyDenied)
+        XCTAssertEqual(store.grants.first(where: { $0.id == exec.id })?.expiresAt, exec.expiresAt)
+        XCTAssertEqual(store.grants.first(where: { $0.id == ended.id })?.expiresAt, ended.expiresAt)
+    }
+
+    func testRenewRejectsTheMCPServerThatOwnsTheGrant() async throws {
+        let context = AgentRuntimeContext(sessionID: "mcp:current", agentType: "authsia-mcp")
+        let admission = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .root,
+            capabilities: [.mcpAdmission],
+            expiresAt: now.addingTimeInterval(100),
+            agentRuntimeContext: context
+        )
+        let store = MemoryAgentJITGrantStore([admission])
+        // The signed CLI may revoke its own grant. Renewal hands authority back,
+        // so it stays with the human at Access Center.
+        let handler = makeHandler(
+            store: store,
+            callerIdentity: codexAppCallerIdentity,
+            clock: { self.now }
+        )
+
+        let response: BridgeResponse<AgentJITGrantRenewalPayload> = try await renewGrant(
+            handler,
+            id: admission.id,
+            agentRuntimeContext: context
+        )
+
+        XCTAssertEqual(response.error?.code, .policyDenied)
+        XCTAssertEqual(store.grants.first?.expiresAt, admission.expiresAt)
+    }
+
     func testGrantControlRejectsCLICaller() async throws {
         let handler = makeHandler(store: MemoryAgentJITGrantStore())
 
@@ -4139,6 +4246,20 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             body: AgentJITGrantRevokePayload(id: id),
             agentRuntimeContext: agentRuntimeContext,
             action: handler.revokeAgentJITGrant
+        )
+    }
+
+    private func renewGrant(
+        _ handler: XPCRequestHandler,
+        id: UUID,
+        agentRuntimeContext: AgentRuntimeContext? = nil
+    ) async throws -> BridgeResponse<AgentJITGrantRenewalPayload> {
+        try await invokeGrantControl(
+            handler,
+            type: .agentJITRenew,
+            body: AgentJITGrantRenewPayload(id: id),
+            agentRuntimeContext: agentRuntimeContext,
+            action: handler.renewAgentJITGrant
         )
     }
 

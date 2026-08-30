@@ -61,6 +61,7 @@ public enum BridgeRequestType: String, Codable {
     case agentJITSnapshot
     case agentJITRevoke
     case agentJITRevokeAll
+    case agentJITRenew
     case terminalPairingComplete
     /// Audit-only lifecycle marker. Pairing revocation is performed by `lock`.
     case terminalPairingRevoke

@@ -116,6 +116,96 @@ extension XPCRequestHandler {
         }
     }
 
+    public func renewAgentJITGrant(
+        _ request: Data,
+        _ rawReply: @escaping (Data?, NSError?) -> Void
+    ) {
+        let reply = XPCReply(rawReply)
+        guard let bridgeRequest = decodeRequest(request),
+              bridgeRequest.type == .agentJITRenew,
+              let body = bridgeRequest.body,
+              let payload = try? BridgeCoder.decode(AgentJITGrantRenewPayload.self, from: body) else {
+            reply(nil, makeNSError(code: .invalidRequest, message: "Invalid JIT renewal request"))
+            return
+        }
+        // Revoking is something a grant's own MCP server may do to itself.
+        // Renewal hands authority back, so only the human at Access Center may
+        // ask for it -- never the agent whose access it extends.
+        guard callerIdentityProvider()?.bundleIdentifier == "app.authsia" else {
+            replyError(
+                id: bridgeRequest.id,
+                code: .policyDenied,
+                message: "JIT grant renewal is restricted to Authsia.app",
+                reply: reply
+            )
+            return
+        }
+
+        let now = agentJITApprovalClock()
+        do {
+            guard let existing = try agentJITGrantStore.loadAll().first(where: {
+                $0.id == payload.id
+            }) else {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .notFound,
+                    message: "JIT grant was not found",
+                    reply: reply
+                )
+                return
+            }
+            // Only admission renews. An exec grant names the vault items it
+            // opened; extending one silently would widen a decision the human
+            // made about specific secrets.
+            guard existing.capabilities == [.mcpAdmission] else {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .policyDenied,
+                    message: "Only MCP admission grants can be renewed",
+                    reply: reply
+                )
+                return
+            }
+            // Ending access is not reversible from here: a client-originated
+            // approval is what starts a new admission.
+            guard existing.status(asOf: now) == .active else {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .policyDenied,
+                    message: "This admission has already ended. "
+                        + "Retry a tool in the MCP client to approve a new one.",
+                    reply: reply
+                )
+                return
+            }
+            let renewed = try agentJITGrantStore.renew(
+                id: existing.id,
+                expiresAt: now.addingTimeInterval(Self.configuredMCPAdmissionTTL)
+            )
+            recordGrantRenewal(renewed, requestContext: bridgeRequest.context)
+            postAgentJITGrantDidChange()
+            let response: BridgeResponse<AgentJITGrantRenewalPayload> = BridgeResponseBuilder.success(
+                id: bridgeRequest.id,
+                payload: AgentJITGrantRenewalPayload(grant: renewed)
+            )
+            reply(encodeResponse(response), nil)
+        } catch AgentJITGrantStoreError.notFound {
+            replyError(
+                id: bridgeRequest.id,
+                code: .notFound,
+                message: "JIT grant was not found",
+                reply: reply
+            )
+        } catch {
+            replyError(
+                id: bridgeRequest.id,
+                code: .appUnavailable,
+                message: "JIT grant could not be renewed",
+                reply: reply
+            )
+        }
+    }
+
     public func revokeAllAgentJITGrants(
         _ request: Data,
         _ rawReply: @escaping (Data?, NSError?) -> Void
@@ -174,6 +264,27 @@ extension XPCRequestHandler {
     /// Center refreshes immediately instead of waiting for its periodic poll.
     func postAgentJITGrantDidChange() {
         AccessCenterActivityNotifier.postGrantDidChange()
+    }
+
+    private func recordGrantRenewal(
+        _ grant: AgentJITGrant,
+        requestContext: BridgeContext
+    ) {
+        try? auditLogger.record(
+            BridgeAuditRecord(
+                command: .agentJITPreflight,
+                itemId: grant.id.uuidString,
+                itemName: grant.folderScope.displayName,
+                approvedBy: "renewed",
+                timestamp: agentJITApprovalClock(),
+                requestedCommand: requestContext.requestedCommand,
+                fullCommand: requestContext.fullCommand,
+                agentJITGrantID: grant.id,
+                agentRuntimeContext: grant.agentRuntimeContext,
+                workspaceContext: requestContext.workspaceContext,
+                environmentScope: grant.environmentScope
+            )
+        )
     }
 
     private func recordGrantRevocation(

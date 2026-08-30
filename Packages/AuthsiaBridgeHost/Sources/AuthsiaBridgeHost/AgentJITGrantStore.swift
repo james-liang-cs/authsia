@@ -23,6 +23,7 @@ public nonisolated protocol AgentJITGrantStoring {
     func saveAll(_ grants: [AgentJITGrant]) throws
     func markUsed(id: UUID, at date: Date) throws -> AgentJITGrant
     func revoke(id: UUID, revokedAt date: Date) throws -> AgentJITGrant
+    func renew(id: UUID, expiresAt date: Date) throws -> AgentJITGrant
     func revokeAll(revokedAt date: Date) throws -> [AgentJITGrant]
     func revokeClosedTerminalGrants(now: Date) throws -> [AgentJITGrant]
     func markUsedIfAllowed(
@@ -73,6 +74,15 @@ public nonisolated protocol AgentJITGrantStoring {
 }
 
 public extension AgentJITGrantStoring {
+    func renew(id: UUID, expiresAt date: Date) throws -> AgentJITGrant {
+        guard let grant = try loadAll().first(where: { $0.id == id }) else {
+            throw AgentJITGrantStoreError.notFound(id)
+        }
+        let renewed = grant.renewed(expiresAt: date)
+        try save(renewed)
+        return renewed
+    }
+
     func revokeAll(revokedAt date: Date) throws -> [AgentJITGrant] {
         try loadAll()
             .filter { $0.status(asOf: date) == .active }
@@ -178,6 +188,16 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
         try locked {
             try updateUnlocked(id: id) { grant in
                 grant.copy(revokedAt: date)
+            }
+        }
+    }
+
+    public func renew(id: UUID, expiresAt date: Date) throws -> AgentJITGrant {
+        try locked {
+            // Read and write under one lock: a revocation landing between the
+            // two would otherwise be overwritten by the extended copy.
+            try updateUnlocked(id: id) { grant in
+                grant.renewed(expiresAt: date)
             }
         }
     }
