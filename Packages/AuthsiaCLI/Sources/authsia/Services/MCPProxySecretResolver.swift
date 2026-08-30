@@ -176,6 +176,52 @@ protocol MCPProxyToolCallRecording: Sendable {
         workspaceRoot: URL?,
         grantID: UUID?
     ) throws
+
+    func recordRejected(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws
+
+    func recordOutcome(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws
+}
+
+extension MCPProxyToolCallRecording {
+    func recordRejected(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws {
+        _ = (upstreamName, upstreamCommand, toolName, agentRuntimeContext, workspaceRoot, grantID, outcome)
+    }
+
+    func recordOutcome(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws {
+        _ = (upstreamName, upstreamCommand, toolName, agentRuntimeContext, workspaceRoot, grantID, outcome)
+    }
 }
 
 struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Sendable {
@@ -193,8 +239,68 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         workspaceRoot: URL?,
         grantID: UUID?
     ) throws {
+        try store.record(event(
+            upstreamName: upstreamName,
+            upstreamCommand: upstreamCommand,
+            toolName: toolName,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot,
+            grantID: grantID,
+            outcome: .started
+        ))
+    }
+
+    func recordRejected(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws {
+        try store.record(event(
+            upstreamName: upstreamName,
+            upstreamCommand: upstreamCommand,
+            toolName: toolName,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot,
+            grantID: grantID,
+            outcome: outcome
+        ))
+    }
+
+    func recordOutcome(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws {
+        try store.record(event(
+            upstreamName: upstreamName,
+            upstreamCommand: upstreamCommand,
+            toolName: toolName,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot,
+            grantID: grantID,
+            outcome: outcome
+        ))
+    }
+
+    private func event(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) -> AgentCommandEvent {
         let executable = upstreamCommand ?? upstreamName
-        try store.record(AgentCommandEvent(
+        return AgentCommandEvent(
             recordedAt: Date(),
             agentPlatform: agentRuntimeContext.platform,
             sessionID: agentRuntimeContext.sessionID,
@@ -207,7 +313,8 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             workingDirectory: workspaceRoot?.path,
             executable: executable,
             arguments: ["mcp-tool", toolName],
-            command: "\(executable) mcp-tool \(toolName)"
-        ))
+            command: "\(executable) mcp-tool \(toolName)",
+            mcpProxyOutcome: outcome
+        )
     }
 }

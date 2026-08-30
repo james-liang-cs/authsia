@@ -407,6 +407,7 @@ struct MCPProxySpawnTests {
             ]
         )
         defer { try? FileManager.default.removeItem(at: root) }
+        let recorder = RecordingMCPProxyToolCallRecorder()
         let proxy = AuthsiaMCPProxy(
             version: "test",
             upstreamName: "jira",
@@ -415,7 +416,7 @@ struct MCPProxySpawnTests {
             sessionClient: sessionClient,
             parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
             initializeTimeoutSeconds: 15,
-            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+            toolCallRecorder: recorder
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP sdk spike")
         var admitted: [RequestContext<CallTool.Result>] = []
@@ -429,7 +430,8 @@ struct MCPProxySpawnTests {
         let ninthResult = try await ninth.value
         #expect(ninthResult.isError == true)
         #expect(toolErrorCode(ninthResult) == MCPToolErrorCode.busy.rawValue)
-        #expect(toolErrorInvocationID(ninthResult) == nil)
+        #expect(toolErrorInvocationID(ninthResult) != nil)
+        #expect(recorder.outcomes.contains { $0.outcome == .busy && $0.toolName == "fast" })
 
         for call in admitted {
             #expect((try await call.value).isError != true)
@@ -505,7 +507,7 @@ struct MCPProxySpawnTests {
         let overlappingResult = try await overlapping.value
         #expect(overlappingResult.isError == true)
         #expect(toolErrorCode(overlappingResult) == MCPToolErrorCode.busy.rawValue)
-        #expect(toolErrorInvocationID(overlappingResult) == nil)
+        #expect(toolErrorInvocationID(overlappingResult) != nil)
 
         let slowResult = try await slow.value
         #expect(slowResult.isError != true)

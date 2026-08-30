@@ -142,116 +142,342 @@ actor AuthsiaMCPProxy {
     }
 
     private func callTool(_ parameters: CallTool.Parameters) async throws -> CallTool.Result {
+        let invocationID = UUID()
+        let agentRuntimeContext = await runtimeContext.makeProxyAgentRuntimeContext(
+            upstreamName: upstreamName,
+            invocationID: invocationID
+        )
+
         guard mcpAccessEnabled() else {
-            return try Self.errorResult(
+            return try proxyFailureResult(
+                invocationID: invocationID,
+                upstreamCommand: nil,
+                toolName: parameters.name,
+                agentRuntimeContext: agentRuntimeContext,
+                grantID: nil,
+                outcome: .denied,
                 code: .mcpAccessDisabled,
-                message: "MCP integrations are disabled in Authsia. Enable them in Settings > Developer Access."
+                message: "MCP integrations are disabled in Authsia. Enable them in Settings > Developer Access.",
+                recordAttempted: false,
+                recordedInvocationID: nil
             )
         }
         switch boundPolicy() {
         case .unbound:
-            return try Self.errorResult(
+            return try proxyFailureResult(
+                invocationID: invocationID,
+                upstreamCommand: nil,
+                toolName: parameters.name,
+                agentRuntimeContext: agentRuntimeContext,
+                grantID: nil,
+                outcome: .upstreamUnavailable,
                 code: .workspaceUnavailable,
-                message: "The MCP proxy is not bound to a valid managed workspace."
+                message: "The MCP proxy is not bound to a valid managed workspace.",
+                recordAttempted: false,
+                recordedInvocationID: nil
             )
         case .missingUpstream:
-            return try Self.errorResult(
+            return try proxyFailureResult(
+                invocationID: invocationID,
+                upstreamCommand: nil,
+                toolName: parameters.name,
+                agentRuntimeContext: agentRuntimeContext,
+                grantID: nil,
+                outcome: .upstreamUnavailable,
                 code: .upstreamUnavailable,
-                message: "The named MCP upstream is not declared in this workspace."
+                message: "The named MCP upstream is not declared in this workspace.",
+                recordAttempted: false,
+                recordedInvocationID: nil
             )
         case .httpUpstream:
-            return try Self.errorResult(
+            return try proxyFailureResult(
+                invocationID: invocationID,
+                upstreamCommand: nil,
+                toolName: parameters.name,
+                agentRuntimeContext: agentRuntimeContext,
+                grantID: nil,
+                outcome: .denied,
                 code: .httpUpstreamUnsupported,
-                message: "HTTP MCP upstreams are not supported."
+                message: "HTTP MCP upstreams are not supported.",
+                recordAttempted: false,
+                recordedInvocationID: nil
             )
         case .stdio(let upstream):
             let advertised = await advertisedNames(for: upstream)
             guard advertised.contains(parameters.name) else {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: currentChildGrantID(),
+                    outcome: .denied,
                     code: .upstreamDenied,
-                    message: "This upstream tool is denied by workspace policy."
+                    message: "This upstream tool is denied by workspace policy.",
+                    recordAttempted: false,
+                    recordedInvocationID: nil
                 )
             }
             guard inFlightCallCount < maximumConcurrentCalls else {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: currentChildGrantID(),
+                    outcome: .busy,
                     code: .busy,
-                    message: "Too many concurrent calls are in flight for this MCP upstream."
+                    message: "Too many concurrent calls are in flight for this MCP upstream.",
+                    recordAttempted: false,
+                    recordedInvocationID: nil
                 )
             }
             inFlightCallCount += 1
             defer { inFlightCallCount -= 1 }
-            let invocationID = UUID()
             var recordedInvocationID: UUID?
+            var recordAttempted = false
+            var recordedGrantID: UUID?
             do {
-                let agentRuntimeContext = await runtimeContext.makeProxyAgentRuntimeContext(
-                    upstreamName: upstreamName,
-                    invocationID: invocationID
-                )
                 let session = try await ensureChild(
                     upstream: upstream,
                     toolName: parameters.name,
                     agentRuntimeContext: agentRuntimeContext
                 )
+                let grantID = session.grantIDs.sorted { $0.uuidString < $1.uuidString }.first
+                recordedGrantID = grantID
                 guard session.childToolNames.contains(parameters.name) else {
-                    return try Self.errorResult(
+                    return try proxyFailureResult(
+                        invocationID: invocationID,
+                        upstreamCommand: upstream.command,
+                        toolName: parameters.name,
+                        agentRuntimeContext: agentRuntimeContext,
+                        grantID: grantID,
+                        outcome: .upstreamUnavailable,
                         code: .upstreamUnavailable,
-                        message: "The upstream MCP server does not implement this tool."
+                        message: "The upstream MCP server does not implement this tool.",
+                        recordAttempted: false,
+                        recordedInvocationID: nil
                     )
                 }
+                recordAttempted = true
                 try toolCallRecorder.record(
                     upstreamName: upstreamName,
                     upstreamCommand: upstream.command,
                     toolName: parameters.name,
                     agentRuntimeContext: agentRuntimeContext,
                     workspaceRoot: runtimeContext.workspaceRoot,
-                    grantID: session.grantIDs.sorted { $0.uuidString < $1.uuidString }.first
+                    grantID: grantID
                 )
                 recordedInvocationID = invocationID
-                return try await forward(parameters, using: session)
+                let result = try await forward(parameters, using: session)
+                recordMCPProxyOutcome(
+                    result.isError == true ? .mcpError : .succeeded,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: grantID
+                )
+                return result
             } catch let error as MCPToolInputError {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    outcome: .mcpError,
                     code: .invalidInput,
                     message: error.localizedDescription,
-                    invocationID: recordedInvocationID
+                    recordAttempted: recordAttempted,
+                    recordedInvocationID: recordedInvocationID
                 )
             } catch let error as BridgeClientError {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    outcome: .upstreamUnavailable,
                     code: MCPChildFailureReporter.code(for: error),
                     message: error.localizedDescription,
-                    invocationID: recordedInvocationID
+                    recordAttempted: recordAttempted,
+                    recordedInvocationID: recordedInvocationID
                 )
             } catch MCPProxySpawnError.grantUnavailable {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    outcome: .denied,
                     code: .grantUnavailable,
                     message: "No revocable Authsia grant covers this upstream's secret references.",
-                    invocationID: recordedInvocationID
+                    recordAttempted: recordAttempted,
+                    recordedInvocationID: recordedInvocationID
                 )
             } catch is MCPProxySpawnError {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    outcome: .upstreamUnavailable,
                     code: .upstreamUnavailable,
                     message: "The upstream MCP server could not be started.",
-                    invocationID: recordedInvocationID
+                    recordAttempted: recordAttempted,
+                    recordedInvocationID: recordedInvocationID
                 )
             } catch is MCPProxyCallError {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    outcome: .timedOut,
                     code: .timedOut,
                     message: "The upstream MCP server did not answer this tool call in time.",
-                    invocationID: recordedInvocationID
+                    recordAttempted: recordAttempted,
+                    recordedInvocationID: recordedInvocationID
                 )
             } catch is CancellationError {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    outcome: .cancelled,
                     code: .cancelled,
                     message: "The upstream tool call was cancelled.",
-                    invocationID: recordedInvocationID
+                    recordAttempted: recordAttempted,
+                    recordedInvocationID: recordedInvocationID
                 )
             } catch {
-                return try Self.errorResult(
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    outcome: .upstreamUnavailable,
                     code: .upstreamUnavailable,
                     message: "The upstream MCP server is unavailable.",
-                    invocationID: recordedInvocationID
+                    recordAttempted: recordAttempted,
+                    recordedInvocationID: recordedInvocationID
                 )
             }
         }
+    }
+
+    private func currentChildGrantID() -> UUID? {
+        if let grantID = childSession?.grantIDs.sorted(by: { $0.uuidString < $1.uuidString }).first {
+            return grantID
+        }
+        return try? grantService.activeOwnedGrantIDs().sorted { $0.uuidString < $1.uuidString }.first
+    }
+
+    private func proxyFailureResult(
+        invocationID: UUID,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome,
+        code: MCPToolErrorCode,
+        message: String,
+        recordAttempted: Bool,
+        recordedInvocationID: UUID?
+    ) throws -> CallTool.Result {
+        let responseID = proxyFailureInvocationID(
+            outcome: outcome,
+            invocationID: invocationID,
+            upstreamCommand: upstreamCommand,
+            toolName: toolName,
+            agentRuntimeContext: agentRuntimeContext,
+            grantID: grantID,
+            recordAttempted: recordAttempted,
+            recordedInvocationID: recordedInvocationID
+        )
+        return try Self.errorResult(code: code, message: message, invocationID: responseID)
+    }
+
+    @discardableResult
+    private func recordRejectedCall(
+        invocationID: UUID,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) -> UUID? {
+        do {
+            try toolCallRecorder.recordRejected(
+                upstreamName: upstreamName,
+                upstreamCommand: upstreamCommand,
+                toolName: toolName,
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: runtimeContext.workspaceRoot,
+                grantID: grantID,
+                outcome: outcome
+            )
+            return invocationID
+        } catch {
+            return nil
+        }
+    }
+
+    private func recordMCPProxyOutcome(
+        _ outcome: MCPProxyCallOutcome,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        grantID: UUID?
+    ) {
+        try? toolCallRecorder.recordOutcome(
+            upstreamName: upstreamName,
+            upstreamCommand: upstreamCommand,
+            toolName: toolName,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: runtimeContext.workspaceRoot,
+            grantID: grantID,
+            outcome: outcome
+        )
+    }
+
+    private func proxyFailureInvocationID(
+        outcome: MCPProxyCallOutcome,
+        invocationID: UUID,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        grantID: UUID?,
+        recordAttempted: Bool,
+        recordedInvocationID: UUID?
+    ) -> UUID? {
+        if recordAttempted {
+            if recordedInvocationID != nil {
+                recordMCPProxyOutcome(
+                    outcome,
+                    upstreamCommand: upstreamCommand,
+                    toolName: toolName,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: grantID
+                )
+            }
+            return recordedInvocationID
+        }
+        return recordRejectedCall(
+            invocationID: invocationID,
+            upstreamCommand: upstreamCommand,
+            toolName: toolName,
+            agentRuntimeContext: agentRuntimeContext,
+            grantID: grantID,
+            outcome: outcome
+        )
     }
 
     private func forward(

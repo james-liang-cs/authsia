@@ -505,24 +505,36 @@ admission, and revoke-kill contract those rows display.
 ## Observability
 
 The proxy can see wrapped `tools/call` traffic at runtime. Persistence is a
-redacted Agent command event only: proxy source, grant ID, workspace/runtime
-correlation, and the MCP tool name. If that record cannot be saved, the call
-fails before it reaches the child. Raw JSON-RPC, tool arguments, results, and
-child stderr are never written to audit or activity stores.
+redacted Agent command event only: proxy source, optional grant ID,
+workspace/runtime correlation, MCP tool name, and a bounded outcome. An
+admitted call is written as `started` before forwarding, then an appended event
+with the same invocation merge key records `succeeded`, `mcpError`,
+`timedOut`, `cancelled`, or `upstreamUnavailable`. Policy and lifecycle
+failures that occur before a grant exists are recorded as `denied`, `busy`, or
+`upstreamUnavailable` without a grant when the proxy can persist them. If the
+record cannot be saved, the call still fails closed and its error omits the
+invocation identifier. Raw JSON-RPC, tool arguments, results, and child stderr
+are never written to audit or activity stores.
 
-An error envelope carries the invocation UUID only after the redacted command
+An error envelope carries the invocation UUID only after the redacted decision
 event has been saved. The matching audit row's `turnID` (and `toolUseID`) is
-`mcp-call:` followed by that UUID. Failures before or during audit persistence
-omit the key; an identifier with no audit row would be misleading.
+`mcp-call:` followed by that UUID when a Bridge authorization row exists. A
+pre-admission decision may have no matching audit row, but remains visible as
+an unowned proxy decision in Access Center.
 
 Review that event on the owning grant in Access Center: **MCP proxy** filter →
 grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call
-**MCP tool called** and shows the child basename plus the tool name. Direct
-and unadmitted client launches produce no call events.
+**MCP tool called** and shows the child basename, tool name, and redacted
+outcome. Decisions without a grant appear as recent unowned proxy decisions.
+Direct client launches outside the proxy produce no call events.
 
 `tools/list`, including the admitted credential-less discovery probe, is not
-per-tool command activity. File, network, and Process Tree tabs remain the existing
-Authsia-mediated exec stores; they are not a transcript of a generic MCP child.
+per-tool command activity. File, network, and Process Tree tabs remain the
+existing Authsia-mediated exec stores; they are not a transcript of a generic
+MCP child. Access Center labels those three surfaces as unavailable for a
+generic proxy grant instead of presenting an empty result as proof of no
+activity. Child liveness is not persisted as a separate status; the grant
+state and last redacted proxy decision are the available status signals.
 
 Operator guidance:
 
@@ -610,6 +622,9 @@ Implementation is not complete until automated tests prove:
   in flight, and the counter drains so a later call succeeds;
 - an error after audit persistence carries the UUID prefix of the recorded
   audit `turnID`, while an audit-write failure omits `invocationID`;
+- persisted proxy decisions merge one redacted `started` row with a terminal
+  outcome when forwarding begins, while pre-admission decisions remain
+  visible without a grant;
 - Access Center revocation removes the associated child process group within
   the documented polling window, while restart cannot reuse the old instance's
   grant;

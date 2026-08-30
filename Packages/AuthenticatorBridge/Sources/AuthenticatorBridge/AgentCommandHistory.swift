@@ -7,6 +7,38 @@ public enum AgentCommandCaptureSource: String, Codable, Equatable, Sendable {
     case mcpProxy
 }
 
+public enum MCPProxyCallOutcome: String, Codable, Equatable, Sendable {
+    case started
+    case succeeded
+    case mcpError
+    case timedOut
+    case cancelled
+    case upstreamUnavailable
+    case denied
+    case busy
+
+    public var displayLabel: String {
+        switch self {
+        case .started:
+            return "Outcome pending"
+        case .succeeded:
+            return "Succeeded"
+        case .mcpError:
+            return "MCP error"
+        case .timedOut:
+            return "Timed out"
+        case .cancelled:
+            return "Cancelled"
+        case .upstreamUnavailable:
+            return "Upstream unavailable"
+        case .denied:
+            return "Denied"
+        case .busy:
+            return "Busy"
+        }
+    }
+}
+
 public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let recordedAt: Date
@@ -26,6 +58,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
     public let arguments: [String]
     public let command: String?
     public let exitStatus: Int32?
+    public let mcpProxyOutcome: MCPProxyCallOutcome?
     public let responseOutcome: AgentLeakResponseOutcome?
     public let responseEvidence: AgentLeakEvidence?
     public let responsePreventedAction: Bool?
@@ -49,6 +82,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         arguments: [String] = [],
         command: String? = nil,
         exitStatus: Int32? = nil,
+        mcpProxyOutcome: MCPProxyCallOutcome? = nil,
         responseOutcome: AgentLeakResponseOutcome? = nil,
         responseEvidence: AgentLeakEvidence? = nil,
         responsePreventedAction: Bool? = nil
@@ -71,6 +105,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         self.arguments = AgentCommandRedactor.redactedArguments(arguments)
         self.command = AgentCommandRedactor.redactedCommand(command)
         self.exitStatus = exitStatus
+        self.mcpProxyOutcome = mcpProxyOutcome
         self.responseOutcome = responseOutcome
         self.responseEvidence = responseEvidence
         self.responsePreventedAction = responsePreventedAction

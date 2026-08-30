@@ -278,6 +278,60 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(loaded[0].exitStatus, 1)
     }
 
+    func testRecordingSameMCPProxyInvocationMergesOutcomeInsteadOfDuplicating() throws {
+        let fileURL = try makeTempURL()
+        let store = AgentCommandHistoryStore(fileURL: fileURL)
+        let grantID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let context = AgentRuntimeContext(
+            platform: "codex",
+            sessionID: "mcp:11111111-2222-3333-4444-555555555555",
+            turnID: "mcp-call:11111111-2222-3333-4444-555555555555",
+            agentID: "proxy:jira",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:11111111-2222-3333-4444-555555555555"
+        )
+        let started = AgentCommandEvent(
+            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+            recordedAt: Date(timeIntervalSince1970: 10),
+            agentPlatform: "codex",
+            sessionID: context.sessionID,
+            turnID: context.turnID,
+            agentID: context.agentID,
+            agentType: context.agentType,
+            toolUseID: context.toolUseID,
+            agentJITGrantID: grantID,
+            captureSource: .mcpProxy,
+            executable: "jira",
+            arguments: ["mcp-tool", "search"],
+            command: "jira mcp-tool search",
+            mcpProxyOutcome: .started
+        )
+        let completed = AgentCommandEvent(
+            id: UUID(uuidString: "22222222-3333-4444-5555-666666666666")!,
+            recordedAt: Date(timeIntervalSince1970: 11),
+            agentPlatform: "codex",
+            sessionID: context.sessionID,
+            turnID: context.turnID,
+            agentID: context.agentID,
+            agentType: context.agentType,
+            toolUseID: context.toolUseID,
+            agentJITGrantID: grantID,
+            captureSource: .mcpProxy,
+            executable: "jira",
+            arguments: ["mcp-tool", "search"],
+            command: "jira mcp-tool search",
+            mcpProxyOutcome: .succeeded
+        )
+
+        try store.record(started)
+        try store.record(completed)
+
+        let loaded = try store.loadAll()
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded[0].id, completed.id)
+        XCTAssertEqual(loaded[0].mcpProxyOutcome, .succeeded)
+    }
+
     func testEventsForGrantMatchByGrantIDRuntimeContextOrTerminalScope() {
         let grantID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
         let grant = AgentJITGrant(

@@ -331,6 +331,8 @@ struct MCPProxyJITTests {
         #expect(recorder.calls.first?.upstreamName == "jira")
         #expect(recorder.calls.first?.toolName == "jira_get_issue")
         #expect(recorder.calls.first?.grantID == grantID)
+        #expect(recorder.outcomes.first?.outcome == .succeeded)
+        #expect(recorder.outcomes.first?.grantID == grantID)
 
         let second: RequestContext<CallTool.Result> = try await connection.client.callTool(
             name: "jira_search"
@@ -368,6 +370,7 @@ struct MCPProxyJITTests {
         let result = try await denied.value
         #expect(result.isError == true)
         #expect(toolErrorCode(result) == MCPToolErrorCode.upstreamDenied.rawValue)
+        #expect(toolErrorInvocationID(result) != nil)
         #expect(sessionClient.prepareCount == 0)
         #expect(launcher.spawnCount == 0)
 

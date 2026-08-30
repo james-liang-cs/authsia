@@ -408,8 +408,15 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
         let grantID: UUID?
     }
 
+    struct Outcome: Equatable {
+        let toolName: String
+        let outcome: MCPProxyCallOutcome
+        let grantID: UUID?
+    }
+
     private let lock = NSLock()
     private(set) var calls: [Call] = []
+    private(set) var outcomes: [Outcome] = []
     var error: (any Error)?
 
     func record(
@@ -431,6 +438,38 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
                 grantID: grantID
             ))
         }
+    }
+
+    func recordRejected(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws {
+        try lock.withLock {
+            if let error { throw error }
+            outcomes.append(Outcome(toolName: toolName, outcome: outcome, grantID: grantID))
+        }
+        _ = (upstreamName, upstreamCommand, agentRuntimeContext, workspaceRoot)
+    }
+
+    func recordOutcome(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws {
+        try lock.withLock {
+            if let error { throw error }
+            outcomes.append(Outcome(toolName: toolName, outcome: outcome, grantID: grantID))
+        }
+        _ = (upstreamName, upstreamCommand, agentRuntimeContext, workspaceRoot)
     }
 }
 

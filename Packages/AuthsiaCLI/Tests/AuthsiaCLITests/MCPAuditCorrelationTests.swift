@@ -170,6 +170,8 @@ struct MCPAuditCorrelationTests {
         #expect(UUID(uuidString: envelopeID) != nil)
         let recorded = try #require(recorder.calls.first)
         #expect(recorded.agentRuntimeContext.turnID == "mcp-call:\(envelopeID)")
+        #expect(recorder.outcomes.first?.outcome == .timedOut)
+        #expect(recorder.outcomes.first?.grantID == recorded.grantID)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
@@ -219,15 +221,17 @@ struct MCPAuditCorrelationTests {
         await proxy.waitUntilCompleted()
     }
 
-    @Test("pre-invocation workspace failure has no invocationID")
-    func preInvocationFailureOmitsInvocationID() async throws {
+    @Test("pre-invocation workspace failure records a denied invocation")
+    func preInvocationFailureRecordsInvocationOutcome() async throws {
         let root = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: root) }
+        let recorder = RecordingMCPProxyToolCallRecorder()
         let proxy = AuthsiaMCPProxy(
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            mcpAccessEnabled: { true }
+            mcpAccessEnabled: { true },
+            toolCallRecorder: recorder
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP unbound audit")
         let context: RequestContext<CallTool.Result> = try await connection.client.callTool(
@@ -236,7 +240,8 @@ struct MCPAuditCorrelationTests {
         let result = try await context.value
         #expect(result.isError == true)
         #expect(toolErrorCode(result) == MCPToolErrorCode.workspaceUnavailable.rawValue)
-        #expect(toolErrorInvocationID(result) == nil)
+        #expect(toolErrorInvocationID(result) != nil)
+        #expect(recorder.outcomes.first?.outcome == .upstreamUnavailable)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
