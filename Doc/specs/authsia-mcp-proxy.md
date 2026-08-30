@@ -84,12 +84,10 @@ parity, executable attestation, or DLP.
     authsia mcp serve                    2. Enable MCP Integrations
     authsia mcp proxy                       (Settings deep-links to Coverage;
                                             Coverage can turn it on)
-                                         3. Confirm Wrap on the winning
-                                            (usually project) file — declare
-                                            + checksum write; or Write wrap
-                                            if already declared
-                                         4. Approve first discovery /
-                                            tools/call
+                                         3. Choose Protect server on the
+                                            winning (usually project) file
+                                         4. Approve first discovery or call;
+                                            active grant verifies protection
 ```
 
 ### Preconditions
@@ -105,11 +103,11 @@ parity, executable attestation, or DLP.
 1. Initialize and validate the managed Authsia workspace.
 2. Enable **MCP Integrations**. Settings → Developer Access deep-links to
    Access Center Coverage; Coverage can turn the setting on.
-3. On Access Center **MCP proxy** Coverage, confirm **Wrap** on the winning
-   (usually project) file. Wrap declares command and argv in `mcpUpstreams`
-   and, after showing the current entry, the replacement, and a SHA256
-   checksum, writes the scanned client file. Use **Write wrap** when the child
-   is already declared. Absolute Homebrew or system paths store a PATH
+3. On Access Center **MCP proxy** Protection coverage, choose **Protect
+   server** on the winning (usually project) file. Authsia declares command
+   and argv in `mcpUpstreams` when needed and, after showing the current entry,
+   protected entry, and a SHA256 checksum, writes the scanned client file.
+   Absolute Homebrew or system paths store a PATH
    basename; committed `workspace.json` still forbids absolute paths. Keep live
    credentials and private endpoints out of committed policy. Project-scoped
    Claude, Cursor, and VS Code entries override matching user-global entries;
@@ -122,10 +120,10 @@ parity, executable attestation, or DLP.
    long-lived child starts; an existing matching grant is reused. Revoke in
    Access Center when done.
 
-**Copy wrap recipe**, `authsia mcp configure`, and `authsia mcp wrap --write
+**Copy manual recipe**, `authsia mcp configure`, and `authsia mcp wrap --write
 --server <name> --yes` are fallbacks, not required steps. A client that already
 launches `mcp proxy` without a matching `mcpUpstreams` entry still needs
-**Declare in workspace**; Wrap cannot infer child argv from a proxy launch.
+workspace policy; Authsia cannot infer child argv from a proxy launch.
 
 ## Company Local MCP Allowlist
 
@@ -148,10 +146,13 @@ Playwright, Codegraph, or other child names in the company file.
                                  optional allow/deny         revoke-kill
 ```
 
-Do not enable Claude Code `allowManagedMcpServersOnly` (exclusive managed
-catalog) if users should adopt new local tools through Authsia. That mode
-blocks user-added servers even when the argv matches. Remote HTTP/SSE company
-gateways remain a separate lane; they do not see this local stdio path.
+Enable Claude Code `allowManagedMcpServersOnly` with the two Authsia
+`serverCommand` entries when the company requires an Authsia-only local MCP
+launch policy. This setting restricts user additions to matching approved
+argv; it is distinct from deploying exclusive `managed-mcp.json`, which would
+freeze the server-name catalog and block self-service protection of new local
+tools. Remote HTTP/SSE company gateways remain a separate lane; they do not
+see this local stdio path.
 
 `--upstream` remains valid for terminal launches and for existing client files.
 Generated client configuration uses a stable `mcp proxy` argv plus
@@ -496,11 +497,12 @@ snapshot and terminates its child process group; Access Center does not signal
 the child directly.
 
 The **MCP proxy** filter lists admission and `proxy:<upstream>` grants first.
-Scan findings sit in a coverage strip grouped by wrap status, not workspace
-path. Coverage stays expanded while wrap-eligible Direct launch or Not wrapped
-rows exist. **Wrap** declares and writes; **Write wrap** writes an already
-declared launch. Both require confirmation and refuse an overridden
-user-global row. The Agent grants Workspace menu filters every source tab; it
+Scan findings sit in a protection-coverage strip grouped by effective status,
+not workspace path. Coverage stays expanded while actionable rows exist.
+**Protect server** declares and/or writes as required by that row. It requires
+confirmation for client writes and refuses an overridden user-global row. The
+strip shows protected known launches over total effective known launches, plus
+the next onboarding step. The Agent grants Workspace menu filters every source tab; it
 lists **~** for grants with no workspace, the same pinned and recent local
 workspaces Workspace Center shows that still exist on this Mac, and existing
 roots of active proxy grants. It omits
