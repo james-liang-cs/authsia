@@ -42,13 +42,17 @@ public enum MCPLocalMCPWrapRecipe {
         }
         sections.append(contentsOf: [
             "",
-            "Authsia does not edit the client file. Catalog discovery or the first permitted tool call requests local MCP admission.",
+            "Authsia writes the scanned client file only after you confirm Write wrap. Catalog discovery or the first permitted tool call requests local MCP admission.",
         ])
         return sections.joined(separator: "\n")
     }
 
     public static func clientLaunchInstruction(for finding: MCPClientServerFinding) -> String {
         "Replace the \(finding.source.displayName) \(finding.serverName) entry in \(finding.configPathLabel)."
+    }
+
+    public static func wrapWriteCommand(for finding: MCPClientServerFinding) -> String {
+        "authsia mcp wrap --write --server \(finding.serverName)"
     }
 
     private static func clientReplacement(
@@ -90,14 +94,22 @@ public enum MCPLocalMCPWrapRecipe {
             """
         case .cursor:
             return """
-            Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object with:
+            Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object.
 
+            Configure directly:
+            \(wrapWriteCommand(for: finding))
+
+            Or paste this object:
             \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
             """
         case .devin:
             return """
-            Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object with:
+            Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object.
 
+            Configure directly:
+            \(wrapWriteCommand(for: finding))
+
+            Or paste this object:
             \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
             """
         case .vscode:
@@ -132,7 +144,7 @@ public enum MCPLocalMCPWrapRecipe {
         return jsonObject(object)
     }
 
-    private static func jsonServerObject(
+    static func jsonServerObject(
         authsiaCommand: String,
         environment: [String: String],
         includeType: Bool
@@ -156,7 +168,7 @@ public enum MCPLocalMCPWrapRecipe {
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
-    private static func codexTable(
+    static func codexTable(
         name: String,
         authsiaCommand: String,
         environment: [String: String]
@@ -239,7 +251,7 @@ public enum MCPLocalMCPWrapRecipe {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private static func sanitizedCommand(_ value: String) -> String? {
+    static func sanitizedCommand(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               trimmed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {

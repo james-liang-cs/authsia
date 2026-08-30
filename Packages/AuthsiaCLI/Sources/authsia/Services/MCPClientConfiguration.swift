@@ -81,7 +81,7 @@ enum MCPClientConfiguration {
         return ([
             "Read-only local MCP configuration scan:",
         ] + rows + [
-            "Detection is visibility only for direct client launches; Authsia does not edit client files or block them.",
+            "Detection is visibility only for direct client launches; Authsia does not edit client files or block them during this scan.",
         ]).joined(separator: "\n")
     }
 

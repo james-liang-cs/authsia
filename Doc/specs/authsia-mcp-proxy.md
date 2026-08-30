@@ -108,16 +108,19 @@ parity, executable attestation, or DLP.
 
 1. Initialize and validate the managed Authsia workspace.
 2. Add a `mcpUpstreams` entry, or open Access Center **MCP proxy** and use
-   **Declare in workspace** for a wrap-eligible scanned server. Declare writes
-   command and argv only; it does not require listing tool names. Keep live
-   credentials, private endpoints, and absolute paths out of committed policy.
+   **Wrap** for a wrap-eligible scanned server. Wrap declares command and argv
+   and, after confirmation, writes the scanned client file. Absolute Homebrew
+   or system paths store a PATH basename. Keep live credentials and private
+   endpoints out of committed policy.
 3. Enable **MCP Integrations**.
 4. From that workspace, run `authsia mcp configure --client
    <codex|claude|cursor|devin|vscode>`, or copy the Access Center wrap recipe.
-5. Replace the direct launch in the printed user-global client file, or use an
-   Access Center recipe to replace the exact scanned user-global or project
-   file. Project-scoped Claude, Cursor, and VS Code entries override matching
-   user-global entries. Authsia never edits either file.
+5. Replace the direct launch in the scanned client file with Access Center
+   **Write wrap** / **Wrap** (confirmed, checksum-gated), `authsia mcp wrap
+   --write --server <name> --yes`, or the printed recipe. Project-scoped
+   Claude, Cursor, and VS Code entries override matching user-global entries.
+   Authsia never rewrites a client file silently; it writes only the scanned
+   file after that confirmation.
 6. Open the managed workspace. Pinned policy lists without starting the child.
    Empty-policy discovery requests local MCP admission before starting its
    short-lived child. A permitted call also requires admission before the
@@ -273,8 +276,10 @@ The delivered output uses user-global Codex `~/.codex/config.toml`, Claude Code
 `~/.claude.json`, Cursor `~/.cursor/mcp.json`, Devin Desktop
 `~/.config/devin/mcp_config.json`, and the VS Code user-profile `mcp.json`
 shapes. Configuration formats remain client-owned compatibility surfaces, not
-part of Authsia authorization. V1 does not edit third-party configuration,
-launch the client, add credentials, or use a shell wrapper.
+part of Authsia authorization. `mcp configure` still prints only. Confirmed
+**Write wrap** / `authsia mcp wrap --write` may replace a scanned server entry
+after a checksum check; Authsia does not silent-rewrite, launch the client,
+add credentials, or use a shell wrapper.
 
 ## Technical Flow
 

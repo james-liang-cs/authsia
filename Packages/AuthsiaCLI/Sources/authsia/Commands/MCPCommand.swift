@@ -18,11 +18,12 @@ struct MCPCommand: AsyncParsableCommand {
 
             Examples:
               authsia mcp configure --client codex
+              authsia mcp wrap --write --server filesystem
               authsia mcp serve --workspace /path/to/repository
               authsia mcp proxy --upstream jira
               authsia mcp doctor --json
             """,
-        subcommands: [Configure.self, Serve.self, Proxy.self, Doctor.self]
+        subcommands: [Configure.self, Wrap.self, Serve.self, Proxy.self, Doctor.self]
     )
 
     static func startingDirectory(
@@ -351,6 +352,89 @@ struct MCPCommand: AsyncParsableCommand {
             case .directBypass, .unadmitted:
                 return finding.precedence != .overridden
             }
+        }
+    }
+
+    struct Wrap: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Replace a scanned client MCP launch with Authsia mcp proxy after confirmation",
+            discussion: """
+                Writes the scanned client file only. Re-run with --yes after reviewing
+                the replacement. Project scope wins over user-global. Authsia never
+                rewrites the file if the checksum no longer matches.
+
+                Examples:
+                  authsia mcp wrap --write --server filesystem
+                  authsia mcp wrap --write --server filesystem --yes
+                """
+        )
+
+        @Flag(name: .customLong("write"), help: "Replace the scanned client launch with mcp proxy")
+        var write = false
+
+        @Option(help: "Upstream / client server name to wrap")
+        var server: String
+
+        @Option(help: "Client: codex, claude, cursor, devin, or vscode")
+        var client: MCPClient?
+
+        @Flag(name: .customLong("yes"), help: "Write the replacement after printing the plan")
+        var yes = false
+
+        @Option(help: "Workspace root used to resolve effective vs overridden findings. Repeatable.")
+        var workspace: [String] = []
+
+        var homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        var currentDirectoryPath = FileManager.default.currentDirectoryPath
+        var environment = ProcessInfo.processInfo.environment
+
+        func run() throws {
+            try run { print($0) }
+        }
+
+        func run(output: (String) -> Void) throws {
+            guard write else {
+                throw ValidationError("Pass --write to replace a scanned client launch.")
+            }
+            guard MCPProxyClientLaunch.validUpstreamName(server) != nil else {
+                throw ValidationError("Server name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
+            }
+            var doctor = Doctor()
+            doctor.client = client
+            doctor.workspace = workspace
+            doctor.homeDirectory = homeDirectory
+            doctor.currentDirectoryPath = currentDirectoryPath
+            doctor.environment = environment
+            let findings = try doctor.makeReport().findings
+            guard let finding = MCPLocalMCPClientWrap.preferredFinding(named: server, in: findings) else {
+                throw ValidationError(
+                    "No wrap-eligible \(server) launch won in the scanned client files."
+                )
+            }
+            let plan = try MCPLocalMCPClientWrap.plan(
+                finding: finding,
+                authsiaCommand: Authsia.currentExecutableURL().path,
+                homeDirectory: homeDirectory
+            )
+            var message = """
+                Replace \(finding.source.displayName) \(finding.serverName) in \(finding.configPathLabel)
+                Checksum \(plan.checksum)
+
+                Current:
+                \(plan.existingSnippet)
+
+                Replacement:
+                \(plan.replacementSnippet)
+                """
+            guard yes else {
+                output(message + "\n\nRe-run with --yes to write this replacement.")
+                throw ExitCode(2)
+            }
+            try MCPLocalMCPClientWrap.apply(
+                plan,
+                authsiaCommand: Authsia.currentExecutableURL().path
+            )
+            output(message + "\n\nWrote \(finding.configPathLabel).")
         }
     }
 }

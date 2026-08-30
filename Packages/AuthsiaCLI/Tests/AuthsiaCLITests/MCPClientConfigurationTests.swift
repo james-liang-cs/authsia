@@ -183,7 +183,7 @@ struct MCPClientConfigurationTests {
         #expect(report.contains("bypasses admission"))
         #expect(report.contains("not on the current workspace allowlist"))
         #expect(report.contains("visibility only"))
-        #expect(report.contains("does not edit client files or block them"))
+        #expect(report.contains("does not edit client files or block them during this scan"))
         #expect(report.contains("User-global / Effective / ~/repo / ~/.codex/config.toml"))
         #expect(report.contains("Project / Overridden / ~/repo / VS Code user mcp.json"))
         #expect(MCPClientConfiguration.scanReport([]) == nil)
@@ -454,6 +454,60 @@ struct MCPClientConfigurationTests {
             withIntermediateDirectories: true
         )
         return (root, binary)
+    }
+
+    @Test("wrap --write replaces the winning scanned client launch after --yes")
+    func wrapWriteRequiresConfirmationThenReplaces() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        try writeDoctorJSON([
+            "mcpServers": [
+                "filesystem": [
+                    "command": "/opt/homebrew/bin/node",
+                    "args": ["server.js"],
+                ]
+            ]
+        ], to: fixture.home.appendingPathComponent(".cursor/mcp.json"))
+
+        var preview = try MCPCommand.Wrap.parse([
+            "--write",
+            "--server",
+            "filesystem",
+            "--client",
+            "cursor",
+        ])
+        preview.homeDirectory = fixture.home
+        preview.currentDirectoryPath = fixture.workspace.path
+        var previewOutput = ""
+        do {
+            try preview.run { previewOutput = $0 }
+            Issue.record("wrap without --yes should exit 2")
+        } catch let code as ExitCode {
+            #expect(code.rawValue == 2)
+        }
+        #expect(previewOutput.contains("Re-run with --yes"))
+        #expect(previewOutput.contains("Replacement:"))
+        let original = try Data(contentsOf: fixture.home.appendingPathComponent(".cursor/mcp.json"))
+
+        var apply = try MCPCommand.Wrap.parse([
+            "--write",
+            "--server",
+            "filesystem",
+            "--client",
+            "cursor",
+            "--yes",
+        ])
+        apply.homeDirectory = fixture.home
+        apply.currentDirectoryPath = fixture.workspace.path
+        var applyOutput = ""
+        try apply.run { applyOutput = $0 }
+        #expect(applyOutput.contains("Wrote"))
+        let rewritten = try Data(contentsOf: fixture.home.appendingPathComponent(".cursor/mcp.json"))
+        #expect(rewritten != original)
+        let object = try JSONSerialization.jsonObject(with: rewritten) as? [String: Any]
+        let servers = object?["mcpServers"] as? [String: Any]
+        let filesystem = servers?["filesystem"] as? [String: Any]
+        #expect(filesystem?["args"] as? [String] == ["mcp", "proxy"])
     }
 }
 

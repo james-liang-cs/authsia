@@ -477,21 +477,11 @@ public struct MCPClientConfigScanner {
               validUpstreamName(name) != nil else {
             return nil
         }
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              !trimmed.hasPrefix("/"),
-              trimmed != ".",
-              trimmed != "..",
-              !trimmed.contains("\0"),
-              trimmed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
-        else {
+        guard let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: command) else {
             return nil
         }
-        if trimmed.contains("/") {
-            let parts = trimmed.split(separator: "/", omittingEmptySubsequences: false)
-            guard !parts.contains(where: { $0 == ".." || $0.isEmpty }) else {
-                return nil
-            }
+        guard URL(fileURLWithPath: policyCommand).lastPathComponent.lowercased() != "authsia" else {
+            return nil
         }
         guard arguments.count <= 64 else { return nil }
         for argument in arguments {
@@ -503,13 +493,13 @@ public struct MCPClientConfigScanner {
         }
         // Must match what WorkspaceConfigStore will accept when it reads the
         // declared entry back, or declaring writes a config that no longer
-        // loads.
+        // loads. Absolute scanned commands store the PATH basename.
         if MCPUpstreamCommandRules.shellExecutableNames.contains(
-            URL(fileURLWithPath: trimmed).lastPathComponent.lowercased()
-        ) || MCPUpstreamCommandRules.containsShellCommandString([trimmed] + arguments) {
+            URL(fileURLWithPath: policyCommand).lastPathComponent.lowercased()
+        ) || MCPUpstreamCommandRules.containsShellCommandString([policyCommand] + arguments) {
             return nil
         }
-        return (trimmed, arguments)
+        return (policyCommand, arguments)
     }
 
     private static func jsonEntries(

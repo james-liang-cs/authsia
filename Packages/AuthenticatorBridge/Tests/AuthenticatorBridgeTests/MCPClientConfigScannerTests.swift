@@ -146,14 +146,15 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertTrue(locations.allSatisfy { $0.workspaceRoot == nil })
     }
 
-    func testAbsoluteAndShellCommandsAreNotWrapEligible() throws {
+    func testAbsoluteHomebrewCommandsAreWrapEligibleAsPATHBasenames() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let cursor = root.appendingPathComponent("cursor.json")
         try writeJSON([
             "mcpServers": [
-                "abs": ["command": "/usr/bin/node", "args": ["server.js"]],
+                "abs": ["command": "/opt/homebrew/bin/node", "args": ["server.js"]],
+                "npxabs": ["command": "/opt/homebrew/bin/npx", "args": ["-y", "pkg"]],
                 "shell": ["command": "bash", "args": ["-c", "node server.js"]],
             ],
         ], to: cursor)
@@ -165,8 +166,12 @@ final class MCPClientConfigScannerTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(Set(findings.map(\.serverName)), ["abs", "shell"])
-        XCTAssertTrue(findings.allSatisfy { !$0.isWrapEligible && !$0.shouldShowInAccessCenter })
+        XCTAssertEqual(Set(findings.map(\.serverName)), ["abs", "npxabs", "shell"])
+        XCTAssertEqual(findings.first { $0.serverName == "abs" }?.isWrapEligible, true)
+        XCTAssertEqual(findings.first { $0.serverName == "abs" }?.wrapCommand, "node")
+        XCTAssertEqual(findings.first { $0.serverName == "abs" }?.shouldShowInAccessCenter, true)
+        XCTAssertEqual(findings.first { $0.serverName == "npxabs" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "shell" }?.isWrapEligible, false)
     }
 
     func testWrapRecipeOmitsSecretsAndUsesProxyArgv() {
@@ -206,7 +211,7 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertTrue(text?.contains("mcpUpstreams") == true)
         XCTAssertTrue(text?.contains("\"command\" : \"npx\"") == true || text?.contains("\"command\": \"npx\"") == true)
         XCTAssertFalse(text?.contains("--upstream") == true)
-        XCTAssertTrue(text?.contains("does not edit the client file") == true)
+        XCTAssertTrue(text?.contains("writes the scanned client file only after you confirm Write wrap") == true)
         XCTAssertFalse(text?.contains("TOKEN") == true)
 
         let claudeFinding = MCPClientServerFinding(
@@ -299,6 +304,7 @@ final class MCPClientConfigScannerTests: XCTestCase {
             authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
         )
         XCTAssertTrue(cursor?.contains("Open ~/.cursor/mcp.json") == true)
+        XCTAssertTrue(cursor?.contains("authsia mcp wrap --write --server codegraph") == true)
         XCTAssertTrue(cursor?.contains("\"mcpServers\"") == true || cursor?.contains("under \"mcpServers\"") == true)
         XCTAssertFalse(cursor?.contains("mcpUpstreams") == true)
         XCTAssertNil(MCPLocalMCPWrapRecipe.clipboardText(

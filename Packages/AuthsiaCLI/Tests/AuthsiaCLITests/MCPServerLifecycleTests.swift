@@ -20,7 +20,7 @@ struct MCPServerLifecycleTests {
 
         #expect(help.contains("configure"))
         #expect(help.contains("serve"))
-        #expect(help.contains("authsia mcp configure --client codex"))
+        #expect(help.contains("authsia mcp wrap --write --server filesystem"))
         #expect(help.contains("authsia mcp serve"))
         #expect(help.contains("Settings > Developer Access"))
     }

@@ -68,6 +68,22 @@ struct MCPProxySpawnTests {
         )
         #expect(pathResolved.lastPathComponent == "mcp-atlassian")
 
+        let overlayHome = root.appendingPathComponent("overlay-home", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: overlayHome.appendingPathComponent(".local/bin", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try writeExecutableMCPProxyScript(
+            at: overlayHome.appendingPathComponent(".local/bin/overlay-mcp")
+        )
+        let overlayResolved = try MCPProxyCommandResolver.resolve(
+            command: "overlay-mcp",
+            workspaceRoot: root,
+            path: "/usr/bin",
+            homeDirectory: overlayHome
+        )
+        #expect(overlayResolved.lastPathComponent == "overlay-mcp")
+
         let relativeResolved = try MCPProxyCommandResolver.resolve(
             command: "tools/upstream-mcp",
             workspaceRoot: root,

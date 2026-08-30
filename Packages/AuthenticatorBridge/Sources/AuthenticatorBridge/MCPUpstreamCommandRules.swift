@@ -13,6 +13,53 @@ public enum MCPUpstreamCommandRules {
         "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "sh", "tcsh", "zsh",
     ]
 
+    /// Absolute package launchers stay ineligible. A bare `npx` / `uvx` PATH
+    /// basename remains wrap-eligible as today.
+    public static let packageLauncherNames: Set<String> = ["npx", "uvx"]
+
+    /// Command stored in workspace `mcpUpstreams` for a scanned client launch.
+    /// Absolute Homebrew or system paths collapse to a PATH basename so
+    /// committed policy stays machine-local.
+    public static func policyCommand(fromScanned command: String) -> String? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isSafeToken(trimmed), trimmed != ".", trimmed != ".." else {
+            return nil
+        }
+        if trimmed.hasPrefix("/") {
+            let base = URL(fileURLWithPath: trimmed).lastPathComponent
+            guard isLegalPATHBasename(base),
+                  !packageLauncherNames.contains(base.lowercased()) else {
+                return nil
+            }
+            return base
+        }
+        if trimmed.contains("/") {
+            let parts = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+            guard !parts.contains(where: { $0 == ".." || $0.isEmpty }) else {
+                return nil
+            }
+            return trimmed
+        }
+        return isLegalPATHBasename(trimmed) ? trimmed : nil
+    }
+
+    public static func isLegalPATHBasename(_ name: String) -> Bool {
+        guard isSafeToken(name),
+              !name.contains("/"),
+              name != ".",
+              name != "..",
+              !shellExecutableNames.contains(name.lowercased()) else {
+            return false
+        }
+        return true
+    }
+
+    private static func isSafeToken(_ value: String) -> Bool {
+        !value.isEmpty
+            && !value.contains("\0")
+            && value.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) }
+    }
+
     /// True when `argv` runs a shell (directly, or through `env`) with an
     /// inline command string.
     public static func containsShellCommandString(_ argv: [String]) -> Bool {

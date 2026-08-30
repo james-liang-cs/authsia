@@ -1064,6 +1064,7 @@ struct WorkspaceConfigTests {
             "envshell": ("env", ["FOO=1", "bash", "-c", "id"]),
             "shell": ("bash", ["-c", "id"]),
             "relative": ("tools/jira-mcp", []),
+            "homebrew": ("/opt/homebrew/bin/node", ["server.js"]),
         ]
         let home = try makeWorkspaceRootForConfig()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -1084,7 +1085,8 @@ struct WorkspaceConfigTests {
         let eligible = findings.filter(\.isWrapEligible)
         // The shell forms must never be offered for wrapping, whether the shell
         // is the executable or reached through `env`.
-        #expect(Set(eligible.map(\.serverName)) == ["atlassian", "files", "relative"])
+        #expect(Set(eligible.map(\.serverName)) == ["atlassian", "files", "relative", "homebrew"])
+        #expect(eligible.first { $0.serverName == "homebrew" }?.wrapCommand == "node")
 
         for finding in eligible {
             let root = try makeWorkspaceRootForConfig()

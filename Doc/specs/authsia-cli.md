@@ -140,6 +140,7 @@ Key properties:
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
 | `authsia mcp configure` | Print a user-global MCP fallback plus an effective scope report, without editing client files | `authsia mcp configure --client codex` |
+| `authsia mcp wrap --write` | Replace a scanned client MCP launch with `mcp proxy` after confirmation | `authsia mcp wrap --write --server filesystem --yes` |
 | `authsia mcp serve` | Run the local stdio MCP server, discovering one client workspace or using an explicit override | `authsia mcp serve --workspace /path/to/repo` |
 | `authsia mcp doctor` | Scan known MCP client configs and fail on effective or conditional bypasses | `authsia mcp doctor --json` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |

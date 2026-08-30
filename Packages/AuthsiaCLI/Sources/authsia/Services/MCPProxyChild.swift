@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import AuthenticatorBridge
 
 #if canImport(System)
 import System
@@ -31,6 +32,7 @@ enum MCPProxyCommandResolver {
         command: String,
         workspaceRoot: URL,
         path: String,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default
     ) throws -> URL {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -45,7 +47,11 @@ enum MCPProxyCommandResolver {
                 fileManager: fileManager
             )
         }
-        for directory in path.split(separator: ":") where !directory.isEmpty {
+        let searchPath = MCPProxyPathOverlay.searchPath(
+            path: path,
+            homeDirectory: homeDirectory
+        )
+        for directory in searchPath.split(separator: ":") where !directory.isEmpty {
             let candidate = URL(fileURLWithPath: String(directory), isDirectory: true)
                 .appendingPathComponent(trimmed)
             var isDirectory: ObjCBool = false
