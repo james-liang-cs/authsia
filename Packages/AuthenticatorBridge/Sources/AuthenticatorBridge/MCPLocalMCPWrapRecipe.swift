@@ -42,7 +42,7 @@ public enum MCPLocalMCPWrapRecipe {
         }
         sections.append(contentsOf: [
             "",
-            "Authsia writes the scanned client file only after you confirm Write wrap. Catalog discovery or the first permitted tool call requests local MCP admission.",
+            "Authsia writes the scanned client file only after you confirm Write wrap. Next: authsia mcp catalog --server \(finding.serverName) --write records what that server advertises, then the first permitted tool call requests local MCP admission.",
         ])
         return sections.joined(separator: "\n")
     }

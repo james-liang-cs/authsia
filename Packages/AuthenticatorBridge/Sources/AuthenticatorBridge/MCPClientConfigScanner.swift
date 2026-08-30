@@ -149,17 +149,25 @@ public struct MCPDeclaredLocalServer: Equatable, Sendable {
     public let command: String
     public let arguments: [String]
     public let workspaceRoot: URL?
+    /// True when workspace policy already advertises allow ∪ approve names.
+    public let hasAdvertisedCatalog: Bool
+    /// True when a credential-less stdio probe can record that catalog.
+    public let canRecordCatalog: Bool
 
     public init(
         name: String,
         command: String,
         arguments: [String],
-        workspaceRoot: URL? = nil
+        workspaceRoot: URL? = nil,
+        hasAdvertisedCatalog: Bool = false,
+        canRecordCatalog: Bool = false
     ) {
         self.name = name
         self.command = command
         self.arguments = arguments
         self.workspaceRoot = workspaceRoot?.standardizedFileURL
+        self.hasAdvertisedCatalog = hasAdvertisedCatalog
+        self.canRecordCatalog = canRecordCatalog
     }
 }
 
@@ -183,9 +191,15 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     public let wrapCommand: String?
     public let wrapArguments: [String]
     public let isWrapEligible: Bool
+    public let hasAdvertisedCatalog: Bool
+    public let canRecordCatalog: Bool
 
     public var id: String {
         "\(workspacePathLabel ?? ""):\(source.rawValue):\(serverName):\(configPathLabel)"
+    }
+
+    public var needsCatalogRecording: Bool {
+        status == .admittedWrapped && !hasAdvertisedCatalog && canRecordCatalog
     }
 
     public var shouldShowInAccessCenter: Bool {
@@ -205,7 +219,9 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         isAuthsiaProxyLaunch: Bool = false,
         wrapCommand: String? = nil,
         wrapArguments: [String] = [],
-        isWrapEligible: Bool = false
+        isWrapEligible: Bool = false,
+        hasAdvertisedCatalog: Bool = true,
+        canRecordCatalog: Bool = false
     ) {
         self.source = source
         self.serverName = serverName
@@ -220,6 +236,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         self.wrapCommand = wrapCommand
         self.wrapArguments = wrapArguments
         self.isWrapEligible = isWrapEligible
+        self.hasAdvertisedCatalog = hasAdvertisedCatalog
+        self.canRecordCatalog = canRecordCatalog
     }
 
     enum CodingKeys: String, CodingKey {
@@ -237,6 +255,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         case wrapCommand
         case wrapArguments
         case isWrapEligible
+        case hasAdvertisedCatalog
+        case canRecordCatalog
     }
 
     public init(from decoder: Decoder) throws {
@@ -257,6 +277,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         wrapCommand = try container.decodeIfPresent(String.self, forKey: .wrapCommand)
         wrapArguments = try container.decodeIfPresent([String].self, forKey: .wrapArguments) ?? []
         isWrapEligible = try container.decodeIfPresent(Bool.self, forKey: .isWrapEligible) ?? false
+        hasAdvertisedCatalog = try container.decodeIfPresent(Bool.self, forKey: .hasAdvertisedCatalog) ?? true
+        canRecordCatalog = try container.decodeIfPresent(Bool.self, forKey: .canRecordCatalog) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -280,6 +302,12 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         }
         if isWrapEligible {
             try container.encode(isWrapEligible, forKey: .isWrapEligible)
+        }
+        if !hasAdvertisedCatalog {
+            try container.encode(hasAdvertisedCatalog, forKey: .hasAdvertisedCatalog)
+        }
+        if canRecordCatalog {
+            try container.encode(canRecordCatalog, forKey: .canRecordCatalog)
         }
     }
 }
@@ -446,6 +474,9 @@ public struct MCPClientConfigScanner {
             status: status,
             isAuthsiaProxyLaunch: isAuthsiaProxyLaunch
         )
+        let declaredMatch = declaredUpstreamName.flatMap { name in
+            applicableDeclarations.first { $0.name == name }
+        }
         return MCPClientServerFinding(
             source: entry.location.source,
             serverName: serverName,
@@ -461,7 +492,12 @@ public struct MCPClientConfigScanner {
             isAuthsiaProxyLaunch: isAuthsiaProxyLaunch,
             wrapCommand: wrap?.command,
             wrapArguments: wrap?.arguments ?? [],
-            isWrapEligible: wrap != nil
+            isWrapEligible: wrap != nil,
+            hasAdvertisedCatalog: status == .admittedWrapped
+                ? (declaredMatch?.hasAdvertisedCatalog ?? true)
+                : true,
+            canRecordCatalog: status == .admittedWrapped
+                && (declaredMatch?.canRecordCatalog ?? false)
         )
     }
 

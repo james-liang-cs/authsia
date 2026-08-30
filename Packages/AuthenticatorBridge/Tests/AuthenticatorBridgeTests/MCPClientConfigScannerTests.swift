@@ -80,6 +80,8 @@ final class MCPClientConfigScannerTests: XCTestCase {
             ["rogue-server"]
         )
         XCTAssertEqual(findings.first { $0.serverName == "jira" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "jira" }?.hasAdvertisedCatalog, false)
+        XCTAssertEqual(findings.first { $0.serverName == "jira" }?.canRecordCatalog, false)
         XCTAssertEqual(findings.first { $0.serverName == "stale" }?.isWrapEligible, false)
         XCTAssertEqual(findings.first { $0.serverName == "stale" }?.shouldShowInAccessCenter, true)
         XCTAssertEqual(findings.first { $0.serverName == "invalid-wrapper" }?.shouldShowInAccessCenter, false)
@@ -89,6 +91,45 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertFalse(encoded.contains("must-not-appear"))
         XCTAssertFalse(encoded.contains("TOKEN"))
         XCTAssertFalse(findings.contains { $0.serverName == "authsia" })
+    }
+
+    func testWrappedLaunchWithoutCatalogIsRecordable() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let codex = root.appendingPathComponent("codex.toml")
+        try """
+        [mcp_servers.codegraph]
+        command = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        args = ["mcp", "proxy"]
+
+        [mcp_servers.codegraph.env]
+        AUTHSIA_MCP_UPSTREAM = "codegraph"
+        """.write(to: codex, atomically: true, encoding: .utf8)
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [
+                MCPDeclaredLocalServer(
+                    name: "codegraph",
+                    command: "codegraph",
+                    arguments: ["serve", "--mcp"],
+                    workspaceRoot: root,
+                    hasAdvertisedCatalog: false,
+                    canRecordCatalog: true
+                ),
+            ],
+            locations: [
+                MCPClientConfigLocation(
+                    source: .codex,
+                    fileURL: codex,
+                    displayPath: "~/.codex/config.toml"
+                ),
+            ]
+        )
+        let finding = findings.first { $0.serverName == "codegraph" }
+        XCTAssertEqual(finding?.status, .admittedWrapped)
+        XCTAssertEqual(finding?.hasAdvertisedCatalog, false)
+        XCTAssertEqual(finding?.canRecordCatalog, true)
+        XCTAssertEqual(finding?.needsCatalogRecording, true)
     }
 
     func testScanIsReadOnlyAndFailsOpenForMissingMalformedAndEmptyAllowlist() throws {
@@ -212,6 +253,7 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertTrue(text?.contains("\"command\" : \"npx\"") == true || text?.contains("\"command\": \"npx\"") == true)
         XCTAssertFalse(text?.contains("--upstream") == true)
         XCTAssertTrue(text?.contains("writes the scanned client file only after you confirm Write wrap") == true)
+        XCTAssertTrue(text?.contains("authsia mcp catalog --server playwright --write") == true)
         XCTAssertFalse(text?.contains("TOKEN") == true)
 
         let claudeFinding = MCPClientServerFinding(

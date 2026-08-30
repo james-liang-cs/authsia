@@ -125,7 +125,10 @@ struct MCPCommand: AsyncParsableCommand {
                     name: upstream.name,
                     command: command,
                     arguments: upstream.args,
-                    workspaceRoot: workspaceRoot
+                    workspaceRoot: workspaceRoot,
+                    hasAdvertisedCatalog: !upstream.tools.allow.isEmpty
+                        || !upstream.tools.approve.isEmpty,
+                    canRecordCatalog: upstream.requiresStdioPolicy && upstream.env.isEmpty
                 )
             }
         }

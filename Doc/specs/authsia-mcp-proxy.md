@@ -86,7 +86,9 @@ parity, executable attestation, or DLP.
                                             Coverage can turn it on)
                                          3. Choose Protect server on the
                                             winning (usually project) file
-                                         4. Approve first discovery or call;
+                                            (wrap, then record catalog)
+                                         4. Approve catalog recording if
+                                            prompted, then the first tool call;
                                             active grant verifies protection
 ```
 
@@ -107,17 +109,21 @@ parity, executable attestation, or DLP.
    server** on the winning (usually project) file. Authsia declares command
    and argv in `mcpUpstreams` when needed and, after showing the current entry,
    protected entry, and a SHA256 checksum, writes the scanned client file.
-   Absolute Homebrew or system paths store a PATH
+   For a credential-less stdio entry with empty `allow` and `approve`, Protect
+   then records the tool catalog: local MCP admission, a short-lived child
+   probe, and names plus sanitized schemas written into `mcpUpstreams`. Absolute
+   Homebrew or system paths store a PATH
    basename; committed `workspace.json` still forbids absolute paths. Keep live
    credentials and private endpoints out of committed policy. Project-scoped
    Claude, Cursor, and VS Code entries override matching user-global entries;
    an overridden write is refused. Authsia never rewrites a client file
-   silently.
-4. Run `authsia mcp catalog --server <name> --write` once. It approves local
-   MCP admission, starts the declared child long enough to read its tool list,
-   stops it, and records the names and sanitized schemas in `mcpUpstreams`.
-5. Open the managed workspace. Opening it starts nothing and asks nothing:
-   `tools/list` is answered from committed policy. The first `tools/call`
+   silently. If catalog recording is skipped or declined, Coverage keeps
+   **Protected, record tools** and **Record catalog**. `authsia mcp catalog
+   --write` remains the terminal equivalent, including after `mcp wrap --write`.
+4. Open the managed workspace. Opening it starts nothing and asks nothing:
+   `tools/list` is answered from committed policy. A wrapped server with no
+   recorded catalog advertises nothing, so the client has no MCP tools to call
+   and agents fall through to the unproxied CLI. The first `tools/call`
    requests local MCP admission before the long-lived child starts; an existing
    matching grant is reused. Revoke in Access Center when done.
 
@@ -528,9 +534,13 @@ Authsia.app may renew, and only an active admission.
 Scan findings sit in a protection-coverage strip grouped by effective status,
 not workspace path. Coverage stays expanded while actionable rows exist.
 **Protect server** declares and/or writes as required by that row. It requires
-confirmation for client writes and refuses an overridden user-global row. The
-strip shows protected known launches over total effective known launches, plus
-the next onboarding step. The Agent grants Workspace menu filters every source tab; it
+confirmation for client writes and refuses an overridden user-global row. For
+a credential-less launch whose policy still has empty `allow` and `approve`,
+Protect then records the catalog behind the same local admission. If that
+probe is skipped or fails, the row stays **Protected, record tools** until
+**Record catalog** captures what the child advertises. The strip shows
+protected known launches over total
+effective known launches, plus the next onboarding step. The Agent grants Workspace menu filters every source tab; it
 lists **~** for grants with no workspace, the same pinned and recent local
 workspaces Workspace Center shows that still exist on this Mac, and existing
 roots of active proxy grants. It omits
