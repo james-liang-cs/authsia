@@ -667,6 +667,10 @@ The complete MCP serve tool and lifecycle contract is
 JIT grants use the configured CLI session TTL (`cliSessionTTL`). The default is
 the same default used by normal CLI sessions, and the maximum is 24 hours.
 Legacy negative TTL preferences are treated as 24 hours.
+Local MCP admission is the exception: `mcp-admission` grants use
+`mcpAdmissionTTL` (default 30 minutes), capped by the managed
+`mcpAdmissionMaximumTTL` preference and the product maximum of 24 hours.
+Admission expiry is absolute rather than activity-renewed.
 
 Active grants are stored in the versioned, HMAC-authenticated Bridge authority
 store backed by Keychain. The former path:

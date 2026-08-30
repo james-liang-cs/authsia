@@ -407,6 +407,12 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
     }
 
     func testMCPAdmissionCreatesDedicatedLocalGrantWithoutVaultAuthority() async throws {
+        let restoreCLITTL = setCLIApprovalTTL(15)
+        let restoreMCPAdmissionTTL = setMCPAdmissionApprovalTTL(7200, maximum: 1800)
+        defer {
+            restoreMCPAdmissionTTL()
+            restoreCLITTL()
+        }
         let approver = JITApprovalTracker(result: true)
         let builder = RemoteRequestBuilderSpy()
         let store = MemoryAgentJITGrantStore()
@@ -446,6 +452,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         let grant = try XCTUnwrap(store.grants.first)
         XCTAssertEqual(response.payload?.grantIDs, [grant.id])
         XCTAssertEqual(grant.capabilities, [.mcpAdmission])
+        XCTAssertEqual(grant.expiresAt, now.addingTimeInterval(1800))
         XCTAssertTrue(grant.requestedItems.isEmpty)
         XCTAssertTrue(grant.matchesAgentRuntimeContext(runtime))
         XCTAssertTrue(grant.allows(
@@ -468,6 +475,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(request.remoteRequests, [])
         let descriptor = try XCTUnwrap(request.approvalDescriptors.first)
         XCTAssertEqual(descriptor.capabilities, [.mcpAdmission])
+        XCTAssertEqual(descriptor.durationSeconds, 1800)
         XCTAssertEqual(descriptor.reuseDescription, "MCP server admission")
         XCTAssertEqual(descriptor.mcpUpstreamName, "jira")
         XCTAssertTrue(descriptor.requestedItems.isEmpty)
@@ -4017,6 +4025,31 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
                 defaults.set(previous, forKey: key)
             } else {
                 defaults.removeObject(forKey: key)
+            }
+        }
+    }
+
+    private func setMCPAdmissionApprovalTTL(
+        _ ttl: TimeInterval,
+        maximum: TimeInterval = BridgeSettings.maximumSessionTTL
+    ) -> () -> Void {
+        let defaults = BridgeSettings.appDefaults
+        let ttlKey = BridgeSettings.mcpAdmissionTTLKey
+        let maximumKey = BridgeSettings.mcpAdmissionMaximumTTLKey
+        let previousTTL = defaults.object(forKey: ttlKey)
+        let previousMaximum = defaults.object(forKey: maximumKey)
+        defaults.set(ttl, forKey: ttlKey)
+        defaults.set(maximum, forKey: maximumKey)
+        return {
+            if let previousTTL {
+                defaults.set(previousTTL, forKey: ttlKey)
+            } else {
+                defaults.removeObject(forKey: ttlKey)
+            }
+            if let previousMaximum {
+                defaults.set(previousMaximum, forKey: maximumKey)
+            } else {
+                defaults.removeObject(forKey: maximumKey)
             }
         }
     }

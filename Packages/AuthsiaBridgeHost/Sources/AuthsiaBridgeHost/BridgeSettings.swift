@@ -5,10 +5,13 @@ public enum BridgeSettings {
     public static let appDefaultsSuiteName = "app.authsia"
     public static let cliSessionTTLKey = "cliSessionTTL"
     public static let sshSessionTTLKey = "sshSessionTTL"
+    public static let mcpAdmissionTTLKey = "mcpAdmissionTTL"
+    public static let mcpAdmissionMaximumTTLKey = "mcpAdmissionMaximumTTL"
     public static let cliAccessEnabledKey = "cliAccessEnabled"
     public static let iCloudKeychainSyncEnabledKey = "iCloudKeychainSyncEnabled"
     public static let defaultSessionTTL: TimeInterval = 15.0
     public static let defaultSSHSessionTTL: TimeInterval = 1800.0
+    public static let defaultMCPAdmissionTTL: TimeInterval = 1800.0
     public static let maximumSessionTTL: TimeInterval = 24 * 60 * 60
 
     public static var appDefaults: UserDefaults {
@@ -32,6 +35,20 @@ public enum BridgeSettings {
 
     public static func sshSessionTTL(defaults: UserDefaults = appDefaults) -> TimeInterval {
         sessionTTL(forKey: sshSessionTTLKey, defaultValue: defaultSSHSessionTTL, defaults: defaults)
+    }
+
+    public static func mcpAdmissionTTL(defaults: UserDefaults = appDefaults) -> TimeInterval {
+        let configured = sessionTTL(
+            forKey: mcpAdmissionTTLKey,
+            defaultValue: defaultMCPAdmissionTTL,
+            defaults: defaults
+        )
+        let managedMaximum = sessionTTL(
+            forKey: mcpAdmissionMaximumTTLKey,
+            defaultValue: maximumSessionTTL,
+            defaults: defaults
+        )
+        return min(configured, managedMaximum)
     }
 
     private static func sessionTTL(

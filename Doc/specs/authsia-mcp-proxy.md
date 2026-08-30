@@ -389,6 +389,16 @@ The discovery probe is killed after `listTools`.
 - A denied or missing admission grant prevents both discovery and the
   long-lived spawn. A declined discovery caches an empty catalog for that proxy
   session so the client does not re-prompt on every `tools/list`.
+- Local `mcp-admission` grants use the dedicated `mcpAdmissionTTL` preference,
+  default 30 minutes, instead of the 15-second CLI session default. The
+  `mcpAdmissionMaximumTTL` managed preference can lower the company maximum;
+  the product ceiling remains 24 hours. Expiry is absolute and does not slide
+  when tools are used.
+- On expiry or revocation, the proxy observes the inactive grant within its
+  polling interval and terminates the child process group. A later tool call
+  requests a fresh admission. Access Center shows a live remaining-time label;
+  **Renew admission** revokes the current grant and directs the user to retry a
+  client tool for a new approval rather than extending authority silently.
 
 ```text
   client          proxy                         Bridge / Access Center
@@ -497,6 +507,9 @@ snapshot and terminates its child process group; Access Center does not signal
 the child directly.
 
 The **MCP proxy** filter lists admission and `proxy:<upstream>` grants first.
+Active admission rows show **Access expires in** with a live countdown and an
+explicit **Renew admission** action. Renewal ends the current admission first;
+the originating MCP client's next tool call must request and receive a new one.
 Scan findings sit in a protection-coverage strip grouped by effective status,
 not workspace path. Coverage stays expanded while actionable rows exist.
 **Protect server** declares and/or writes as required by that row. It requires
@@ -596,6 +609,7 @@ Shared codes such as `mcpAccessDisabled`, `approvalDenied`, and
 | Upstream receives ambient credentials or Authsia runtime markers | Build a stripped environment, add only declared literals and freshly resolved refs, and omit `AUTHSIA_AGENT_*` and automation authority from the child. |
 | Injected values leak through proxied JSON-RPC | Parse and mask JSON string values in both directions; never patch raw frames or store them in audit or diagnostics. |
 | Revocation leaves a long-lived upstream authorized | Associate the child with exact owned grant IDs, recheck on every call and periodically, and terminate the complete process group when association fails. |
+| A short shared CLI timeout makes MCP unusable, or activity silently extends authority | Give MCP admission an independent 30-minute default with a managed maximum, keep expiry absolute, show remaining time, and require a fresh client-originated approval to renew. |
 | A `deny` added mid-session keeps answering from a stale catalog | Cache only what the child advertised and subtract `deny` from live workspace policy on every list and call. |
 | A wedged child holds the caller until its grant expires | Bound every forwarded `tools/call` with a proxy-side deadline, cancel the request upstream on expiry, and return `timedOut`. |
 | A terminated child cannot be observed dying | Reap every child the proxy starts, including the discovery probe. An unreaped process group still answers `kill(-pgid, 0)`, so termination would wait out the whole grace and force window. |

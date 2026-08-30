@@ -70,6 +70,39 @@ final class BridgeSettingsTests: XCTestCase {
         }
     }
 
+    func testMCPAdmissionTTLUsesIndependentKeyAndDefault() {
+        withDefaults { defaults in
+            defaults.set(15.0, forKey: BridgeSettings.cliSessionTTLKey)
+
+            XCTAssertEqual(BridgeSettings.sessionTTL(defaults: defaults), 15.0)
+            XCTAssertEqual(BridgeSettings.mcpAdmissionTTL(defaults: defaults), 1800.0)
+
+            defaults.set(7200.0, forKey: BridgeSettings.mcpAdmissionTTLKey)
+
+            XCTAssertEqual(BridgeSettings.mcpAdmissionTTL(defaults: defaults), 7200.0)
+        }
+    }
+
+    func testMCPAdmissionTTLCapsValuesAt24Hours() {
+        withDefaults { defaults in
+            defaults.set(BridgeSettings.maximumSessionTTL * 2, forKey: BridgeSettings.mcpAdmissionTTLKey)
+
+            XCTAssertEqual(
+                BridgeSettings.mcpAdmissionTTL(defaults: defaults),
+                BridgeSettings.maximumSessionTTL
+            )
+        }
+    }
+
+    func testMCPAdmissionTTLHonorsManagedMaximum() {
+        withDefaults { defaults in
+            defaults.set(7200.0, forKey: BridgeSettings.mcpAdmissionTTLKey)
+            defaults.set(3600.0, forKey: BridgeSettings.mcpAdmissionMaximumTTLKey)
+
+            XCTAssertEqual(BridgeSettings.mcpAdmissionTTL(defaults: defaults), 3600.0)
+        }
+    }
+
     func testSSHSessionTTLMapsLegacyNeverTo24Hours() {
         withDefaults { defaults in
             defaults.set(-1.0, forKey: BridgeSettings.sshSessionTTLKey)

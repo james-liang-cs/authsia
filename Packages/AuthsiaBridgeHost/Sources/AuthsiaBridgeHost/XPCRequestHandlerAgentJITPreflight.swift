@@ -171,7 +171,9 @@ extension XPCRequestHandler {
         }
         let capability: AgentJITCapability = requestedCommand == "list" ? .list : .exec
 
-        let ttl = Self.configuredSessionTTL
+        let ttl = payload.mcpAdmissionRequested
+            ? Self.configuredMCPAdmissionTTL
+            : Self.configuredSessionTTL
         guard let timing = Self.fixedAgentJITApprovalTiming(
             now: agentJITApprovalClock(),
             ttl: ttl

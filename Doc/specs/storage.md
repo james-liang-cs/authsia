@@ -74,7 +74,7 @@ Application Support unless noted otherwise.
 | `~/Library/Application Support/Authsia/agent-file-activity.jsonl` | Agent hooks / Access Center | Redacted hook and workspace-diff file-activity evidence for Access Center. |
 | `~/Library/Application Support/Authsia/injected-process-trees.jsonl` | CLI injected-child watcher / Access Center | Redacted Process Tree runs recorded while a secret-injected child is running. |
 | `~/Library/Application Support/Authsia/AgentRuntimeContext/events.jsonl` | Optional agent hook scripts / CLI | Short-lived agent attribution events read by the CLI when building bridge request context. |
-| `~/Library/Preferences/app.authsia.plist` | UserDefaults | App preferences domain for CLI access, CLI and SSH session TTLs, SSH-agent opt-in state, iCloud Keychain sync preference, interface settings, and registration identities. macOS may cache this through `cfprefsd`. |
+| `~/Library/Preferences/app.authsia.plist` | UserDefaults | App preferences domain for CLI access, CLI, SSH, and MCP admission TTLs, the managed MCP admission maximum, SSH-agent opt-in state, iCloud Keychain sync preference, interface settings, and registration identities. macOS may cache this through `cfprefsd`. |
 
 ### `~/.authsia` Runtime State
 

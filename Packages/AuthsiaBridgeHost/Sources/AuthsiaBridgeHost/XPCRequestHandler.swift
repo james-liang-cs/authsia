@@ -84,6 +84,11 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         BridgeSessionManager.configuredTTL
     }
 
+    /// Returns the configured lifetime for local MCP admission grants.
+    static var configuredMCPAdmissionTTL: TimeInterval {
+        BridgeSettings.mcpAdmissionTTL()
+    }
+
     /// Returns whether CLI access is globally enabled (default: true for backward compatibility)
     static var isCliAccessEnabled: Bool {
         BridgeSettings.isCliAccessEnabled()
