@@ -39,9 +39,11 @@ upstream declared by the bound workspace. It does not add tools to
 Authsia an implementation of the upstream service.
 
 There is no client setting that intercepts a server the client already
-launches. The client must start Authsia instead of the child command. Authsia
-never rewrites third-party MCP configuration. Workspace Setup does not write
-`mcpUpstreams`.
+launches. The client must start Authsia instead of the child command. Access
+Center **Wrap** / **Write wrap** and `authsia mcp wrap --write` may replace a
+scanned client launch after confirmation and a checksum check. Authsia never
+silent-rewrites. `mcp configure` still prints only. Workspace Setup does not
+write `mcpUpstreams`.
 
 Company policy allowlists Authsia. Workspace `mcpUpstreams` names each child.
 Admission, redacted call evidence, and revoke-kill apply only on the wrapped
@@ -78,23 +80,16 @@ parity, executable attestation, or DLP.
 ```text
   company policy                         user / workspace
   --------------                         ----------------
-  allow only:                            1. Enable MCP Integrations
-    authsia mcp serve                       (Settings > Developer Access)
-    authsia mcp proxy                    2. Declare the child in mcpUpstreams
-                                            (Access Center Declare, or edit
-                                            .authsia/workspace.json)
-                                         3. Point the named client file at
-                                            Authsia mcp proxy +
-                                            AUTHSIA_MCP_UPSTREAM=<name>
-                                         4. Open the managed workspace
-                                            (pinned tools list without child;
-                                            empty policy requests admission
-                                            before discovery)
-                                         5. Approve the first operation that
-                                            must start the child (discovery or
-                                            tools/call)
-                                         6. Use the child's tools
-                                         7. Revoke in Access Center when done
+  allow only:                            1. Init workspace
+    authsia mcp serve                    2. Enable MCP Integrations
+    authsia mcp proxy                       (Settings deep-links to Coverage;
+                                            Coverage can turn it on)
+                                         3. Confirm Wrap on the winning
+                                            (usually project) file — declare
+                                            + checksum write; or Write wrap
+                                            if already declared
+                                         4. Approve first discovery /
+                                            tools/call
 ```
 
 ### Preconditions
@@ -102,33 +97,35 @@ parity, executable attestation, or DLP.
 - An initialized, validated Authsia workspace.
 - **MCP Integrations** enabled under Authsia **Settings > Developer Access**.
   The setting is off by default. Configuring a client does not turn it on.
-  Enabling it creates no grant and bypasses no Bridge or JIT check.
+  The Settings toggle opens Coverage; Coverage can turn it on. Enabling it
+  creates no grant and bypasses no Bridge or JIT check.
 
 ### Steps
 
 1. Initialize and validate the managed Authsia workspace.
-2. Add a `mcpUpstreams` entry, or open Access Center **MCP proxy** and use
-   **Wrap** for a wrap-eligible scanned server. Wrap declares command and argv
-   and, after confirmation, writes the scanned client file. Absolute Homebrew
-   or system paths store a PATH basename. Keep live credentials and private
-   endpoints out of committed policy.
-3. Enable **MCP Integrations**.
-4. From that workspace, run `authsia mcp configure --client
-   <codex|claude|cursor|devin|vscode>`, or copy the Access Center wrap recipe.
-5. Replace the direct launch in the scanned client file with Access Center
-   **Write wrap** / **Wrap** (confirmed, checksum-gated), `authsia mcp wrap
-   --write --server <name> --yes`, or the printed recipe. Project-scoped
-   Claude, Cursor, and VS Code entries override matching user-global entries.
-   Authsia never rewrites a client file silently; it writes only the scanned
-   file after that confirmation.
-6. Open the managed workspace. Pinned policy lists without starting the child.
-   Empty-policy discovery requests local MCP admission before starting its
-   short-lived child. A permitted call also requires admission before the
-   long-lived child starts; an existing matching grant is reused.
+2. Enable **MCP Integrations**. Settings → Developer Access deep-links to
+   Access Center Coverage; Coverage can turn the setting on.
+3. On Access Center **MCP proxy** Coverage, confirm **Wrap** on the winning
+   (usually project) file. Wrap declares command and argv in `mcpUpstreams`
+   and, after showing the current entry, the replacement, and a SHA256
+   checksum, writes the scanned client file. Use **Write wrap** when the child
+   is already declared. Absolute Homebrew or system paths store a PATH
+   basename; committed `workspace.json` still forbids absolute paths. Keep live
+   credentials and private endpoints out of committed policy. Project-scoped
+   Claude, Cursor, and VS Code entries override matching user-global entries;
+   an overridden write is refused. Authsia never rewrites a client file
+   silently.
+4. Open the managed workspace. Approve the first operation that must start the
+   child (discovery or `tools/call`). Pinned policy lists without starting the
+   child. Empty-policy discovery requests local MCP admission before starting
+   its short-lived child. A permitted call also requires admission before the
+   long-lived child starts; an existing matching grant is reused. Revoke in
+   Access Center when done.
 
-Access Center **Copy wrap recipe** pastes a client-native replacement for the
-scanned file. After Declare, that copy is only the client-launch replacement,
-not a second `mcpUpstreams` paste.
+**Copy wrap recipe**, `authsia mcp configure`, and `authsia mcp wrap --write
+--server <name> --yes` are fallbacks, not required steps. A client that already
+launches `mcp proxy` without a matching `mcpUpstreams` entry still needs
+**Declare in workspace**; Wrap cannot infer child argv from a proxy launch.
 
 ## Company Local MCP Allowlist
 
@@ -164,9 +161,11 @@ Generated client configuration uses a stable `mcp proxy` argv plus
 
 Add one named entry to the optional `mcpUpstreams` array in
 `.authsia/workspace.json`. That array is the admission allowlist. Access Center
-**Declare in workspace** appends a wrap-eligible scanned stdio server to the
-selected managed workspaces after confirmation; Workspace Setup still does not
-write `mcpUpstreams`.
+**Wrap** is the operator action for a wrap-eligible scanned stdio server: it
+declares command and argv and writes the scanned client launch after
+confirmation. **Declare in workspace** remains for a missing declaration when
+the client already launches `mcp proxy` and Wrap cannot infer child argv.
+Workspace Setup still does not write `mcpUpstreams`.
 
 - `name` must be unique and match `[A-Za-z][A-Za-z0-9_-]{0,31}`.
 - `command` is a PATH basename or workspace-relative executable, plus a
@@ -226,7 +225,11 @@ Credential-less example that lets Authsia discover the child catalog:
 
 ## Print And Apply Client Configuration
 
-From the managed workspace, run:
+The write path is Access Center **Wrap** / **Write wrap**, or `authsia mcp wrap
+--write --server <name>` (prints a plan; `--yes` writes). `mcp configure`
+stays print-only.
+
+From the managed workspace, the fallback print is:
 
 ```text
 authsia mcp configure --client <codex|claude|cursor|devin|vscode>
@@ -239,7 +242,7 @@ secret references. Codex, Claude Code, and VS Code receive a direct
 installation command plus a manual fallback. Cursor and Devin Desktop receive
 only the manual user-global configuration.
 
-Apply the printed **proxy** form so the client launches the installed Authsia
+Wrap writes that **proxy** form so the client launches the installed Authsia
 binary with argv `mcp proxy` and `AUTHSIA_MCP_UPSTREAM=<name>`. A remaining
 direct command/argv entry bypasses admission, redacted call evidence, and
 revoke-kill.
@@ -247,9 +250,9 @@ revoke-kill.
 The printed form is a user-global fallback derived from the currently bound
 workspace. It is effective only when that workspace declares the named
 upstream and no project-scoped entry overrides it. For Claude, Cursor, and VS
-Code, inspect and replace a matching project entry as well; Access Center copy
-recipes target the exact scanned scope and never emit a user-global install
-command for a project file.
+Code, prefer Wrap on the matching project file. Access Center copy
+recipes remain a fallback and target the exact scanned scope; they never emit a
+user-global install command for a project file.
 
 ```text
   ~/.claude.json  (user-global; same argv for every local tool)
@@ -475,12 +478,13 @@ against their owning root. Findings are:
 | unadmitted | No known workspace declaration matches the observed launch. |
 
 Malformed, missing, or oversized config files are skipped. The scanner never
-edits client configuration. A direct or unadmitted entry is visibility only:
-Authsia cannot audit those calls, kill them on revoke, or prevent launch. An
-empty or partial allowlist therefore fails open and can only affect the
-displayed finding. Command/argv matching is an identity hint, not executable
-attestation; pin a local binary instead of a drifting package launcher when
-stronger identity matters.
+edits client configuration. Confirmed **Wrap** / **Write wrap** may replace a
+scanned launch after a checksum check; that write is not the scan. A direct or
+unadmitted entry is visibility only until wrapped: Authsia cannot audit those
+calls, kill them on revoke, or prevent launch. An empty or partial allowlist
+therefore fails open and can only affect the displayed finding. Command/argv
+matching is an identity hint, not executable attestation; pin a local binary
+instead of a drifting package launcher when stronger identity matters.
 
 ## Access Center
 
@@ -492,8 +496,11 @@ snapshot and terminates its child process group; Access Center does not signal
 the child directly.
 
 The **MCP proxy** filter lists admission and `proxy:<upstream>` grants first.
-Scan findings sit in a collapsed coverage strip grouped by wrap status, not
-workspace path. The Agent grants Workspace menu filters every source tab; it
+Scan findings sit in a coverage strip grouped by wrap status, not workspace
+path. Coverage stays expanded while wrap-eligible Direct launch or Not wrapped
+rows exist. **Wrap** declares and writes; **Write wrap** writes an already
+declared launch. Both require confirmation and refuse an overridden
+user-global row. The Agent grants Workspace menu filters every source tab; it
 lists **~** for grants with no workspace, the same pinned and recent local
 workspaces Workspace Center shows that still exist on this Mac, and existing
 roots of active proxy grants. It omits
@@ -636,6 +643,8 @@ Implementation is not complete until automated tests prove:
 - client configuration remains byte-stable without upstream declarations and
   prints one client-native `mcp proxy` block plus `AUTHSIA_MCP_UPSTREAM` per
   declared upstream when present, with no `--upstream` in generated argv;
+- wrap write shows the current entry, replacement, and checksum, and refuses
+  when the file changed underfoot or the row is overridden by project config;
 - the scanner reports wrapped, direct bypass, and unadmitted without retaining
   other environment values;
 - Access Center presents a wrapped `tools/call` as the child basename plus MCP

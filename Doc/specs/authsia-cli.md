@@ -1687,8 +1687,8 @@ from the parent process; follow-up secret access still goes through `authsia wor
 deterministic user-global configuration for the exact installed Authsia binary.
 It rejects unsupported clients and unsafe path values. The output contains no
 secret, bearer, automation credential, or fixed repository path and warns that
-the binary path is machine-specific. It never edits or launches a third-party
-client. For Codex, Claude Code, and VS Code, the output first provides a
+the binary path is machine-specific. `mcp configure` never edits or launches a
+third-party client. Confirmed wrap write is `authsia mcp wrap --write`. For Codex, Claude Code, and VS Code, the output first provides a
 shell-safe direct command that uses the client's supported MCP installer; the
 manual configuration remains available as a fallback. Cursor and Devin Desktop
 receive only their manual configuration because they do not expose a documented

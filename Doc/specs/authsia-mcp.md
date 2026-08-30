@@ -614,11 +614,12 @@ operating-system-wide DLP.
 
 `authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints a
 deterministic user-global local-stdio configuration for the exact installed
-Authsia binary. It always prints the `authsia mcp serve` entry. Proxy blocks,
-company allowlist shape, and the read-only known-client scan are specified in
-[`authsia-mcp-proxy.md`](authsia-mcp-proxy.md#print-and-apply-client-configuration).
-V1 does not edit third-party configuration, launch the client, add credentials,
-or use a shell wrapper.
+Authsia binary. It always prints the `authsia mcp serve` entry. Proxy wrap
+write, company allowlist shape, and the known-client scan are specified in
+[`authsia-mcp-proxy.md`](authsia-mcp-proxy.md#user-flow).
+`mcp configure` does not edit third-party configuration, launch the client, add
+credentials, or use a shell wrapper. Confirmed Wrap / `mcp wrap --write` may
+replace a scanned launch after a checksum check.
 
 Before using the configured client, the user explicitly enables **MCP
 Integrations** under Authsia **Settings > Developer Access**. Client

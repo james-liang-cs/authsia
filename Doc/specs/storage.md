@@ -441,7 +441,9 @@ Authoritative grants remain in the Bridge-owned authenticated Keychain envelope.
 MCP activity continues to use the existing command, file, network, Process
 Tree, and HMAC-chained audit paths listed above. Client-owned MCP configuration
 is outside Authsia storage; `authsia mcp configure` prints user-global
-configuration and does not write third-party client files.
+configuration and does not write third-party client files. Confirmed Wrap /
+`authsia mcp wrap --write` may replace a scanned client launch; that write is
+still the client's file, not an Authsia store.
 
 ## Audit Logs
 
