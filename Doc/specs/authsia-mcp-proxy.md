@@ -16,6 +16,12 @@ in the private Access Center spec.
 - [Purpose](#purpose)
 - [Complementary Lanes](#complementary-lanes)
 - [User Flow](#user-flow)
+  - [Preconditions](#preconditions)
+  - [Find The Server](#find-the-server)
+  - [Protect A Listed Server](#protect-a-listed-server)
+  - [When Coverage Does Not List The Server](#when-coverage-does-not-list-the-server)
+  - [When Protect Is Unavailable](#when-protect-is-unavailable)
+  - [After Wrap](#after-wrap)
 - [Company Local MCP Allowlist](#company-local-mcp-allowlist)
 - [Declare The Upstream](#declare-the-upstream)
 - [Print And Apply Client Configuration](#print-and-apply-client-configuration)
@@ -77,18 +83,30 @@ parity, executable attestation, or DLP.
 
 ## User Flow
 
+Coverage lists wrap-safe stdio launches already present in a known client MCP
+file. **Protect server** exists only on those rows. A local tool that is not
+scanned, or that Coverage hides, has no Protect button. Follow [Find The
+Server](#find-the-server), then the matching branch.
+
 ```text
   company policy                         user / workspace
   --------------                         ----------------
   allow only:                            1. Init workspace
     authsia mcp serve                    2. Enable MCP Integrations
-    authsia mcp proxy                       (Settings deep-links to Coverage;
-                                            Coverage can turn it on)
-                                         3. Choose Protect server on the
-                                            winning (usually project) file
-                                            (wrap, then record catalog)
-                                         4. Approve catalog recording if
-                                            prompted, then the first tool call;
+    authsia mcp proxy                    3. Access Center → MCP proxy
+                                            → expand Coverage
+                                         4. Branch:
+                                            listed, Protect available
+                                              → Protect server
+                                            listed proxy, missing mcpUpstreams
+                                              → Declare in workspace
+                                            listed, no Protect (npx / uvx / shell)
+                                              → pin a PATH basename, reload
+                                            no row
+                                              → declare mcpUpstreams,
+                                                wrap the client file, catalog
+                                         5. Approve catalog if prompted, then
+                                            the first tools/call;
                                             active grant verifies protection
 ```
 
@@ -100,37 +118,103 @@ parity, executable attestation, or DLP.
   The Settings toggle opens Coverage; Coverage can turn it on. Enabling it
   creates no grant and bypasses no Bridge or JIT check.
 
-### Steps
+### Find The Server
 
 1. Initialize and validate the managed Authsia workspace.
-2. Enable **MCP Integrations**. Settings → Developer Access deep-links to
-   Access Center Coverage; Coverage can turn the setting on.
-3. On Access Center **MCP proxy** Protection coverage, choose **Protect
-   server** on the winning (usually project) file. Authsia declares command
-   and argv in `mcpUpstreams` when needed and, after showing the current entry,
-   protected entry, and a SHA256 checksum, writes the scanned client file.
-   For a credential-less stdio entry with empty `allow` and `approve`, Protect
-   then records the tool catalog: local MCP admission, a short-lived child
-   probe, and names plus sanitized schemas written into `mcpUpstreams`. Absolute
-   Homebrew or system paths store a PATH
-   basename; committed `workspace.json` still forbids absolute paths. Keep live
-   credentials and private endpoints out of committed policy. Project-scoped
-   Claude, Cursor, and VS Code entries override matching user-global entries;
-   an overridden write is refused. Authsia never rewrites a client file
-   silently. If catalog recording is skipped or declined, Coverage keeps
-   **Protected, record tools** and **Record catalog**. `authsia mcp catalog
-   --write` remains the terminal equivalent, including after `mcp wrap --write`.
-4. Open the managed workspace. Opening it starts nothing and asks nothing:
-   `tools/list` is answered from committed policy. A wrapped server with no
-   recorded catalog advertises nothing, so the client has no MCP tools to call
-   and agents fall through to the unproxied CLI. The first `tools/call`
-   requests local MCP admission before the long-lived child starts; an existing
-   matching grant is reused. Revoke in Access Center when done.
+2. Enable **MCP Integrations**.
+3. Open Access Center → **MCP proxy** (not All, Authsia MCP, or Direct agents).
+4. Choose the workspace that owns the tool.
+5. Expand Coverage (**Show coverage** or **Review protection**). Coverage is
+   collapsed by default.
 
-**Copy manual recipe**, `authsia mcp configure`, and `authsia mcp wrap --write
---server <name> --yes` are fallbacks, not required steps. A client that already
-launches `mcp proxy` without a matching `mcpUpstreams` entry still needs
-workspace policy; Authsia cannot infer child argv from a proxy launch.
+Coverage shows wrap-eligible **Direct launch** and **Not wrapped** rows, a
+proxy launch whose upstream is missing from that workspace, and **Protected,
+record tools**. It hides shell wrappers, `npx` / `uvx` package launchers, an
+Authsia proxy launch with no valid upstream name, and wrapped rows that already
+have a live grant plus a recorded catalog. Absolute Homebrew or `/usr/local`
+binaries wrap as a PATH basename.
+
+Supported scanned clients: Codex, Claude Code, Cursor, Devin Desktop (Windsurf
+uses the Devin config path), and Visual Studio Code (including Copilot MCP).
+User-global files: `~/.codex/config.toml`, `~/.claude.json`,
+`~/.cursor/mcp.json`, `~/.config/devin/mcp_config.json`, and VS Code user
+`mcp.json`. Project files that outrank those: Claude `.mcp.json`, Cursor
+`.cursor/mcp.json`, and VS Code `.vscode/mcp.json`. Codex and Devin have no
+project scope.
+
+### Protect A Listed Server
+
+When Coverage shows the server and **Protect server** is available, use it on
+the winning (usually project) file. Authsia declares command and argv in
+`mcpUpstreams` when needed and, after showing the current entry, protected
+entry, and a SHA256 checksum, writes the scanned client file. For a
+credential-less stdio entry with empty `allow` and `approve`, Protect then
+records the tool catalog: local MCP admission, a short-lived child probe, and
+names plus sanitized schemas written into `mcpUpstreams`. Absolute Homebrew or
+system paths store a PATH basename; committed `workspace.json` still forbids
+absolute paths. Keep live credentials and private endpoints out of committed
+policy. Project-scoped Claude, Cursor, and VS Code entries override matching
+user-global entries; an overridden write is refused. Authsia never rewrites a
+client file silently. If catalog recording is skipped or declined, Coverage
+keeps **Protected, record tools** and **Record catalog**. `authsia mcp catalog
+--write` remains the terminal equivalent, including after `mcp wrap --write`.
+
+Then continue at [After Wrap](#after-wrap).
+
+### When Coverage Does Not List The Server
+
+There is no Protect button. Declare policy by hand, then point the client at
+the proxy. Details of the `mcpUpstreams` object are in
+[Declare The Upstream](#declare-the-upstream). Client file shapes are in
+[Print And Apply Client Configuration](#print-and-apply-client-configuration).
+
+1. Add a named `mcpUpstreams` entry to `.authsia/workspace.json`. `command` is
+   a PATH basename or workspace-relative executable. Do not commit `npx`,
+   `uvx`, a shell wrapper, live credentials, or a machine-specific absolute
+   path. Credential-less servers use `"env": {}`. Servers that inject
+   `authsia://` references must pin `allow` / `approve` by hand; catalog
+   capture is disabled when `env` is non-empty.
+2. Replace the client's direct child launch with the installed Authsia binary,
+   argv `mcp proxy`, and `AUTHSIA_MCP_UPSTREAM=<name>`. Prefer the project file
+   for Claude, Cursor, and VS Code. Restart the client after the edit.
+3. For a credential-less entry with empty `allow` and `approve`, record the
+   catalog with `authsia mcp catalog --server <name> --write` and approve the
+   Mac admission sheet. Until that write succeeds, `tools/list` is empty and
+   agents fall through to the unproxied CLI.
+4. Continue at [After Wrap](#after-wrap).
+
+`authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints this
+launch; it does not write files. `authsia mcp wrap --write` only wraps a
+scanned, wrap-eligible row.
+
+### When Protect Is Unavailable
+
+**Declare in workspace** is for a Coverage row that already launches
+`authsia mcp proxy` but has no matching `mcpUpstreams` entry. Wrap cannot infer
+child argv from a proxy launch. Declare writes command and argv into each
+selected workspace; it does not require operators to list child tool names. A
+credential-less empty `allow` / `approve` entry still needs catalog recording
+afterward.
+
+If Coverage lists the server but has no Protect button, the launch is not
+wrap-safe (shell, `npx`, `uvx`, invalid name, or an Authsia proxy with no
+valid upstream name). Install a PATH basename for that child, change the client
+entry to that command, reload Access Center, then Protect if the row appears.
+
+**Copy manual recipe** and `authsia mcp wrap --write --server <name> --yes`
+remain fallbacks for wrap-eligible scanned rows. They are not a substitute
+when Coverage has no row.
+
+### After Wrap
+
+Open the managed workspace. Opening it starts nothing and asks nothing:
+`tools/list` is answered from committed policy. A wrapped server with no
+recorded catalog advertises nothing, so the client has no MCP tools to call
+and agents fall through to the unproxied CLI. The first `tools/call` requests
+local MCP admission before the long-lived child starts; an existing matching
+grant is reused. Access Center shows **Access expires in** on an active
+admission row. **Renew admission** extends that grant in place. Revoke in
+Access Center when done.
 
 ## Company Local MCP Allowlist
 
@@ -594,7 +678,8 @@ Operator guidance:
 1. Wrap every local stdio server that should be auditable. Visibility and
    revoke-kill exist only when the client starts `authsia mcp proxy` with
    `AUTHSIA_MCP_UPSTREAM`. On **MCP proxy**, review grants first; wrap remaining
-   Direct launch and Not wrapped rows from Coverage.
+   Direct launch and Not wrapped rows from Coverage. If Coverage has no row,
+   follow [When Coverage Does Not List The Server](#when-coverage-does-not-list-the-server).
 2. Review by grant. Expect *which tool ran*, not *what it was asked*.
 3. Treat the client-config scan as detective. A direct entry is a finding, not
    a block, and is not a call log.
