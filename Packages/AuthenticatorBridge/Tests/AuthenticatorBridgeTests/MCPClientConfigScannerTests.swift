@@ -449,11 +449,12 @@ final class MCPClientConfigScannerTests: XCTestCase {
             homeDirectory: home
         )
 
-        XCTAssertEqual(locations.map(\.source), [.claude, .cursor, .vscode])
+        XCTAssertEqual(locations.map(\.source), [.claude, .cursor, .vscode, .claude])
         XCTAssertEqual(locations.map(\.displayPath), [
             "~/repo/.mcp.json",
             "~/repo/.cursor/mcp.json",
             "~/repo/.vscode/mcp.json",
+            "~/.claude.json (local scope)",
         ])
         XCTAssertTrue(locations.allSatisfy { $0.scope == .project })
         XCTAssertTrue(locations.allSatisfy { $0.workspaceRoot == URL(fileURLWithPath: "/Users/dev/repo", isDirectory: true).standardizedFileURL })
@@ -470,7 +471,7 @@ final class MCPClientConfigScannerTests: XCTestCase {
             homeDirectory: home
         )
 
-        XCTAssertEqual(locations.count, 3)
+        XCTAssertEqual(locations.count, 4)
         XCTAssertEqual(locations.first?.displayPath, "/srv/repo/.mcp.json")
     }
 
@@ -596,6 +597,167 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertEqual(rootBFinding.status, .unadmitted)
         XCTAssertEqual(rootBFinding.precedence, .effective)
         XCTAssertTrue(rootBFinding.shouldShowInAccessCenter)
+    }
+
+
+    func testDisabledLaunchesAreNotReportedAsProtectionDebt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let codex = root.appendingPathComponent("codex.toml")
+        let cursor = root.appendingPathComponent("cursor.json")
+        try """
+        [mcp_servers.off]
+        command = "off-server"
+        args = ["mcp"]
+        enabled = false
+
+        [mcp_servers.on]
+        command = "on-server"
+        args = ["mcp"]
+        """.write(to: codex, atomically: true, encoding: .utf8)
+        try writeJSON([
+            "mcpServers": [
+                "cursor-off": ["command": "off-server", "enabled": false],
+                "cursor-also-off": ["command": "off-server", "disabled": true],
+                "cursor-on": ["command": "on-server"],
+            ],
+        ], to: cursor)
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: [
+                MCPClientConfigLocation(source: .codex, fileURL: codex, displayPath: "~/.codex/config.toml"),
+                MCPClientConfigLocation(source: .cursor, fileURL: cursor, displayPath: "~/.cursor/mcp.json"),
+            ]
+        )
+
+        XCTAssertEqual(findings.map(\.serverName), ["on", "cursor-on"])
+    }
+
+    func testClaudeLocalScopeIsDiscoveredAndOutranksProjectFile() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let repo = home.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try writeJSON([
+            "mcpServers": ["shared": ["command": "user-global-server"]],
+            "projects": [
+                repo.standardizedFileURL.path: [
+                    "mcpServers": [
+                        "shared": ["command": "local-scope-server"],
+                        "local-only": ["command": "local-only-server"],
+                    ],
+                ],
+            ],
+        ], to: home.appendingPathComponent(".claude.json"))
+        try writeJSON([
+            "mcpServers": ["shared": ["command": "project-file-server"]],
+        ], to: repo.appendingPathComponent(".mcp.json"))
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: MCPClientConfigLocation.knownLocations(homeDirectory: home)
+                + MCPClientConfigLocation.projectLocations(
+                    workspaceRoots: [repo],
+                    homeDirectory: home
+                )
+        )
+
+        // `claude mcp add` defaults to local scope, so a server that exists
+        // only there must still be discovered.
+        XCTAssertEqual(
+            findings.first { $0.serverName == "local-only" }?.commandLabel,
+            "local-only-server"
+        )
+        let shared = findings.filter { $0.serverName == "shared" }
+        XCTAssertEqual(
+            shared.filter { $0.precedence == .effective }.map(\.commandLabel),
+            ["local-scope-server"]
+        )
+        XCTAssertEqual(
+            Set(shared.filter { $0.precedence == .overridden }.map(\.commandLabel)),
+            ["project-file-server", "user-global-server"]
+        )
+    }
+
+
+    func testLaunchKeysWorkspacePolicyCannotCarryBlockTheWrap() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let codex = root.appendingPathComponent("codex.toml")
+        let cursor = root.appendingPathComponent("cursor.json")
+        try """
+        [mcp_servers.relative]
+        command = "./tool/server"
+        args = ["mcp"]
+        cwd = "."
+        """.write(to: codex, atomically: true, encoding: .utf8)
+        try writeJSON([
+            "mcpServers": [
+                "pinned": ["command": "server", "cwd": "/srv/tool"],
+            ],
+        ], to: cursor)
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: [
+                MCPClientConfigLocation(source: .codex, fileURL: codex, displayPath: "~/.codex/config.toml"),
+                MCPClientConfigLocation(source: .cursor, fileURL: cursor, displayPath: "~/.cursor/mcp.json"),
+            ]
+        )
+
+        XCTAssertEqual(findings.count, 2)
+        for finding in findings {
+            // Wrapping would drop the working directory and quietly change how
+            // the child runs, so Coverage must not offer Protect here.
+            XCTAssertFalse(finding.isWrapEligible, finding.serverName)
+            XCTAssertEqual(finding.wrapBlockReason, .unsupportedLaunchKey, finding.serverName)
+            XCTAssertEqual(finding.unsupportedLaunchKeys, ["cwd"], finding.serverName)
+            XCTAssertTrue(finding.shouldShowInAccessCenter, finding.serverName)
+        }
+    }
+
+
+    func testChildEnvironmentIsCountedButNeverRetained() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let codex = root.appendingPathComponent("codex.toml")
+        let cursor = root.appendingPathComponent("cursor.json")
+        try """
+        [mcp_servers.node_repl]
+        command = "node_repl"
+        args = []
+
+        [mcp_servers.node_repl.env]
+        NODE_PATH = "must-not-appear"
+        NODE_MODULE_DIRS = "must-not-appear"
+        """.write(to: codex, atomically: true, encoding: .utf8)
+        try writeJSON([
+            "mcpServers": [
+                "jira": [
+                    "command": "mcp-atlassian",
+                    "env": ["TOKEN": "must-not-appear"],
+                ],
+            ],
+        ], to: cursor)
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: [
+                MCPClientConfigLocation(source: .codex, fileURL: codex, displayPath: "~/.codex/config.toml"),
+                MCPClientConfigLocation(source: .cursor, fileURL: cursor, displayPath: "~/.cursor/mcp.json"),
+            ]
+        )
+
+        XCTAssertEqual(findings.first { $0.serverName == "node_repl" }?.childEnvironmentCount, 2)
+        XCTAssertEqual(findings.first { $0.serverName == "jira" }?.childEnvironmentCount, 1)
+        let encoded = String(decoding: try JSONEncoder().encode(findings), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("must-not-appear"))
+        XCTAssertFalse(encoded.contains("TOKEN"))
+        XCTAssertFalse(encoded.contains("NODE_PATH"))
     }
 
 }

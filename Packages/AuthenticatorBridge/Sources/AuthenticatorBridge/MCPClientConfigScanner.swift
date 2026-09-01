@@ -45,12 +45,27 @@ public enum MCPClientConfigPrecedence: String, Codable, Equatable, Sendable {
 }
 
 public struct MCPClientConfigLocation: Equatable, Sendable {
+    /// Precedence tiers among entries that name the same client and server for
+    /// one workspace root. Higher wins; the loser is reported `overridden`.
+    enum Rank: Int {
+        case userGlobal = 0
+        case projectFile = 1
+        /// Claude Code's `local` scope, the default for `claude mcp add`. It
+        /// lives in `~/.claude.json` under `projects[<root>]` and outranks the
+        /// repository's own `.mcp.json`.
+        case claudeLocalScope = 2
+    }
+
     public let source: MCPClientConfigSource
     public let fileURL: URL
     public let displayPath: String
     public let scope: MCPClientConfigScope
     public let workspaceRoot: URL?
     public let workspacePathLabel: String?
+    /// When set, servers are read from `projects[projectKey].mcpServers`
+    /// instead of the file's top-level map.
+    let projectKey: String?
+    let rank: Rank
 
     public init(
         source: MCPClientConfigSource,
@@ -60,12 +75,36 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
         workspaceRoot: URL? = nil,
         workspacePathLabel: String? = nil
     ) {
+        self.init(
+            source: source,
+            fileURL: fileURL,
+            displayPath: displayPath,
+            scope: scope,
+            workspaceRoot: workspaceRoot,
+            workspacePathLabel: workspacePathLabel,
+            projectKey: nil,
+            rank: scope == .project ? .projectFile : .userGlobal
+        )
+    }
+
+    init(
+        source: MCPClientConfigSource,
+        fileURL: URL,
+        displayPath: String,
+        scope: MCPClientConfigScope,
+        workspaceRoot: URL?,
+        workspacePathLabel: String?,
+        projectKey: String?,
+        rank: Rank
+    ) {
         self.source = source
         self.fileURL = fileURL
         self.displayPath = displayPath
         self.scope = scope
         self.workspaceRoot = workspaceRoot?.standardizedFileURL
         self.workspacePathLabel = workspacePathLabel
+        self.projectKey = projectKey
+        self.rank = rank
     }
 
     /// Repository-scoped client config files, which take precedence over the
@@ -86,6 +125,10 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
         var locations: [Self] = []
         for root in workspaceRoots {
             let standardized = root.standardizedFileURL
+            let workspacePathLabel = abbreviated(
+                standardized.path,
+                homeDirectory: homeDirectory
+            )
             for (source, relativePath) in relativePaths {
                 let fileURL = standardized.appendingPathComponent(relativePath)
                 guard seen.insert(fileURL.path).inserted else { continue }
@@ -95,12 +138,27 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
                     displayPath: abbreviated(fileURL.path, homeDirectory: homeDirectory),
                     scope: .project,
                     workspaceRoot: standardized,
-                    workspacePathLabel: abbreviated(
-                        standardized.path,
-                        homeDirectory: homeDirectory
-                    )
+                    workspacePathLabel: workspacePathLabel,
+                    projectKey: nil,
+                    rank: .projectFile
                 ))
             }
+            // Claude Code's local scope. Reading only the top-level map misses
+            // every server added by a plain `claude mcp add`, which defaults
+            // there, and those outrank the repository's `.mcp.json`.
+            guard seen.insert("claude-local-scope:" + standardized.path).inserted else {
+                continue
+            }
+            locations.append(Self(
+                source: .claude,
+                fileURL: homeDirectory.appendingPathComponent(".claude.json"),
+                displayPath: "~/.claude.json (local scope)",
+                scope: .project,
+                workspaceRoot: standardized,
+                workspacePathLabel: workspacePathLabel,
+                projectKey: standardized.path,
+                rank: .claudeLocalScope
+            ))
         }
         return locations
     }
@@ -180,6 +238,10 @@ public enum MCPClientServerAdmissionStatus: String, Codable, Equatable, Sendable
 public enum MCPClientWrapBlockReason: String, Codable, Equatable, Sendable {
     case packageLauncher = "package-launcher"
     case shell
+    /// The scanned entry sets something about the child's execution that
+    /// `mcpUpstreams` cannot carry, so wrapping it would silently change how
+    /// the child runs.
+    case unsupportedLaunchKey = "unsupported-launch-key"
 }
 
 public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable {
@@ -199,6 +261,13 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     public let wrapBlockReason: MCPClientWrapBlockReason?
     public let hasAdvertisedCatalog: Bool
     public let canRecordCatalog: Bool
+    /// Names the launch keys behind a `.unsupportedLaunchKey` block, so the
+    /// reason can be stated instead of the keys being dropped silently.
+    public let unsupportedLaunchKeys: [String]
+    /// How many environment values the scanned entry sets for the child. A
+    /// wrap does not copy them, so the count is what makes that visible before
+    /// the write. Never the names, never the values.
+    public let childEnvironmentCount: Int
 
     public var id: String {
         "\(workspacePathLabel ?? ""):\(source.rawValue):\(serverName):\(configPathLabel)"
@@ -206,6 +275,15 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
 
     public var needsCatalogRecording: Bool {
         status == .admittedWrapped && !hasAdvertisedCatalog && canRecordCatalog
+    }
+
+    /// Wrapped, but nothing will ever appear in the client: the upstream
+    /// declares environment values, so listing may not probe the child, and
+    /// policy names no tool. Until a human writes `allow` / `approve`, the
+    /// proxy advertises an empty catalog and agents fall through to the
+    /// unproxied CLI.
+    public var needsToolPolicy: Bool {
+        status == .admittedWrapped && !hasAdvertisedCatalog && !canRecordCatalog
     }
 
     public var shouldShowInAccessCenter: Bool {
@@ -231,7 +309,9 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         isWrapEligible: Bool = false,
         wrapBlockReason: MCPClientWrapBlockReason? = nil,
         hasAdvertisedCatalog: Bool = true,
-        canRecordCatalog: Bool = false
+        canRecordCatalog: Bool = false,
+        unsupportedLaunchKeys: [String] = [],
+        childEnvironmentCount: Int = 0
     ) {
         self.source = source
         self.serverName = serverName
@@ -249,6 +329,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         self.wrapBlockReason = wrapBlockReason
         self.hasAdvertisedCatalog = hasAdvertisedCatalog
         self.canRecordCatalog = canRecordCatalog
+        self.unsupportedLaunchKeys = unsupportedLaunchKeys
+        self.childEnvironmentCount = childEnvironmentCount
     }
 
     enum CodingKeys: String, CodingKey {
@@ -269,6 +351,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         case wrapBlockReason
         case hasAdvertisedCatalog
         case canRecordCatalog
+        case unsupportedLaunchKeys
+        case childEnvironmentCount
     }
 
     public init(from decoder: Decoder) throws {
@@ -295,6 +379,14 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         )
         hasAdvertisedCatalog = try container.decodeIfPresent(Bool.self, forKey: .hasAdvertisedCatalog) ?? true
         canRecordCatalog = try container.decodeIfPresent(Bool.self, forKey: .canRecordCatalog) ?? false
+        unsupportedLaunchKeys = try container.decodeIfPresent(
+            [String].self,
+            forKey: .unsupportedLaunchKeys
+        ) ?? []
+        childEnvironmentCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .childEnvironmentCount
+        ) ?? 0
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -323,6 +415,12 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         if !hasAdvertisedCatalog {
             try container.encode(hasAdvertisedCatalog, forKey: .hasAdvertisedCatalog)
         }
+        if !unsupportedLaunchKeys.isEmpty {
+            try container.encode(unsupportedLaunchKeys, forKey: .unsupportedLaunchKeys)
+        }
+        if childEnvironmentCount > 0 {
+            try container.encode(childEnvironmentCount, forKey: .childEnvironmentCount)
+        }
         if canRecordCatalog {
             try container.encode(canRecordCatalog, forKey: .canRecordCatalog)
         }
@@ -331,6 +429,10 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
 
 public struct MCPClientConfigScanner {
     private static let maximumConfigBytes: UInt64 = 1_048_576
+    /// `mcpUpstreams` has no field for these, and the proxy resolves the
+    /// child's working directory itself, so a wrap would quietly change how
+    /// the child runs.
+    static let unsupportedLaunchKeys: Set<String> = ["cwd"]
     private let fileManager: FileManager
 
     public init(fileManager: FileManager = .default) {
@@ -341,7 +443,10 @@ public struct MCPClientConfigScanner {
         declaredServers: [MCPDeclaredLocalServer],
         locations: [MCPClientConfigLocation]
     ) -> [MCPClientServerFinding] {
+        // A launch the client file marks off cannot run, so it is neither a
+        // bypass to report nor protection debt to work off.
         let observedServers = locations.flatMap { entries(at: $0) }
+            .filter { !$0.isDisabled }
         var rootsByPath: [String: URL] = [:]
         var labelsByRootPath: [String: String] = [:]
         for location in locations {
@@ -357,26 +462,38 @@ public struct MCPClientConfigScanner {
             }
         }
         let workspaceRoots = rootsByPath.values.sorted { $0.path < $1.path }
-        let projectKeys = Set(observedServers.compactMap { entry -> PrecedenceKey? in
+        // Highest workspace-bound tier seen for each client/server/root. A
+        // lower tier resolves to nothing for that root and is reported
+        // `overridden` rather than as a live bypass.
+        var winningRank: [PrecedenceKey: Int] = [:]
+        for entry in observedServers {
             guard entry.location.scope == .project,
                   let root = entry.location.workspaceRoot else {
-                return nil
+                continue
             }
-            return PrecedenceKey(
+            let key = PrecedenceKey(
                 source: entry.location.source,
                 serverName: entry.name,
                 workspacePath: root.path
             )
-        })
+            winningRank[key] = max(winningRank[key] ?? 0, entry.location.rank.rawValue)
+        }
 
         let contextualServers = observedServers.flatMap { entry -> [ContextualObservedServer] in
             if entry.location.scope == .project {
                 let root = entry.location.workspaceRoot
+                let outranked = root.map { root in
+                    (winningRank[PrecedenceKey(
+                        source: entry.location.source,
+                        serverName: entry.name,
+                        workspacePath: root.path
+                    )] ?? 0) > entry.location.rank.rawValue
+                } ?? false
                 return [ContextualObservedServer(
                     entry: entry,
                     workspaceRoot: root,
                     workspacePathLabel: entry.location.workspacePathLabel ?? root?.path,
-                    precedence: .effective
+                    precedence: outranked ? .overridden : .effective
                 )]
             }
             guard !workspaceRoots.isEmpty else {
@@ -397,7 +514,7 @@ public struct MCPClientConfigScanner {
                     entry: entry,
                     workspaceRoot: root,
                     workspacePathLabel: labelsByRootPath[root.path] ?? root.path,
-                    precedence: projectKeys.contains(key) ? .overridden : .effective
+                    precedence: winningRank[key] != nil ? .overridden : .effective
                 )
             }
         }
@@ -509,18 +626,22 @@ public struct MCPClientConfigScanner {
             isAuthsiaProxyLaunch: isAuthsiaProxyLaunch,
             wrapCommand: wrap?.command,
             wrapArguments: wrap?.arguments ?? [],
-            isWrapEligible: wrap != nil,
-            wrapBlockReason: wrap == nil
-                ? MCPUpstreamCommandRules.accessCenterBlockReason(
-                    fromScanned: entry.command,
-                    arguments: entry.arguments
-                )
-                : nil,
+            isWrapEligible: wrap != nil && entry.unsupportedKeys.isEmpty,
+            wrapBlockReason: entry.unsupportedKeys.isEmpty
+                ? (wrap == nil
+                    ? MCPUpstreamCommandRules.accessCenterBlockReason(
+                        fromScanned: entry.command,
+                        arguments: entry.arguments
+                    )
+                    : nil)
+                : .unsupportedLaunchKey,
             hasAdvertisedCatalog: status == .admittedWrapped
                 ? (declaredMatch?.hasAdvertisedCatalog ?? true)
                 : true,
             canRecordCatalog: status == .admittedWrapped
-                && (declaredMatch?.canRecordCatalog ?? false)
+                && (declaredMatch?.canRecordCatalog ?? false),
+            unsupportedLaunchKeys: entry.unsupportedKeys,
+            childEnvironmentCount: entry.childEnvironmentCount
         )
     }
 
@@ -565,9 +686,21 @@ public struct MCPClientConfigScanner {
         data: Data,
         location: MCPClientConfigLocation
     ) -> [ObservedServer] {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let servers = root[location.source == .vscode ? "servers" : "mcpServers"]
-                as? [String: Any] else {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
+        }
+        let scopeRoot: [String: Any]
+        if let projectKey = location.projectKey {
+            guard let projects = root["projects"] as? [String: Any],
+                  let project = projects[projectKey] as? [String: Any] else {
+                return []
+            }
+            scopeRoot = project
+        } else {
+            scopeRoot = root
+        }
+        guard let servers = scopeRoot[location.source == .vscode ? "servers" : "mcpServers"]
+            as? [String: Any] else {
             return []
         }
         return servers.compactMap { name, rawValue in
@@ -588,7 +721,16 @@ public struct MCPClientConfigScanner {
                 command: command,
                 arguments: arguments,
                 upstreamEnvironmentName: upstreamEnvironmentName,
-                location: location
+                location: location,
+                isDisabled: value["enabled"] as? Bool == false
+                    || value["disabled"] as? Bool == true,
+                unsupportedKeys: Self.unsupportedLaunchKeys
+                    .filter { value[$0] != nil }
+                    .sorted(),
+                childEnvironmentCount: (value["env"] as? [String: Any])?
+                    .keys
+                    .filter { $0 != MCPProxyClientLaunch.environmentKey }
+                    .count ?? 0
             )
         }
     }
@@ -603,6 +745,9 @@ public struct MCPClientConfigScanner {
         var command: String?
         var arguments: [String] = []
         var upstreamEnvironmentName: String?
+        var isDisabled = false
+        var unsupportedKeys: [String] = []
+        var childEnvironmentCount = 0
         var readingEnvTable = false
 
         func flush() {
@@ -612,7 +757,10 @@ public struct MCPClientConfigScanner {
                     command: command,
                     arguments: arguments,
                     upstreamEnvironmentName: upstreamEnvironmentName,
-                    location: location
+                    location: location,
+                    isDisabled: isDisabled,
+                    unsupportedKeys: unsupportedKeys.sorted(),
+                    childEnvironmentCount: childEnvironmentCount
                 ))
             }
         }
@@ -633,6 +781,9 @@ public struct MCPClientConfigScanner {
                 command = nil
                 arguments = []
                 upstreamEnvironmentName = nil
+                isDisabled = false
+                unsupportedKeys = []
+                childEnvironmentCount = 0
                 readingEnvTable = false
             } else if readingEnvTable,
                       let value = assignmentValue(
@@ -640,12 +791,20 @@ public struct MCPClientConfigScanner {
                         key: MCPProxyClientLaunch.environmentKey
                       ) {
                 upstreamEnvironmentName = parseTOMLString(value)
+            } else if readingEnvTable, line.contains("=") {
+                childEnvironmentCount += 1
             } else if !readingEnvTable, name != nil,
                       let value = assignmentValue(in: line, key: "command") {
                 command = parseTOMLString(value)
             } else if !readingEnvTable, name != nil,
                       let value = assignmentValue(in: line, key: "args") {
                 arguments = parseTOMLStringArray(value) ?? []
+            } else if !readingEnvTable, name != nil,
+                      let value = assignmentValue(in: line, key: "enabled") {
+                isDisabled = value == "false"
+            } else if !readingEnvTable, name != nil,
+                      let key = unsupportedLaunchKey(in: line) {
+                unsupportedKeys.append(key)
             }
         }
         flush()
@@ -658,6 +817,10 @@ public struct MCPClientConfigScanner {
             return nil
         }
         return value
+    }
+
+    private static func unsupportedLaunchKey(in line: String) -> String? {
+        unsupportedLaunchKeys.first { assignmentValue(in: line, key: $0) != nil }
     }
 
     private static func assignmentValue(in line: String, key: String) -> String? {
@@ -725,6 +888,16 @@ public struct MCPClientConfigScanner {
         let arguments: [String]
         let upstreamEnvironmentName: String?
         let location: MCPClientConfigLocation
+        /// The client file marks this launch off. A disabled entry cannot run,
+        /// so it is neither a bypass nor protection debt.
+        let isDisabled: Bool
+        /// Keys on the scanned entry that shape how the child runs and have no
+        /// `mcpUpstreams` equivalent. Wrapping would drop them.
+        let unsupportedKeys: [String]
+        /// How many environment values the client file sets for the child,
+        /// ignoring Authsia's own upstream key. The count only: names and
+        /// values of a child's environment are never retained or reported.
+        let childEnvironmentCount: Int
     }
 
     private struct ContextualObservedServer {
