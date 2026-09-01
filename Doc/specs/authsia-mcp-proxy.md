@@ -100,8 +100,10 @@ Server](#find-the-server), then the matching branch.
                                               → Protect server
                                             listed proxy, missing mcpUpstreams
                                               → Declare in workspace
-                                            listed, no Protect (npx / uvx / shell)
-                                              → pin a PATH basename, reload
+                                            listed, no Protect (shell, absolute
+                                              npx / uvx, or an unsupported
+                                              launch key such as cwd)
+                                              → resolve in the client file
                                             no row
                                               → declare mcpUpstreams,
                                                 wrap the client file, catalog
@@ -130,9 +132,13 @@ Server](#find-the-server), then the matching branch.
 Coverage shows wrap-eligible **Direct launch** and **Not wrapped** rows, a
 proxy launch whose upstream is missing from that workspace, **Pin a PATH
 binary** rows for shells and absolute `npx` / `uvx` launchers (no Protect),
-and **Protected, record tools**. It hides an Authsia proxy launch with no
-valid upstream name, and wrapped rows that already have a live grant plus a
-recorded catalog. Absolute Homebrew or `/usr/local` binaries wrap as a PATH
+**Launch setting not carried** rows for an entry that sets something workspace
+policy has no field for (`cwd`; no Protect until it is resolved in the client
+file), **Protected, record tools**, and **Protected, no tools listed** for a
+wrapped upstream whose declared env forbids the probe and whose policy names
+no tool. It hides a launch the client file marks disabled, an Authsia proxy
+launch with no valid upstream name, and wrapped rows that already have a live
+grant plus a recorded catalog. Absolute Homebrew or `/usr/local` binaries wrap as a PATH
 basename. Coverage rescans when Access Center appears, when the app becomes
 active, and every 30 seconds while the pane is open.
 
@@ -142,7 +148,9 @@ User-global files: `~/.codex/config.toml`, `~/.claude.json`,
 `~/.cursor/mcp.json`, `~/.config/devin/mcp_config.json`, and VS Code user
 `mcp.json`. Project files that outrank those: Claude `.mcp.json`, Cursor
 `.cursor/mcp.json`, and VS Code `.vscode/mcp.json`. Codex and Devin have no
-project scope.
+project scope. Claude Code's `local` scope, the default for `claude mcp add`,
+lives in `~/.claude.json` under `projects[<root>].mcpServers` and outranks
+that repository's `.mcp.json`; it is read only for managed workspace roots.
 
 ### Protect A Listed Server
 
@@ -155,7 +163,15 @@ records the tool catalog: local MCP admission, a short-lived child probe, and
 names plus sanitized schemas written into `mcpUpstreams`. Absolute Homebrew or
 system paths store a PATH basename; committed `workspace.json` still forbids
 absolute paths. Keep live credentials and private endpoints out of committed
-policy. Project-scoped Claude, Cursor, and VS Code entries override matching
+policy.
+
+Before it writes, Protect names what the diff cannot show: catalog recording
+puts every advertised tool in `tools.allow`, which runs under the admission
+grant with no per-call prompt, so a tool that should prompt belongs in
+`tools.approve`; the wrap does not copy the environment values the client file
+set for the child, and states how many there were; and a bare `npx` / `uvx`
+launcher pins the launcher rather than what it fetches. Keys the entry sets
+that `mcpUpstreams` cannot carry block Protect instead of being dropped. Project-scoped Claude, Cursor, and VS Code entries override matching
 user-global entries; an overridden write is refused. Authsia never rewrites a
 client file silently. If catalog recording is skipped or declined, Coverage
 keeps **Protected, record tools** and **Record catalog**. `authsia mcp catalog
@@ -171,9 +187,10 @@ the proxy. Details of the `mcpUpstreams` object are in
 [Print And Apply Client Configuration](#print-and-apply-client-configuration).
 
 1. Add a named `mcpUpstreams` entry to `.authsia/workspace.json`. `command` is
-   a PATH basename or workspace-relative executable. Do not commit `npx`,
-   `uvx`, a shell wrapper, live credentials, or a machine-specific absolute
-   path. Credential-less servers use `"env": {}`. Servers that inject
+   a PATH basename or workspace-relative executable. Do not commit a shell
+   wrapper, live credentials, or a machine-specific absolute path. A bare
+   `npx` / `uvx` basename is accepted but pins the launcher rather than what it
+   fetches; prefer a local binary where identity matters. Credential-less servers use `"env": {}`. Servers that inject
    `authsia://` references must pin `allow` / `approve` by hand; catalog
    capture is disabled when `env` is non-empty.
 2. Replace the client's direct child launch with the installed Authsia binary,
@@ -187,7 +204,10 @@ the proxy. Details of the `mcpUpstreams` object are in
 
 `authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints this
 launch; it does not write files. `authsia mcp wrap --write` only wraps a
-scanned, wrap-eligible row.
+scanned, wrap-eligible row. It declares the upstream in the resolved workspace
+as part of that write, so the wrapped launch resolves and `mcp catalog` can
+follow; a name the workspace already declares differently is left alone and
+reported.
 
 ### When Protect Is Unavailable
 
@@ -594,8 +614,12 @@ against their owning root. Findings are:
 | direct bypass | The declared command/argv exists, but the client launches it directly. |
 | unadmitted | No known workspace declaration matches the observed launch. |
 
-Malformed, missing, or oversized config files are skipped. The scanner never
-edits client configuration. Confirmed **Wrap** / **Write wrap** may replace a
+Malformed, missing, or oversized config files are skipped, as is any entry the
+client file marks disabled (`enabled = false`, `"enabled": false`, or
+`"disabled": true`): a launch that cannot run is neither a bypass to report nor
+protection debt to work off. The scanner counts how many environment values an
+entry sets for its child, never their names or values, so the wrap can say what
+it will not copy. The scanner never edits client configuration. Confirmed **Wrap** / **Write wrap** may replace a
 scanned launch after a checksum check; that write is not the scan. A direct or
 unadmitted entry is visibility only until wrapped: Authsia cannot audit those
 calls, kill them on revoke, or prevent launch. An empty or partial allowlist
