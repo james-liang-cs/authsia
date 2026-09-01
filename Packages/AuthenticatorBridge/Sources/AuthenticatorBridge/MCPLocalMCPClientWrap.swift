@@ -87,7 +87,11 @@ public enum MCPLocalMCPClientWrap {
         try validateFinding(finding)
         let url = fileURL ?? Self.fileURL(for: finding, homeDirectory: homeDirectory)
         let data = try readConfig(at: url, fileManager: fileManager)
-        let replacement = try replacementSnippet(for: finding, authsiaCommand: authsiaCommand)
+        let replacement = try replacementSnippet(
+            for: finding,
+            authsiaCommand: authsiaCommand,
+            data: data
+        )
         let existing = try existingSnippet(for: finding, data: data)
         return Plan(
             finding: finding,
@@ -177,7 +181,8 @@ public enum MCPLocalMCPClientWrap {
 
     private static func replacementSnippet(
         for finding: MCPClientServerFinding,
-        authsiaCommand: String
+        authsiaCommand: String,
+        data: Data
     ) throws -> String {
         guard let authsia = MCPLocalMCPWrapRecipe.sanitizedCommand(authsiaCommand) else {
             throw WrapError.notWrapEligible
@@ -187,22 +192,68 @@ public enum MCPLocalMCPClientWrap {
             return MCPLocalMCPWrapRecipe.codexTable(
                 name: finding.serverName,
                 authsiaCommand: authsia,
-                environment: MCPProxyClientLaunch.environment(upstreamName: finding.serverName)
-            )
-        case .claude, .cursor, .devin:
-            return MCPLocalMCPWrapRecipe.jsonServerObject(
-                authsiaCommand: authsia,
                 environment: MCPProxyClientLaunch.environment(upstreamName: finding.serverName),
-                includeType: false
+                preservedLines: preservedCodexLines(data: data, serverName: finding.serverName)
             )
-        case .vscode:
-            return MCPLocalMCPWrapRecipe.jsonServerObject(
+        case .claude, .cursor, .devin, .vscode:
+            return prettyJSON(jsonObject(
                 authsiaCommand: authsia,
-                environment: MCPProxyClientLaunch.environment(upstreamName: finding.serverName),
-                includeType: true
-            )
+                upstreamName: finding.serverName,
+                includeType: finding.source == .vscode,
+                preserving: preservedJSONKeys(
+                    data: data,
+                    source: finding.source,
+                    serverName: finding.serverName
+                )
+            ))
         }
     }
+
+    /// Keys the human set on the scanned entry that Authsia does not manage.
+    /// The wrap replaces the launch, not the rest of the entry.
+    private static func preservedJSONKeys(
+        data: Data,
+        source: MCPClientConfigSource,
+        serverName: String
+    ) -> [String: Any] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = root[jsonServersKey(for: source)] as? [String: Any],
+              let existing = servers[serverName] as? [String: Any] else {
+            return [:]
+        }
+        return existing.filter { key, _ in !managedJSONKeys.contains(key) }
+    }
+
+    private static func preservedCodexLines(data: Data, serverName: String) -> [String] {
+        guard let text = String(data: data, encoding: .utf8),
+              let table = extractCodexTable(text, serverName: serverName) else {
+            return []
+        }
+        var preserved: [String] = []
+        var sawTableHeader = false
+        for rawLine in table.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            // Only the entry's own top-level keys are preserved. Everything
+            // from the first sub-table on -- `env` above all -- is replaced by
+            // the proxy's own environment and must not be carried forward.
+            if line.hasPrefix("["), line.hasSuffix("]") {
+                if sawTableHeader { break }
+                sawTableHeader = true
+                continue
+            }
+            guard !line.hasPrefix("#"), let equals = line.firstIndex(of: "=") else { continue }
+            let key = String(line[..<equals]).trimmingCharacters(in: .whitespaces)
+            guard !managedCodexKeys.contains(key),
+                  !MCPClientConfigScanner.unsupportedLaunchKeys.contains(key) else {
+                continue
+            }
+            preserved.append(line)
+        }
+        return preserved
+    }
+
+    private static let managedJSONKeys: Set<String> = ["command", "args", "env", "type"]
+    private static let managedCodexKeys: Set<String> = ["command", "args", "env_vars"]
 
     private static func existingSnippet(
         for finding: MCPClientServerFinding,
@@ -245,7 +296,8 @@ public enum MCPLocalMCPClientWrap {
         servers[serverName] = jsonObject(
             authsiaCommand: authsia,
             upstreamName: serverName,
-            includeType: source == .vscode
+            includeType: source == .vscode,
+            preserving: preservedJSONKeys(data: data, source: source, serverName: serverName)
         )
         root[key] = servers
         guard let encoded = try? JSONSerialization.data(
@@ -260,13 +312,15 @@ public enum MCPLocalMCPClientWrap {
     private static func jsonObject(
         authsiaCommand: String,
         upstreamName: String,
-        includeType: Bool
+        includeType: Bool,
+        preserving preserved: [String: Any] = [:]
     ) -> [String: Any] {
-        var object: [String: Any] = [
-            "command": authsiaCommand,
-            "args": MCPProxyClientLaunch.arguments,
-            "env": MCPProxyClientLaunch.environment(upstreamName: upstreamName),
-        ]
+        var object = preserved
+        object["command"] = authsiaCommand
+        object["args"] = MCPProxyClientLaunch.arguments
+        // The child's credentials never survive the wrap: the proxy resolves
+        // them from workspace policy instead of the client file.
+        object["env"] = MCPProxyClientLaunch.environment(upstreamName: upstreamName)
         if includeType {
             object["type"] = "stdio"
         }

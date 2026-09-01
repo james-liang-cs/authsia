@@ -181,4 +181,89 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted])
         try data.write(to: url)
     }
+
+    func testWrapKeepsLaunchSettingsAuthsiaDoesNotManage() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let codex = root.appendingPathComponent("config.toml")
+        try """
+        [mcp_servers.playwright]
+        command = "node"
+        args = ["server.js"]
+        startup_timeout_sec = 45.0
+
+        [mcp_servers.playwright.env]
+        TOKEN = "must-not-survive"
+        """.write(to: codex, atomically: true, encoding: .utf8)
+        let finding = MCPClientServerFinding(
+            source: .codex,
+            serverName: "playwright",
+            commandLabel: "node",
+            status: .directBypass,
+            declaredUpstreamName: "playwright",
+            configPathLabel: "~/.codex/config.toml",
+            wrapCommand: "node",
+            wrapArguments: ["server.js"],
+            isWrapEligible: true
+        )
+        let authsia = "/Applications/Authsia.app/Contents/Helpers/authsia"
+
+        let plan = try MCPLocalMCPClientWrap.plan(
+            finding: finding,
+            authsiaCommand: authsia,
+            fileURL: codex
+        )
+        try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: authsia)
+
+        // A raised timeout still applies to the proxy process; dropping it
+        // would change the launch without saying so.
+        XCTAssertTrue(plan.replacementSnippet.contains("startup_timeout_sec = 45.0"))
+        let text = try String(contentsOf: codex, encoding: .utf8)
+        XCTAssertTrue(text.contains("startup_timeout_sec = 45.0"))
+        XCTAssertFalse(text.contains("must-not-survive"))
+    }
+
+    func testJSONWrapKeepsUnmanagedKeysAndDropsChildEnvironment() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let cursor = root.appendingPathComponent("mcp.json")
+        try JSONSerialization.data(withJSONObject: [
+            "mcpServers": [
+                "filesystem": [
+                    "command": "node",
+                    "args": ["server.js"],
+                    "env": ["TOKEN": "must-not-survive"],
+                    "timeout": 60,
+                ],
+            ],
+        ]).write(to: cursor)
+        let finding = MCPClientServerFinding(
+            source: .cursor,
+            serverName: "filesystem",
+            commandLabel: "node",
+            status: .directBypass,
+            declaredUpstreamName: "filesystem",
+            configPathLabel: "~/.cursor/mcp.json",
+            wrapCommand: "node",
+            wrapArguments: ["server.js"],
+            isWrapEligible: true
+        )
+        let authsia = "/Applications/Authsia.app/Contents/Helpers/authsia"
+
+        let plan = try MCPLocalMCPClientWrap.plan(
+            finding: finding,
+            authsiaCommand: authsia,
+            fileURL: cursor
+        )
+        try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: authsia)
+
+        XCTAssertTrue(plan.replacementSnippet.contains("\"timeout\""))
+        let text = try String(contentsOf: cursor, encoding: .utf8)
+        XCTAssertTrue(text.contains("\"timeout\""))
+        XCTAssertTrue(text.contains("AUTHSIA_MCP_UPSTREAM"))
+        XCTAssertFalse(text.contains("must-not-survive"))
+    }
+
 }

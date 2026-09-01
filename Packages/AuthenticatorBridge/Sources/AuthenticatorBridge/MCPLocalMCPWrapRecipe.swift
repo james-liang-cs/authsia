@@ -55,6 +55,32 @@ public enum MCPLocalMCPWrapRecipe {
         "authsia mcp wrap --write --server \(finding.serverName)"
     }
 
+    /// What to paste when an upstream is wrapped but advertises nothing. Its
+    /// declared env forbids the probe, so the tool names have to come from the
+    /// server's own documentation; only the shape can be supplied here.
+    public static func toolPolicyText(for finding: MCPClientServerFinding) -> String? {
+        guard finding.needsToolPolicy,
+              let name = MCPProxyClientLaunch.validUpstreamName(
+                finding.declaredUpstreamName ?? finding.serverName
+              ) else {
+            return nil
+        }
+        return """
+            The \(name) upstream declares environment values, so Authsia will not \
+            start it to read its tool list. Name the tools yourself in the \(name) \
+            entry under mcpUpstreams in .authsia/workspace.json:
+
+            "tools": {
+              "allow": ["tool-that-may-run"],
+              "approve": ["tool-that-should-prompt"]
+            }
+
+            allow runs under the admission grant; approve asks every call. Until \
+            one of them names a tool, the client sees no tools and the agent \
+            falls back to the unproxied CLI.
+            """
+    }
+
     private static func clientReplacement(
         for finding: MCPClientServerFinding,
         authsiaCommand: String
@@ -171,7 +197,8 @@ public enum MCPLocalMCPWrapRecipe {
     static func codexTable(
         name: String,
         authsiaCommand: String,
-        environment: [String: String]
+        environment: [String: String],
+        preservedLines: [String] = []
     ) -> String {
         var table = """
         [mcp_servers.\(name)]
@@ -179,6 +206,12 @@ public enum MCPLocalMCPWrapRecipe {
         args = \(tomlStringArray(MCPProxyClientLaunch.arguments))
         env_vars = [\(MCPProxyClientLaunch.tlsTrustEnvironmentNames.map { "\"\($0)\"" }.joined(separator: ", "))]
         """
+        // Settings the human put on this launch that Authsia does not manage,
+        // such as a raised startup timeout, still apply to the proxy process.
+        // Dropping them would change how the launch behaves without saying so.
+        for line in preservedLines {
+            table += "\n" + line
+        }
         if !environment.isEmpty {
             table += "\n\n[mcp_servers.\(name).env]\n"
             table += environment.keys.sorted().map { key in
