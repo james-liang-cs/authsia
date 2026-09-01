@@ -519,7 +519,17 @@ struct MCPCommand: AsyncParsableCommand {
             doctor.homeDirectory = homeDirectory
             doctor.currentDirectoryPath = currentDirectoryPath
             doctor.environment = environment
-            let findings = try doctor.makeReport().findings
+            let report = try doctor.makeReport()
+            let findings = report.findings
+            let workspaceRoots = report.workspaceRoots.map {
+                URL(fileURLWithPath: $0, isDirectory: true)
+            }
+            guard !workspaceRoots.isEmpty else {
+                throw ValidationError(
+                    "No managed workspace resolved from this directory. Pass --workspace "
+                        + "<root> so the upstream can be declared alongside the client write."
+                )
+            }
             guard let finding = MCPLocalMCPClientWrap.preferredFinding(named: server, in: findings) else {
                 throw ValidationError(
                     "No wrap-eligible \(server) launch won in the scanned client files."
@@ -530,7 +540,7 @@ struct MCPCommand: AsyncParsableCommand {
                 authsiaCommand: Authsia.currentExecutableURL().path,
                 homeDirectory: homeDirectory
             )
-            var message = """
+            let message = """
                 Replace \(finding.source.displayName) \(finding.serverName) in \(finding.configPathLabel)
                 Checksum \(plan.checksum)
 
@@ -544,16 +554,50 @@ struct MCPCommand: AsyncParsableCommand {
                 output(message + "\n\nRe-run with --yes to write this replacement.")
                 throw ExitCode(2)
             }
+            // Pointing a client at `mcp proxy` without a matching
+            // `mcpUpstreams` entry leaves a launch that cannot resolve, so the
+            // declaration is part of the wrap rather than a step left to the
+            // reader. An already-declared upstream reports `alreadyDeclared`.
+            let declarations = MCPLocalMCPWorkspaceDeclaration.declare(
+                finding: finding,
+                workspaceRoots: workspaceRoots
+            )
+            var declareNotes: [String] = []
+            for declaration in declarations {
+                guard case .failure(let error) = declaration.outcome else { continue }
+                // A name already declared with a different body still resolves,
+                // so the wrap is safe; the human just needs to know the proxy
+                // will run the declared child and not the scanned one.
+                guard case .duplicateName = error else {
+                    throw ValidationError(
+                        "Could not declare \(finding.serverName) in "
+                            + "\(declaration.workspaceRoot.path): "
+                            + (error.errorDescription ?? "Could not declare.")
+                    )
+                }
+                declareNotes.append(
+                    "\(declaration.workspaceRoot.path) already declares \(finding.serverName) "
+                        + "differently; the proxy runs the declared child."
+                )
+            }
             try MCPLocalMCPClientWrap.apply(
                 plan,
                 authsiaCommand: Authsia.currentExecutableURL().path
             )
+            let declared = declarations.compactMap { declaration -> String? in
+                guard case .success(.declared) = declaration.outcome else { return nil }
+                return declaration.workspaceRoot.path
+            }
+            var written = ["Wrote \(finding.configPathLabel)."]
+            if !declared.isEmpty {
+                written.append("Declared \(finding.serverName) in \(declared.joined(separator: ", ")).")
+            }
+            written.append(contentsOf: declareNotes)
             // The proxy answers tools/list from workspace policy, so a wrapped
             // server the workspace has no catalog for lists nothing until
-            // capture runs. Wrapping writes the scanned client file only, so
-            // name that step rather than starting the child from here.
+            // capture runs.
             output(
-                message + "\n\nWrote \(finding.configPathLabel)."
+                message + "\n\n" + written.joined(separator: "\n")
                     + "\nNext: authsia mcp catalog --server \(finding.serverName) --write "
                     + "records what that server advertises."
             )

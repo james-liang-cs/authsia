@@ -609,6 +609,43 @@ struct MCPClientConfigurationTests {
         let filesystem = servers?["filesystem"] as? [String: Any]
         #expect(filesystem?["args"] as? [String] == ["mcp", "proxy"])
     }
+
+    @Test("wrap --write declares an undeclared upstream alongside the client write")
+    func wrapWriteDeclaresUndeclaredUpstream() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        // Nothing in workspace policy names `codegraph`. Writing only the
+        // client file would leave a proxy launch that cannot resolve, and the
+        // catalog step that follows would refuse an undeclared upstream.
+        try writeDoctorJSON([
+            "mcpServers": [
+                "codegraph": [
+                    "command": "codegraph",
+                    "args": ["serve", "--mcp"],
+                ]
+            ]
+        ], to: fixture.home.appendingPathComponent(".cursor/mcp.json"))
+
+        var apply = try MCPCommand.Wrap.parse([
+            "--write",
+            "--server",
+            "codegraph",
+            "--client",
+            "cursor",
+            "--yes",
+        ])
+        apply.homeDirectory = fixture.home
+        apply.currentDirectoryPath = fixture.workspace.path
+        var output = ""
+        try apply.run { output = $0 }
+
+        #expect(output.contains("Declared codegraph"))
+        let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: fixture.workspace)
+        let declared = config.mcpUpstreams.first { $0.name == "codegraph" }
+        #expect(declared?.command == "codegraph")
+        #expect(declared?.args == ["serve", "--mcp"])
+    }
+
 }
 
 private struct DoctorFixture {
