@@ -60,7 +60,7 @@ enum MCPClientConfiguration {
             case .unadmitted:
                 shape = "not on the current workspace allowlist"
             }
-            let state: String
+            var state: String
             switch finding.precedence {
             case .effective:
                 state = shape
@@ -68,6 +68,9 @@ enum MCPClientConfiguration {
                 state = "overridden by project config; observed entry is \(shape)"
             case .conditional:
                 state = "conditional until a managed workspace is selected; observed entry is \(shape)"
+            }
+            if finding.wrapBlockReason != nil {
+                state += "; pin a PATH binary before Protect"
             }
             let context = [
                 finding.configScope.displayName,

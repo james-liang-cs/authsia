@@ -128,11 +128,13 @@ Server](#find-the-server), then the matching branch.
    collapsed by default.
 
 Coverage shows wrap-eligible **Direct launch** and **Not wrapped** rows, a
-proxy launch whose upstream is missing from that workspace, and **Protected,
-record tools**. It hides shell wrappers, `npx` / `uvx` package launchers, an
-Authsia proxy launch with no valid upstream name, and wrapped rows that already
-have a live grant plus a recorded catalog. Absolute Homebrew or `/usr/local`
-binaries wrap as a PATH basename.
+proxy launch whose upstream is missing from that workspace, **Pin a PATH
+binary** rows for shells and absolute `npx` / `uvx` launchers (no Protect),
+and **Protected, record tools**. It hides an Authsia proxy launch with no
+valid upstream name, and wrapped rows that already have a live grant plus a
+recorded catalog. Absolute Homebrew or `/usr/local` binaries wrap as a PATH
+basename. Coverage rescans when Access Center appears, when the app becomes
+active, and every 30 seconds while the pane is open.
 
 Supported scanned clients: Codex, Claude Code, Cursor, Devin Desktop (Windsurf
 uses the Devin config path), and Visual Studio Code (including Copilot MCP).
@@ -196,10 +198,10 @@ selected workspace; it does not require operators to list child tool names. A
 credential-less empty `allow` / `approve` entry still needs catalog recording
 afterward.
 
-If Coverage lists the server but has no Protect button, the launch is not
-wrap-safe (shell, `npx`, `uvx`, invalid name, or an Authsia proxy with no
-valid upstream name). Install a PATH basename for that child, change the client
-entry to that command, reload Access Center, then Protect if the row appears.
+If Coverage lists the server as **Pin a PATH binary**, the launch is a shell
+or absolute `npx` / `uvx` launcher. Install a PATH basename for that child,
+change the client entry to that command, then Protect when the row becomes
+wrap-eligible. An Authsia proxy with no valid upstream name stays hidden.
 
 **Copy manual recipe** and `authsia mcp wrap --write --server <name> --yes`
 remain fallbacks for wrap-eligible scanned rows. They are not a substitute
@@ -633,9 +635,10 @@ historical grant paths even when the folder is still on disk. Project config
 scans use the same roots so a newly used workspace is visible before it is
 added to Workspace Center. The strip includes wrap-eligible Direct
 launch and Not wrapped rows,
+**Pin a PATH binary** rows for shells and absolute package launchers,
 wrapped entries with no live grant, and valid Authsia proxy entries even when
-their upstream is not declared in that workspace. It hides absolute commands,
-shell wrappers, and an Authsia proxy launch with no valid upstream name.
+their upstream is not declared in that workspace. It hides an Authsia proxy
+launch with no valid upstream name.
 Presentation rules live in the Access Center spec; this document owns the wrap,
 admission, and revoke-kill contract those rows display.
 

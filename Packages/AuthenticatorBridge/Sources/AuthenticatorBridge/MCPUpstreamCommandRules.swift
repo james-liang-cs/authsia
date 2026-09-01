@@ -43,6 +43,23 @@ public enum MCPUpstreamCommandRules {
         return isLegalPATHBasename(trimmed) ? trimmed : nil
     }
 
+    /// Why Access Center may show a scanned launch without Protect.
+    /// Absolute `npx` / `uvx` and shells cannot become `mcpUpstreams` policy.
+    public static func accessCenterBlockReason(
+        fromScanned command: String,
+        arguments: [String]
+    ) -> MCPClientWrapBlockReason? {
+        let base = URL(fileURLWithPath: command).lastPathComponent.lowercased()
+        if packageLauncherNames.contains(base), command.hasPrefix("/") {
+            return .packageLauncher
+        }
+        if shellExecutableNames.contains(base)
+            || containsShellCommandString([command] + arguments) {
+            return .shell
+        }
+        return nil
+    }
+
     public static func isLegalPATHBasename(_ name: String) -> Bool {
         guard isSafeToken(name),
               !name.contains("/"),

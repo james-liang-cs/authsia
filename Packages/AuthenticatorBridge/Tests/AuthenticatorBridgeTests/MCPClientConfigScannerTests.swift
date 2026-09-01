@@ -212,7 +212,11 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertEqual(findings.first { $0.serverName == "abs" }?.wrapCommand, "node")
         XCTAssertEqual(findings.first { $0.serverName == "abs" }?.shouldShowInAccessCenter, true)
         XCTAssertEqual(findings.first { $0.serverName == "npxabs" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "npxabs" }?.wrapBlockReason, .packageLauncher)
+        XCTAssertEqual(findings.first { $0.serverName == "npxabs" }?.shouldShowInAccessCenter, true)
         XCTAssertEqual(findings.first { $0.serverName == "shell" }?.isWrapEligible, false)
+        XCTAssertEqual(findings.first { $0.serverName == "shell" }?.wrapBlockReason, .shell)
+        XCTAssertEqual(findings.first { $0.serverName == "shell" }?.shouldShowInAccessCenter, true)
     }
 
     func testWrapRecipeOmitsSecretsAndUsesProxyArgv() {

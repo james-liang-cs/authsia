@@ -177,6 +177,11 @@ public enum MCPClientServerAdmissionStatus: String, Codable, Equatable, Sendable
     case unadmitted
 }
 
+public enum MCPClientWrapBlockReason: String, Codable, Equatable, Sendable {
+    case packageLauncher = "package-launcher"
+    case shell
+}
+
 public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable {
     public let source: MCPClientConfigSource
     public let serverName: String
@@ -191,6 +196,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     public let wrapCommand: String?
     public let wrapArguments: [String]
     public let isWrapEligible: Bool
+    public let wrapBlockReason: MCPClientWrapBlockReason?
     public let hasAdvertisedCatalog: Bool
     public let canRecordCatalog: Bool
 
@@ -203,7 +209,10 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     }
 
     public var shouldShowInAccessCenter: Bool {
-        status == .admittedWrapped || isAuthsiaProxyLaunch || isWrapEligible
+        status == .admittedWrapped
+            || isAuthsiaProxyLaunch
+            || isWrapEligible
+            || wrapBlockReason != nil
     }
 
     public init(
@@ -220,6 +229,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         wrapCommand: String? = nil,
         wrapArguments: [String] = [],
         isWrapEligible: Bool = false,
+        wrapBlockReason: MCPClientWrapBlockReason? = nil,
         hasAdvertisedCatalog: Bool = true,
         canRecordCatalog: Bool = false
     ) {
@@ -236,6 +246,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         self.wrapCommand = wrapCommand
         self.wrapArguments = wrapArguments
         self.isWrapEligible = isWrapEligible
+        self.wrapBlockReason = wrapBlockReason
         self.hasAdvertisedCatalog = hasAdvertisedCatalog
         self.canRecordCatalog = canRecordCatalog
     }
@@ -255,6 +266,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         case wrapCommand
         case wrapArguments
         case isWrapEligible
+        case wrapBlockReason
         case hasAdvertisedCatalog
         case canRecordCatalog
     }
@@ -277,6 +289,10 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         wrapCommand = try container.decodeIfPresent(String.self, forKey: .wrapCommand)
         wrapArguments = try container.decodeIfPresent([String].self, forKey: .wrapArguments) ?? []
         isWrapEligible = try container.decodeIfPresent(Bool.self, forKey: .isWrapEligible) ?? false
+        wrapBlockReason = try container.decodeIfPresent(
+            MCPClientWrapBlockReason.self,
+            forKey: .wrapBlockReason
+        )
         hasAdvertisedCatalog = try container.decodeIfPresent(Bool.self, forKey: .hasAdvertisedCatalog) ?? true
         canRecordCatalog = try container.decodeIfPresent(Bool.self, forKey: .canRecordCatalog) ?? false
     }
@@ -303,6 +319,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         if isWrapEligible {
             try container.encode(isWrapEligible, forKey: .isWrapEligible)
         }
+        try container.encodeIfPresent(wrapBlockReason, forKey: .wrapBlockReason)
         if !hasAdvertisedCatalog {
             try container.encode(hasAdvertisedCatalog, forKey: .hasAdvertisedCatalog)
         }
@@ -493,6 +510,12 @@ public struct MCPClientConfigScanner {
             wrapCommand: wrap?.command,
             wrapArguments: wrap?.arguments ?? [],
             isWrapEligible: wrap != nil,
+            wrapBlockReason: wrap == nil
+                ? MCPUpstreamCommandRules.accessCenterBlockReason(
+                    fromScanned: entry.command,
+                    arguments: entry.arguments
+                )
+                : nil,
             hasAdvertisedCatalog: status == .admittedWrapped
                 ? (declaredMatch?.hasAdvertisedCatalog ?? true)
                 : true,
