@@ -88,6 +88,94 @@ enum MCPClientConfiguration {
         ]).joined(separator: "\n")
     }
 
+    static func scanTable(
+        workspaceRoots: [String],
+        findings: [MCPClientServerFinding],
+        violationCount: Int? = nil,
+        unboundHint: String? = nil
+    ) -> String {
+        var pairs: [(String, String)] = [
+            (
+                "Workspace roots",
+                workspaceRoots.isEmpty ? "(none)" : workspaceRoots.joined(separator: ", ")
+            ),
+            ("Findings", String(findings.count)),
+        ]
+        if let violationCount {
+            pairs.append(("Violations", String(violationCount)))
+            pairs.append(("Verdict", violationCount == 0 ? "clean" : "fail"))
+        }
+        var lines: [String] = [WorkspaceOutputFormatter.keyValue(pairs)]
+        if workspaceRoots.isEmpty, let unboundHint, !unboundHint.isEmpty {
+            WorkspaceOutputFormatter.append(unboundHint, to: &lines)
+        }
+        WorkspaceOutputFormatter.append(
+            WorkspaceOutputFormatter.section(
+                "Launches:",
+                headers: ["Client", "Server", "Command", "Status", "Effect", "Next", "File"],
+                rows: findings.map(doctorRow),
+                empty: "none"
+            ),
+            to: &lines
+        )
+        WorkspaceOutputFormatter.append(
+            "Scan is read-only. Direct launches are not blocked here.",
+            to: &lines
+        )
+        return lines.joined(separator: "\n")
+    }
+
+    static func doctorTable(
+        workspaceRoots: [String],
+        violationCount: Int,
+        findings: [MCPClientServerFinding]
+    ) -> String {
+        scanTable(
+            workspaceRoots: workspaceRoots,
+            findings: findings,
+            violationCount: violationCount,
+            unboundHint: "User-global entries stay conditional until you pass --workspace <root>."
+        )
+    }
+
+    private static func doctorRow(_ finding: MCPClientServerFinding) -> [String] {
+        [
+            finding.source.displayName,
+            finding.serverName,
+            finding.commandLabel,
+            doctorStatus(finding.status),
+            finding.precedence.rawValue,
+            doctorNextStep(finding),
+            finding.configPathLabel,
+        ]
+    }
+
+    private static func doctorStatus(_ status: MCPClientServerAdmissionStatus) -> String {
+        switch status {
+        case .admittedWrapped:
+            return "wrapped"
+        case .directBypass:
+            return "bypass"
+        case .unadmitted:
+            return "unadmitted"
+        }
+    }
+
+    private static func doctorNextStep(_ finding: MCPClientServerFinding) -> String {
+        if finding.precedence == .overridden {
+            return "—"
+        }
+        if finding.wrapBlockReason != nil {
+            return "pin PATH"
+        }
+        switch finding.status {
+        case .admittedWrapped:
+            return finding.needsCatalogRecording ? "record catalog" : "ok"
+        case .directBypass, .unadmitted:
+            return finding.isAuthsiaProxyLaunch ? "declare" : "protect"
+        }
+    }
+
     static func render(
         clientName: String,
         executableURL: URL,

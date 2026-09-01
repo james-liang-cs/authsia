@@ -50,31 +50,39 @@ struct MCPCommand: AsyncParsableCommand {
 
     struct Configure: ParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Print a user-global MCP fallback and effective config report"
+            abstract: "Print a user-global MCP fallback and a table of current launches"
         )
 
         @Option(help: "Client: codex, claude, cursor, devin, or vscode")
         var client: MCPClient
 
-        mutating func run() throws {
+        var homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        var currentDirectoryPath = FileManager.default.currentDirectoryPath
+        var environment = ProcessInfo.processInfo.environment
+        var executableURL = Authsia.currentExecutableURL()
+
+        func run() throws {
+            try run { print($0) }
+        }
+
+        func run(output: (String) -> Void) throws {
             let upstreams = Self.upstreams(
-                environment: ProcessInfo.processInfo.environment,
-                currentDirectoryPath: FileManager.default.currentDirectoryPath
+                environment: environment,
+                currentDirectoryPath: currentDirectoryPath
             )
-            print(try MCPClientConfiguration.render(
+            let recipe = try MCPClientConfiguration.render(
                 client: client,
-                executableURL: Authsia.currentExecutableURL(),
+                executableURL: executableURL,
                 upstreamNames: upstreams.map(\.name)
-            ))
+            )
             let workspaceRoot = Self.boundWorkspaceRoot(
-                environment: ProcessInfo.processInfo.environment,
-                currentDirectoryPath: FileManager.default.currentDirectoryPath
+                environment: environment,
+                currentDirectoryPath: currentDirectoryPath
             )
             let declared = Self.declaredServers(
                 from: upstreams,
                 workspaceRoot: workspaceRoot
             )
-            let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
             // The bound workspace's project config outranks the user-global one
             // this command prints, so report it too.
             let locations = MCPClientConfigLocation.knownLocations(
@@ -87,9 +95,14 @@ struct MCPCommand: AsyncParsableCommand {
                 declaredServers: declared,
                 locations: locations
             )
-            if let report = MCPClientConfiguration.scanReport(findings) {
-                print("\n\(report)")
-            }
+            .filter { $0.source.rawValue == client.rawValue }
+            .sorted { $0.id < $1.id }
+            let table = MCPClientConfiguration.scanTable(
+                workspaceRoots: workspaceRoot.map { [$0.path] } ?? [],
+                findings: findings,
+                unboundHint: "No managed workspace is bound from this directory. User-global entries stay conditional."
+            )
+            output(recipe + "\n\n" + table)
         }
 
         static func upstreamNames(
@@ -350,8 +363,9 @@ struct MCPCommand: AsyncParsableCommand {
             discussion: """
                 Scan user-global and project MCP client files and exit 2 when an
                 effective or conditional entry bypasses Authsia or is unadmitted.
-                Overridden entries are reported and do not fail. Pass --workspace
-                to resolve user-global fallbacks as effective or overridden.
+                Overridden entries are reported and do not fail. Default output is
+                a table; --json is the machine verdict. Pass --workspace to resolve
+                user-global fallbacks as effective or overridden.
 
                 Examples:
                   authsia mcp doctor
@@ -384,8 +398,14 @@ struct MCPCommand: AsyncParsableCommand {
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 let data = try encoder.encode(report)
                 output(String(decoding: data, as: UTF8.self))
-            } else if let text = MCPClientConfiguration.scanReport(report.findings) {
-                output(text)
+            } else {
+                output(
+                    MCPClientConfiguration.doctorTable(
+                        workspaceRoots: report.workspaceRoots,
+                        violationCount: report.violationCount,
+                        findings: report.findings
+                    )
+                )
             }
             if report.violationCount > 0 {
                 throw ExitCode(2)

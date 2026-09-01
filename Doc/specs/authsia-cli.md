@@ -139,10 +139,10 @@ Key properties:
 | `authsia workspace status` | Show non-secret workspace health, env references, rule state, and recovery guidance | `authsia workspace status --format json` |
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
-| `authsia mcp configure` | Print a user-global MCP fallback plus an effective scope report, without editing client files | `authsia mcp configure --client codex` |
+| `authsia mcp configure` | Print a user-global MCP fallback plus a table of that client's current launches, without editing client files | `authsia mcp configure --client codex` |
 | `authsia mcp wrap --write` | Replace a scanned client MCP launch with `mcp proxy` after confirmation | `authsia mcp wrap --write --server filesystem --yes` |
 | `authsia mcp serve` | Run the local stdio MCP server, discovering one client workspace or using an explicit override | `authsia mcp serve --workspace /path/to/repo` |
-| `authsia mcp doctor` | Scan known MCP client configs and fail on effective or conditional bypasses | `authsia mcp doctor --json` |
+| `authsia mcp doctor` | Scan known MCP client configs and fail on effective or conditional bypasses. Default output is a table; `--json` is the machine verdict | `authsia mcp doctor` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
@@ -1696,11 +1696,11 @@ equivalent command.
 
 The printed proxy entries are a user-global fallback derived from the currently
 bound managed workspace. Project-scoped Claude, Cursor, and VS Code config can
-override them. The read-only report therefore includes config scope, workspace,
-exact path, and effective/overridden/conditional precedence; declaration
-matching never crosses workspace roots. A wrapped row means declared and routed
-through Authsia, not already approved—admission is still required before
-discovery or a first tool call.
+override them. After the recipe, configure prints a table of that client's
+current launches (`Client`, `Server`, `Command`, `Status`, `Effect`, `Next`,
+`File`). Declaration matching never crosses workspace roots. A wrapped row
+means declared and routed through Authsia, not already approved—admission is
+still required before discovery or a first tool call.
 
 The generated Codex manual configuration also forwards the optional local
 `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, and `SSL_CERT_FILE` TLS trust
@@ -1756,7 +1756,10 @@ conditional.
 A violation is a `direct-bypass` or `unadmitted` finding. Effective and
 conditional violations fail the command; overridden violations are reported
 and do not fail. Exit `0` when the policy is clean and `2` when it is
-violated. Exit `1` is reserved for ArgumentParser input errors. `--json` prints
+violated. Exit `1` is reserved for ArgumentParser input errors. Default output
+is a summary table of launches (`Client`, `Server`, `Command`, `Status`,
+`Effect`, `Next`, `File`) plus a verdict. Unbound scans print `(none)` for
+workspace roots and tell the operator to pass `--workspace`. `--json` prints
 a versioned object with `schemaVersion`, `workspaceRoots`, `violationCount`,
 and `findings`. Each finding includes its stable `id` for diffable automation.
 An empty `workspaceRoots` array means the conservative conditional path.

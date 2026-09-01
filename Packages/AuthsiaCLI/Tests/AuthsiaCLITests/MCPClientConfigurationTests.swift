@@ -189,6 +189,102 @@ struct MCPClientConfigurationTests {
         #expect(MCPClientConfiguration.scanReport([]) == nil)
     }
 
+    @Test("doctor default output is a table with a verdict")
+    func doctorTable() {
+        let findings = [
+            MCPClientServerFinding(
+                source: .codex,
+                serverName: "jira",
+                commandLabel: "authsia",
+                status: .admittedWrapped,
+                declaredUpstreamName: "jira",
+                configPathLabel: "~/.codex/config.toml",
+                configScope: .userGlobal,
+                precedence: .effective,
+                workspacePathLabel: "~/repo",
+                isAuthsiaProxyLaunch: true
+            ),
+            MCPClientServerFinding(
+                source: .cursor,
+                serverName: "playwright",
+                commandLabel: "/opt/homebrew/bin/npx",
+                status: .unadmitted,
+                declaredUpstreamName: nil,
+                configPathLabel: "~/.cursor/mcp.json",
+                configScope: .userGlobal,
+                precedence: .conditional,
+                wrapBlockReason: .packageLauncher
+            ),
+            MCPClientServerFinding(
+                source: .vscode,
+                serverName: "rogue",
+                commandLabel: "node",
+                status: .unadmitted,
+                declaredUpstreamName: nil,
+                configPathLabel: "VS Code user mcp.json",
+                configScope: .project,
+                precedence: .overridden,
+                workspacePathLabel: "~/repo",
+                isWrapEligible: true
+            ),
+        ]
+
+        let table = MCPClientConfiguration.doctorTable(
+            workspaceRoots: [],
+            violationCount: 1,
+            findings: findings
+        )
+        #expect(table.contains("Workspace roots"))
+        #expect(table.contains("(none)"))
+        #expect(table.contains("Verdict"))
+        #expect(table.contains("fail"))
+        #expect(table.contains("--workspace"))
+        #expect(table.contains("| Client"))
+        #expect(table.contains("| Server"))
+        #expect(table.contains("wrapped"))
+        #expect(table.contains("ok"))
+        #expect(table.contains("pin PATH"))
+        #expect(table.contains("—"))
+        #expect(!table.contains("Read-only local MCP configuration scan:"))
+        #expect(!table.contains("User-global / Conditional"))
+
+        let empty = MCPClientConfiguration.doctorTable(
+            workspaceRoots: ["/tmp/repo"],
+            violationCount: 0,
+            findings: []
+        )
+        #expect(empty.contains("clean"))
+        #expect(empty.contains("none"))
+        #expect(!empty.contains("--workspace"))
+    }
+
+    @Test("configure appends a launch table instead of slash-separated scan lines")
+    func configurePrintsLaunchTable() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+
+        var configure = try MCPCommand.Configure.parse(["--client", "cursor"])
+        configure.homeDirectory = fixture.home
+        configure.currentDirectoryPath = fixture.unrelated.path
+        configure.environment = [:]
+        configure.executableURL = URL(fileURLWithPath: "/Applications/Authsia.app/Contents/Helpers/authsia")
+        var output = ""
+        try configure.run { output = $0 }
+
+        #expect(output.contains("~/.cursor/mcp.json"))
+        #expect(output.contains("| Client"))
+        #expect(output.contains("| Server"))
+        #expect(output.contains("jira"))
+        #expect(output.contains("Workspace roots"))
+        #expect(output.contains("(none)"))
+        #expect(output.contains("No managed workspace is bound"))
+        #expect(!output.contains("Read-only local MCP configuration scan:"))
+        #expect(!output.contains("User-global / Conditional"))
+        #expect(!output.contains("Verdict"))
+        #expect(!output.contains("Claude"))
+        #expect(!output.contains("filesystem"))
+    }
+
     @Test("client shapes match their documented configuration surfaces")
     func clientShapes() throws {
         let fixture = try makeFixture()
@@ -399,6 +495,10 @@ struct MCPClientConfigurationTests {
             currentDirectory: fixture.unrelated
         )
         #expect(result.code == 0)
+        #expect(result.output.contains("| Client"))
+        #expect(result.output.contains("Verdict"))
+        #expect(result.output.contains("clean"))
+        #expect(!result.output.contains("Read-only local MCP configuration scan:"))
     }
 
     @Test("doctor fails an effective direct-bypass when a workspace is supplied")
