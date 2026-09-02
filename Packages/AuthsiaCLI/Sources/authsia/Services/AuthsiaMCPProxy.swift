@@ -821,15 +821,32 @@ actor AuthsiaMCPProxy {
     /// admission the call path takes, probes the declared child, then drops the
     /// grant: no child outlives the command, and the next client call must
     /// raise its own approval.
-    func captureCatalog() async -> [Tool]? {
-        guard mcpAccessEnabled() else { return nil }
-        guard let upstream = stdioUpstream(),
-              MCPProxyCatalog.canProbeChildCatalog(upstream) else {
-            return nil
+    /// Records what a declared child advertises, or says which precondition
+    /// stopped it. One sentence covering every refusal leaves the human unable
+    /// to tell "credentialed, by design" from "the setting is off" from "the
+    /// server is broken", which are three different next actions.
+    func captureCatalog() async -> Result<[Tool], MCPCatalogProbeFailure> {
+        guard mcpAccessEnabled() else { return .failure(.mcpAccessDisabled) }
+        switch boundPolicy() {
+        case .unbound:
+            return .failure(.workspaceUnavailable(
+                runtimeContext.workspaceUnavailableMessage
+            ))
+        case .missingUpstream:
+            return .failure(.notDeclared(upstreamName))
+        case .httpUpstream:
+            return .failure(.notStdio(upstreamName))
+        case .stdio(let upstream):
+            guard MCPProxyCatalog.canProbeChildCatalog(upstream) else {
+                return .failure(.declaresEnvironment(upstreamName))
+            }
+            let discovered = await probeChildCatalog(upstream)
+            grantService.revokeActiveOwnedGrants()
+            guard let discovered else {
+                return .failure(.childUnavailable(upstreamName))
+            }
+            return .success(discovered)
         }
-        let discovered = await probeChildCatalog(upstream)
-        grantService.revokeActiveOwnedGrants()
-        return discovered
     }
 
     private func advertisedNames(for upstream: MCPUpstreamConfig) async -> Set<String> {
@@ -1104,6 +1121,39 @@ private struct ChildSession: Sendable {
 
     var isAlive: Bool {
         Darwin.kill(processID, 0) == 0 || errno == EPERM
+    }
+}
+
+/// Why `captureCatalog` could not record a catalog.
+enum MCPCatalogProbeFailure: Error, Equatable {
+    case mcpAccessDisabled
+    case workspaceUnavailable(String)
+    case notDeclared(String)
+    case notStdio(String)
+    case declaresEnvironment(String)
+    case childUnavailable(String)
+
+    var message: String {
+        switch self {
+        case .mcpAccessDisabled:
+            return "MCP Integrations is off. Turn it on in Authsia Settings > Developer Access, "
+                + "then run this again."
+        case .workspaceUnavailable(let detail):
+            return detail
+        case .notDeclared(let name):
+            return "'\(name)' is not declared in this workspace's mcpUpstreams. "
+                + "Declare it, or run `authsia mcp wrap --write --server \(name) --yes`."
+        case .notStdio(let name):
+            return "'\(name)' is not a local stdio upstream. HTTP, SSE, and URL upstreams "
+                + "are not executed by this proxy."
+        case .declaresEnvironment(let name):
+            return "'\(name)' declares environment values, so Authsia will not start it to "
+                + "read its tool list. Name its tools under mcpUpstreams.tools.allow in "
+                + WorkspaceConfigStore.relativeConfigPath + "."
+        case .childUnavailable(let name):
+            return "'\(name)' could not be started or did not answer tools/list. "
+                + "Check that its command resolves on PATH."
+        }
     }
 }
 

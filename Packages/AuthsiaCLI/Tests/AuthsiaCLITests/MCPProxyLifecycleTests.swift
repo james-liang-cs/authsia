@@ -574,8 +574,8 @@ struct MCPProxyLifecycleTests {
 
         // `authsia mcp catalog` runs the probe and nothing else, so the only
         // child the launcher saw is the one being reaped.
-        let captured = await proxy.captureCatalog()
-        #expect(captured?.isEmpty == false)
+        let captured = try await proxy.captureCatalog().get()
+        #expect(captured.isEmpty == false)
         let probeProcessID = try #require(launcher.lastSpawned?.processID)
 
         // An unreaped probe child stays a zombie whose process group still

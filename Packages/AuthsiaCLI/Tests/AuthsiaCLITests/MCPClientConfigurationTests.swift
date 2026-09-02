@@ -675,6 +675,83 @@ struct MCPClientConfigurationTests {
         // Desktop has no repository of its own.
         #expect(after.violationCount == before.violationCount)
     }
+    @Test("catalog names which precondition refused it")
+    func catalogRefusalNamesTheCause() async throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+
+        // Declared, but credentialed: listing must never resolve the value, so
+        // this is a by-design refusal and must not read like a broken server.
+        let configURL = fixture.workspace
+            .appendingPathComponent(WorkspaceConfigStore.relativeConfigPath)
+        var raw = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: configURL)
+        ) as? [String: Any] ?? [:]
+        var upstreams = raw["mcpUpstreams"] as? [[String: Any]] ?? []
+        for index in upstreams.indices where upstreams[index]["name"] as? String == "jira" {
+            upstreams[index]["env"] = [
+                "JIRA_TOKEN": "authsia://api-key/jira/key?folder=Workspaces/doctor",
+            ]
+        }
+        raw["mcpUpstreams"] = upstreams
+        try JSONSerialization.data(withJSONObject: raw).write(to: configURL)
+
+        var credentialed = try MCPCommand.Catalog.parse([
+            "--server", "jira", "--workspace", fixture.workspace.path,
+        ])
+        var message = ""
+        do {
+            try await credentialed.run { _ in }
+        } catch {
+            message = "\(error)"
+        }
+        #expect(message.contains("declares environment values"))
+        #expect(message.contains("tools.allow"))
+
+        // Not declared at all is a different next action.
+        var undeclared = try MCPCommand.Catalog.parse([
+            "--server", "absent", "--workspace", fixture.workspace.path,
+        ])
+        message = ""
+        do {
+            try await undeclared.run { _ in }
+        } catch {
+            message = "\(error)"
+        }
+        #expect(message.contains("not declared"))
+    }
+
+    @Test("an unreadable workspace config is not reported as a missing one")
+    func unreadableConfigNamesTheFile() async throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        let configURL = fixture.workspace
+            .appendingPathComponent(WorkspaceConfigStore.relativeConfigPath)
+        // One malformed entry takes the whole config down. Reporting that as
+        // "no workspace found" sends the reader to the wrong problem.
+        var raw = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: configURL)
+        ) as? [String: Any] ?? [:]
+        var upstreams = raw["mcpUpstreams"] as? [[String: Any]] ?? []
+        upstreams[0]["env"] = ["API_TOKEN": "authsia://not-a-valid-shape"]
+        raw["mcpUpstreams"] = upstreams
+        try JSONSerialization.data(withJSONObject: raw).write(to: configURL)
+
+        var catalog = try MCPCommand.Catalog.parse([
+            "--server", "jira", "--workspace", fixture.workspace.path,
+        ])
+        var message = ""
+        do {
+            try await catalog.run { _ in }
+        } catch {
+            message = "\(error)"
+        }
+
+        #expect(message.contains("could not be read"))
+        #expect(message.contains("no upstream in this workspace resolves"))
+        #expect(!message.contains("No Authsia workspace found"))
+    }
+
 }
 
 private struct DoctorFixture {

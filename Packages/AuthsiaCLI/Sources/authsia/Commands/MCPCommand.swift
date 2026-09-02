@@ -1,6 +1,7 @@
 import ArgumentParser
 import AuthenticatorBridge
 import Foundation
+import MCP
 
 struct MCPCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -201,7 +202,7 @@ struct MCPCommand: AsyncParsableCommand {
                 )
             )
             guard let workspaceRoot = runtimeContext.workspaceRoot else {
-                throw ValidationError(WorkspaceConfigError.missingConfig.localizedDescription)
+                throw ValidationError(runtimeContext.workspaceUnavailableMessage)
             }
             let proxy = AuthsiaMCPProxy(
                 version: Authsia.version(),
@@ -209,12 +210,12 @@ struct MCPCommand: AsyncParsableCommand {
                 runtimeContext: runtimeContext,
                 mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
             )
-            guard let tools = await proxy.captureCatalog() else {
-                throw ValidationError(
-                    "Could not probe '\(server)'. It must be a declared stdio upstream that "
-                        + "declares no env, MCP integrations must be enabled in Authsia, and "
-                        + "the server must answer tools/list."
-                )
+            let tools: [Tool]
+            switch await proxy.captureCatalog() {
+            case .success(let discovered):
+                tools = discovered
+            case .failure(let failure):
+                throw ValidationError(failure.message)
             }
             guard !tools.isEmpty else {
                 throw ValidationError(
