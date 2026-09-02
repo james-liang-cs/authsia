@@ -208,7 +208,8 @@ struct MCPCommand: AsyncParsableCommand {
                 version: Authsia.version(),
                 upstreamName: server,
                 runtimeContext: runtimeContext,
-                mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
+                mcpAccessEnabled: { MCPAccessSettings.isEnabled() },
+                toolCallRecorder: LiveMCPProxyToolCallRecorder()
             )
             let tools: [Tool]
             switch await proxy.captureCatalog() {
@@ -321,7 +322,8 @@ struct MCPCommand: AsyncParsableCommand {
                 version: Authsia.version(),
                 upstreamName: upstreamName,
                 runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
-                mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
+                mcpAccessEnabled: { MCPAccessSettings.isEnabled() },
+                toolCallRecorder: LiveMCPProxyToolCallRecorder()
             )
             try await proxy.runStdio()
         }

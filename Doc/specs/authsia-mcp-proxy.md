@@ -16,6 +16,7 @@ in the private Access Center spec.
 - [Purpose](#purpose)
 - [Complementary Lanes](#complementary-lanes)
 - [User Flow](#user-flow)
+  - [Read The MCP Proxy Tab](#read-the-mcp-proxy-tab)
   - [Preconditions](#preconditions)
   - [Find The Server](#find-the-server)
   - [Protect A Listed Server](#protect-a-listed-server)
@@ -89,28 +90,66 @@ scanned, or that Coverage hides, has no Protect button. Follow [Find The
 Server](#find-the-server), then the matching branch.
 
 ```text
-  company policy                         user / workspace
-  --------------                         ----------------
-  allow only:                            1. Init workspace
-    authsia mcp serve                    2. Enable MCP Integrations
-    authsia mcp proxy                    3. Access Center → MCP proxy
-                                            → expand Coverage
-                                         4. Branch:
-                                            listed, Protect available
-                                              → Protect server
-                                            listed proxy, missing mcpUpstreams
-                                              → Declare in workspace
-                                            listed, no Protect (shell, absolute
-                                              npx / uvx, or an unsupported
-                                              launch key such as cwd)
-                                              → resolve in the client file
-                                            no row
-                                              → declare mcpUpstreams,
-                                                wrap the client file, catalog
-                                         5. Approve catalog if prompted, then
-                                            the first tools/call;
-                                            active grant verifies protection
+ scanned client entry
+          |
+          v
+ Access Center → MCP proxy → Protection coverage
+          |
+          +-- direct / not wrapped ------> Protect server
+          +-- proxy missing policy ------> Declare in workspace
+          +-- unsafe launch -------------> fix the client entry, then Protect
+          +-- no row --------------------> declare + wrap manually
+          |
+          v
+ client launches: authsia mcp proxy
+          |
+          +-- tools/list ----------------> committed catalog only
+          |                                no child, no grant, no prompt
+          |
+          +-- catalog capture -----------> local admission → short probe
+          |                                write catalog → grant ends
+          |
+          +-- first tools/call
+                   |
+                   +-- fails before grant -> Recent proxy decisions
+                   |                         without a grant
+                   |
+                   +-- grant reused or admission / secret JIT approved
+                              |
+                              v
+                       owned active grant → child starts
+                              |
+                              v
+                       redacted tool activity
+                              |
+                              v
+                       revoke / expiry → child stops
 ```
+
+### Read The MCP Proxy Tab
+
+The tab combines three related views. They are not three names for the same
+state:
+
+| Area | What it answers | Does it mean the child is running? |
+| --- | --- | --- |
+| Admission and proxy grants | Which approved proxy sessions are active or retained in grant history? | An active grant is the authority; the proxy stops the child after it observes revoke or expiry. |
+| Protection coverage | Which known client launches are wrapped, bypassing, incomplete, or ready to protect in each workspace? | No. This is configuration state from the read-only client scan. |
+| Recent proxy decisions without a grant | Which proxy calls failed or were rejected before Authsia created an owned grant? | No. These are historical failure decisions, not grants or server rows. |
+
+**Protected, awaiting use** means the scanned client launch points through
+Authsia, its workspace declaration is usable, and no matching active grant has
+yet verified runtime use. “Protected” describes the launch configuration; it
+does not mean a child is currently running or that access is already approved.
+A user-global row may represent several workspaces. Its **N workspaces** menu
+lists their shortest unique path labels; choosing one filters grants and
+Coverage to that workspace.
+
+**No grant created** means the proxy failed closed before it obtained an owned,
+revocable grant. The request may have been denied by settings or tool policy,
+or failed because the workspace, upstream, transport, child, or advertised tool
+was unavailable. The row is retained so a failed attempt does not disappear
+from operator visibility; it grants no authority.
 
 ### Preconditions
 
@@ -136,11 +175,13 @@ binary** rows for shells and absolute `npx` / `uvx` launchers (no Protect),
 policy has no field for (`cwd`; no Protect until it is resolved in the client
 file), **Protected, record tools**, and **Protected, no tools listed** for a
 wrapped upstream whose declared env forbids the probe and whose policy names
-no tool. It hides a launch the client file marks disabled, an Authsia proxy
-launch with no valid upstream name, and wrapped rows that already have a live
-grant plus a recorded catalog. Absolute Homebrew or `/usr/local` binaries wrap as a PATH
-basename. Coverage rescans when Access Center appears, when the app becomes
-active, and every 30 seconds while the pane is open.
+no tool. **Protected, awaiting use** is a valid wrapped launch with no matching
+active grant; use its workspace label or **N workspaces** menu to see where the
+configuration applies. It hides a launch the client file marks disabled, an
+Authsia proxy launch with no valid upstream name, and wrapped rows that already
+have a live grant plus a recorded catalog. Absolute Homebrew or `/usr/local`
+binaries wrap as a PATH basename. Coverage rescans when Access Center appears,
+when the app becomes active, and every 30 seconds while the pane is open.
 
 Supported scanned clients: Codex, Claude Code, Cursor, Devin Desktop (Windsurf
 uses the Devin config path), and Visual Studio Code (including Copilot MCP).
@@ -244,9 +285,10 @@ when Coverage has no row.
 Open the managed workspace. Opening it starts nothing and asks nothing:
 `tools/list` is answered from committed policy. A wrapped server with no
 recorded catalog advertises nothing, so the client has no MCP tools to call
-and agents fall through to the unproxied CLI. The first `tools/call` requests
-local MCP admission before the long-lived child starts; an existing matching
-grant is reused. Access Center shows **Access expires in** on an active
+and agents fall through to the unproxied CLI. The first permitted `tools/call`
+requests local MCP admission for a credential-less upstream, or exec JIT for
+an upstream with `authsia://` references, before the long-lived child starts;
+an existing matching grant is reused. Access Center shows **Access expires in** on an active
 admission row. **Renew admission** extends that grant in place. Revoke in
 Access Center when done.
 
@@ -674,9 +716,19 @@ scans use the same roots so a newly used workspace is visible before it is
 added to Workspace Center. The strip includes wrap-eligible Direct
 launch and Not wrapped rows,
 **Pin a PATH binary** rows for shells and absolute package launchers,
-wrapped entries with no live grant, and valid Authsia proxy entries even when
+**Protected, awaiting use** for wrapped entries with no matching active grant,
+and valid Authsia proxy entries even when
 their upstream is not declared in that workspace. It hides an Authsia proxy
-launch with no valid upstream name.
+launch with no valid upstream name. A collapsed user-global row exposes an
+**N workspaces** menu that names each represented workspace and filters grants
+and Coverage when one is chosen.
+
+Below Coverage, **Recent proxy decisions without a grant** shows at most the
+five newest proxy command events whose grant ID is absent. Each row is
+historical evidence: upstream executable or fallback name, MCP tool name,
+coarse outcome, and age. It is not an active-server list and does not add to
+protection coverage. **No grant created** means the request received no
+authority and no long-lived child was admitted.
 Presentation rules live in the Access Center spec; this document owns the wrap,
 admission, and revoke-kill contract those rows display.
 
@@ -699,6 +751,13 @@ event has been saved. The matching audit row's `turnID` (and `toolUseID`) is
 `mcp-call:` followed by that UUID when a Bridge authorization row exists. A
 pre-admission decision may have no matching audit row, but remains visible as
 an unowned proxy decision in Access Center.
+
+The compact unowned-decision row deliberately shows a coarse outcome rather
+than the full protocol error. **Denied** covers settings, transport, grant, and
+tool-policy rejections. **Upstream unavailable** covers workspace or upstream
+resolution, child launch, and child-tool drift failures. When an invocation ID
+exists, use the client error envelope and correlated audit/activity evidence to
+recover the more specific error code; do not infer it from the compact label.
 
 Review that event on the owning grant in Access Center: **MCP proxy** filter →
 grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call

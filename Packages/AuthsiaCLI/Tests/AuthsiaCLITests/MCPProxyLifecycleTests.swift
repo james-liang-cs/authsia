@@ -108,7 +108,8 @@ struct MCPProxyLifecycleTests {
             version: "test",
             upstreamName: "jira",
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            mcpAccessEnabled: { true }
+            mcpAccessEnabled: { true },
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         let transports = await InMemoryTransport.createConnectedPair()
         let client = Client(name: "MCP proxy unbound test", version: "1")
@@ -673,7 +674,8 @@ struct MCPProxyLifecycleTests {
             version: "test",
             upstreamName: upstreamName,
             runtimeContext: MCPRuntimeContext(startingDirectory: root),
-            mcpAccessEnabled: mcpAccessEnabled
+            mcpAccessEnabled: mcpAccessEnabled,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
         )
         return (proxy, root)
     }

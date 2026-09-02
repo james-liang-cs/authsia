@@ -51,7 +51,7 @@ actor AuthsiaMCPProxy {
         killGraceSeconds: Double = 2,
         grantPollIntervalSeconds: Double = 2,
         grantService: MCPGrantService? = nil,
-        toolCallRecorder: (any MCPProxyToolCallRecording)? = nil,
+        toolCallRecorder: any MCPProxyToolCallRecording,
         stderrOutput: FileHandle = .standardError
     ) {
         self.server = Server(
@@ -77,7 +77,7 @@ actor AuthsiaMCPProxy {
         self.grantService = grantService ?? MCPGrantService(
             serverInstanceID: runtimeContext.instanceID
         )
-        self.toolCallRecorder = toolCallRecorder ?? LiveMCPProxyToolCallRecorder()
+        self.toolCallRecorder = toolCallRecorder
         self.stderrOutput = stderrOutput
     }
 
