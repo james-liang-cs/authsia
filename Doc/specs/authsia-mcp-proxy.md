@@ -150,7 +150,19 @@ User-global files: `~/.codex/config.toml`, `~/.claude.json`,
 `.cursor/mcp.json`, and VS Code `.vscode/mcp.json`. Codex and Devin have no
 project scope. Claude Code's `local` scope, the default for `claude mcp add`,
 lives in `~/.claude.json` under `projects[<root>].mcpServers` and outranks
-that repository's `.mcp.json`; it is read only for managed workspace roots.
+that repository's `.mcp.json`; it is read only for managed workspace roots. A
+`.mcp.json` server the human declined, recorded in that project's
+`disabledMcpjsonServers`, is not reported; a server in neither the enabled nor
+the disabled list has not been answered yet and is still reported.
+
+Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`)
+is also scanned. It has no repository of its own, so its rows are **advisory**:
+`mcp doctor` lists them and never counts them as violations, since no pilot
+repository can close them. Protecting one pins a workspace in the entry's
+environment with `WORKSPACE_FOLDER_PATHS`, which the proxy already reads.
+Because company allowlists match command plus argv, naming the workspace there
+rather than in argv keeps the two-entry allowlist intact. A Desktop row with no
+managed workspace selected cannot be protected.
 
 ### Protect A Listed Server
 
@@ -619,7 +631,9 @@ client file marks disabled (`enabled = false`, `"enabled": false`, or
 `"disabled": true`): a launch that cannot run is neither a bypass to report nor
 protection debt to work off. The scanner counts how many environment values an
 entry sets for its child, never their names or values, so the wrap can say what
-it will not copy. The scanner never edits client configuration. Confirmed **Wrap** / **Write wrap** may replace a
+it will not copy. Findings from a client with no repository of its own are
+advisory and excluded from the doctor verdict. The scanner never edits client
+configuration. Confirmed **Wrap** / **Write wrap** may replace a
 scanned launch after a checksum check; that write is not the scan. A direct or
 unadmitted entry is visibility only until wrapped: Authsia cannot audit those
 calls, kill them on revoke, or prevent launch. An empty or partial allowlist
