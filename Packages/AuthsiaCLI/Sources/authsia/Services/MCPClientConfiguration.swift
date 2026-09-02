@@ -122,6 +122,13 @@ enum MCPClientConfiguration {
             "Scan is read-only. Direct launches are not blocked here.",
             to: &lines
         )
+        if findings.contains(where: { !$0.source.hasWorkspaceOfItsOwn }) {
+            WorkspaceOutputFormatter.append(
+                "Claude Desktop has no repository of its own, so its rows are advisory "
+                    + "and excluded from the verdict.",
+                to: &lines
+            )
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -165,12 +172,18 @@ enum MCPClientConfiguration {
         if finding.precedence == .overridden {
             return "—"
         }
+        if finding.wrapBlockReason == .unsupportedLaunchKey {
+            return "fix entry"
+        }
         if finding.wrapBlockReason != nil {
             return "pin PATH"
         }
         switch finding.status {
         case .admittedWrapped:
-            return finding.needsCatalogRecording ? "record catalog" : "ok"
+            if finding.needsCatalogRecording {
+                return "record catalog"
+            }
+            return finding.needsToolPolicy ? "list tools" : "ok"
         case .directBypass, .unadmitted:
             return finding.isAuthsiaProxyLaunch ? "declare" : "protect"
         }

@@ -266,4 +266,64 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         XCTAssertFalse(text.contains("must-not-survive"))
     }
 
+
+    func testClaudeDesktopWrapPinsTheWorkspaceInEnvironmentNotArgv() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let config = root.appendingPathComponent("claude_desktop_config.json")
+        try JSONSerialization.data(withJSONObject: [
+            "mcpServers": [
+                "filesystem": ["command": "server", "args": ["mcp"]],
+            ],
+        ]).write(to: config)
+        func finding(workspace: String?) -> MCPClientServerFinding {
+            MCPClientServerFinding(
+                source: .claudeDesktop,
+                serverName: "filesystem",
+                commandLabel: "server",
+                status: .unadmitted,
+                declaredUpstreamName: nil,
+                configPathLabel: "~/Library/Application Support/Claude/claude_desktop_config.json",
+                configScope: .userGlobal,
+                precedence: .effective,
+                workspacePathLabel: workspace,
+                wrapCommand: "server",
+                wrapArguments: ["mcp"],
+                isWrapEligible: true
+            )
+        }
+        let authsia = "/Applications/Authsia.app/Contents/Helpers/authsia"
+
+        let plan = try MCPLocalMCPClientWrap.plan(
+            finding: finding(workspace: "~/repo"),
+            authsiaCommand: authsia,
+            fileURL: config,
+            homeDirectory: URL(fileURLWithPath: "/Users/example", isDirectory: true)
+        )
+        try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: authsia)
+
+        // Argv stays the stable two-entry shape a company allowlist matches;
+        // the workspace binding rides in the environment instead.
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any]
+        let servers = object?["mcpServers"] as? [String: Any]
+        let entry = servers?["filesystem"] as? [String: Any]
+        XCTAssertEqual(entry?["args"] as? [String], ["mcp", "proxy"])
+        let environment = entry?["env"] as? [String: String]
+        XCTAssertEqual(environment?["AUTHSIA_MCP_UPSTREAM"], "filesystem")
+        XCTAssertEqual(environment?["WORKSPACE_FOLDER_PATHS"], "/Users/example/repo")
+
+        // Claude Desktop has no cwd to fall back on, so an unbound finding
+        // cannot be wrapped at all.
+        XCTAssertThrowsError(
+            try MCPLocalMCPClientWrap.plan(
+                finding: finding(workspace: nil),
+                authsiaCommand: authsia,
+                fileURL: config
+            )
+        ) { error in
+            XCTAssertEqual(error as? MCPLocalMCPClientWrap.WrapError, .missingWorkspaceBinding)
+        }
+    }
+
 }

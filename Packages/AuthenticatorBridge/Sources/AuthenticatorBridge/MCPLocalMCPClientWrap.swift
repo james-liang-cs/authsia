@@ -14,19 +14,24 @@ public enum MCPLocalMCPClientWrap {
         public let checksum: String
         public let existingSnippet: String
         public let replacementSnippet: String
+        /// Resolved once, when the plan is built, so the write cannot bind a
+        /// different workspace than the diff the human approved.
+        public let workspacePath: String?
 
         public init(
             finding: MCPClientServerFinding,
             fileURL: URL,
             checksum: String,
             existingSnippet: String,
-            replacementSnippet: String
+            replacementSnippet: String,
+            workspacePath: String? = nil
         ) {
             self.finding = finding
             self.fileURL = fileURL
             self.checksum = checksum
             self.existingSnippet = existingSnippet
             self.replacementSnippet = replacementSnippet
+            self.workspacePath = workspacePath
         }
     }
 
@@ -38,6 +43,7 @@ public enum MCPLocalMCPClientWrap {
         case malformedConfig
         case checksumMismatch
         case writeFailed
+        case missingWorkspaceBinding
 
         public var errorDescription: String? {
             switch self {
@@ -55,6 +61,9 @@ public enum MCPLocalMCPClientWrap {
                 return "The client file changed since this wrap was planned. Scan again."
             case .writeFailed:
                 return "Could not write the client file."
+            case .missingWorkspaceBinding:
+                return "This client has no repository of its own, so a managed workspace "
+                    + "must be selected before its launch can be protected."
             }
         }
     }
@@ -84,13 +93,15 @@ public enum MCPLocalMCPClientWrap {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default
     ) throws -> Plan {
-        try validateFinding(finding)
+        try validateFinding(finding, homeDirectory: homeDirectory)
         let url = fileURL ?? Self.fileURL(for: finding, homeDirectory: homeDirectory)
         let data = try readConfig(at: url, fileManager: fileManager)
+        let workspacePath = wrapWorkspacePath(for: finding, homeDirectory: homeDirectory)
         let replacement = try replacementSnippet(
             for: finding,
             authsiaCommand: authsiaCommand,
-            data: data
+            data: data,
+            workspacePath: workspacePath
         )
         let existing = try existingSnippet(for: finding, data: data)
         return Plan(
@@ -98,7 +109,8 @@ public enum MCPLocalMCPClientWrap {
             fileURL: url,
             checksum: checksum(of: data),
             existingSnippet: existing,
-            replacementSnippet: replacement
+            replacementSnippet: replacement,
+            workspacePath: workspacePath
         )
     }
 
@@ -107,7 +119,7 @@ public enum MCPLocalMCPClientWrap {
         authsiaCommand: String,
         fileManager: FileManager = .default
     ) throws {
-        try validateFinding(plan.finding)
+        try validateFinding(plan.finding, workspacePath: plan.workspacePath)
         let data = try readConfig(at: plan.fileURL, fileManager: fileManager)
         guard checksum(of: data) == plan.checksum else {
             throw WrapError.checksumMismatch
@@ -124,12 +136,13 @@ public enum MCPLocalMCPClientWrap {
                 throw WrapError.malformedConfig
             }
             encoded = Data(rewritten.utf8)
-        case .claude, .cursor, .devin, .vscode:
+        case .claude, .cursor, .devin, .vscode, .claudeDesktop:
             encoded = try rewriteJSON(
                 data,
                 source: plan.finding.source,
                 serverName: plan.finding.serverName,
-                authsiaCommand: authsiaCommand
+                authsiaCommand: authsiaCommand,
+                workspacePath: plan.workspacePath
             )
         }
         do {
@@ -153,7 +166,11 @@ public enum MCPLocalMCPClientWrap {
         return matches.first
     }
 
-    private static func validateFinding(_ finding: MCPClientServerFinding) throws {
+    private static func validateFinding(
+        _ finding: MCPClientServerFinding,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        workspacePath: String? = nil
+    ) throws {
         guard finding.isWrapEligible, finding.precedence != .overridden else {
             throw finding.precedence == .overridden
                 ? WrapError.overriddenByProject
@@ -162,6 +179,29 @@ public enum MCPLocalMCPClientWrap {
         guard MCPProxyClientLaunch.validUpstreamName(finding.serverName) != nil else {
             throw WrapError.notWrapEligible
         }
+        let resolvedWorkspace = workspacePath
+            ?? wrapWorkspacePath(for: finding, homeDirectory: homeDirectory)
+        guard finding.source.hasWorkspaceOfItsOwn || resolvedWorkspace != nil else {
+            throw WrapError.missingWorkspaceBinding
+        }
+    }
+
+    /// The workspace a wrapped launch binds to, for a client that has no
+    /// repository of its own. Named in the entry's environment rather than its
+    /// argv, so a company allowlist matching command plus argv still matches.
+    public static func wrapWorkspacePath(
+        for finding: MCPClientServerFinding,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String? {
+        guard !finding.source.hasWorkspaceOfItsOwn,
+              let label = finding.workspacePathLabel,
+              !label.isEmpty else {
+            return nil
+        }
+        if label.hasPrefix("~/") {
+            return homeDirectory.appendingPathComponent(String(label.dropFirst(2))).path
+        }
+        return label.hasPrefix("/") ? label : nil
     }
 
     private static func readConfig(at url: URL, fileManager: FileManager) throws -> Data {
@@ -182,7 +222,8 @@ public enum MCPLocalMCPClientWrap {
     private static func replacementSnippet(
         for finding: MCPClientServerFinding,
         authsiaCommand: String,
-        data: Data
+        data: Data,
+        workspacePath: String?
     ) throws -> String {
         guard let authsia = MCPLocalMCPWrapRecipe.sanitizedCommand(authsiaCommand) else {
             throw WrapError.notWrapEligible
@@ -195,11 +236,12 @@ public enum MCPLocalMCPClientWrap {
                 environment: MCPProxyClientLaunch.environment(upstreamName: finding.serverName),
                 preservedLines: preservedCodexLines(data: data, serverName: finding.serverName)
             )
-        case .claude, .cursor, .devin, .vscode:
+        case .claude, .cursor, .devin, .vscode, .claudeDesktop:
             return prettyJSON(jsonObject(
                 authsiaCommand: authsia,
                 upstreamName: finding.serverName,
                 includeType: finding.source == .vscode,
+                workspacePath: workspacePath,
                 preserving: preservedJSONKeys(
                     data: data,
                     source: finding.source,
@@ -266,7 +308,7 @@ public enum MCPLocalMCPClientWrap {
                 throw WrapError.malformedConfig
             }
             return snippet
-        case .claude, .cursor, .devin, .vscode:
+        case .claude, .cursor, .devin, .vscode, .claudeDesktop:
             guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let servers = root[jsonServersKey(for: finding.source)] as? [String: Any],
                   let value = servers[finding.serverName] else {
@@ -280,7 +322,8 @@ public enum MCPLocalMCPClientWrap {
         _ data: Data,
         source: MCPClientConfigSource,
         serverName: String,
-        authsiaCommand: String
+        authsiaCommand: String,
+        workspacePath: String?
     ) throws -> Data {
         guard let authsia = MCPLocalMCPWrapRecipe.sanitizedCommand(authsiaCommand) else {
             throw WrapError.notWrapEligible
@@ -297,6 +340,7 @@ public enum MCPLocalMCPClientWrap {
             authsiaCommand: authsia,
             upstreamName: serverName,
             includeType: source == .vscode,
+            workspacePath: workspacePath,
             preserving: preservedJSONKeys(data: data, source: source, serverName: serverName)
         )
         root[key] = servers
@@ -313,6 +357,7 @@ public enum MCPLocalMCPClientWrap {
         authsiaCommand: String,
         upstreamName: String,
         includeType: Bool,
+        workspacePath: String? = nil,
         preserving preserved: [String: Any] = [:]
     ) -> [String: Any] {
         var object = preserved
@@ -320,7 +365,10 @@ public enum MCPLocalMCPClientWrap {
         object["args"] = MCPProxyClientLaunch.arguments
         // The child's credentials never survive the wrap: the proxy resolves
         // them from workspace policy instead of the client file.
-        object["env"] = MCPProxyClientLaunch.environment(upstreamName: upstreamName)
+        object["env"] = MCPProxyClientLaunch.environment(
+            upstreamName: upstreamName,
+            workspacePath: workspacePath
+        )
         if includeType {
             object["type"] = "stdio"
         }

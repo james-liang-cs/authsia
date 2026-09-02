@@ -646,6 +646,35 @@ struct MCPClientConfigurationTests {
         #expect(declared?.args == ["serve", "--mcp"])
     }
 
+
+    @Test("doctor reports Claude Desktop launches without failing the verdict")
+    func doctorTreatsClaudeDesktopAsAdvisory() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        func report() throws -> MCPDoctorReport {
+            var doctor = try MCPCommand.Doctor.parse(["--workspace", fixture.workspace.path])
+            doctor.homeDirectory = fixture.home
+            doctor.currentDirectoryPath = fixture.unrelated.path
+            doctor.environment = [:]
+            return try doctor.makeReport()
+        }
+        let before = try report()
+
+        try writeDoctorJSON([
+            "mcpServers": [
+                "desktop-only": ["command": "mcp-atlassian"],
+            ]
+        ], to: fixture.home.appendingPathComponent(
+            "Library/Application Support/Claude/claude_desktop_config.json"
+        ))
+        let after = try report()
+
+        // Visible, because an unwrapped local launch is worth knowing about.
+        #expect(after.findings.contains { $0.serverName == "desktop-only" })
+        // Not a failure, because no pilot repository can close it: Claude
+        // Desktop has no repository of its own.
+        #expect(after.violationCount == before.violationCount)
+    }
 }
 
 private struct DoctorFixture {

@@ -6,6 +6,7 @@ public enum MCPClientConfigSource: String, Codable, CaseIterable, Equatable, Sen
     case cursor
     case devin
     case vscode
+    case claudeDesktop = "claude-desktop"
 
     public var displayName: String {
         switch self {
@@ -14,7 +15,15 @@ public enum MCPClientConfigSource: String, Codable, CaseIterable, Equatable, Sen
         case .cursor: return "Cursor"
         case .devin: return "Devin"
         case .vscode: return "Visual Studio Code"
+        case .claudeDesktop: return "Claude Desktop"
         }
+    }
+
+    /// A client with no repository of its own. Its launches are real and worth
+    /// reporting, but they cannot be closed per pilot repository, so they are
+    /// advisory rather than a compliance failure.
+    public var hasWorkspaceOfItsOwn: Bool {
+        self != .claudeDesktop
     }
 }
 
@@ -197,6 +206,13 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
                 source: .vscode,
                 fileURL: homeDirectory.appendingPathComponent("Library/Application Support/Code/User/mcp.json"),
                 displayPath: "~/Library/Application Support/Code/User/mcp.json"
+            ),
+            Self(
+                source: .claudeDesktop,
+                fileURL: homeDirectory.appendingPathComponent(
+                    "Library/Application Support/Claude/claude_desktop_config.json"
+                ),
+                displayPath: "~/Library/Application Support/Claude/claude_desktop_config.json"
             ),
         ]
     }
@@ -444,9 +460,20 @@ public struct MCPClientConfigScanner {
         locations: [MCPClientConfigLocation]
     ) -> [MCPClientServerFinding] {
         // A launch the client file marks off cannot run, so it is neither a
-        // bypass to report nor protection debt to work off.
+        // bypass to report nor protection debt to work off. Claude Code keeps
+        // that answer for `.mcp.json` servers in a different file, so the two
+        // reads are combined here rather than inside either parser.
+        let disabledProjectServers = claudeDisabledProjectServers(in: locations)
         let observedServers = locations.flatMap { entries(at: $0) }
-            .filter { !$0.isDisabled }
+            .filter { entry in
+                guard !entry.isDisabled else { return false }
+                guard entry.location.source == .claude,
+                      entry.location.rank == .projectFile,
+                      let root = entry.location.workspaceRoot else {
+                    return true
+                }
+                return disabledProjectServers[root.path]?.contains(entry.name) != true
+            }
         var rootsByPath: [String: URL] = [:]
         var labelsByRootPath: [String: String] = [:]
         for location in locations {
@@ -539,6 +566,37 @@ public struct MCPClientConfigScanner {
             }
             return lhs.configPathLabel < rhs.configPathLabel
         }
+    }
+
+    /// `.mcp.json` servers the human declined, per project, from
+    /// `~/.claude.json`. Only the explicit `disabledMcpjsonServers` list counts:
+    /// a name in neither list has not been answered yet, and treating that as
+    /// off would hide real debt.
+    private func claudeDisabledProjectServers(
+        in locations: [MCPClientConfigLocation]
+    ) -> [String: Set<String>] {
+        guard let location = locations.first(where: {
+            $0.source == .claude && $0.scope == .userGlobal
+        }),
+            let attributes = try? fileManager.attributesOfItem(atPath: location.fileURL.path),
+            let size = (attributes[.size] as? NSNumber)?.uint64Value,
+            size <= Self.maximumConfigBytes,
+            let data = try? Data(contentsOf: location.fileURL, options: .mappedIfSafe),
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let projects = root["projects"] as? [String: Any] else {
+            return [:]
+        }
+        var disabled: [String: Set<String>] = [:]
+        for (projectPath, value) in projects {
+            guard let project = value as? [String: Any],
+                  let names = project["disabledMcpjsonServers"] as? [String],
+                  !names.isEmpty else {
+                continue
+            }
+            disabled[URL(fileURLWithPath: projectPath, isDirectory: true).standardizedFileURL.path]
+                = Set(names)
+        }
+        return disabled
     }
 
     private func entries(at location: MCPClientConfigLocation) -> [ObservedServer] {

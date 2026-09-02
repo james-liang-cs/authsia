@@ -168,13 +168,17 @@ final class MCPClientConfigScannerTests: XCTestCase {
         let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
         let locations = MCPClientConfigLocation.knownLocations(homeDirectory: home)
 
-        XCTAssertEqual(locations.map(\.source), [.codex, .claude, .cursor, .devin, .vscode])
+        XCTAssertEqual(
+            locations.map(\.source),
+            [.codex, .claude, .cursor, .devin, .vscode, .claudeDesktop]
+        )
         XCTAssertEqual(locations.map(\.fileURL.path), [
             "/Users/example/.codex/config.toml",
             "/Users/example/.claude.json",
             "/Users/example/.cursor/mcp.json",
             "/Users/example/.config/devin/mcp_config.json",
             "/Users/example/Library/Application Support/Code/User/mcp.json",
+            "/Users/example/Library/Application Support/Claude/claude_desktop_config.json",
         ])
         XCTAssertEqual(locations.map(\.displayPath), [
             "~/.codex/config.toml",
@@ -182,6 +186,7 @@ final class MCPClientConfigScannerTests: XCTestCase {
             "~/.cursor/mcp.json",
             "~/.config/devin/mcp_config.json",
             "~/Library/Application Support/Code/User/mcp.json",
+            "~/Library/Application Support/Claude/claude_desktop_config.json",
         ])
         XCTAssertTrue(locations.allSatisfy { $0.scope == .userGlobal })
         XCTAssertTrue(locations.allSatisfy { $0.workspaceRoot == nil })
@@ -758,6 +763,41 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertFalse(encoded.contains("must-not-appear"))
         XCTAssertFalse(encoded.contains("TOKEN"))
         XCTAssertFalse(encoded.contains("NODE_PATH"))
+    }
+
+
+    func testClaudeProjectServersTheHumanDeclinedAreNotDebt() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let repo = home.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try writeJSON([
+            "projects": [
+                repo.standardizedFileURL.path: [
+                    "disabledMcpjsonServers": ["declined"],
+                ],
+            ],
+        ], to: home.appendingPathComponent(".claude.json"))
+        try writeJSON([
+            "mcpServers": [
+                "declined": ["command": "declined-server"],
+                "accepted": ["command": "accepted-server"],
+                // Answered by neither list. Claude Code has not been told yet,
+                // so this must still be reported rather than assumed off.
+                "unanswered": ["command": "unanswered-server"],
+            ],
+        ], to: repo.appendingPathComponent(".mcp.json"))
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: MCPClientConfigLocation.knownLocations(homeDirectory: home)
+                + MCPClientConfigLocation.projectLocations(
+                    workspaceRoots: [repo],
+                    homeDirectory: home
+                )
+        )
+
+        XCTAssertEqual(findings.map(\.serverName).sorted(), ["accepted", "unanswered"])
     }
 
 }

@@ -33,7 +33,7 @@ struct MCPCommand: AsyncParsableCommand {
         currentDirectoryPath: String
     ) -> URL {
         let clientWorkspacePath: String?
-        if let value = environment["WORKSPACE_FOLDER_PATHS"] {
+        if let value = environment[MCPProxyClientLaunch.workspaceEnvironmentKey] {
             let paths = value.split(separator: ",", omittingEmptySubsequences: false)
             let path = paths.count == 1 ? String(paths[0]) : ""
             clientWorkspacePath = path.hasPrefix("/") && path.unicodeScalars.allSatisfy {
@@ -460,6 +460,10 @@ struct MCPCommand: AsyncParsableCommand {
         }
 
         static func isFailingViolation(_ finding: MCPClientServerFinding) -> Bool {
+            // A client with no repository of its own cannot be brought into
+            // compliance per pilot repository, so failing every machine that
+            // has it installed would report a gap nobody can close here.
+            guard finding.source.hasWorkspaceOfItsOwn else { return false }
             switch finding.status {
             case .admittedWrapped:
                 return false

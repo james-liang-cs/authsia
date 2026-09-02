@@ -89,7 +89,10 @@ public enum MCPLocalMCPWrapRecipe {
             return nil
         }
         let name = finding.serverName
-        let env = MCPProxyClientLaunch.environment(upstreamName: name)
+        let env = MCPProxyClientLaunch.environment(
+            upstreamName: name,
+            workspacePath: MCPLocalMCPClientWrap.wrapWorkspacePath(for: finding)
+        )
         switch finding.source {
         case .codex:
             return """
@@ -117,6 +120,16 @@ public enum MCPLocalMCPWrapRecipe {
 
             Or paste this object:
             \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
+            """
+        case .claudeDesktop:
+            // Claude Desktop has no repository of its own, so the workspace it
+            // binds to is pinned in the entry rather than inferred from a cwd.
+            return """
+            Open \(finding.configPathLabel). Find "\(name)" under "mcpServers" and replace that object.
+
+            \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: false))
+
+            Quit and reopen Claude Desktop afterwards.
             """
         case .cursor:
             return """
