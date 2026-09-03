@@ -20,12 +20,16 @@ struct MCPCommand: AsyncParsableCommand {
             Examples:
               authsia mcp configure --client codex
               authsia mcp wrap --write --server filesystem
+              authsia mcp unwrap --write --server filesystem
               authsia mcp catalog --server filesystem --write
               authsia mcp serve --workspace /path/to/repository
               authsia mcp proxy --upstream jira
               authsia mcp doctor --json
             """,
-        subcommands: [Configure.self, Wrap.self, Catalog.self, Serve.self, Proxy.self, Doctor.self]
+        subcommands: [
+            Configure.self, Wrap.self, Unwrap.self, Catalog.self, Serve.self, Proxy.self,
+            Doctor.self,
+        ]
     )
 
     static func startingDirectory(
@@ -607,6 +611,107 @@ struct MCPCommand: AsyncParsableCommand {
                 message + "\n\n" + written.joined(separator: "\n")
                     + "\nNext: authsia mcp catalog --server \(finding.serverName) --write "
                     + "records what that server advertises."
+            )
+        }
+    }
+
+    struct Unwrap: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Restore a wrapped client MCP launch to the child workspace policy declares",
+            discussion: """
+                Writes the scanned client file only, and leaves the mcpUpstreams entry
+                declared so the launch can be protected again. Re-run with --yes after
+                reviewing the restore. Project scope wins over user-global. Authsia
+                never rewrites the file if the checksum no longer matches.
+
+                Examples:
+                  authsia mcp unwrap --write --server filesystem
+                  authsia mcp unwrap --write --server filesystem --yes
+                """
+        )
+
+        @Flag(name: .customLong("write"), help: "Restore the wrapped client launch")
+        var write = false
+
+        @Option(help: "Upstream / client server name to restore")
+        var server: String
+
+        @Option(help: "Client: codex, claude, cursor, devin, or vscode")
+        var client: MCPClient?
+
+        @Flag(name: .customLong("yes"), help: "Write the restore after printing the plan")
+        var yes = false
+
+        @Option(help: "Workspace root that declares the upstream. Repeatable.")
+        var workspace: [String] = []
+
+        var homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        var currentDirectoryPath = FileManager.default.currentDirectoryPath
+        var environment = ProcessInfo.processInfo.environment
+
+        func run() throws {
+            try run { print($0) }
+        }
+
+        func run(output: (String) -> Void) throws {
+            guard write else {
+                throw ValidationError("Pass --write to restore a wrapped client launch.")
+            }
+            guard MCPProxyClientLaunch.validUpstreamName(server) != nil else {
+                throw ValidationError("Server name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
+            }
+            var doctor = Doctor()
+            doctor.client = client
+            doctor.workspace = workspace
+            doctor.homeDirectory = homeDirectory
+            doctor.currentDirectoryPath = currentDirectoryPath
+            doctor.environment = environment
+            let report = try doctor.makeReport()
+            guard let finding = MCPLocalMCPClientUnwrap.preferredFinding(
+                named: server,
+                in: report.findings
+            ) else {
+                throw ValidationError(
+                    "No protected \(server) launch won in the scanned client files."
+                )
+            }
+            // The child argv survives a wrap only in workspace policy, so the
+            // restore reads the same roots the scan resolved.
+            let plan = try MCPLocalMCPClientUnwrap.plan(
+                finding: finding,
+                workspaceRoots: report.workspaceRoots.map {
+                    URL(fileURLWithPath: $0, isDirectory: true)
+                },
+                homeDirectory: homeDirectory
+            )
+            var message = """
+                Restore \(finding.source.displayName) \(finding.serverName) in \(finding.configPathLabel)
+                Declared by \(plan.workspaceRoot.path)
+                Checksum \(plan.checksum)
+
+                Current:
+                \(plan.existingSnippet)
+
+                Restored:
+                \(plan.replacementSnippet)
+                """
+            if plan.declaredEnvironmentCount > 0 {
+                // Declared env may hold `authsia://` references, which mean
+                // nothing outside the proxy, so the restore never copies them.
+                message += "\n\nWorkspace policy sets \(plan.declaredEnvironmentCount) environment "
+                    + "value\(plan.declaredEnvironmentCount == 1 ? "" : "s") for this child. The restored "
+                    + "launch carries none of them; set what the child needs in the client file."
+            }
+            guard yes else {
+                output(message + "\n\nRe-run with --yes to write this restore.")
+                throw ExitCode(2)
+            }
+            try MCPLocalMCPClientUnwrap.apply(plan)
+            output(
+                message + "\n\nWrote \(finding.configPathLabel). \(finding.serverName) now starts "
+                    + "directly: its calls are no longer admitted, audited, or revocable by Authsia. "
+                    + "\(plan.workspaceRoot.path) still declares the upstream, so "
+                    + "authsia mcp wrap --write --server \(finding.serverName) protects it again."
             )
         }
     }

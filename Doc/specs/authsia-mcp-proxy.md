@@ -23,6 +23,7 @@ in the private Access Center spec.
   - [When Coverage Does Not List The Server](#when-coverage-does-not-list-the-server)
   - [When Protect Is Unavailable](#when-protect-is-unavailable)
   - [After Wrap](#after-wrap)
+  - [Remove Protection](#remove-protection)
 - [Company Local MCP Allowlist](#company-local-mcp-allowlist)
 - [Declare The Upstream](#declare-the-upstream)
 - [Print And Apply Client Configuration](#print-and-apply-client-configuration)
@@ -291,6 +292,30 @@ an upstream with `authsia://` references, before the long-lived child starts;
 an existing matching grant is reused. Access Center shows **Access expires in** on an active
 admission row. **Renew admission** extends that grant in place. Revoke in
 Access Center when done.
+
+### Remove Protection
+
+Protection is reversible. **Remove protection** on a protected Coverage row,
+and `authsia mcp unwrap --write --server <name>`, restore the client entry to
+the command and argv the workspace declares, after showing the protected entry,
+the restored entry, and a SHA256 checksum. The write is refused when the file
+changed underfoot or when project config overrides the row, exactly as Protect
+is.
+
+A wrap keeps the child argv only in `mcpUpstreams`, so that declaration is the
+restore source: a proxy launch no workspace declares as a stdio command reports
+that nothing recorded the launch it replaced, and the entry has to be restored
+by hand. The restore is not a byte-for-byte undo. Environment values the client
+file set for the child were never copied into policy at wrap time and do not
+come back, and `authsia://` references a declared upstream carries are not
+written into a client file, because only the proxy resolves them. Both are
+named before the write.
+
+Workspace policy is left alone. The `mcpUpstreams` entry keeps its recorded
+catalog and any hand-placed `allow` / `approve`, so Coverage moves the row to
+**Bypasses protection** and Protect restores protection without recording the
+catalog again. Reopen the client afterwards. A restored launch is a direct
+launch: its tool calls are no longer admitted, audited, or revocable.
 
 ## Company Local MCP Allowlist
 
@@ -877,6 +902,10 @@ Implementation is not complete until automated tests prove:
   declared upstream when present, with no `--upstream` in generated argv;
 - wrap write shows the current entry, replacement, and checksum, and refuses
   when the file changed underfoot or the row is overridden by project config;
+- unwrap write restores the declared command and argv, drops the proxy
+  environment, keeps neighbor entries and launch settings Authsia does not
+  manage, leaves `mcpUpstreams` declared, and refuses an undeclared upstream,
+  a stale checksum, or an overridden row;
 - the scanner reports wrapped, direct bypass, and unadmitted without retaining
   other environment values;
 - Access Center presents a wrapped `tools/call` as the child basename plus MCP

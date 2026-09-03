@@ -204,7 +204,7 @@ public enum MCPLocalMCPClientWrap {
         return label.hasPrefix("/") ? label : nil
     }
 
-    private static func readConfig(at url: URL, fileManager: FileManager) throws -> Data {
+    static func readConfig(at url: URL, fileManager: FileManager) throws -> Data {
         guard fileManager.fileExists(atPath: url.path) else {
             throw WrapError.missingFile
         }
@@ -253,7 +253,7 @@ public enum MCPLocalMCPClientWrap {
 
     /// Keys the human set on the scanned entry that Authsia does not manage.
     /// The wrap replaces the launch, not the rest of the entry.
-    private static func preservedJSONKeys(
+    static func preservedJSONKeys(
         data: Data,
         source: MCPClientConfigSource,
         serverName: String
@@ -266,7 +266,7 @@ public enum MCPLocalMCPClientWrap {
         return existing.filter { key, _ in !managedJSONKeys.contains(key) }
     }
 
-    private static func preservedCodexLines(data: Data, serverName: String) -> [String] {
+    static func preservedCodexLines(data: Data, serverName: String) -> [String] {
         guard let text = String(data: data, encoding: .utf8),
               let table = extractCodexTable(text, serverName: serverName) else {
             return []
@@ -297,7 +297,7 @@ public enum MCPLocalMCPClientWrap {
     private static let managedJSONKeys: Set<String> = ["command", "args", "env", "type"]
     private static let managedCodexKeys: Set<String> = ["command", "args", "env_vars"]
 
-    private static func existingSnippet(
+    static func existingSnippet(
         for finding: MCPClientServerFinding,
         data: Data
     ) throws -> String {
@@ -375,11 +375,11 @@ public enum MCPLocalMCPClientWrap {
         return object
     }
 
-    private static func jsonServersKey(for source: MCPClientConfigSource) -> String {
+    static func jsonServersKey(for source: MCPClientConfigSource) -> String {
         source == .vscode ? "servers" : "mcpServers"
     }
 
-    private static func prettyJSON(_ value: Any) -> String {
+    static func prettyJSON(_ value: Any) -> String {
         guard JSONSerialization.isValidJSONObject(value),
               let data = try? JSONSerialization.data(
                 withJSONObject: value,
@@ -395,7 +395,7 @@ public enum MCPLocalMCPClientWrap {
         return String(text[range]).trimmingCharacters(in: .newlines)
     }
 
-    private static func rewriteCodex(
+    static func rewriteCodex(
         _ text: String,
         serverName: String,
         replacement: String

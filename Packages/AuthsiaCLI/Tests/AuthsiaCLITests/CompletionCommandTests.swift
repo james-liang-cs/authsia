@@ -96,8 +96,8 @@ struct CompletionCommandTests {
         )
 
         let bash = Completion.completionScript(for: .bash)
-        #expect(bash.contains("configure|wrap|catalog|serve|proxy|doctor"))
-        #expect(bash.contains("compgen -W 'configure wrap catalog serve proxy doctor'"))
+        #expect(bash.contains("configure|wrap|unwrap|catalog|serve|proxy|doctor"))
+        #expect(bash.contains("compgen -W 'configure wrap unwrap catalog serve proxy doctor'"))
 
         let fish = Completion.completionScript(for: .fish)
         #expect(fish.contains("-fa 'serve' -d 'Serve Authsia tools over local stdio'"))

@@ -283,13 +283,13 @@ public enum MCPLocalMCPWrapRecipe {
         }.joined()
     }
 
-    private static func tomlEscaped(_ value: String) -> String {
+    static func tomlEscaped(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    private static func tomlStringArray(_ values: [String]) -> String {
+    static func tomlStringArray(_ values: [String]) -> String {
         "[" + values.map { "\"\(tomlEscaped($0))\"" }.joined(separator: ", ") + "]"
     }
 

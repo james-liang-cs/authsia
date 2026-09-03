@@ -217,6 +217,66 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         return .declared
     }
 
+    /// The child launch a workspace declares for `name`. A protected client
+    /// entry no longer records the launch it replaced, so this declaration is
+    /// what a restore reads.
+    public struct DeclaredLaunch: Equatable, Sendable {
+        public let workspaceRoot: URL
+        public let command: String
+        public let arguments: [String]
+        /// Environment values policy sets for the child. A restored client
+        /// launch carries none of them: they may be `authsia://` references,
+        /// which only the proxy resolves.
+        public let environmentCount: Int
+
+        public init(
+            workspaceRoot: URL,
+            command: String,
+            arguments: [String],
+            environmentCount: Int
+        ) {
+            self.workspaceRoot = workspaceRoot
+            self.command = command
+            self.arguments = arguments
+            self.environmentCount = environmentCount
+        }
+    }
+
+    /// The first stdio launch named `name` among `workspaceRoots`, in the order
+    /// given. An http or url upstream never replaced a local launch, so it is
+    /// not a restore source.
+    public static func declaredLaunch(
+        named name: String,
+        workspaceRoots: [URL],
+        fileManager: FileManager = .default
+    ) -> DeclaredLaunch? {
+        for candidate in workspaceRoots {
+            let standardized = candidate.standardizedFileURL
+            let configURL = standardized.appendingPathComponent(relativeConfigPath)
+            guard fileManager.fileExists(atPath: configURL.path),
+                  let attributes = try? fileManager.attributesOfItem(atPath: configURL.path),
+                  let size = (attributes[.size] as? NSNumber)?.uint64Value,
+                  size <= maximumConfigBytes,
+                  let data = try? Data(contentsOf: configURL),
+                  let object = try? JSONSerialization.jsonObject(with: data),
+                  let config = object as? [String: Any],
+                  let upstreams = config["mcpUpstreams"] as? [[String: Any]],
+                  let entry = upstreams.first(where: { ($0["name"] as? String) == name }),
+                  (entry["transport"] as? String ?? "stdio") == "stdio",
+                  entry["url"] == nil,
+                  let command = entry["command"] as? String else {
+                continue
+            }
+            return DeclaredLaunch(
+                workspaceRoot: standardized,
+                command: command,
+                arguments: stringArray(entry["args"]) ?? [],
+                environmentCount: (entry["env"] as? [String: Any])?.count ?? 0
+            )
+        }
+        return nil
+    }
+
     private static func workspaceRoot(
         startingAt path: String,
         fileManager: FileManager
