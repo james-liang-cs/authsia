@@ -83,11 +83,12 @@ struct CompletionCommandTests {
         #expect(fish.contains("-fa 'unguard' -d 'Restart the current tab in normal terminal mode'"))
     }
 
-    @Test("all shell scripts complete MCP serve and proxy commands")
+    @Test("all shell scripts complete MCP commands")
     func allShellScriptsCompleteMCPCommands() {
         let zsh = Completion.completionScript(for: .zsh)
         #expect(zsh.contains("'serve:Serve Authsia tools over local stdio'"))
         #expect(zsh.contains("'proxy:Proxy a named workspace upstream over local stdio'"))
+        #expect(zsh.contains("'unwrap:Restore a wrapped client MCP launch"))
         #expect(zsh.contains("'doctor:Report whether known MCP client configs comply with the Authsia allowlist'"))
         #expect(
             zsh.contains(
@@ -102,7 +103,12 @@ struct CompletionCommandTests {
         let fish = Completion.completionScript(for: .fish)
         #expect(fish.contains("-fa 'serve' -d 'Serve Authsia tools over local stdio'"))
         #expect(fish.contains("-fa 'proxy' -d 'Proxy a named workspace upstream over local stdio'"))
-        #expect(fish.contains("-fa 'doctor' -d 'Report whether known MCP client configs comply with the Authsia allowlist'"))
+        #expect(fish.contains("-fa 'unwrap' -d 'Restore a wrapped client MCP launch"))
+        #expect(
+            fish.contains(
+                "-fa 'doctor' -d 'Report whether known MCP client configs comply with the Authsia allowlist'"
+            )
+        )
         #expect(
             fish.contains(
                 "-fa 'catalog' -d 'Record what a declared local MCP server advertises into workspace policy'"

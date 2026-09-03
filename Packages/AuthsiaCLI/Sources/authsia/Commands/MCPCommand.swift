@@ -695,23 +695,40 @@ struct MCPCommand: AsyncParsableCommand {
                 Restored:
                 \(plan.replacementSnippet)
                 """
+            message += """
+
+
+                Any environment values the client entry used before protection were not retained by
+                Authsia and cannot be restored automatically. Add any values the child still needs
+                to the client file.
+                """
             if plan.declaredEnvironmentCount > 0 {
-                // Declared env may hold `authsia://` references, which mean
-                // nothing outside the proxy, so the restore never copies them.
                 message += "\n\nWorkspace policy sets \(plan.declaredEnvironmentCount) environment "
-                    + "value\(plan.declaredEnvironmentCount == 1 ? "" : "s") for this child. The restored "
-                    + "launch carries none of them; set what the child needs in the client file."
+                    + "value\(plan.declaredEnvironmentCount == 1 ? "" : "s") for this child. Authsia "
+                    + "does not copy them into the restored launch. This includes any authsia:// references, "
+                    + "which only the proxy resolves."
+            } else {
+                message += """
+
+
+                    Authsia does not copy workspace environment values into a restored client launch.
+                    Any authsia:// references stay in policy because only the proxy resolves them.
+                    """
             }
             guard yes else {
                 output(message + "\n\nRe-run with --yes to write this restore.")
                 throw ExitCode(2)
             }
+            // Even an explicitly confirmed invocation shows the exact plan
+            // before the mutation it authorizes.
+            output(message)
             try MCPLocalMCPClientUnwrap.apply(plan)
             output(
-                message + "\n\nWrote \(finding.configPathLabel). \(finding.serverName) now starts "
+                "Wrote \(finding.configPathLabel). \(finding.serverName) now starts "
                     + "directly: its calls are no longer admitted, audited, or revocable by Authsia. "
                     + "\(plan.workspaceRoot.path) still declares the upstream, so "
-                    + "authsia mcp wrap --write --server \(finding.serverName) protects it again."
+                    + "authsia mcp wrap --write --server \(finding.serverName) protects it again. "
+                    + "Reopen the client."
             )
         }
     }

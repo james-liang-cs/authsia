@@ -646,6 +646,67 @@ struct MCPClientConfigurationTests {
         #expect(declared?.args == ["serve", "--mcp"])
     }
 
+    @Test("unwrap previews before writing and names restore consequences")
+    func unwrapPreviewsBeforeWriting() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        let configURL = fixture.home.appendingPathComponent(".cursor/mcp.json")
+        let protected = try Data(contentsOf: configURL)
+
+        var preview = try MCPCommand.Unwrap.parse([
+            "--write",
+            "--server", "jira",
+            "--client", "cursor",
+            "--workspace", fixture.workspace.path,
+        ])
+        preview.homeDirectory = fixture.home
+        preview.currentDirectoryPath = fixture.unrelated.path
+        preview.environment = [:]
+        var previewOutput = ""
+        do {
+            try preview.run { previewOutput += $0 }
+            Issue.record("unwrap without --yes should exit 2")
+        } catch let code as ExitCode {
+            #expect(code.rawValue == 2)
+        }
+        #expect(previewOutput.contains("Current:"))
+        #expect(previewOutput.contains("Restored:"))
+        #expect(previewOutput.contains("Checksum"))
+        #expect(previewOutput.contains("cannot be restored automatically"))
+        #expect(previewOutput.contains("authsia:// references stay in policy"))
+        #expect(try Data(contentsOf: configURL) == protected)
+
+        var apply = try MCPCommand.Unwrap.parse([
+            "--write",
+            "--server", "jira",
+            "--client", "cursor",
+            "--workspace", fixture.workspace.path,
+            "--yes",
+        ])
+        apply.homeDirectory = fixture.home
+        apply.currentDirectoryPath = fixture.unrelated.path
+        apply.environment = [:]
+        var output: [String] = []
+        var dataWhenPlanPrinted: Data?
+        try apply.run { message in
+            output.append(message)
+            if dataWhenPlanPrinted == nil {
+                dataWhenPlanPrinted = try? Data(contentsOf: configURL)
+            }
+        }
+
+        #expect(output.first?.contains("Current:") == true)
+        #expect(dataWhenPlanPrinted == protected)
+        #expect(output.last?.contains("Reopen the client") == true)
+        let object = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: configURL)
+        ) as? [String: Any]
+        let servers = object?["mcpServers"] as? [String: Any]
+        let jira = servers?["jira"] as? [String: Any]
+        #expect(jira?["command"] as? String == "mcp-atlassian")
+        #expect(jira?["env"] == nil)
+    }
+
 
     @Test("doctor reports Claude Desktop launches without failing the verdict")
     func doctorTreatsClaudeDesktopAsAdvisory() throws {

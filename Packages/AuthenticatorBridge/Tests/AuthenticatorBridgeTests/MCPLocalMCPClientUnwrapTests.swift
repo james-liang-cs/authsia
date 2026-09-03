@@ -148,6 +148,81 @@ final class MCPLocalMCPClientUnwrapTests: XCTestCase {
         }
     }
 
+    func testRestoreUsesOnlyTheFindingWorkspaceDeclaration() throws {
+        let primary = try makeWorkspace(upstreams: [
+            ["name": "filesystem", "command": "primary-child"],
+        ])
+        let other = try makeWorkspace(upstreams: [
+            ["name": "filesystem", "command": "other-child"],
+        ])
+        defer {
+            try? FileManager.default.removeItem(at: primary)
+            try? FileManager.default.removeItem(at: other)
+        }
+        let cursor = primary.appendingPathComponent("mcp.json")
+        try writeJSON([
+            "mcpServers": [
+                "filesystem": [
+                    "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                    "args": ["mcp", "proxy"],
+                    "env": ["AUTHSIA_MCP_UPSTREAM": "filesystem"],
+                ],
+            ],
+        ], to: cursor)
+        let finding = protectedFinding(
+            source: .cursor,
+            configPathLabel: cursor.path,
+            workspacePathLabel: primary.path
+        )
+
+        let plan = try MCPLocalMCPClientUnwrap.plan(
+            finding: finding,
+            workspaceRoots: [other, primary],
+            fileURL: cursor
+        )
+        XCTAssertEqual(plan.command, "primary-child")
+
+        try writeJSON(
+            ["mcpUpstreams": [["name": "filesystem", "command": "changed-child"]]],
+            to: primary.appendingPathComponent(".authsia/workspace.json")
+        )
+        XCTAssertThrowsError(try MCPLocalMCPClientUnwrap.apply(plan)) { error in
+            XCTAssertEqual(error as? MCPLocalMCPClientUnwrap.UnwrapError, .declarationChanged)
+        }
+
+        try writeJSON(
+            ["mcpUpstreams": []],
+            to: primary.appendingPathComponent(".authsia/workspace.json")
+        )
+        XCTAssertThrowsError(
+            try MCPLocalMCPClientUnwrap.plan(
+                finding: finding,
+                workspaceRoots: [other, primary],
+                fileURL: cursor
+            )
+        ) { error in
+            XCTAssertEqual(error as? MCPLocalMCPClientUnwrap.UnwrapError, .missingDeclaration)
+        }
+
+        try writeJSON(
+            [
+                "mcpUpstreams": [
+                    ["name": "filesystem", "command": "primary-child", "args": "not-an-array"],
+                ],
+            ],
+            to: primary.appendingPathComponent(".authsia/workspace.json")
+        )
+        XCTAssertThrowsError(
+            try MCPLocalMCPClientUnwrap.plan(
+                finding: finding,
+                workspaceRoots: [other, primary],
+                fileURL: cursor
+            )
+        ) { error in
+            XCTAssertEqual(error as? MCPLocalMCPClientUnwrap.UnwrapError, .missingDeclaration)
+        }
+    }
+
     func testPrefersProjectFindingAndRefusesOverriddenRestore() throws {
         let user = protectedFinding(
             source: .cursor,
@@ -185,12 +260,12 @@ final class MCPLocalMCPClientUnwrapTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
 
         XCTAssertNil(
-            MCPLocalMCPWorkspaceDeclaration.declaredLaunch(named: "jira", workspaceRoots: [root])
+            MCPLocalMCPWorkspaceDeclaration.declaredLaunch(named: "jira", workspaceRoot: root)
         )
         let launch = try XCTUnwrap(
             MCPLocalMCPWorkspaceDeclaration.declaredLaunch(
                 named: "filesystem",
-                workspaceRoots: [root]
+                workspaceRoot: root
             )
         )
         XCTAssertEqual(launch.command, "node")
@@ -203,7 +278,8 @@ final class MCPLocalMCPClientUnwrapTests: XCTestCase {
         serverName: String = "filesystem",
         configPathLabel: String,
         configScope: MCPClientConfigScope = .project,
-        precedence: MCPClientConfigPrecedence = .effective
+        precedence: MCPClientConfigPrecedence = .effective,
+        workspacePathLabel: String? = nil
     ) -> MCPClientServerFinding {
         MCPClientServerFinding(
             source: source,
@@ -214,6 +290,7 @@ final class MCPLocalMCPClientUnwrapTests: XCTestCase {
             configPathLabel: configPathLabel,
             configScope: configScope,
             precedence: precedence,
+            workspacePathLabel: workspacePathLabel,
             isAuthsiaProxyLaunch: true
         )
     }

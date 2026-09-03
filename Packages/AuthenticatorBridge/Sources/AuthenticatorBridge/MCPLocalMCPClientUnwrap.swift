@@ -1,5 +1,6 @@
 import Foundation
 
+#if os(macOS)
 /// Confirmed restore of a wrapped client MCP launch to the child the workspace
 /// declares.
 ///
@@ -50,6 +51,7 @@ public enum MCPLocalMCPClientUnwrap {
         case notProtected
         case overriddenByProject
         case missingDeclaration
+        case declarationChanged
         case missingFile
         case configTooLarge
         case malformedConfig
@@ -63,8 +65,10 @@ public enum MCPLocalMCPClientUnwrap {
             case .overriddenByProject:
                 return "This user-global entry is not the launch that wins. Restore the project file instead."
             case .missingDeclaration:
-                return "No workspace declares this upstream as a stdio command, so the launch "
-                    + "Authsia replaced is not recorded anywhere. Restore the client entry by hand."
+                return "This launch's workspace does not declare the upstream as a stdio command, "
+                    + "so the launch Authsia replaced is not recorded there. Restore the client entry by hand."
+            case .declarationChanged:
+                return "The workspace declaration changed while you were reviewing this restore. Scan again."
             case .missingFile:
                 return "The scanned client file is no longer present."
             case .configTooLarge:
@@ -106,9 +110,13 @@ public enum MCPLocalMCPClientUnwrap {
         // The client entry names the upstream it proxies; the child argv lives
         // only in workspace policy, so a name no workspace declares cannot be
         // restored to anything.
-        guard let launch = MCPLocalMCPWorkspaceDeclaration.declaredLaunch(
-            named: finding.declaredUpstreamName ?? finding.serverName,
+        guard let workspaceRoot = restorationWorkspaceRoot(
+            for: finding,
             workspaceRoots: workspaceRoots,
+            homeDirectory: homeDirectory
+        ), let launch = MCPLocalMCPWorkspaceDeclaration.declaredLaunch(
+            named: finding.declaredUpstreamName ?? finding.serverName,
+            workspaceRoot: workspaceRoot,
             fileManager: fileManager
         ) else {
             throw UnwrapError.missingDeclaration
@@ -136,6 +144,18 @@ public enum MCPLocalMCPClientUnwrap {
         fileManager: FileManager = .default
     ) throws {
         try validateFinding(plan.finding)
+        guard let currentLaunch = MCPLocalMCPWorkspaceDeclaration.declaredLaunch(
+            named: plan.finding.declaredUpstreamName ?? plan.finding.serverName,
+            workspaceRoot: plan.workspaceRoot,
+            fileManager: fileManager
+        ) else {
+            throw UnwrapError.missingDeclaration
+        }
+        guard currentLaunch.command == plan.command,
+              currentLaunch.arguments == plan.arguments,
+              currentLaunch.environmentCount == plan.declaredEnvironmentCount else {
+            throw UnwrapError.declarationChanged
+        }
         let data = try configData(at: plan.fileURL, fileManager: fileManager)
         guard MCPLocalMCPClientWrap.checksum(of: data) == plan.checksum else {
             throw UnwrapError.checksumMismatch
@@ -169,6 +189,32 @@ public enum MCPLocalMCPClientUnwrap {
         guard finding.precedence != .overridden else {
             throw UnwrapError.overriddenByProject
         }
+    }
+
+    /// Resolve the exact workspace context the scanner attached to this row.
+    /// A missing context may use a sole explicit root, but multiple roots never
+    /// fall through by name.
+    private static func restorationWorkspaceRoot(
+        for finding: MCPClientServerFinding,
+        workspaceRoots: [URL],
+        homeDirectory: URL
+    ) -> URL? {
+        let roots = workspaceRoots.map(\.standardizedFileURL)
+        guard let label = finding.workspacePathLabel else {
+            return roots.count == 1 ? roots[0] : nil
+        }
+        let path: String
+        if label == "~" {
+            path = homeDirectory.standardizedFileURL.path
+        } else if label.hasPrefix("~/") {
+            path = homeDirectory.appendingPathComponent(String(label.dropFirst(2)))
+                .standardizedFileURL.path
+        } else if label.hasPrefix("/") {
+            path = URL(fileURLWithPath: label, isDirectory: true).standardizedFileURL.path
+        } else {
+            return nil
+        }
+        return roots.first { $0.path == path }
     }
 
     private static func configData(at url: URL, fileManager: FileManager) throws -> Data {
@@ -295,3 +341,4 @@ public enum MCPLocalMCPClientUnwrap {
         return table
     }
 }
+#endif

@@ -217,6 +217,7 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         return .declared
     }
 
+    #if os(macOS)
     /// The child launch a workspace declares for `name`. A protected client
     /// entry no longer records the launch it replaced, so this declaration is
     /// what a restore reads.
@@ -242,40 +243,69 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         }
     }
 
-    /// The first stdio launch named `name` among `workspaceRoots`, in the order
-    /// given. An http or url upstream never replaced a local launch, so it is
-    /// not a restore source.
+    /// The stdio launch named `name` in one exact workspace. An http or url
+    /// upstream never replaced a local launch, so it is not a restore source.
     public static func declaredLaunch(
         named name: String,
-        workspaceRoots: [URL],
+        workspaceRoot: URL,
         fileManager: FileManager = .default
     ) -> DeclaredLaunch? {
-        for candidate in workspaceRoots {
-            let standardized = candidate.standardizedFileURL
-            let configURL = standardized.appendingPathComponent(relativeConfigPath)
-            guard fileManager.fileExists(atPath: configURL.path),
-                  let attributes = try? fileManager.attributesOfItem(atPath: configURL.path),
-                  let size = (attributes[.size] as? NSNumber)?.uint64Value,
-                  size <= maximumConfigBytes,
-                  let data = try? Data(contentsOf: configURL),
-                  let object = try? JSONSerialization.jsonObject(with: data),
-                  let config = object as? [String: Any],
-                  let upstreams = config["mcpUpstreams"] as? [[String: Any]],
-                  let entry = upstreams.first(where: { ($0["name"] as? String) == name }),
-                  (entry["transport"] as? String ?? "stdio") == "stdio",
-                  entry["url"] == nil,
-                  let command = entry["command"] as? String else {
-                continue
-            }
-            return DeclaredLaunch(
-                workspaceRoot: standardized,
-                command: command,
-                arguments: stringArray(entry["args"]) ?? [],
-                environmentCount: (entry["env"] as? [String: Any])?.count ?? 0
-            )
+        let standardized = workspaceRoot.standardizedFileURL
+        let configURL = standardized.appendingPathComponent(relativeConfigPath)
+        guard fileManager.fileExists(atPath: configURL.path),
+              let attributes = try? fileManager.attributesOfItem(atPath: configURL.path),
+              let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              size <= maximumConfigBytes,
+              let data = try? Data(contentsOf: configURL),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let config = object as? [String: Any],
+              let upstreams = config["mcpUpstreams"] as? [[String: Any]],
+              let entry = upstreams.first(where: { ($0["name"] as? String) == name }),
+              (entry["transport"] as? String ?? "stdio") == "stdio",
+              entry["url"] == nil,
+              let command = entry["command"] as? String else {
+            return nil
         }
-        return nil
+        let arguments: [String]
+        if let value = entry["args"] {
+            guard let parsed = stringArray(value) else { return nil }
+            arguments = parsed
+        } else {
+            arguments = []
+        }
+        let environmentCount: Int
+        if let value = entry["env"] {
+            guard let environment = value as? [String: String] else { return nil }
+            environmentCount = environment.count
+        } else {
+            environmentCount = 0
+        }
+        guard isRestorableLaunch(command: command, arguments: arguments) else {
+            return nil
+        }
+        return DeclaredLaunch(
+            workspaceRoot: standardized,
+            command: command,
+            arguments: arguments,
+            environmentCount: environmentCount
+        )
     }
+
+    private static func isRestorableLaunch(command: String, arguments: [String]) -> Bool {
+        guard MCPUpstreamCommandRules.policyCommand(fromScanned: command) == command,
+              arguments.count <= 64,
+              !MCPUpstreamCommandRules.containsShellCommandString([command] + arguments) else {
+            return false
+        }
+        return arguments.allSatisfy { argument in
+            argument.utf8.count <= 32 * 1_024
+                && argument.unicodeScalars.allSatisfy {
+                    !CharacterSet.controlCharacters.contains($0)
+                }
+                && !argument.lowercased().contains("authsia://")
+        }
+    }
+    #endif
 
     private static func workspaceRoot(
         startingAt path: String,

@@ -298,9 +298,9 @@ Access Center when done.
 Protection is reversible. **Remove protection** on a protected Coverage row,
 and `authsia mcp unwrap --write --server <name>`, restore the client entry to
 the command and argv the workspace declares, after showing the protected entry,
-the restored entry, and a SHA256 checksum. The write is refused when the file
-changed underfoot or when project config overrides the row, exactly as Protect
-is.
+the restored entry, and a SHA256 checksum. The write is refused when the client
+file changed underfoot, when that exact workspace no longer declares the
+reviewed command and argv, or when project config overrides the row.
 
 A wrap keeps the child argv only in `mcpUpstreams`, so that declaration is the
 restore source: a proxy launch no workspace declares as a stdio command reports
@@ -904,8 +904,9 @@ Implementation is not complete until automated tests prove:
   when the file changed underfoot or the row is overridden by project config;
 - unwrap write restores the declared command and argv, drops the proxy
   environment, keeps neighbor entries and launch settings Authsia does not
-  manage, leaves `mcpUpstreams` declared, and refuses an undeclared upstream,
-  a stale checksum, or an overridden row;
+  manage, leaves `mcpUpstreams` declared, never borrows a same-named declaration
+  from another workspace, and refuses an undeclared or changed restore command
+  and argv, a stale checksum, or an overridden row;
 - the scanner reports wrapped, direct bypass, and unadmitted without retaining
   other environment values;
 - Access Center presents a wrapped `tools/call` as the child basename plus MCP
