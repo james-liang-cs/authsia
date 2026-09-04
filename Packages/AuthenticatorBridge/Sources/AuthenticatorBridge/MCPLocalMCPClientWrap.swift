@@ -316,7 +316,7 @@ public enum MCPLocalMCPClientWrap {
                   let snippet = extractCodexTable(text, serverName: finding.serverName) else {
                 throw WrapError.malformedConfig
             }
-            return snippet
+            return redactCodexEnvValues(snippet)
         case .claude, .cursor, .devin, .vscode, .claudeDesktop:
             guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let servers = jsonServers(
@@ -327,8 +327,40 @@ public enum MCPLocalMCPClientWrap {
                   let value = servers[finding.serverName] else {
                 throw WrapError.malformedConfig
             }
-            return prettyJSON(value)
+            return prettyJSON(redactingEnvValues(value))
         }
+    }
+
+    /// Plan diffs keep env keys so the human sees what Protect will not copy,
+    /// and replace every value. The scanner already stores only a count.
+    static func redactingEnvValues(_ value: Any) -> Any {
+        guard var object = value as? [String: Any],
+              let env = object["env"] as? [String: Any] else {
+            return value
+        }
+        object["env"] = Dictionary(uniqueKeysWithValues: env.keys.map { ($0, "•••" as Any) })
+        return object
+    }
+
+    static func redactCodexEnvValues(_ snippet: String) -> String {
+        var inEnvTable = false
+        return snippet.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .map { rawLine -> String in
+                let line = String(rawLine)
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("["), trimmed.hasSuffix("]") {
+                    inEnvTable = trimmed.hasSuffix(".env]")
+                    return line
+                }
+                guard inEnvTable, let equals = trimmed.firstIndex(of: "=") else {
+                    return line
+                }
+                let key = String(trimmed[..<equals]).trimmingCharacters(in: .whitespaces)
+                guard !key.isEmpty else { return line }
+                let indent = String(line.prefix { $0.isWhitespace })
+                return "\(indent)\(key) = \"•••\""
+            }
+            .joined(separator: "\n")
     }
 
     private static func rewriteJSON(

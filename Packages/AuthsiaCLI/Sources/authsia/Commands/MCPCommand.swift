@@ -607,11 +607,15 @@ struct MCPCommand: AsyncParsableCommand {
             written.append(contentsOf: declareNotes)
             // The proxy answers tools/list from workspace policy, so a wrapped
             // server the workspace has no catalog for lists nothing until
-            // capture runs.
+            // capture runs. A scanned child env means the declaration wrote
+            // empty env and probing would record the wrong catalog.
+            let next = finding.childEnvironmentCount > 0
+                ? "\nNext: name tools under mcpUpstreams.tools.allow; Authsia will not start this child to read a catalog."
+                : "\nNext: authsia mcp catalog --server \(finding.serverName) --write "
+                    + "records what that server advertises."
             output(
                 message + "\n\n" + written.joined(separator: "\n")
-                    + "\nNext: authsia mcp catalog --server \(finding.serverName) --write "
-                    + "records what that server advertises."
+                    + next
             )
         }
     }

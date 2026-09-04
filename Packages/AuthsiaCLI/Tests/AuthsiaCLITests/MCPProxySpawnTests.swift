@@ -16,6 +16,10 @@ struct MCPProxySpawnTests {
                 "LANG": "en_US.UTF-8",
                 "LC_CTYPE": "UTF-8",
                 "NODE_EXTRA_CA_CERTS": "/synthetic/trust/node.pem",
+                "HTTPS_PROXY": "http://127.0.0.1:9",
+                "HTTP_PROXY": "http://127.0.0.1:9",
+                "NO_PROXY": "localhost,127.0.0.1",
+                "http_proxy": "http://127.0.0.1:9",
                 "GITHUB_TOKEN": "synthetic-token-must-not-survive",
                 "AWS_SECRET_ACCESS_KEY": "synthetic-key-must-not-survive",
                 "AUTHSIA_AGENT_ID": "stale-agent-must-not-survive",
@@ -37,6 +41,10 @@ struct MCPProxySpawnTests {
         #expect(child["LANG"] == "en_US.UTF-8")
         #expect(child["LC_CTYPE"] == "UTF-8")
         #expect(child["NODE_EXTRA_CA_CERTS"] == "/synthetic/trust/node.pem")
+        #expect(child["HTTPS_PROXY"] == "http://127.0.0.1:9")
+        #expect(child["HTTP_PROXY"] == "http://127.0.0.1:9")
+        #expect(child["NO_PROXY"] == "localhost,127.0.0.1")
+        #expect(child["http_proxy"] == "http://127.0.0.1:9")
         #expect(child["JIRA_URL"] == "https://example.atlassian.net")
         #expect(child["JIRA_API_TOKEN"] == "synthetic-token")
         #expect(child["GITHUB_TOKEN"] == nil)
@@ -816,6 +824,151 @@ struct MCPProxySpawnTests {
         #expect(toolErrorCode(result) == "grantUnavailable")
         // Nothing to revoke means nothing may hold the secrets.
         #expect(launcher.spawnCount == 0)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("two Bridge snapshot throws do not kill the child")
+    func transientGrantSnapshotThrowLeavesChildRunning() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let grantID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: grantID, serverID: serverID)],
+                history: []
+            )
+        )
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["JIRA_API_TOKEN": "synthetic-token"],
+            secrets: ["synthetic-token"],
+            grantIDs: [grantID]
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            grantPollIntervalSeconds: 0.05,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP grant blip")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        let spawned = try #require(launcher.lastSpawned)
+        #expect(mcpProxyProcessGroupIsAlive(spawned.processGroupID))
+
+        grantClient.failNextSnapshots(2)
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(mcpProxyProcessGroupIsAlive(spawned.processGroupID))
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("a child that exits during initialize fails fast with childExited")
+    func childExitDuringInitializeFailsFast() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        let script = bin.appendingPathComponent("mcp-atlassian")
+        try """
+        #!/usr/bin/python3
+        import sys
+        sys.exit(7)
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                stdioJiraUpstream(env: [:], allow: ["jira_get_issue"], approve: [], deny: [])
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let started = ContinuousClock.now
+        let sessionClient = RecordingMCPProxySessionClient(environment: [:])
+        let launcher = RecordingMCPProxyChildLauncher()
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(active: [], history: [])
+        )
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP instant exit")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let result = try await call.value
+        let elapsed = started.duration(to: .now)
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == "upstreamUnavailable")
+        #expect(toolErrorMessage(result)?.contains("exited during startup") == true)
+        #expect(elapsed < .seconds(3))
+        #expect(launcher.spawnCount == 1)
+
+        let cached: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let cachedResult = try await cached.value
+        #expect(cachedResult.isError == true)
+        #expect(toolErrorMessage(cachedResult)?.contains("exited during startup") == true)
+        #expect(launcher.spawnCount == 1)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("invalid workspace.json is named instead of unbound")
+    func invalidWorkspaceJSONIsNamed() async throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = root.appendingPathComponent(".authsia/workspace.json")
+        try FileManager.default.createDirectory(
+            at: config.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "{ not json".write(to: config, atomically: true, encoding: .utf8)
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP invalid workspace")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let result = try await call.value
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.workspaceUnavailable.rawValue)
+        #expect(toolErrorMessage(result)?.contains("failed validation") == true)
+        #expect(toolErrorMessage(result)?.contains("could not be read") == true)
+        #expect(toolErrorMessage(result)?.contains("workspace.json") == true)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()

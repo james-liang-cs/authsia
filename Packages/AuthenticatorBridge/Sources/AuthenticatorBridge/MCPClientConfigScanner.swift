@@ -295,16 +295,21 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     }
 
     public var needsCatalogRecording: Bool {
-        status == .admittedWrapped && !hasAdvertisedCatalog && canRecordCatalog
+        status == .admittedWrapped
+            && !hasAdvertisedCatalog
+            && canRecordCatalog
+            && childEnvironmentCount == 0
     }
 
     /// Wrapped, but nothing will ever appear in the client: the upstream
-    /// declares environment values, so listing may not probe the child, and
-    /// policy names no tool. Until a human writes `allow` / `approve`, the
-    /// proxy advertises an empty catalog and agents fall through to the
-    /// unproxied CLI.
+    /// declares environment values, or the scanned client entry did, so listing
+    /// may not probe the child, and policy names no tool. Until a human writes
+    /// `allow` / `approve`, the proxy advertises an empty catalog and agents
+    /// fall through to the unproxied CLI.
     public var needsToolPolicy: Bool {
-        status == .admittedWrapped && !hasAdvertisedCatalog && !canRecordCatalog
+        status == .admittedWrapped
+            && !hasAdvertisedCatalog
+            && (!canRecordCatalog || childEnvironmentCount > 0)
     }
 
     public var shouldShowInAccessCenter: Bool {

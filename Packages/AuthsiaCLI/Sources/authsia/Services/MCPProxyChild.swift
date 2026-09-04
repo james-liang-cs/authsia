@@ -12,6 +12,33 @@ enum MCPProxySpawnError: Error, Equatable {
     /// Refs resolved but no owned grant came back, so revocation would have
     /// nothing to observe and the child could outlive an Access Center revoke.
     case grantUnavailable
+    /// The child process group exited before initialize finished.
+    case childExited(Int32)
+
+    static func childExitedMessage(_ status: Int32) -> String {
+        let waitStatus = status & 0x7f
+        if waitStatus == 0 {
+            let code = (status >> 8) & 0xff
+            return "The upstream MCP server exited during startup (exit \(code))."
+        }
+        if waitStatus != 0x7f {
+            return "The upstream MCP server exited during startup (signal \(waitStatus))."
+        }
+        return "The upstream MCP server exited during startup."
+    }
+}
+
+final class MCPChildExitBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Int32?
+
+    func record(_ status: Int32) {
+        lock.withLock { stored = status }
+    }
+
+    var status: Int32? {
+        lock.withLock { stored }
+    }
 }
 
 enum MCPProxyChildEnvironment {

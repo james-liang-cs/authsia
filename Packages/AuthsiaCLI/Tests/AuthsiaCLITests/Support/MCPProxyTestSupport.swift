@@ -313,6 +313,10 @@ func toolErrorCode(_ result: CallTool.Result) -> String? {
     result.structuredContent?.objectValue?["code"]?.stringValue
 }
 
+func toolErrorMessage(_ result: CallTool.Result) -> String? {
+    result.structuredContent?.objectValue?["message"]?.stringValue
+}
+
 func toolErrorInvocationID(_ result: CallTool.Result) -> String? {
     result.structuredContent?.objectValue?["invocationID"]?.stringValue
 }
@@ -500,9 +504,14 @@ final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
     private let lock = NSLock()
     private var snapshot: AgentJITGrantSnapshotPayload
     private var storedRevokedIDs: [UUID] = []
+    private var remainingSnapshotFailures = 0
 
     init(snapshot: AgentJITGrantSnapshotPayload) {
         self.snapshot = snapshot
+    }
+
+    func failNextSnapshots(_ count: Int) {
+        lock.withLock { remainingSnapshotFailures = count }
     }
 
     var revokedIDs: [UUID] {
@@ -517,7 +526,13 @@ final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
         agentRuntimeContext: AgentRuntimeContext
     ) throws -> AgentJITGrantSnapshotPayload {
         _ = agentRuntimeContext
-        return lock.withLock { snapshot }
+        return try lock.withLock {
+            if remainingSnapshotFailures > 0 {
+                remainingSnapshotFailures -= 1
+                throw MCPGrantSnapshotTestError.unreachable
+            }
+            return snapshot
+        }
     }
 
     func revokeAgentJITGrant(
@@ -528,6 +543,10 @@ final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
         lock.withLock { storedRevokedIDs.append(id) }
         return AgentJITGrantMutationPayload(revokedGrantIDs: [id])
     }
+}
+
+enum MCPGrantSnapshotTestError: Error {
+    case unreachable
 }
 
 func mcpProxyGrant(

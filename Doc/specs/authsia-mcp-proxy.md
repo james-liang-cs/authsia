@@ -164,7 +164,10 @@ from operator visibility; it grants no authority.
 
 1. Initialize and validate the managed Authsia workspace.
 2. Enable **MCP Integrations**.
-3. Open Access Center → **MCP proxy** (not All, Authsia MCP, or Direct agents).
+3. Open Access Center. When launches still need protection, or MCP Integrations
+   is off and findings exist, **All** shows a Local MCP card; **Review
+   protection** opens the **MCP proxy** filter. Coverage itself stays on that
+   filter (not Authsia MCP or Direct agents).
 4. Choose the workspace that owns the tool.
 5. Expand Coverage (**Show coverage** or **Review protection**). Coverage is
    collapsed by default.
@@ -175,7 +178,8 @@ binary** rows for shells and absolute `npx` / `uvx` launchers (no Protect),
 **Launch setting not carried** rows for an entry that sets something workspace
 policy has no field for (`cwd`; no Protect until it is resolved in the client
 file), **Protected, record tools**, and **Protected, no tools listed** for a
-wrapped upstream whose declared env forbids the probe and whose policy names
+wrapped upstream whose declared env forbids the probe, or whose scanned client
+entry set child environment values, and whose policy names
 no tool. **Protected, awaiting use** is a valid wrapped launch with no matching
 active grant; use its workspace label or **N workspaces** menu to see where the
 configuration applies. It hides a launch the client file marks disabled, an
@@ -250,10 +254,13 @@ the proxy. Details of the `mcpUpstreams` object are in
 2. Replace the client's direct child launch with the installed Authsia binary,
    argv `mcp proxy`, and `AUTHSIA_MCP_UPSTREAM=<name>`. Prefer the project file
    for Claude, Cursor, and VS Code. Restart the client after the edit.
-3. For a credential-less entry with empty `allow` and `approve`, record the
+3. For a credential-less entry with empty `allow` and `approve` and no scanned
+   child environment, record the
    catalog with `authsia mcp catalog --server <name> --write` and approve the
    Mac admission sheet. Until that write succeeds, `tools/list` is empty and
-   agents fall through to the unproxied CLI.
+   agents fall through to the unproxied CLI. If the scanned entry set child
+   environment values, name tools under `mcpUpstreams.tools.allow` instead;
+   Authsia will not start that child to read a catalog.
 4. Continue at [After Wrap](#after-wrap).
 
 `authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints this
@@ -650,17 +657,26 @@ relayed to the proxy's own standard error under the same concealment and a
 bounded volume.
 
 The child environment is a stripped allowlist plus declared literals and
-freshly resolved refs. The allowlist includes basic process variables and the
-non-secret TLS trust settings `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, and
+freshly resolved refs. The allowlist includes basic process variables, the
+corporate egress settings `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` (both
+letter cases), and the non-secret TLS trust settings `NODE_EXTRA_CA_CERTS`,
+`REQUESTS_CA_BUNDLE`, and
 `SSL_CERT_FILE`. `AUTHSIA_AGENT_*`, automation authority, and
 `AUTHSIA_MCP_UPSTREAM` are omitted from the child.
 
 The child is associated in memory with the exact Bridge grant IDs that
 authorized its environment. The proxy checks those grants on every call and
-while the child is live. Revocation kills the upstream process group and drops
+while the child is live. A Bridge snapshot that throws is not treated as
+revocation: the watcher tolerates three consecutive failures (about six
+seconds at the two-second poll) and logs once, then stops the child if the
+Bridge stays unreachable. Revocation kills the upstream process group and drops
 the client, secrets, and grant association; the periodic check may take up to
 five seconds after the Bridge snapshot first reports no active associated
-grant. Graceful proxy shutdown (`SIGINT`, `SIGTERM`, `SIGHUP`) performs the same
+grant. `waitpid` starts immediately after `posix_spawn`, so a child that exits
+during initialize fails fast with a distinct startup-exit error and a short
+negative cache instead of waiting the initialize deadline. A `workspace.json`
+that fails validation is reported as such on stderr once and in the client
+error, not as an unbound workspace. Graceful proxy shutdown (`SIGINT`, `SIGTERM`, `SIGHUP`) performs the same
 child cleanup and revokes active grants owned by that proxy instance. A later
 call starts a fresh JIT session when required.
 
@@ -737,11 +753,17 @@ Scan findings sit in a protection-coverage strip grouped by effective status,
 not workspace path. Coverage is collapsed by default; the operator expands
 it. The strip still shows progress and the next onboarding step while hidden.
 **Protect server** declares and/or writes as required by that row. It requires
-confirmation for client writes and refuses an overridden user-global row. For
-a credential-less launch whose policy still has empty `allow` and `approve`,
+confirmation for client writes and refuses an overridden user-global row. The
+plan snippet keeps child env keys and replaces every value. For a
+credential-less launch whose scanned entry set no child environment and whose
+policy still has empty `allow` and `approve`,
 Protect then records the catalog behind the same local admission. If that
-probe is skipped or fails, the row stays **Protected, record tools** until
-**Record catalog** captures what the child advertises. The strip shows
+probe is skipped because the scanned entry set environment values, the row
+lands in **Protected, no tools listed**. If the probe fails, the row stays
+**Protected, record tools** until
+**Record catalog** captures what the child advertises. Coverage rows show one
+line of status explanation for Bypasses protection, Ready to protect, and
+Protected, awaiting use, not only in VoiceOver. The strip shows
 protected known launches over total
 effective known launches, plus the next onboarding step. The Agent grants Workspace menu filters every source tab; it
 lists **~** for grants with no workspace, the same pinned and recent local
@@ -903,6 +925,13 @@ Implementation is not complete until automated tests prove:
   and leaves the child usable for the next call;
 - a ninth overlapping forwarded call is rejected with `busy` while eight are
   in flight, and the counter drains so a later call succeeds;
+- a child that exits during initialize returns a startup-exit error without
+  waiting the initialize deadline, and a short negative cache avoids respawning
+  the same command;
+- an unreadable `workspace.json` is reported as a validation failure, not as a
+  missing workspace;
+- a transient Bridge snapshot throw does not kill the wrapped child until three
+  consecutive failures;
 - an error after audit persistence carries the UUID prefix of the recorded
   audit `turnID`, while an audit-write failure omits `invocationID`;
 - persisted proxy decisions merge one redacted `started` row with a terminal
@@ -914,7 +943,8 @@ Implementation is not complete until automated tests prove:
 - client configuration remains byte-stable without upstream declarations and
   prints one client-native `mcp proxy` block plus `AUTHSIA_MCP_UPSTREAM` per
   declared upstream when present, with no `--upstream` in generated argv;
-- wrap write shows the current entry, replacement, and checksum, and refuses
+- wrap write shows the current entry, replacement, and checksum, redacts child
+  env values in the current snippet, and refuses
   when the file changed underfoot or the row is overridden by project config;
 - unwrap write restores the declared command and argv, drops the proxy
   environment, keeps neighbor entries and launch settings Authsia does not

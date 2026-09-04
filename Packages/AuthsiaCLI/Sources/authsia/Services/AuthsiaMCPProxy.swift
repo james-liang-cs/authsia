@@ -36,6 +36,13 @@ actor AuthsiaMCPProxy {
     private var discoveredChildTools: [Tool]?
     private var discoveryTask: Task<[Tool]?, Never>?
     private var warnedMissingCatalog = false
+    private var pendingChildExitStatus: [pid_t: Int32] = [:]
+    private var consecutiveGrantCheckFailures = 0
+    private var loggedGrantWatcherUnreachable = false
+    private var loggedInvalidWorkspace = false
+    private var spawnFailureCache: (label: String, status: Int32, until: Date)?
+    private let grantCheckFailureLimit = 3
+    private let spawnFailureCacheSeconds = 5.0
 
     init(
         version: String,
@@ -177,7 +184,20 @@ actor AuthsiaMCPProxy {
                 grantID: nil,
                 outcome: .upstreamUnavailable,
                 code: .workspaceUnavailable,
-                message: "The MCP proxy is not bound to a valid managed workspace.",
+                message: runtimeContext.workspaceUnavailableMessage,
+                recordAttempted: false,
+                recordedInvocationID: nil
+            )
+        case .invalidWorkspace(let detail):
+            return try proxyFailureResult(
+                invocationID: invocationID,
+                upstreamCommand: nil,
+                toolName: parameters.name,
+                agentRuntimeContext: agentRuntimeContext,
+                grantID: nil,
+                outcome: .upstreamUnavailable,
+                code: .workspaceUnavailable,
+                message: detail,
                 recordAttempted: false,
                 recordedInvocationID: nil
             )
@@ -330,10 +350,23 @@ actor AuthsiaMCPProxy {
                     upstreamCommand: upstream.command,
                     toolName: parameters.name,
                     agentRuntimeContext: agentRuntimeContext,
-                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    grantID: recordedGrantID,
                     outcome: .denied,
                     code: .grantUnavailable,
                     message: "No revocable Authsia grant covers this upstream's secret references.",
+                    recordAttempted: recordAttempted,
+                    recordedInvocationID: recordedInvocationID
+                )
+            } catch MCPProxySpawnError.childExited(let status) {
+                return try proxyFailureResult(
+                    invocationID: invocationID,
+                    upstreamCommand: upstream.command,
+                    toolName: parameters.name,
+                    agentRuntimeContext: agentRuntimeContext,
+                    grantID: recordedGrantID,
+                    outcome: .upstreamUnavailable,
+                    code: .upstreamUnavailable,
+                    message: MCPProxySpawnError.childExitedMessage(status),
                     recordAttempted: recordAttempted,
                     recordedInvocationID: recordedInvocationID
                 )
@@ -343,7 +376,7 @@ actor AuthsiaMCPProxy {
                     upstreamCommand: upstream.command,
                     toolName: parameters.name,
                     agentRuntimeContext: agentRuntimeContext,
-                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    grantID: recordedGrantID,
                     outcome: .upstreamUnavailable,
                     code: .upstreamUnavailable,
                     message: "The upstream MCP server could not be started.",
@@ -606,6 +639,11 @@ actor AuthsiaMCPProxy {
         let sessionClient = self.sessionClient
         let upstreamName = self.upstreamName
         let commandLabel = Self.commandLabel(for: upstream)
+        if let cache = spawnFailureCache,
+           cache.label == commandLabel,
+           cache.until > Date() {
+            throw MCPProxySpawnError.childExited(cache.status)
+        }
         let mcpToolPolicy: AgentJITMCPToolPolicy?
         if upstream.tools.approve.contains(toolName) {
             mcpToolPolicy = .approve
@@ -654,6 +692,17 @@ actor AuthsiaMCPProxy {
             childProcessID: spawned.processID,
             proxyProcessID: getpid()
         )
+        let client = Client(
+            name: "authsia-mcp-proxy",
+            version: proxyVersion,
+            configuration: .default
+        )
+        let exitBox = MCPChildExitBox()
+        watchSpawnedChild(spawned.processID, exitBox: exitBox, onExit: {
+            Darwin.shutdown(spawned.stdoutRead, SHUT_RDWR)
+            Darwin.shutdown(spawned.stdinWrite, SHUT_RDWR)
+            Task { await client.disconnect() }
+        })
         MCPProxyStderrDrain.start(
             fileDescriptor: spawned.stderrRead,
             secrets: prepared.secrets,
@@ -663,11 +712,6 @@ actor AuthsiaMCPProxy {
             processID: spawned.processID,
             processGroupID: spawned.processGroupID,
             killGraceSeconds: killGraceSeconds
-        )
-        let client = Client(
-            name: "authsia-mcp-proxy",
-            version: proxyVersion,
-            configuration: .default
         )
         inFlight = InFlightSpawn(
             terminator: terminator,
@@ -685,18 +729,31 @@ actor AuthsiaMCPProxy {
         )
         let timeout = initializeTimeoutSeconds
         do {
-            let listed = try await mcpProxyWithTimeout(
-                timeout,
-                timeoutError: MCPProxySpawnError.launchFailed
-            ) {
-                _ = try await client.connect(transport: transport)
-                let tools = try await client.listTools()
-                return Set(tools.tools.map(\.name))
+            let listed: Set<String>
+            do {
+                listed = try await mcpProxyWithTimeout(
+                    timeout,
+                    timeoutError: MCPProxySpawnError.launchFailed
+                ) {
+                    _ = try await client.connect(transport: transport)
+                    let tools = try await client.listTools()
+                    return Set(tools.tools.map(\.name))
+                }
+            } catch {
+                if let status = exitBox.status {
+                    throw MCPProxySpawnError.childExited(status)
+                }
+                throw error
             }
             try Task.checkCancellation()
             guard !isStopped else {
                 await consumeInFlight()
                 throw CancellationError()
+            }
+            if let status = exitBox.status ?? pendingChildExitStatus[spawned.processID] {
+                await consumeInFlight()
+                rememberSpawnFailure(label: commandLabel, status: status)
+                throw MCPProxySpawnError.childExited(status)
             }
             let session = ChildSession(
                 processID: spawned.processID,
@@ -712,9 +769,17 @@ actor AuthsiaMCPProxy {
             )
             childSession = session
             inFlight = nil
-            watchChild(session)
             watchGrants(session)
             return session
+        } catch let error as MCPProxySpawnError {
+            await consumeInFlight()
+            if case .childExited(let status) = error {
+                rememberSpawnFailure(label: commandLabel, status: status)
+            }
+            throw error
+        } catch is CancellationError {
+            await consumeInFlight()
+            throw CancellationError()
         } catch {
             await consumeInFlight()
             throw MCPProxySpawnError.launchFailed
@@ -732,22 +797,30 @@ actor AuthsiaMCPProxy {
             await dropChild(processID: session.processID)
             return nil
         }
-        guard associatedGrantsRemainActive(for: session) else {
+        switch associatedGrantsRemainActive(for: session) {
+        case .active, .unreachable:
+            return session
+        case .inactive:
             await dropChild(processID: session.processID)
             return nil
         }
-        return session
     }
 
-    private func associatedGrantsRemainActive(for session: ChildSession) -> Bool {
-        guard !session.grantIDs.isEmpty else { return true }
-        guard let active = try? grantService.activeOwnedGrantIDs() else { return false }
-        return session.grantIDs.isSubset(of: active)
+    private func associatedGrantsRemainActive(for session: ChildSession) -> GrantWatchVerdict {
+        guard !session.grantIDs.isEmpty else { return .active }
+        do {
+            let active = try grantService.activeOwnedGrantIDs()
+            return session.grantIDs.isSubset(of: active) ? .active : .inactive
+        } catch {
+            return .unreachable
+        }
     }
 
     private func watchGrants(_ session: ChildSession) {
         guard !session.grantIDs.isEmpty else { return }
         grantWatchTask?.cancel()
+        consecutiveGrantCheckFailures = 0
+        loggedGrantWatcherUnreachable = false
         let processID = session.processID
         let interval = max(grantPollIntervalSeconds, 0.01)
         grantWatchTask = Task { [weak self] in
@@ -755,12 +828,50 @@ actor AuthsiaMCPProxy {
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled, let self else { return }
                 guard await self.childSession?.processID == processID else { return }
-                guard await self.associatedGrantsRemainActive(for: session) else {
+                switch await self.associatedGrantsRemainActive(for: session) {
+                case .active:
+                    await self.resetGrantWatchFailures()
+                case .inactive:
                     await self.dropChild(processID: processID)
                     return
+                case .unreachable:
+                    if await self.grantWatchFailedUnreachable(processID: processID) {
+                        return
+                    }
                 }
             }
         }
+    }
+
+    private func resetGrantWatchFailures() {
+        consecutiveGrantCheckFailures = 0
+    }
+
+    private func grantWatchFailedUnreachable(processID: pid_t) async -> Bool {
+        consecutiveGrantCheckFailures += 1
+        if !loggedGrantWatcherUnreachable {
+            loggedGrantWatcherUnreachable = true
+            stderrOutput.write(Data(
+                "authsia mcp proxy: Authsia Bridge is unreachable; wrapped child stays up for a short grace window.\n".utf8
+            ))
+        }
+        guard consecutiveGrantCheckFailures >= grantCheckFailureLimit else {
+            return false
+        }
+        stderrOutput.write(Data(
+            "authsia mcp proxy: Authsia Bridge stayed unreachable; stopping the wrapped child.\n".utf8
+        ))
+        await dropChild(processID: processID)
+        return true
+    }
+
+    private func rememberSpawnFailure(label: String?, status: Int32) {
+        guard let label else { return }
+        spawnFailureCache = (
+            label,
+            status,
+            Date().addingTimeInterval(spawnFailureCacheSeconds)
+        )
     }
 
     private static func reapChild(_ processID: pid_t) {
@@ -770,18 +881,25 @@ actor AuthsiaMCPProxy {
         }
     }
 
-    private func watchChild(_ session: ChildSession) {
-        let processID = session.processID
+    private func watchSpawnedChild(
+        _ processID: pid_t,
+        exitBox: MCPChildExitBox? = nil,
+        onExit: (@Sendable () -> Void)? = nil
+    ) {
         Thread.detachNewThread { [weak self] in
             var status: Int32 = 0
             _ = waitpid(processID, &status, 0)
-            Task { await self?.childDidExit(processID) }
+            exitBox?.record(status)
+            onExit?()
+            Task { await self?.spawnedChildDidExit(processID, status: status) }
         }
     }
 
-    private func childDidExit(_ processID: pid_t) async {
-        guard childSession?.processID == processID else { return }
-        await dropChild()
+    private func spawnedChildDidExit(_ processID: pid_t, status: Int32) async {
+        pendingChildExitStatus[processID] = status
+        if childSession?.processID == processID {
+            await dropChild()
+        }
     }
 
     private func dropChild(processID: pid_t? = nil) async {
@@ -792,6 +910,7 @@ actor AuthsiaMCPProxy {
         grantWatchTask = nil
         MCPProxyChildRegistry.unregister(grantIDs: session.grantIDs)
         MCPProxyChildRegistry.unregister(processGroupID: session.processGroupID)
+        pendingChildExitStatus.removeValue(forKey: session.processID)
         await teardownSpawn(
             client: session.client,
             terminator: session.terminator,
@@ -878,6 +997,8 @@ actor AuthsiaMCPProxy {
             return .failure(.workspaceUnavailable(
                 runtimeContext.workspaceUnavailableMessage
             ))
+        case .invalidWorkspace(let detail):
+            return .failure(.workspaceUnavailable(detail))
         case .missingUpstream:
             return .failure(.notDeclared(upstreamName))
         case .httpUpstream:
@@ -1085,9 +1206,23 @@ actor AuthsiaMCPProxy {
     }
 
     private func boundPolicy() -> BoundPolicy {
-        guard let root = runtimeContext.workspaceRoot,
-              let config = try? WorkspaceConfigStore.read(fromWorkspaceRoot: root) else {
+        guard let root = runtimeContext.workspaceRoot else {
+            if case .unreadableConfig = runtimeContext.workspaceBindingFailure {
+                return invalidWorkspaceDetail(
+                    "workspace.json failed validation. \(runtimeContext.workspaceUnavailableMessage)"
+                )
+            }
             return .unbound
+        }
+        let config: WorkspaceConfig
+        do {
+            config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        } catch WorkspaceConfigError.missingConfig {
+            return .unbound
+        } catch {
+            return invalidWorkspaceDetail(
+                "workspace.json failed validation. \(error.localizedDescription)"
+            )
         }
         guard let upstream = config.mcpUpstreams.first(where: { $0.name == upstreamName }) else {
             return .missingUpstream
@@ -1096,6 +1231,14 @@ actor AuthsiaMCPProxy {
             return .httpUpstream
         }
         return .stdio(upstream)
+    }
+
+    private func invalidWorkspaceDetail(_ detail: String) -> BoundPolicy {
+        if !loggedInvalidWorkspace {
+            loggedInvalidWorkspace = true
+            stderrOutput.write(Data("authsia mcp proxy: \(detail)\n".utf8))
+        }
+        return .invalidWorkspace(detail)
     }
 
     private static func errorResult(
@@ -1207,7 +1350,14 @@ enum MCPCatalogProbeFailure: Error, Equatable {
 
 private enum BoundPolicy {
     case unbound
+    case invalidWorkspace(String)
     case missingUpstream
     case httpUpstream
     case stdio(MCPUpstreamConfig)
+}
+
+private enum GrantWatchVerdict {
+    case active
+    case inactive
+    case unreachable
 }

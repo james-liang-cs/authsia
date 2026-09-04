@@ -449,4 +449,79 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         XCTAssertEqual(filesystem["args"] as? [String], ["mcp", "proxy"])
     }
 
+    func testExistingJSONSnippetRedactsChildEnvValuesAndKeepsKeys() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let cursor = root.appendingPathComponent("mcp.json")
+        try writeJSON([
+            "mcpServers": [
+                "jira": [
+                    "command": "/opt/homebrew/bin/node",
+                    "args": ["server.js"],
+                    "env": ["JIRA_API_TOKEN": "synthetic-token-must-not-appear"],
+                ],
+            ],
+        ], to: cursor)
+
+        let finding = MCPClientServerFinding(
+            source: .cursor,
+            serverName: "jira",
+            commandLabel: "node",
+            status: .unadmitted,
+            declaredUpstreamName: nil,
+            configPathLabel: cursor.path,
+            wrapCommand: "node",
+            wrapArguments: ["server.js"],
+            isWrapEligible: true,
+            childEnvironmentCount: 1
+        )
+        let plan = try MCPLocalMCPClientWrap.plan(
+            finding: finding,
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia",
+            fileURL: cursor
+        )
+        XCTAssertTrue(plan.existingSnippet.contains("JIRA_API_TOKEN"))
+        XCTAssertTrue(plan.existingSnippet.contains("•••"))
+        XCTAssertFalse(plan.existingSnippet.contains("synthetic-token-must-not-appear"))
+        XCTAssertTrue(plan.existingSnippet.contains("node") || plan.existingSnippet.contains("/opt/homebrew/bin/node"))
+    }
+
+    func testExistingCodexSnippetRedactsEnvTableValues() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let codex = root.appendingPathComponent("config.toml")
+        try """
+        [mcp_servers.playwright]
+        command = "/opt/homebrew/bin/node"
+        args = ["server.js"]
+
+        [mcp_servers.playwright.env]
+        TOKEN = "synthetic-token-must-not-appear"
+        """.write(to: codex, atomically: true, encoding: .utf8)
+
+        let finding = MCPClientServerFinding(
+            source: .codex,
+            serverName: "playwright",
+            commandLabel: "node",
+            status: .directBypass,
+            declaredUpstreamName: "playwright",
+            configPathLabel: "~/.codex/config.toml",
+            wrapCommand: "node",
+            wrapArguments: ["server.js"],
+            isWrapEligible: true,
+            childEnvironmentCount: 1
+        )
+        let plan = try MCPLocalMCPClientWrap.plan(
+            finding: finding,
+            authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia",
+            fileURL: codex
+        )
+        XCTAssertTrue(plan.existingSnippet.contains("TOKEN"))
+        XCTAssertTrue(plan.existingSnippet.contains("•••"))
+        XCTAssertFalse(plan.existingSnippet.contains("synthetic-token-must-not-appear"))
+        XCTAssertTrue(plan.existingSnippet.contains("command = \"/opt/homebrew/bin/node\""))
+    }
+
 }
