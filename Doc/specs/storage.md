@@ -70,10 +70,11 @@ Application Support unless noted otherwise.
 | `~/Library/Application Support/Authsia/bridge_audit.log` | Bridge / SSH agent | HMAC-chained audit log for sensitive bridge requests and SSH signing. |
 | `~/Library/Application Support/Authsia/bridge_audit.log.lock` | Bridge / SSH agent | Empty `0600` advisory-lock sidecar that serializes audit appends and integrity verification across both headless processes. |
 | `~/Library/Application Support/Authsia/agent-jit-grants.json` | Upgrade migration only | Legacy unsigned JIT data. On first grant-store access it is moved to `agent-jit-grants.json.legacy`, or removed when that quarantine file already exists. Neither file is authority. |
-| `~/Library/Application Support/Authsia/agent-command-history.jsonl` | CLI / hooks / Access Center | Redacted agent command-history evidence for Access Center. |
+| `~/Library/Application Support/Authsia/agent-command-history.jsonl` | CLI / hooks / Access Center | Redacted agent command-history evidence for Access Center, and the production attribution source. Attribution uses a 5-minute window from `recordedAt`; `contextExpiresAt` (60 minutes) is history retention. |
 | `~/Library/Application Support/Authsia/agent-file-activity.jsonl` | Agent hooks / Access Center | Redacted hook and workspace-diff file-activity evidence for Access Center. |
 | `~/Library/Application Support/Authsia/injected-process-trees.jsonl` | CLI injected-child watcher / Access Center | Redacted Process Tree runs recorded while a secret-injected child is running. |
-| `~/Library/Application Support/Authsia/AgentRuntimeContext/events.jsonl` | Optional agent hook scripts / CLI | Short-lived agent attribution events read by the CLI when building bridge request context. |
+| `~/Library/Application Support/Authsia/agent-command-history.claimed.json` | CLI | `0600` claim sidecar keyed by command-history record id so concurrent `authsia` processes do not reuse one hook record. Pruned with the history file. |
+| `~/Library/Application Support/Authsia/AgentRuntimeContext/events.jsonl` | Optional fallback hook scripts | Fallback attribution records from `Tools/AuthsiaAgentContext/`. The CLI reads this file in addition to `agent-command-history.jsonl`, or a path in `AUTHSIA_HOOK_CONTEXT_PATH`. |
 | `~/Library/Preferences/app.authsia.plist` | UserDefaults | App preferences domain for CLI access, CLI, SSH, and MCP admission TTLs, the managed MCP admission maximum, SSH-agent opt-in state, iCloud Keychain sync preference, interface settings, and registration identities. macOS may cache this through `cfprefsd`. |
 
 ### `~/.authsia` Runtime State

@@ -2516,7 +2516,11 @@ filter `All` or `Flagged` rows, and JSON export includes `commands`, `files`, `p
 `findings`, and `summary` counts.
 
 The same hook metadata can attach display-only agent or subagent attribution to JIT grants and audit
-records. Attribution is not trusted for authorization. JIT still binds grants to the OS caller
+records. Claude Code and Codex `PreToolUse` payloads include `agent_id` /
+`agent_type` for sub-agents; Authsia displays those names and labels them as
+reported by hook. Concurrent hook records in one directory are not guessed:
+the CLI attaches platform only and marks attribution ambiguous. Attribution is
+not trusted for authorization. JIT still binds grants to the OS caller
 fingerprint, terminal/session scope, working directory, folder-tree scope, capability, and TTL.
 
 Agents that cannot install a hook, including VS Code-only Copilot terminal flows, can mark a single

@@ -17,9 +17,17 @@ public enum RemoteJITApprovalCanonicalCoding {
     public static func encodeDescriptor(
         _ descriptor: RemoteJITApprovalDescriptor
     ) throws -> Data {
+        let includeAttribution = {
+            guard let context = descriptor.agentRuntimeContext else { return false }
+            return !context.isEmpty || context.attributionConfidence != .high
+        }()
         var writer = CanonicalWriter()
         writer.append(descriptorDomain)
-        writer.append(RemoteJITApprovalDescriptor.schemaVersion)
+        writer.append(
+            includeAttribution
+                ? RemoteJITApprovalDescriptor.attributionSchemaVersion
+                : RemoteJITApprovalDescriptor.schemaVersion
+        )
         writer.append(RemoteJITApprovalDescriptor.protocolVersion)
         writer.append(descriptor.approvalID)
         writer.append(descriptor.approvalNonce)
@@ -47,6 +55,9 @@ public enum RemoteJITApprovalCanonicalCoding {
         }
         writer.append(descriptor.grantIssuedAtMilliseconds)
         writer.append(descriptor.grantExpiresAtMilliseconds)
+        if includeAttribution {
+            try writer.append(descriptor.agentRuntimeContext)
+        }
 
         guard writer.data.count <= maximumDescriptorBytes else {
             throw RemoteJITApprovalValidationError.oversized
@@ -65,7 +76,9 @@ public enum RemoteJITApprovalCanonicalCoding {
         guard try reader.readFixedData(count: descriptorDomain.count) == descriptorDomain else {
             throw RemoteJITApprovalValidationError.nonCanonical
         }
-        guard try reader.readUInt16() == RemoteJITApprovalDescriptor.schemaVersion,
+        let schemaVersion = try reader.readUInt16()
+        guard schemaVersion == RemoteJITApprovalDescriptor.schemaVersion
+            || schemaVersion == RemoteJITApprovalDescriptor.attributionSchemaVersion,
               try reader.readUInt16() == RemoteJITApprovalDescriptor.protocolVersion else {
             throw RemoteJITApprovalValidationError.unsupportedVersion
         }
@@ -100,6 +113,9 @@ public enum RemoteJITApprovalCanonicalCoding {
         let requestedItems = try reader.readItems()
         let grantIssuedAtMilliseconds = try reader.readInt64()
         let grantExpiresAtMilliseconds = try reader.readInt64()
+        let agentRuntimeContext = schemaVersion == RemoteJITApprovalDescriptor.attributionSchemaVersion
+            ? try reader.readAgentRuntimeContext()
+            : nil
         guard reader.isAtEnd else {
             throw RemoteJITApprovalValidationError.nonCanonical
         }
@@ -121,7 +137,8 @@ public enum RemoteJITApprovalCanonicalCoding {
             environmentScope: environmentScope,
             requestedItems: requestedItems,
             grantIssuedAtMilliseconds: grantIssuedAtMilliseconds,
-            grantExpiresAtMilliseconds: grantExpiresAtMilliseconds
+            grantExpiresAtMilliseconds: grantExpiresAtMilliseconds,
+            agentRuntimeContext: agentRuntimeContext
         )
         guard try encodeDescriptor(descriptor) == data else {
             throw RemoteJITApprovalValidationError.nonCanonical
@@ -376,6 +393,16 @@ private struct CanonicalWriter {
             try appendString(name)
         }
     }
+
+    mutating func append(_ context: AgentRuntimeContext?) throws {
+        try appendOptionalString(context?.platform)
+        try appendOptionalString(context?.sessionID)
+        try appendOptionalString(context?.turnID)
+        try appendOptionalString(context?.agentID)
+        try appendOptionalString(context?.agentType)
+        try appendOptionalString(context?.toolUseID)
+        append(context?.attributionConfidence == .ambiguous ? UInt8(1) : UInt8(0))
+    }
 }
 
 private struct CanonicalReader {
@@ -501,6 +528,34 @@ private struct CanonicalReader {
         default:
             throw RemoteJITApprovalValidationError.nonCanonical
         }
+    }
+
+    mutating func readAgentRuntimeContext() throws -> AgentRuntimeContext? {
+        let platform = try readOptionalString(maximumBytes: 128)
+        let sessionID = try readOptionalString(maximumBytes: 128)
+        let turnID = try readOptionalString(maximumBytes: 128)
+        let agentID = try readOptionalString(maximumBytes: 128)
+        let agentType = try readOptionalString(maximumBytes: 128)
+        let toolUseID = try readOptionalString(maximumBytes: 128)
+        let attributionConfidence: AgentAttributionConfidence
+        switch try readUInt8() {
+        case 0:
+            attributionConfidence = .high
+        case 1:
+            attributionConfidence = .ambiguous
+        default:
+            throw RemoteJITApprovalValidationError.nonCanonical
+        }
+        let context = AgentRuntimeContext(
+            platform: platform,
+            sessionID: sessionID,
+            turnID: turnID,
+            agentID: agentID,
+            agentType: agentType,
+            toolUseID: toolUseID,
+            attributionConfidence: attributionConfidence
+        )
+        return context.isEmpty && context.attributionConfidence == .high ? nil : context
     }
 
     mutating func readItems() throws -> [RemoteJITApprovalItemReference] {

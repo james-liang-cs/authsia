@@ -157,6 +157,7 @@ public struct RemoteJITApprovalDescriptorInput: Equatable, Sendable {
 
 public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
     public static let schemaVersion: UInt16 = 2
+    public static let attributionSchemaVersion: UInt16 = 3
     public static let protocolVersion: UInt16 = 2
     public static let requestLifetimeMilliseconds: Int64 = 90_000
 
@@ -177,6 +178,8 @@ public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
     public let requestedItems: [RemoteJITApprovalItemReference]
     public let grantIssuedAtMilliseconds: Int64
     public let grantExpiresAtMilliseconds: Int64
+    /// Display-only hook/env identity. Omitted from v2 encodings; not part of grant matching.
+    public let agentRuntimeContext: AgentRuntimeContext?
     private let normalizedInput: RemoteJITApprovalDescriptorInput
 
     public init(
@@ -196,7 +199,8 @@ public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
         environmentScope: EnvironmentAccessScope?,
         requestedItems: [RemoteJITApprovalItemReference],
         grantIssuedAtMilliseconds: Int64,
-        grantExpiresAtMilliseconds: Int64
+        grantExpiresAtMilliseconds: Int64,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) throws {
         guard approvalNonce.count == 32,
               macSigningKeyFingerprint.count == 32,
@@ -236,6 +240,10 @@ public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
         self.requestedItems = input.requestedItems
         self.grantIssuedAtMilliseconds = grantIssuedAtMilliseconds
         self.grantExpiresAtMilliseconds = input.grantExpiresAtMilliseconds
+        self.agentRuntimeContext = agentRuntimeContext?.isEmpty == false
+            || agentRuntimeContext?.attributionConfidence == .ambiguous
+            ? agentRuntimeContext
+            : nil
         self.normalizedInput = input
     }
 
@@ -252,7 +260,8 @@ public extension RemoteJITApprovalDescriptor {
         input: RemoteJITApprovalDescriptorInput,
         approvalID: UUID,
         approvalNonce: Data,
-        pairing: RemoteJITApprovalPairingBinding
+        pairing: RemoteJITApprovalPairingBinding,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) throws {
         try self.init(
             approvalID: approvalID,
@@ -271,7 +280,8 @@ public extension RemoteJITApprovalDescriptor {
             environmentScope: input.environmentScope,
             requestedItems: input.requestedItems,
             grantIssuedAtMilliseconds: input.requestIssuedAtMilliseconds,
-            grantExpiresAtMilliseconds: input.grantExpiresAtMilliseconds
+            grantExpiresAtMilliseconds: input.grantExpiresAtMilliseconds,
+            agentRuntimeContext: agentRuntimeContext
         )
     }
 

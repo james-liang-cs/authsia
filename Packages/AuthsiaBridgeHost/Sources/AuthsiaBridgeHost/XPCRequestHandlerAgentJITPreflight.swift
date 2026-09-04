@@ -223,7 +223,8 @@ extension XPCRequestHandler {
                 caller: caller,
                 capabilities: [.exec, .list],
                 environmentScope: payload.environmentScope,
-                resolutions: scopes
+                resolutions: scopes,
+                agentRuntimeContext: bridgeRequest.context.agentRuntimeContext
             )
             let itemCount = descriptors.flatMap(\.requestedItems).count
             let prompt = "Allow direct CLI access to \(itemCount) requested "
@@ -349,7 +350,8 @@ extension XPCRequestHandler {
                 caller: caller,
                 capabilities: grantCapabilities,
                 environmentScope: payload.environmentScope,
-                resolutions: pendingResolutions
+                resolutions: pendingResolutions,
+                agentRuntimeContext: bridgeRequest.context.agentRuntimeContext
             )
             let approvalDescriptors = agentJITApprovalDescriptors(
                 timing: timing,
@@ -360,7 +362,8 @@ extension XPCRequestHandler {
                 mcpUpstreamName: payload.mcpUpstreamName,
                 mcpUpstreamCommand: payload.mcpUpstreamCommand,
                 mcpToolName: payload.mcpToolName,
-                mcpToolPolicy: payload.mcpToolPolicy
+                mcpToolPolicy: payload.mcpToolPolicy,
+                agentRuntimeContext: bridgeRequest.context.agentRuntimeContext
             )
             let mcpPromptSuffix = agentJTMCPPromptSuffix(
                 mcpUpstreamName: payload.mcpUpstreamName,
@@ -434,7 +437,8 @@ extension XPCRequestHandler {
                     caller: caller,
                     capabilities: grantCapabilities,
                     environmentScope: payload.environmentScope,
-                    resolutions: [resolution]
+                    resolutions: [resolution],
+                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext
                 )
                 let approvalDescriptors = agentJITApprovalDescriptors(
                     timing: timing,
@@ -445,7 +449,8 @@ extension XPCRequestHandler {
                     mcpUpstreamName: payload.mcpUpstreamName,
                     mcpUpstreamCommand: payload.mcpUpstreamCommand,
                     mcpToolName: payload.mcpToolName,
-                    mcpToolPolicy: payload.mcpToolPolicy
+                    mcpToolPolicy: payload.mcpToolPolicy,
+                    agentRuntimeContext: bridgeRequest.context.agentRuntimeContext
                 )
                 let outcome = await requestAgentJITApproval(
                     prompt: agentJITPreflightPrompt(
@@ -748,7 +753,8 @@ extension XPCRequestHandler {
             mcpUpstreamName: upstreamName,
             mcpUpstreamCommand: payload.mcpUpstreamCommand,
             mcpToolName: payload.mcpToolName,
-            mcpToolPolicy: payload.mcpToolPolicy
+            mcpToolPolicy: payload.mcpToolPolicy,
+            agentRuntimeContext: bridgeRequest.context.agentRuntimeContext
         )
         // The upstream name comes from workspace policy, which is committed
         // repository content. Naming the argv keeps the decision about the
@@ -973,7 +979,8 @@ extension XPCRequestHandler {
         mcpUpstreamName: String? = nil,
         mcpUpstreamCommand: String? = nil,
         mcpToolName: String? = nil,
-        mcpToolPolicy: AgentJITMCPToolPolicy? = nil
+        mcpToolPolicy: AgentJITMCPToolPolicy? = nil,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) -> [AgentJITApprovalDescriptor] {
         resolutions.map { resolution in
             AgentJITApprovalDescriptor(
@@ -987,7 +994,8 @@ extension XPCRequestHandler {
                 mcpUpstreamName: mcpUpstreamName,
                 mcpUpstreamCommand: mcpUpstreamCommand,
                 mcpToolName: mcpToolName,
-                mcpToolPolicy: mcpToolPolicy
+                mcpToolPolicy: mcpToolPolicy,
+                agentRuntimeContext: agentRuntimeContext
             )
         }
     }
@@ -1037,7 +1045,8 @@ extension XPCRequestHandler {
         caller: AgentJITCallerFingerprint,
         capabilities: [AgentJITCapability],
         environmentScope: EnvironmentAccessScope?,
-        resolutions: [AgentJITScopeResolution]
+        resolutions: [AgentJITScopeResolution],
+        agentRuntimeContext: AgentRuntimeContext?
     ) async -> [RemoteJITApprovalRequest] {
         guard remoteJITApprovalEnabled(),
               let remoteJITApprovalRequestBuilder else { return [] }
@@ -1050,7 +1059,10 @@ extension XPCRequestHandler {
                 environmentScope: environmentScope,
                 resolutions: resolutions
             )
-            let requests = try await remoteJITApprovalRequestBuilder.buildRequests(for: inputs)
+            let requests = try await remoteJITApprovalRequestBuilder.buildRequests(
+                for: inputs,
+                agentRuntimeContext: agentRuntimeContext
+            )
             guard requests.count == inputs.count,
                   zip(requests, inputs).allSatisfy({ request, input in
                       request.descriptor.input == input

@@ -380,6 +380,27 @@ final class AgentJITGrantTests: XCTestCase {
         XCTAssertEqual(descriptor.callerDisplayName, "Claude")
         XCTAssertEqual(descriptor.workspaceLabel, "project")
         XCTAssertEqual(descriptor.requestedItems.map(\.name), ["Unnamed item"])
+        XCTAssertNil(descriptor.agentRuntimeContext)
+    }
+
+    func testApprovalDescriptorCarriesDisplayOnlyRuntimeContext() throws {
+        let context = AgentRuntimeContext(platform: "claude-code", agentType: "Explore")
+        let descriptor = AgentJITApprovalDescriptor(
+            callerFingerprint: .fixture(workingDirectory: "/repo/project"),
+            capabilities: [.exec],
+            resourceScope: .folder(.root),
+            environmentScope: nil,
+            requestedItems: [],
+            requestIssuedAtMilliseconds: 1_700_000_000_000,
+            grantExpiresAtMilliseconds: 1_700_000_300_000,
+            agentRuntimeContext: context
+        )
+
+        XCTAssertEqual(descriptor.agentRuntimeContext, context)
+        XCTAssertEqual(
+            AgentAttributionPresentation.promptValue(for: descriptor.agentRuntimeContext),
+            "Claude Code · Explore (reported by hook)"
+        )
     }
 
     func testAllowsDeniesWrongCaller() {

@@ -4756,7 +4756,8 @@ private final class RemoteRequestBuilderSpy: RemoteJITApprovalRequestBuilding {
     }
 
     func buildRequests(
-        for inputs: [RemoteJITApprovalDescriptorInput]
+        for inputs: [RemoteJITApprovalDescriptorInput],
+        agentRuntimeContext: AgentRuntimeContext?
     ) async throws -> [RemoteJITApprovalRequest] {
         inputBatches.append(inputs)
         if mode == .throwError {

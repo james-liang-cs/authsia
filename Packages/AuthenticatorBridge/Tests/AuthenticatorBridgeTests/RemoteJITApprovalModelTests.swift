@@ -71,6 +71,33 @@ final class RemoteJITApprovalModelTests: XCTestCase {
         let encoded = try RemoteJITApprovalCanonicalCoding.encodeDescriptor(descriptor)
         XCTAssertNil(encoded.range(of: Data("jira_get_issue".utf8)))
         XCTAssertNil(encoded.range(of: Data("mcp-proxy-jira".utf8)))
+        XCTAssertNil(descriptor.agentRuntimeContext)
+    }
+
+    func testDescriptorWithHookAttributionRoundTripsOnSchema3AndLeavesV2Unchanged() throws {
+        let unsigned = try makeValidDescriptor()
+        let unsignedBytes = try RemoteJITApprovalCanonicalCoding.encodeDescriptor(unsigned)
+        XCTAssertEqual(
+            unsignedBytes[Data("Authsia.RemoteJITApproval.Descriptor.V1\0".utf8).count],
+            0
+        )
+        XCTAssertEqual(
+            unsignedBytes[Data("Authsia.RemoteJITApproval.Descriptor.V1\0".utf8).count + 1],
+            2
+        )
+
+        let attributed = try makeValidDescriptor(
+            agentRuntimeContext: AgentRuntimeContext(platform: "claude-code", agentType: "Explore")
+        )
+        let encoded = try RemoteJITApprovalCanonicalCoding.encodeDescriptor(attributed)
+        XCTAssertEqual(
+            encoded[Data("Authsia.RemoteJITApproval.Descriptor.V1\0".utf8).count + 1],
+            3
+        )
+        let decoded = try RemoteJITApprovalCanonicalCoding.decodeDescriptor(encoded)
+        XCTAssertEqual(decoded.agentRuntimeContext?.platform, "claude-code")
+        XCTAssertEqual(decoded.agentRuntimeContext?.agentType, "Explore")
+        XCTAssertEqual(decoded.input, unsigned.input)
     }
 
     func testDescriptorInputRejectsInvalidTimeAndCallerAuthority() throws {
@@ -500,7 +527,8 @@ private func makeValidDescriptor(
     requestIssuedAtMilliseconds: Int64 = 2_000_000_000_000,
     requestExpiresAtMilliseconds: Int64 = 2_000_000_090_000,
     grantIssuedAtMilliseconds: Int64 = 2_000_000_000_000,
-    grantExpiresAtMilliseconds: Int64 = 2_000_000_300_000
+    grantExpiresAtMilliseconds: Int64 = 2_000_000_300_000,
+    agentRuntimeContext: AgentRuntimeContext? = nil
 ) throws -> RemoteJITApprovalDescriptor {
     try RemoteJITApprovalDescriptor(
         approvalID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
@@ -519,7 +547,8 @@ private func makeValidDescriptor(
         environmentScope: environmentScope,
         requestedItems: try items ?? [makeItem()],
         grantIssuedAtMilliseconds: grantIssuedAtMilliseconds,
-        grantExpiresAtMilliseconds: grantExpiresAtMilliseconds
+        grantExpiresAtMilliseconds: grantExpiresAtMilliseconds,
+        agentRuntimeContext: agentRuntimeContext
     )
 }
 

@@ -501,7 +501,11 @@ authorization.
 5. For every item or capability without matching authority, the app asks the
    user to approve the canonical descriptor. Local and paired-iPhone panels
    show the same caller, workspace, working directory, environment, capability,
-   duration, reuse policy, and exact item metadata.
+   duration, reuse policy, and exact item metadata. `Caller` is the OS-observed
+   fingerprint. When hook or env metadata is present, a second `Agent` detail
+   names the reported platform and sub-agent and labels it as unverified
+   (`reported by hook`). That detail never replaces `Caller` and is not an
+   authorization input.
 6. A multiple-item decision persists atomically; denial or storage failure
    creates no partial grant.
 7. After local biometric approval, the Bridge revalidates the caller and

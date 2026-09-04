@@ -229,6 +229,8 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
     public let mcpUpstreamCommand: String?
     public let mcpToolName: String?
     public let mcpToolPolicy: AgentJITMCPToolPolicy?
+    /// Display-only hook/env identity. Never an authorization input.
+    public let agentRuntimeContext: AgentRuntimeContext?
 
     public init(
         callerFingerprint: AgentJITCallerFingerprint,
@@ -241,7 +243,8 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
         mcpUpstreamName: String? = nil,
         mcpUpstreamCommand: String? = nil,
         mcpToolName: String? = nil,
-        mcpToolPolicy: AgentJITMCPToolPolicy? = nil
+        mcpToolPolicy: AgentJITMCPToolPolicy? = nil,
+        agentRuntimeContext: AgentRuntimeContext? = nil
     ) {
         self.callerFingerprint = callerFingerprint
         self.capabilities = Array(Set(capabilities)).sorted { $0.rawValue < $1.rawValue }
@@ -254,6 +257,10 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
         self.mcpUpstreamCommand = Self.optionalDisplay(mcpUpstreamCommand)
         self.mcpToolName = Self.optionalDisplay(mcpToolName)
         self.mcpToolPolicy = mcpToolPolicy
+        self.agentRuntimeContext = agentRuntimeContext?.isEmpty == false
+            || agentRuntimeContext?.attributionConfidence == .ambiguous
+            ? agentRuntimeContext
+            : nil
     }
 
     private static func optionalDisplay(_ value: String?) -> String? {

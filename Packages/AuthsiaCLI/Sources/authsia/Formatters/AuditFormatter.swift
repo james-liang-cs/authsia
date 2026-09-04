@@ -68,12 +68,7 @@ struct AuditFormatter {
     }
 
     private static func agentAttribution(_ context: AgentRuntimeContext?) -> String? {
-        guard let context else { return nil }
-        let platform = platformDisplayName(context.platform)
-        let label = context.agentType ?? shortAgentID(context.agentID)
-        guard let label else { return platform }
-        guard let platform else { return "Agent: \(label)" }
-        return "\(platform) / \(label)"
+        AgentAttributionPresentation.caption(for: context)
     }
 
     private static func environmentDisplayName(_ scope: EnvironmentAccessScope?) -> String? {
@@ -85,32 +80,6 @@ struct AuditFormatter {
         case nil:
             return nil
         }
-    }
-
-    private static func platformDisplayName(_ platform: String?) -> String? {
-        switch platform?.lowercased() {
-        case "claude", "claude-code":
-            return "Claude Code"
-        case "codex":
-            return "Codex"
-        case "vscode", "vs-code", "visual-studio-code":
-            return "Visual Studio Code"
-        case "copilot", "github-copilot", "githubcopilot":
-            return "GitHub Copilot"
-        case "cursor":
-            return "Cursor"
-        case "windsurf", "devin", "devin-desktop":
-            return "Devin Desktop"
-        case let value?:
-            return value
-        case nil:
-            return nil
-        }
-    }
-
-    private static func shortAgentID(_ agentID: String?) -> String? {
-        guard let agentID else { return nil }
-        return agentID.count > 12 ? String(agentID.prefix(12)) : agentID
     }
 
     private static func shortHash(_ hash: String) -> String {

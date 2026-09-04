@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import AuthenticatorBridge
 
@@ -9,6 +10,8 @@ enum AgentRuntimeContextResolver {
     static let environmentAgentIDKey = "AUTHSIA_AGENT_ID"
     static let environmentAgentTypeKey = "AUTHSIA_AGENT_TYPE"
     static let environmentToolUseIDKey = "AUTHSIA_AGENT_TOOL_USE_ID"
+    static let environmentHookContextPathKey = "AUTHSIA_HOOK_CONTEXT_PATH"
+    static let attributionTTL: TimeInterval = 5 * 60
 
     private struct RecordsCache {
         let path: String
@@ -29,42 +32,43 @@ enum AgentRuntimeContextResolver {
         AgentCommandHistoryStore.defaultFileURL
     }
 
+    static var defaultHookContextURL: URL {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first ?? FileManager.default.temporaryDirectory
+        return base
+            .appendingPathComponent("Authsia", isDirectory: true)
+            .appendingPathComponent("AgentRuntimeContext", isDirectory: true)
+            .appendingPathComponent("events.jsonl")
+    }
+
     static func resolve(
         now: Date = Date(),
         currentDirectoryPath: String = FileManager.default.currentDirectoryPath,
         processAncestry: [AgenticProcessReference] = AgenticProcessDetector.currentProcessAncestry(),
         eventsURL: URL = defaultEventsURL,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        claimOwner: pid_t = getpid()
     ) -> AgentRuntimeContext? {
         if let explicitContext = explicitAgentRuntimeContext(environment: environment) {
             return explicitContext
         }
 
-        let records = loadRecords(from: eventsURL)
-            .filter { $0.expiresAt > now }
-            .filter { workingDirectoryMatches($0.workingDirectory, currentDirectoryPath: currentDirectoryPath) }
-            .filter { recordInvokesAuthsia($0) }
-        guard !records.isEmpty else { return nil }
-
         let detectedPlatforms = detectedAgentPlatforms(in: processAncestry)
         guard !detectedPlatforms.isEmpty else { return nil }
 
-        let platformCompatible = records.filter {
-            platformMatches($0.platform, detectedPlatforms: detectedPlatforms)
-        }
-        guard let record = platformCompatible.max(by: { $0.recordedAt < $1.recordedAt }) else {
-            return nil
-        }
+        let candidates = attributionEventURLs(eventsURL: eventsURL, environment: environment)
+            .flatMap { url in
+                loadRecords(from: url).map { SourcedRecord(record: $0, sourceURL: url) }
+            }
+            .filter { now.timeIntervalSince($0.record.recordedAt) <= attributionTTL }
+            .filter { workingDirectoryMatches($0.record.workingDirectory, currentDirectoryPath: currentDirectoryPath) }
+            .filter { recordInvokesAuthsia($0.record) }
+            .filter { platformMatches($0.record.platform, detectedPlatforms: detectedPlatforms) }
+            .sorted { $0.record.recordedAt < $1.record.recordedAt }
+        guard !candidates.isEmpty else { return nil }
 
-        let context = AgentRuntimeContext(
-            platform: record.platform,
-            sessionID: record.sessionID,
-            turnID: record.turnID,
-            agentID: record.agentID,
-            agentType: record.agentType,
-            toolUseID: record.toolUseID
-        )
-        return context.isEmpty ? nil : context
+        return selectContext(from: candidates, now: now, claimOwner: claimOwner)
     }
 
     static func hasExplicitAgentInvocationMarker(environment: [String: String]) -> Bool {
@@ -314,6 +318,161 @@ enum AgentRuntimeContextResolver {
 
     private static func standardizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private static func attributionEventURLs(
+        eventsURL: URL,
+        environment: [String: String]
+    ) -> [URL] {
+        var urls = [eventsURL]
+        if let override = environment[environmentHookContextPathKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty {
+            let extra = URL(fileURLWithPath: override)
+            if extra.standardizedFileURL != eventsURL.standardizedFileURL {
+                urls.append(extra)
+            }
+        } else if eventsURL.standardizedFileURL == defaultEventsURL.standardizedFileURL {
+            let hook = defaultHookContextURL
+            if hook.standardizedFileURL != eventsURL.standardizedFileURL {
+                urls.append(hook)
+            }
+        }
+        return urls
+    }
+
+    private static func selectContext(
+        from candidates: [SourcedRecord],
+        now: Date,
+        claimOwner: pid_t
+    ) -> AgentRuntimeContext? {
+        let grouped = Dictionary(grouping: candidates, by: \.sourceURL)
+        var owned: [SourcedRecord] = []
+        var unclaimed: [SourcedRecord] = []
+        for (url, records) in grouped {
+            let claims = AttributionClaimStore.load(for: url, now: now, liveIDs: Set(records.map(\.record.id)))
+            for sourced in records {
+                if let claim = claims[sourced.record.id], claim.pid == Int32(claimOwner) {
+                    owned.append(sourced)
+                } else if claims[sourced.record.id] == nil {
+                    unclaimed.append(sourced)
+                }
+            }
+        }
+        owned.sort { $0.record.recordedAt < $1.record.recordedAt }
+        unclaimed.sort { $0.record.recordedAt < $1.record.recordedAt }
+
+        if let reused = owned.first {
+            return context(from: reused.record, confidence: .high)
+        }
+        if unclaimed.count == 1, let sourced = unclaimed.first {
+            AttributionClaimStore.claim(sourced.record.id, on: sourced.sourceURL, pid: claimOwner, now: now)
+            return context(from: sourced.record, confidence: .high)
+        }
+        if unclaimed.count >= 2 {
+            let platform = unclaimed.first?.record.platform
+            return AgentRuntimeContext(platform: platform, attributionConfidence: .ambiguous)
+        }
+        return nil
+    }
+
+    private static func context(
+        from record: AgentRuntimeContextRecord,
+        confidence: AgentAttributionConfidence
+    ) -> AgentRuntimeContext? {
+        let context = AgentRuntimeContext(
+            platform: record.platform,
+            sessionID: record.sessionID,
+            turnID: record.turnID,
+            agentID: record.agentID,
+            agentType: record.agentType,
+            toolUseID: record.toolUseID,
+            attributionConfidence: confidence
+        )
+        return context.isEmpty ? nil : context
+    }
+}
+
+private struct SourcedRecord {
+    let record: AgentRuntimeContextRecord
+    let sourceURL: URL
+}
+
+private enum AttributionClaimStore {
+    private static let filePermissions: NSNumber = 0o600
+    private static let filePermissionsMode: mode_t = S_IRUSR | S_IWUSR
+    private static let historyRetention: TimeInterval = 60 * 60
+
+    struct Claim: Codable {
+        let claimedAt: Date
+        let pid: Int32
+    }
+
+    static func claimsURL(for eventsURL: URL) -> URL {
+        eventsURL.deletingPathExtension().appendingPathExtension("claimed.json")
+    }
+
+    static func load(for eventsURL: URL, now: Date, liveIDs: Set<UUID>) -> [UUID: Claim] {
+        let url = claimsURL(for: eventsURL)
+        return (try? withFileLock(url) {
+            var claims = decode(url)
+            let pruned = claims.filter { id, claim in
+                liveIDs.contains(id) && now.timeIntervalSince(claim.claimedAt) <= historyRetention
+            }
+            if pruned.count != claims.count {
+                try encode(pruned, to: url)
+                claims = pruned
+            }
+            return claims
+        }) ?? [:]
+    }
+
+    static func claim(_ id: UUID, on eventsURL: URL, pid: pid_t, now: Date) {
+        let url = claimsURL(for: eventsURL)
+        try? withFileLock(url) {
+            var claims = decode(url)
+            claims[id] = Claim(claimedAt: now, pid: Int32(pid))
+            try encode(claims, to: url)
+        }
+    }
+
+    private static func decode(_ url: URL) -> [UUID: Claim] {
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([UUID: Claim].self, from: data)) ?? [:]
+    }
+
+    private static func encode(_ claims: [UUID: Claim], to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(claims)
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: filePermissions],
+            ofItemAtPath: url.path
+        )
+    }
+
+    private static func withFileLock<T>(_ url: URL, _ body: () throws -> T) throws -> T {
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let lockPath = url.path + ".lock"
+        let fileDescriptor = open(lockPath, O_RDWR | O_CREAT, filePermissionsMode)
+        guard fileDescriptor >= 0 else {
+            throw POSIXError(.EIO)
+        }
+        defer { close(fileDescriptor) }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: filePermissions],
+            ofItemAtPath: lockPath
+        )
+        guard flock(fileDescriptor, LOCK_EX) == 0 else {
+            throw POSIXError(.EIO)
+        }
+        defer { flock(fileDescriptor, LOCK_UN) }
+        return try body()
     }
 }
 

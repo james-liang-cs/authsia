@@ -112,7 +112,8 @@ private final class RemoteJITRequestBuilderFake: RemoteJITApprovalRequestBuildin
     }
 
     func buildRequests(
-        for inputs: [RemoteJITApprovalDescriptorInput]
+        for inputs: [RemoteJITApprovalDescriptorInput],
+        agentRuntimeContext: AgentRuntimeContext?
     ) async throws -> [RemoteJITApprovalRequest] {
         requests
     }

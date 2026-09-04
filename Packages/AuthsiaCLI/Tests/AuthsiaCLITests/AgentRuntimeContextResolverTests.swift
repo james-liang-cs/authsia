@@ -151,8 +151,53 @@ struct AgentRuntimeContextResolverTests {
         #expect(records.count == 2)
     }
 
-    @Test("resolver returns newest unexpired cwd-matching authsia hook record")
-    func resolverReturnsNewestMatchingRecord() throws {
+    @Test("resolver claims sequential records once each")
+    func resolverClaimsSequentialRecordsOnceEach() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let first = record(
+            id: "11111111-1111-1111-1111-111111111111",
+            platform: "codex",
+            agentType: "older",
+            workingDirectory: "/repo",
+            command: "authsia list",
+            recordedAt: now.addingTimeInterval(-10),
+            expiresAt: now.addingTimeInterval(20)
+        )
+        let second = record(
+            id: "22222222-2222-2222-2222-222222222222",
+            platform: "codex",
+            agentType: "reviewer",
+            workingDirectory: "/repo",
+            command: "authsia exec password API_KEY -- printenv API_KEY",
+            recordedAt: now.addingTimeInterval(-2),
+            expiresAt: now.addingTimeInterval(20)
+        )
+        let eventsURL = try writeEvents([first])
+
+        let firstContext = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo",
+            processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            claimOwner: 100
+        )
+        try writeEvents([first, second], to: eventsURL)
+        let secondContext = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo",
+            processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            claimOwner: 200
+        )
+
+        #expect(firstContext?.agentType == "older")
+        #expect(firstContext?.attributionConfidence == .high)
+        #expect(secondContext?.agentType == "reviewer")
+        #expect(secondContext?.attributionConfidence == .high)
+    }
+
+    @Test("resolver marks concurrent records ambiguous")
+    func resolverMarksConcurrentRecordsAmbiguous() throws {
         let now = Date(timeIntervalSince1970: 1_000)
         let eventsURL = try writeEvents([
             record(
@@ -173,21 +218,69 @@ struct AgentRuntimeContextResolverTests {
                 recordedAt: now.addingTimeInterval(-2),
                 expiresAt: now.addingTimeInterval(20)
             ),
+            record(
+                id: "33333333-3333-3333-3333-333333333333",
+                platform: "codex",
+                agentType: "plan",
+                workingDirectory: "/repo",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-1),
+                expiresAt: now.addingTimeInterval(20)
+            ),
         ])
 
         let context = AgentRuntimeContextResolver.resolve(
             now: now,
             currentDirectoryPath: "/repo",
             processAncestry: codexAncestry,
-            eventsURL: eventsURL
+            eventsURL: eventsURL,
+            claimOwner: 100
         )
 
         #expect(context?.platform == "codex")
-        #expect(context?.agentType == "reviewer")
+        #expect(context?.agentType == nil)
+        #expect(context?.attributionConfidence == .ambiguous)
+        let claimsURL = eventsURL.deletingPathExtension().appendingPathExtension("claimed.json")
+        #expect(!FileManager.default.fileExists(atPath: claimsURL.path))
     }
 
-    @Test("resolver ignores expired records")
-    func resolverIgnoresExpiredRecords() throws {
+    @Test("resolver reuses a claim for the same process")
+    func resolverReusesClaimForSameProcess() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([
+            record(
+                id: "11111111-1111-1111-1111-111111111111",
+                platform: "codex",
+                agentType: "reviewer",
+                workingDirectory: "/repo",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-1),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+        ])
+
+        let first = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo",
+            processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            claimOwner: 100
+        )
+        let second = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo",
+            processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            claimOwner: 100
+        )
+
+        #expect(first?.agentType == "reviewer")
+        #expect(second?.agentType == "reviewer")
+        #expect(first == second)
+    }
+
+    @Test("resolver ignores records outside the attribution TTL")
+    func resolverIgnoresRecordsOutsideAttributionTTL() throws {
         let now = Date(timeIntervalSince1970: 1_000)
         let eventsURL = try writeEvents([
             record(
@@ -196,8 +289,8 @@ struct AgentRuntimeContextResolverTests {
                 agentType: "expired",
                 workingDirectory: "/repo",
                 command: "authsia list",
-                recordedAt: now.addingTimeInterval(-60),
-                expiresAt: now.addingTimeInterval(-1)
+                recordedAt: now.addingTimeInterval(-6 * 60),
+                expiresAt: now.addingTimeInterval(20)
             ),
         ])
 
@@ -517,6 +610,35 @@ struct AgentRuntimeContextResolverTests {
 
         #expect(context?.platform == "codex")
         #expect(context?.sessionID == nil)
+        #expect(context?.agentType == "reviewer")
+    }
+
+    @Test("resolver reads AUTHSIA_HOOK_CONTEXT_PATH as a fallback source")
+    func resolverReadsHookContextPathOverride() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let primary = try writeEvents([])
+        let hookURL = try writeEvents([
+            record(
+                id: "11111111-1111-1111-1111-111111111111",
+                platform: "codex",
+                agentType: "reviewer",
+                workingDirectory: "/repo",
+                command: nil,
+                invokesAuthsia: true,
+                recordedAt: now.addingTimeInterval(-1),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+        ])
+
+        let context = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo",
+            processAncestry: codexAncestry,
+            eventsURL: primary,
+            environment: [AgentRuntimeContextResolver.environmentHookContextPathKey: hookURL.path],
+            claimOwner: 100
+        )
+
         #expect(context?.agentType == "reviewer")
     }
 
