@@ -935,7 +935,6 @@ struct Workspace: AsyncParsableCommand {
             ) else {
                 throw WorkspaceConfigError.missingConfig
             }
-            _ = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
             let backupService = BackupService()
             let plan = try await WorkspaceResetPlanner.plan(workspaceRoot: root, backupService: backupService)
             print(WorkspaceResetPlanner.renderDryRun(plan))

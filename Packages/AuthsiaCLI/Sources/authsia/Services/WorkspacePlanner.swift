@@ -559,7 +559,7 @@ enum WorkspaceResetPlanner {
         fileManager: FileManager = .default
     ) async throws -> WorkspaceResetPlan {
         let root = URL(fileURLWithPath: workspaceRoot.standardizedFileURL.path, isDirectory: true)
-        let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root, fileManager: fileManager)
+        let config = try WorkspaceConfigStore.readForReset(fromWorkspaceRoot: root, fileManager: fileManager)
         let scanner = FileScannerService()
         var envFiles: [WorkspaceResetEnvFile] = []
         for relativePath in config.managedEnvFiles {

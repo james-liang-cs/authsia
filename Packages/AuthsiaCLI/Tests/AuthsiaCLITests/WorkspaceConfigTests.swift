@@ -801,6 +801,44 @@ struct WorkspaceConfigTests {
         }
     }
 
+    @Test("reset removes workspace.json when MCP env or tools fail policy checks")
+    func resetRemovesInvalidMCPUpstreamConfig() async throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeWorkspaceJSON(
+            extraFields: """
+            "mcpUpstreams": [
+              {
+                "name": "credentialed",
+                "command": "tools/fixture-mcp",
+                "env": { "AUTHSIA_TEST_RESULT_SECRET": "plaintext-must-not-be-a-literal" }
+              },
+              {
+                "name": "pinned",
+                "command": "tools/fixture-mcp",
+                "tools": {
+                  "allow": ["echo_secret"],
+                  "deny": ["echo_secret"]
+                }
+              }
+            ]
+            """,
+            in: root
+        )
+        #expect(throws: WorkspaceConfigError.self) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+
+        let plan = try await WorkspaceResetPlanner.plan(workspaceRoot: root, backupService: nil)
+        let result = try await WorkspaceResetPlanner.apply(plan, backupService: nil)
+        #expect(result.removed.contains(WorkspaceConfigStore.relativeConfigPath))
+        #expect(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(WorkspaceConfigStore.relativeConfigPath).path
+            ) == false
+        )
+    }
+
     @Test("MCP upstream env TOKEN names require authsia refs and reject OTP SSH refs")
     func mcpUpstreamEnvRefRules() throws {
         let root = try makeWorkspaceRoot()

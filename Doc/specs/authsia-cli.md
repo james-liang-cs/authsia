@@ -131,7 +131,7 @@ Key properties:
 | `authsia agent init` | Create local AI-agent rule files | `authsia agent init --agent claude-code` |
 | `authsia workspace init` | Preview-first repo setup with selected env migration, selected agent rules, and commit-safe config | `authsia workspace init --env-file .env --agent codex` |
 | `authsia workspace update` | Re-scan configured env files, add explicit env files, refresh agent rules, and guide missing refs | `authsia workspace update --env-file .env.local` |
-| `authsia workspace reset` | Preview managed env restore, warn when refs would remain unusable without a scrape backup, and remove repo-local workspace metadata plus Authsia-managed agent rules; `--yes` is for externally confirmed callers | `authsia workspace reset --dry-run` |
+| `authsia workspace reset` | Preview managed env restore, warn when refs would remain unusable without a scrape backup, and remove repo-local workspace metadata plus Authsia-managed agent rules even when `mcpUpstreams` would fail a normal config read; `--yes` is for externally confirmed callers | `authsia workspace reset --dry-run` |
 | `authsia workspace sync` | Compare managed env-file references and workspace env bindings with the vault workspace folder, then preview missing, extra, or mismatched refs without printing secrets | `authsia workspace sync --dry-run` |
 | `authsia workspace run` | Run explicit workspace commands; secret-bearing runs use `exec`, while no-secret runs, read-only infra probes, and binding-free commands pass through without JIT | `authsia workspace run -- npm start` |
 | `authsia workspace run --environment <name>` | Use exact-tagged and `All` items for this run without changing the saved selection | `authsia workspace run --environment Production -- npm start` |
@@ -1248,8 +1248,9 @@ Current Workspace CLI capabilities:
   Devin Desktop launches or validated goal handoffs from inline text, a file, or
   stdin.
 - `workspace reset` for previewing managed env restore and applying repo-local
-  workspace config plus managed agent-rule cleanup. `--yes` is reserved for
-  callers that already performed their own confirmation.
+  workspace config plus managed agent-rule cleanup. MCP `mcpUpstreams` policy
+  failures that block a normal config read do not block teardown. `--yes` is
+  reserved for callers that already performed their own confirmation.
 - `workspace sync` for comparing managed env-file references and
   `.authsia/workspace.json` env bindings with password/API-key items in the
   vault workspace folder as the source of truth. It

@@ -397,6 +397,31 @@ enum WorkspaceConfigStore {
     static let relativeConfigPath = ".authsia/workspace.json"
 
     static func read(fromWorkspaceRoot root: URL, fileManager: FileManager = .default) throws -> WorkspaceConfig {
+        try decode(
+            fromWorkspaceRoot: root,
+            fileManager: fileManager,
+            validatePolicy: true
+        )
+    }
+
+    /// Decode and normalize without MCP/env policy checks. Reset uses this so a
+    /// workspace whose `mcpUpstreams` would fail `read` can still be torn down.
+    static func readForReset(
+        fromWorkspaceRoot root: URL,
+        fileManager: FileManager = .default
+    ) throws -> WorkspaceConfig {
+        try decode(
+            fromWorkspaceRoot: root,
+            fileManager: fileManager,
+            validatePolicy: false
+        )
+    }
+
+    private static func decode(
+        fromWorkspaceRoot root: URL,
+        fileManager: FileManager,
+        validatePolicy: Bool
+    ) throws -> WorkspaceConfig {
         let url = root.appendingPathComponent(relativeConfigPath)
         guard fileManager.fileExists(atPath: url.path) else {
             throw WorkspaceConfigError.missingConfig
@@ -417,9 +442,13 @@ enum WorkspaceConfigStore {
         } catch {
             throw WorkspaceConfigError.invalidConfigFile
         }
-        try validateMCPUpstreamCatalogBounds(config.mcpUpstreams)
+        if validatePolicy {
+            try validateMCPUpstreamCatalogBounds(config.mcpUpstreams)
+        }
         let normalized = normalize(config)
-        try validate(normalized)
+        if validatePolicy {
+            try validate(normalized)
+        }
         return normalized
     }
 
