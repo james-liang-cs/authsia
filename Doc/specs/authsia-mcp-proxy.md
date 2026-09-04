@@ -143,14 +143,15 @@ Authsia, its workspace declaration is usable, and no matching active grant has
 yet verified runtime use. “Protected” describes the launch configuration; it
 does not mean a child is currently running or that access is already approved.
 A user-global row may represent several workspaces. Its **N workspaces** menu
-lists their shortest unique path labels; choosing one filters grants and
-Coverage to that workspace.
+lists their shortest unique path labels; choosing one filters grants,
+Coverage, and recent unowned proxy decisions to that workspace.
 
 **No grant created** means the proxy failed closed before it obtained an owned,
 revocable grant. The request may have been denied by settings or tool policy,
 or failed because the workspace, upstream, transport, child, or advertised tool
-was unavailable. The row is retained so a failed attempt does not disappear
-from operator visibility; it grants no authority.
+was unavailable. Access Center titles that list **Recent proxy decisions
+without a grant**; the row is retained so a failed attempt does not disappear
+from operator visibility. It grants no authority.
 
 ### Preconditions
 
@@ -782,10 +783,12 @@ launch with no valid upstream name. A collapsed user-global row exposes an
 and Coverage when one is chosen.
 
 Below Coverage, **Recent proxy decisions without a grant** shows at most the
-five newest proxy command events whose grant ID is absent. Each row is
-historical evidence: upstream executable or fallback name, MCP tool name,
-coarse outcome, and age. It is not an active-server list and does not add to
-protection coverage. **No grant created** means the request received no
+five newest proxy command events whose grant ID is absent, filtered by the
+same Workspace menu as grants and Coverage. Each row is historical evidence:
+the declared upstream name when `agentID` is `proxy:<name>`, else the
+executable basename; MCP tool name; coarse outcome capsule; and age. It is
+not an active-server list and does not add to protection coverage. The
+section title states that no grant was created; the request received no
 authority and no long-lived child was admitted.
 Presentation rules live in the Access Center spec; this document owns the wrap,
 admission, and revoke-kill contract those rows display.
