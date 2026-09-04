@@ -32,8 +32,11 @@ struct AgentCommandTests {
         #expect(settings.contains("\"hooks\""))
         #expect(settings.contains("\"PreToolUse\""))
         #expect(settings.contains("\"PostToolUse\""))
+        #expect(settings.contains("\"SubagentStart\""))
+        #expect(settings.contains("\"SubagentStop\""))
         #expect(settings.contains("\"matcher\": \"Bash\""))
         #expect(settings.contains("authsia agent record-command --platform claude-code --source hook"))
+        #expect(settings.contains("authsia agent record-lineage --platform claude-code"))
         #expect(result.manualSteps.isEmpty)
 
         let rendered = AgentRuleInstaller.renderResult(result)
@@ -74,6 +77,41 @@ struct AgentCommandTests {
         #expect(event.command == "npm run deploy --token [REDACTED]")
         #expect(event.arguments == ["npm", "run", "deploy", "--token", "[REDACTED]"])
         #expect(event.exitStatus == 0)
+    }
+
+    @Test("lineage recorder writes SubagentStart without prompt fields")
+    func lineageRecorderWritesSubagentStartWithoutPromptFields() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("authsia-agent-lineage-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentLineageStore(fileURL: directory.appendingPathComponent("lineage.jsonl"))
+        let command = try Agent.RecordLineage.parse(["--platform", "claude-code"])
+        let payload = Data("""
+        {
+          "hook_event_name": "SubagentStart",
+          "session_id": "session-1",
+          "agent_id": "agent-2",
+          "agent_type": "Explore",
+          "cwd": "/tmp/project",
+          "agent_prompt": "never store this",
+          "last_assistant_message": "nor this"
+        }
+        """.utf8)
+
+        let record = try command.run(store: store, stdinData: payload)
+        let stored = try #require(try store.loadAll().first)
+
+        #expect(record?.agentType == "Explore")
+        #expect(stored.sessionID == "session-1")
+        #expect(stored.agentID == "agent-2")
+        #expect(stored.startedAt != nil)
+        #expect(stored.endedAt == nil)
+        let encoded = try JSONEncoder.agentCommandHistoryLine.encode(stored)
+        let json = try #require(String(data: encoded, encoding: .utf8))
+        #expect(!json.contains("never store this"))
+        #expect(!json.contains("agent_prompt"))
+        #expect(!json.contains("last_assistant_message"))
     }
 
     @Test("hidden recorder parses Copilot native hook payload")
@@ -1501,6 +1539,8 @@ struct AgentCommandTests {
         let hooks = try #require(object["hooks"] as? [String: Any])
         try expectClaudeHookEntries(try #require(hooks["PreToolUse"] as? [[String: Any]]))
         try expectClaudeHookEntries(try #require(hooks["PostToolUse"] as? [[String: Any]]))
+        try expectClaudeLineageHookEntries(try #require(hooks["SubagentStart"] as? [[String: Any]]))
+        try expectClaudeLineageHookEntries(try #require(hooks["SubagentStop"] as? [[String: Any]]))
 
         #expect(!object.keys.contains("network"))
         let sandbox = try #require(object["sandbox"] as? [String: Any])
@@ -1518,6 +1558,14 @@ struct AgentCommandTests {
             let allowUnixSockets = (network["allowUnixSockets"] as? [String]) ?? []
             #expect(!allowUnixSockets.contains("~/.authsia/agent.sock"))
         }
+    }
+
+    private func expectClaudeLineageHookEntries(_ entries: [[String: Any]]) throws {
+        let commands = entries.compactMap { $0["hooks"] as? [[String: Any]] }.flatMap { $0 }
+        #expect(commands.contains {
+            $0["type"] as? String == "command" &&
+                $0["command"] as? String == "authsia agent record-lineage --platform claude-code"
+        })
     }
 
     private func expectClaudeHookEntries(_ entries: [[String: Any]]) throws {

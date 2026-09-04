@@ -1337,6 +1337,7 @@ final class AgentCommandHistoryTests: XCTestCase {
                 "networkCoverage",
                 "findings",
                 "summary",
+                "sessions",
             ]
         )
         XCTAssertEqual(files.first?["workspaceRelativePath"] as? String, "Package.swift")
@@ -1403,6 +1404,164 @@ final class AgentCommandHistoryTests: XCTestCase {
 
         XCTAssertEqual(events.map(\.command), ["npm test"])
         XCTAssertTrue(findings.isEmpty)
+    }
+
+    func testSessionFirstRuntimeMatchLabelsSiblingSubagentEvents() {
+        let grant = AgentJITGrant(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            agentName: "Claude Code",
+            callerFingerprint: AgentJITCallerFingerprint(
+                processName: "authsia",
+                bundleIdentifier: nil,
+                signingTeamId: nil,
+                signingIdentity: nil,
+                parentProcessName: "claude",
+                parentBundleIdentifier: nil,
+                sessionScope: "tty:/dev/ttys002:sid:84",
+                workingDirectory: "/tmp/project"
+            ),
+            folderScope: .folder("Team/API"),
+            capabilities: [.exec, .list],
+            createdAt: Date(timeIntervalSince1970: 50),
+            expiresAt: Date(timeIntervalSince1970: 500),
+            revokedAt: nil,
+            lastUsedAt: nil,
+            requestedItems: [],
+            agentRuntimeContext: AgentRuntimeContext(
+                platform: "claude-code",
+                sessionID: "session-1",
+                agentID: "agent-a",
+                agentType: "Explore"
+            ),
+            approvedBy: "biometric"
+        )
+        let sibling = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 110),
+            agentPlatform: "claude-code",
+            sessionID: "session-1",
+            agentID: "agent-b",
+            agentType: "Plan",
+            captureSource: .hook,
+            command: "git status"
+        )
+        let otherSession = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 120),
+            agentPlatform: "claude-code",
+            sessionID: "session-2",
+            agentID: "agent-b",
+            agentType: "Plan",
+            captureSource: .hook,
+            command: "pwd"
+        )
+
+        let events = AgentCommandHistoryQuery.events(for: grant, from: [sibling, otherSession])
+        XCTAssertEqual(events.map(\.command), ["git status"])
+        XCTAssertEqual(events.first?.agentType, "Plan")
+    }
+
+    func testMCPRuntimeMatchStillRequiresAllIdentifiers() {
+        let grant = AgentJITGrant(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            agentName: "Codex",
+            callerFingerprint: AgentJITCallerFingerprint(
+                processName: "authsia",
+                bundleIdentifier: nil,
+                signingTeamId: nil,
+                signingIdentity: nil,
+                parentProcessName: "codex",
+                parentBundleIdentifier: nil,
+                sessionScope: "tty:/dev/ttys002:sid:84",
+                workingDirectory: "/tmp/project"
+            ),
+            folderScope: .folder("Team/API"),
+            capabilities: [.mcpAdmission],
+            createdAt: Date(timeIntervalSince1970: 50),
+            expiresAt: Date(timeIntervalSince1970: 500),
+            revokedAt: nil,
+            lastUsedAt: nil,
+            requestedItems: [],
+            agentRuntimeContext: AgentRuntimeContext(
+                platform: "Codex",
+                sessionID: "mcp:7E05890F-5C3A-44EF-9208-83A12F17D6CE",
+                agentID: "proxy:notes",
+                agentType: "authsia-mcp",
+                toolUseID: "mcp-call:11111111-1111-1111-1111-111111111111"
+            ),
+            approvedBy: "biometric"
+        )
+        let mismatchedAgent = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 110),
+            agentPlatform: "Codex",
+            sessionID: "mcp:7E05890F-5C3A-44EF-9208-83A12F17D6CE",
+            agentID: "proxy:other",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:11111111-1111-1111-1111-111111111111",
+            captureSource: .mcpProxy,
+            command: "notes.search"
+        )
+        let matched = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 120),
+            agentPlatform: "Codex",
+            sessionID: "mcp:7E05890F-5C3A-44EF-9208-83A12F17D6CE",
+            agentID: "proxy:notes",
+            agentType: "authsia-mcp",
+            toolUseID: "mcp-call:11111111-1111-1111-1111-111111111111",
+            captureSource: .mcpProxy,
+            command: "notes.list"
+        )
+
+        let events = AgentCommandHistoryQuery.events(for: grant, from: [mismatchedAgent, matched])
+        XCTAssertEqual(events.map(\.command), ["notes.list"])
+    }
+
+    func testUnapprovedSubagentTypeIsInfoFindingOnly() {
+        let grant = makeGrant()
+        let event = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 110),
+            agentPlatform: "claude-code",
+            sessionID: "session-1",
+            agentID: "agent-b",
+            agentType: "security-reviewer",
+            captureSource: .hook,
+            command: "authsia exec"
+        )
+
+        let findings = AgentCommandFindingDetector.findings(
+            for: grant,
+            events: [event],
+            auditRecords: []
+        )
+        let subagentFindings = findings.filter { $0.type == .usedByUnapprovedSubagentType }
+
+        XCTAssertEqual(subagentFindings.count, 1)
+        XCTAssertEqual(subagentFindings[0].severity, .info)
+        XCTAssertEqual(
+            subagentFindings[0].title,
+            "Used by a sub-agent type not present at approval (`security-reviewer`)"
+        )
+        XCTAssertFalse(subagentFindings.contains { $0.severity == .review || $0.severity == .warning })
+    }
+
+    func testCommandHistoryExportIncludesSessionsSummary() throws {
+        let event = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 100),
+            agentPlatform: "claude-code",
+            sessionID: "session-1",
+            agentType: "Explore",
+            captureSource: .hook,
+            command: "swift test"
+        )
+        let store = AgentCommandHistoryStore(fileURL: try makeTempURL())
+        let sessions = AgentSessionGrouping.exportSummaries(
+            grants: [makeGrant()],
+            events: [event],
+            lineage: []
+        )
+        let exported = try store.exportJSON(events: [event], findings: [], sessions: sessions)
+        let decoded = try JSONDecoder.agentCommandHistory.decode(AgentCommandHistoryExport.self, from: exported)
+
+        XCTAssertEqual(decoded.sessions.map(\.sessionID), ["session-1"])
+        XCTAssertEqual(decoded.sessions[0].subAgentTypes, ["Explore"])
     }
 
     func testProcessMonitorCapturesOnlyActiveManagedAgentScope() {

@@ -144,25 +144,22 @@ public enum AgentFileActivityQuery {
 
     private static func matchesRuntimeContext(event: AgentFileActivityEvent, grant: AgentJITGrant) -> Bool {
         guard let context = grant.agentRuntimeContext else { return false }
-        guard let eventPlatform = normalizedPlatform(event.agentPlatform),
-              let contextPlatform = normalizedPlatform(context.platform),
-              eventPlatform == contextPlatform else {
-            return false
-        }
-
-        let comparisons = [
-            (event.sessionID, context.sessionID),
-            (event.turnID, context.turnID),
-            (event.agentID, context.agentID),
-            (event.toolUseID, context.toolUseID),
-        ]
-        var hasMatchingIdentifier = false
-        for (lhs, rhs) in comparisons {
-            guard let lhs = normalized(lhs), let rhs = normalized(rhs) else { continue }
-            guard lhs == rhs else { return false }
-            hasMatchingIdentifier = true
-        }
-        return hasMatchingIdentifier
+        return AgentRuntimeContextAssociation.matches(
+            eventPlatform: event.agentPlatform,
+            eventSessionID: event.sessionID,
+            eventTurnID: event.turnID,
+            eventAgentID: event.agentID,
+            eventToolUseID: event.toolUseID,
+            contextPlatform: context.platform,
+            contextSessionID: context.sessionID,
+            contextTurnID: context.turnID,
+            contextAgentID: context.agentID,
+            contextToolUseID: context.toolUseID,
+            isMCPContext: AgentRuntimeContextAssociation.isMCPContext(
+                agentType: context.agentType,
+                sessionID: context.sessionID
+            )
+        )
     }
 
     private static func matchesTerminalScope(event: AgentFileActivityEvent, grant: AgentJITGrant) -> Bool {

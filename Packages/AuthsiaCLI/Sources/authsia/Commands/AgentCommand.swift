@@ -7,7 +7,7 @@ struct Agent: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "agent",
         abstract: "Configure AI agents to use Authsia safely",
-        subcommands: [Init.self, RecordCommand.self]
+        subcommands: [Init.self, RecordCommand.self, RecordLineage.self]
     )
 
     struct Init: ParsableCommand {
@@ -283,7 +283,7 @@ struct Agent: ParsableCommand {
             return responseDecision
         }
 
-        private static func stdinDataIfPiped() -> Data? {
+        fileprivate static func stdinDataIfPiped() -> Data? {
             guard isatty(STDIN_FILENO) == 0 else { return nil }
             let data = FileHandle.standardInput.readDataToEndOfFile()
             return data.isEmpty ? nil : data
@@ -358,6 +358,65 @@ struct Agent: ParsableCommand {
             var data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
             data.append(0x0A)
             output(data)
+        }
+    }
+
+    struct RecordLineage: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "record-lineage",
+            abstract: "Record sub-agent start and stop metadata for Access Center",
+            shouldDisplay: false
+        )
+
+        @Option(name: .long, help: "Agent platform, such as claude-code or codex")
+        var platform: String?
+
+        @Option(name: .long, help: "Agent session identifier")
+        var sessionID: String?
+
+        @Option(name: .long, help: "Agent identifier")
+        var agentID: String?
+
+        @Option(name: .long, help: "Agent type")
+        var agentType: String?
+
+        @Option(name: .long, help: "Working directory")
+        var cwd: String?
+
+        func run() throws {
+            _ = try run(store: AgentLineageStore(), stdinData: RecordCommand.stdinDataIfPiped())
+        }
+
+        @discardableResult
+        func run(
+            store: AgentLineageStore,
+            stdinData: Data? = nil,
+            now: Date = Date()
+        ) throws -> AgentLineageRecord? {
+            let hookPayload = AgentCommandHookPayload(data: stdinData)
+            guard let eventName = hookPayload.hookEventName?.lowercased(),
+                  eventName.contains("subagent") else {
+                return nil
+            }
+            let isStop = eventName.contains("stop")
+            let resolvedSessionID = sessionID ?? hookPayload.sessionID
+            let resolvedAgentID = agentID ?? hookPayload.agentID
+            guard AgentRuntimeContext.sanitize(resolvedSessionID) != nil,
+                  AgentRuntimeContext.sanitize(resolvedAgentID) != nil else {
+                return nil
+            }
+            let record = AgentLineageRecord(
+                platform: platform ?? hookPayload.platform,
+                sessionID: resolvedSessionID,
+                agentID: resolvedAgentID,
+                agentType: agentType ?? hookPayload.agentType,
+                workingDirectory: cwd ?? hookPayload.workingDirectory,
+                startedAt: isStop ? nil : now,
+                endedAt: isStop ? now : nil,
+                expiresAt: now.addingTimeInterval(AgentLineageStore.defaultTTL)
+            )
+            try store.record(record)
+            return record
         }
     }
 }

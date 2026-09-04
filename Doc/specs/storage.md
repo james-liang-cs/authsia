@@ -75,6 +75,7 @@ Application Support unless noted otherwise.
 | `~/Library/Application Support/Authsia/injected-process-trees.jsonl` | CLI injected-child watcher / Access Center | Redacted Process Tree runs recorded while a secret-injected child is running. |
 | `~/Library/Application Support/Authsia/agent-command-history.claimed.json` | CLI | `0600` claim sidecar keyed by command-history record id so concurrent `authsia` processes do not reuse one hook record. Pruned with the history file. |
 | `~/Library/Application Support/Authsia/AgentRuntimeContext/events.jsonl` | Optional fallback hook scripts | Fallback attribution records from `Tools/AuthsiaAgentContext/`. The CLI reads this file in addition to `agent-command-history.jsonl`, or a path in `AUTHSIA_HOOK_CONTEXT_PATH`. |
+| `~/Library/Application Support/Authsia/AgentRuntimeContext/lineage.jsonl` | CLI / fallback SubagentStart-Stop hooks / Access Center | Display-only sub-agent start/stop records (`kind: subagent`) with a 24-hour TTL. Never contains prompts or transcripts. Override with `AUTHSIA_HOOK_LINEAGE_PATH`. |
 | `~/Library/Preferences/app.authsia.plist` | UserDefaults | App preferences domain for CLI access, CLI, SSH, and MCP admission TTLs, the managed MCP admission maximum, SSH-agent opt-in state, iCloud Keychain sync preference, interface settings, and registration identities. macOS may cache this through `cfprefsd`. |
 
 ### `~/.authsia` Runtime State

@@ -144,25 +144,22 @@ public enum AgentCommandHistoryQuery {
 
     private static func matchesRuntimeContext(event: AgentCommandEvent, grant: AgentJITGrant) -> Bool {
         guard let context = grant.agentRuntimeContext else { return false }
-        guard let eventPlatform = normalizedPlatform(event.agentPlatform),
-              let contextPlatform = normalizedPlatform(context.platform),
-              eventPlatform == contextPlatform else {
-            return false
-        }
-
-        let comparisons = [
-            (event.sessionID, context.sessionID),
-            (event.turnID, context.turnID),
-            (event.agentID, context.agentID),
-            (event.toolUseID, context.toolUseID),
-        ]
-        var hasMatchingIdentifier = false
-        for (lhs, rhs) in comparisons {
-            guard let lhs = normalized(lhs), let rhs = normalized(rhs) else { continue }
-            guard lhs == rhs else { return false }
-            hasMatchingIdentifier = true
-        }
-        return hasMatchingIdentifier
+        return AgentRuntimeContextAssociation.matches(
+            eventPlatform: event.agentPlatform,
+            eventSessionID: event.sessionID,
+            eventTurnID: event.turnID,
+            eventAgentID: event.agentID,
+            eventToolUseID: event.toolUseID,
+            contextPlatform: context.platform,
+            contextSessionID: context.sessionID,
+            contextTurnID: context.turnID,
+            contextAgentID: context.agentID,
+            contextToolUseID: context.toolUseID,
+            isMCPContext: AgentRuntimeContextAssociation.isMCPContext(
+                agentType: context.agentType,
+                sessionID: context.sessionID
+            )
+        )
     }
 
     private static func matchesTerminalScope(event: AgentCommandEvent, grant: AgentJITGrant) -> Bool {
@@ -204,6 +201,102 @@ public enum AgentCommandHistoryQuery {
     private static func normalizedPath(_ value: String?) -> String? {
         guard let value = normalized(value) else { return nil }
         return URL(fileURLWithPath: value).standardizedFileURL.path
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+enum AgentRuntimeContextAssociation {
+    static func isMCPContext(agentType: String?, sessionID: String?) -> Bool {
+        if normalized(agentType)?.lowercased() == "authsia-mcp" {
+            return true
+        }
+        if let sessionID = normalized(sessionID), sessionID.lowercased().hasPrefix("mcp:") {
+            return true
+        }
+        return false
+    }
+
+    static func matches(
+        eventPlatform: String?,
+        eventSessionID: String?,
+        eventTurnID: String?,
+        eventAgentID: String?,
+        eventToolUseID: String?,
+        contextPlatform: String?,
+        contextSessionID: String?,
+        contextTurnID: String?,
+        contextAgentID: String?,
+        contextToolUseID: String?,
+        isMCPContext: Bool
+    ) -> Bool {
+        guard let eventPlatform = normalizedPlatform(eventPlatform),
+              let contextPlatform = normalizedPlatform(contextPlatform),
+              eventPlatform == contextPlatform else {
+            return false
+        }
+        if isMCPContext {
+            return matchesAllIdentifiers(
+                eventSessionID: eventSessionID,
+                eventTurnID: eventTurnID,
+                eventAgentID: eventAgentID,
+                eventToolUseID: eventToolUseID,
+                contextSessionID: contextSessionID,
+                contextTurnID: contextTurnID,
+                contextAgentID: contextAgentID,
+                contextToolUseID: contextToolUseID
+            )
+        }
+        guard let eventSession = normalized(eventSessionID),
+              let contextSession = normalized(contextSessionID),
+              eventSession == contextSession else {
+            return false
+        }
+        return true
+    }
+
+    private static func matchesAllIdentifiers(
+        eventSessionID: String?,
+        eventTurnID: String?,
+        eventAgentID: String?,
+        eventToolUseID: String?,
+        contextSessionID: String?,
+        contextTurnID: String?,
+        contextAgentID: String?,
+        contextToolUseID: String?
+    ) -> Bool {
+        let comparisons = [
+            (eventSessionID, contextSessionID),
+            (eventTurnID, contextTurnID),
+            (eventAgentID, contextAgentID),
+            (eventToolUseID, contextToolUseID),
+        ]
+        var hasMatchingIdentifier = false
+        for (lhs, rhs) in comparisons {
+            guard let lhs = normalized(lhs), let rhs = normalized(rhs) else { continue }
+            guard lhs == rhs else { return false }
+            hasMatchingIdentifier = true
+        }
+        return hasMatchingIdentifier
+    }
+
+    private static func normalizedPlatform(_ value: String?) -> String? {
+        switch normalized(value)?.lowercased() {
+        case "claude", "claude-code", "claude code":
+            return "claude-code"
+        case "codex":
+            return "codex"
+        case "copilot", "github-copilot", "github copilot":
+            return "copilot"
+        case let value?:
+            return value
+        case nil:
+            return nil
+        }
     }
 
     private static func normalized(_ value: String?) -> String? {
@@ -350,9 +443,13 @@ public final class AgentCommandHistoryStore {
         try JSONEncoder.agentCommandHistory.encode(events.sorted { $0.recordedAt < $1.recordedAt })
     }
 
-    public func exportJSON(events: [AgentCommandEvent], findings: [AgentCommandFinding]) throws -> Data {
+    public func exportJSON(
+        events: [AgentCommandEvent],
+        findings: [AgentCommandFinding],
+        sessions: [AgentSessionExportSummary] = []
+    ) throws -> Data {
         try JSONEncoder.agentCommandHistory.encode(
-            AgentCommandHistoryExport(events: events, findings: findings)
+            AgentCommandHistoryExport(events: events, findings: findings, sessions: sessions)
         )
     }
 

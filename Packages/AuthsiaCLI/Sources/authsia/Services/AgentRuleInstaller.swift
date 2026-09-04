@@ -1396,6 +1396,26 @@ enum AgentRuleInstaller {
               }
             ]
           }
+        ],
+        "SubagentStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-lineage --platform claude-code"
+              }
+            ]
+          }
+        ],
+        "SubagentStop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-lineage --platform claude-code"
+              }
+            ]
+          }
         ]
       },
       "sandbox": {
@@ -1554,6 +1574,26 @@ enum AgentRuleInstaller {
               {
                 "type": "command",
                 "command": "authsia agent record-command --platform claude-code --source hook"
+              }
+            ]
+          }
+        ],
+        "SubagentStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-lineage --platform claude-code"
+              }
+            ]
+          }
+        ],
+        "SubagentStop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-lineage --platform claude-code"
               }
             ]
           }

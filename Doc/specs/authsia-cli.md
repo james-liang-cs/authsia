@@ -2509,18 +2509,23 @@ direct agent secret-read attempts (`authsia get`, `authsia read`, `authsia load`
 environment dumps (`env`, `printenv`) and clear high-signal dotenv reads (not `.env.example` /
 `ls .env*` mentions), high-signal secret file paths, legacy confirmed unchanged file detections,
 legacy incomplete inspection, and incomplete cleanup. Info-only signals include process
-fallback, injected-tree capture, outside-workspace file activity, and successful secret
-file scrub. File findings require successfully persisted redacted per-file evidence associated with
+fallback, injected-tree capture, outside-workspace file activity, successful secret
+file scrub, and a display-only notice when a grant is later used by a sub-agent type
+that was not present at approval. That last signal is always `Info`; it never becomes
+`Review` or `Warning` and never changes the grant. File findings require successfully persisted redacted per-file evidence associated with
 a JIT grant. The Commands view can
 filter `All` or `Flagged` rows, and JSON export includes `commands`, `files`, `processTrees`,
-`findings`, and `summary` counts.
+`findings`, `sessions`, and `summary` counts.
 
 The same hook metadata can attach display-only agent or subagent attribution to JIT grants and audit
 records. Claude Code and Codex `PreToolUse` payloads include `agent_id` /
 `agent_type` for sub-agents; Authsia displays those names and labels them as
 reported by hook. Concurrent hook records in one directory are not guessed:
-the CLI attaches platform only and marks attribution ambiguous. Attribution is
-not trusted for authorization. JIT still binds grants to the OS caller
+the CLI attaches platform only and marks attribution ambiguous. `SubagentStart` /
+`SubagentStop` write a 24-hour lineage record for session grouping and start/end
+captions; those records never store prompts or transcripts. Command events match
+a grant by session and platform (MCP contexts still require every identifier).
+Attribution is not trusted for authorization. JIT still binds grants to the OS caller
 fingerprint, terminal/session scope, working directory, folder-tree scope, capability, and TTL.
 
 Agents that cannot install a hook, including VS Code-only Copilot terminal flows, can mark a single

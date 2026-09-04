@@ -25,6 +25,7 @@ public enum AgentCommandFindingType: String, Codable, Equatable, Hashable, Senda
     case networkInspectionUnavailable
     case networkInspectionPartial
     case potentialCleartextNetwork
+    case usedByUnapprovedSubagentType
 }
 
 public struct AgentCommandFinding: Codable, Equatable, Identifiable, Sendable {
@@ -161,8 +162,13 @@ public struct AgentCommandHistoryExport: Codable, Equatable, Sendable {
     public let events: [AgentCommandEvent]
     public let findings: [AgentCommandFinding]
     public let summary: AgentCommandFindingSummary
+    public let sessions: [AgentSessionExportSummary]
 
-    public init(events: [AgentCommandEvent], findings: [AgentCommandFinding]) {
+    public init(
+        events: [AgentCommandEvent],
+        findings: [AgentCommandFinding],
+        sessions: [AgentSessionExportSummary] = []
+    ) {
         self.events = events.sorted { $0.recordedAt < $1.recordedAt }
         self.findings = findings.sorted { lhs, rhs in
             if lhs.recordedAt == rhs.recordedAt {
@@ -171,6 +177,30 @@ public struct AgentCommandHistoryExport: Codable, Equatable, Sendable {
             return lhs.recordedAt < rhs.recordedAt
         }
         self.summary = AgentCommandFindingSummary(findings: self.findings)
+        self.sessions = sessions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case events
+        case findings
+        case summary
+        case sessions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        events = try container.decode([AgentCommandEvent].self, forKey: .events)
+        findings = try container.decode([AgentCommandFinding].self, forKey: .findings)
+        summary = try container.decode(AgentCommandFindingSummary.self, forKey: .summary)
+        sessions = try container.decodeIfPresent([AgentSessionExportSummary].self, forKey: .sessions) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(events, forKey: .events)
+        try container.encode(findings, forKey: .findings)
+        try container.encode(summary, forKey: .summary)
+        try container.encode(sessions, forKey: .sessions)
     }
 }
 
@@ -201,13 +231,15 @@ public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
     public let networkCoverage: [AgentNetworkActivityCoverageExport]
     public let findings: [AgentCommandFinding]
     public let summary: AgentCommandFindingSummary
+    public let sessions: [AgentSessionExportSummary]
 
     public init(
         commands: [AgentCommandEvent],
         files: [AgentFileActivityEvent],
         processTrees: [InjectedProcessTreeRun] = [],
         networkSnapshots: [AgentNetworkActivityRunSnapshot] = [],
-        findings: [AgentCommandFinding]
+        findings: [AgentCommandFinding],
+        sessions: [AgentSessionExportSummary] = []
     ) {
         self.commands = commands.sorted { lhs, rhs in
             if lhs.recordedAt == rhs.recordedAt {
@@ -260,6 +292,7 @@ public struct AgentSessionActivityExport: Codable, Equatable, Sendable {
             return lhs.recordedAt < rhs.recordedAt
         }
         self.summary = AgentCommandFindingSummary(findings: findings)
+        self.sessions = sessions
     }
 }
 
@@ -504,6 +537,12 @@ public enum AgentCommandFindingDetector {
             }
         }
 
+        findings.append(contentsOf: unapprovedSubagentTypeFindings(
+            for: grant,
+            events: grantEvents,
+            auditRecords: auditRecords
+        ))
+
         return findings.sorted { lhs, rhs in
             if lhs.recordedAt == rhs.recordedAt {
                 return lhs.id < rhs.id
@@ -714,6 +753,51 @@ public enum AgentCommandFindingDetector {
             detail: "Authsia recorded this command through local process monitoring.",
             recommendedAction: "Use this as supporting evidence when hook capture is unavailable."
         )
+    }
+
+    private static func unapprovedSubagentTypeFindings(
+        for grant: AgentJITGrant,
+        events: [AgentCommandEvent],
+        auditRecords: [BridgeAuditRecord]
+    ) -> [AgentCommandFinding] {
+        guard !AgentRuntimeContextAssociation.isMCPContext(
+            agentType: grant.agentRuntimeContext?.agentType,
+            sessionID: grant.agentRuntimeContext?.sessionID
+        ) else {
+            return []
+        }
+        let approvalType = normalized(grant.agentRuntimeContext?.agentType)
+        var evidenceByType: [String: [UUID]] = [:]
+        var firstSeen: [String: Date] = [:]
+
+        for event in events {
+            guard let type = normalized(event.agentType), type != approvalType else { continue }
+            evidenceByType[type, default: []].append(event.id)
+            firstSeen[type] = min(firstSeen[type] ?? event.recordedAt, event.recordedAt)
+        }
+        for record in auditRecords where record.agentJITGrantID == grant.id {
+            guard let type = normalized(record.agentRuntimeContext?.agentType),
+                  type != approvalType else {
+                continue
+            }
+            firstSeen[type] = min(firstSeen[type] ?? record.timestamp, record.timestamp)
+            evidenceByType[type] = evidenceByType[type] ?? []
+        }
+
+        return evidenceByType.keys.sorted().map { type in
+            AgentCommandFinding(
+                severity: .info,
+                type: .usedByUnapprovedSubagentType,
+                agentJITGrantID: grant.id,
+                evidenceEventIDs: evidenceByType[type] ?? [],
+                recordedAt: firstSeen[type] ?? grant.createdAt,
+                title: "Used by a sub-agent type not present at approval (`\(type)`)",
+                detail: "A later read or command used sub-agent type \(type), which was not the "
+                    + "type reported when this grant was approved. Display only; the grant is unchanged.",
+                recommendedAction: "Use this as investigation context. It does not revoke or "
+                    + "narrow the grant."
+            )
+        }
     }
 
     private static func injectedTreeCaptureFinding(
@@ -932,6 +1016,7 @@ public enum AgentCommandFindingDetector {
         let contextTurnID: String?
         let contextAgentID: String?
         let contextToolUseID: String?
+        let isMCPContext: Bool
         let sessionScope: String?
         let workingDirectory: String?
 
@@ -943,6 +1028,10 @@ public enum AgentCommandFindingDetector {
             contextTurnID = context.flatMap { normalized($0.turnID) }
             contextAgentID = context.flatMap { normalized($0.agentID) }
             contextToolUseID = context.flatMap { normalized($0.toolUseID) }
+            isMCPContext = AgentRuntimeContextAssociation.isMCPContext(
+                agentType: context?.agentType,
+                sessionID: context?.sessionID
+            )
             sessionScope = normalized(grant.callerFingerprint.sessionScope)
             workingDirectory = normalizedPath(grant.callerFingerprint.workingDirectory)
         }
@@ -955,25 +1044,19 @@ public enum AgentCommandFindingDetector {
     }
 
     private static func matchesRuntimeContext(event: AgentCommandEvent, key: GrantMatchKey) -> Bool {
-        guard let contextPlatform = key.contextPlatform,
-              let eventPlatform = normalizedPlatform(event.agentPlatform),
-              eventPlatform == contextPlatform else {
-            return false
-        }
-
-        let comparisons = [
-            (event.sessionID, key.contextSessionID),
-            (event.turnID, key.contextTurnID),
-            (event.agentID, key.contextAgentID),
-            (event.toolUseID, key.contextToolUseID),
-        ]
-        var hasMatchingIdentifier = false
-        for (lhs, rhs) in comparisons {
-            guard let lhs = normalized(lhs), let rhs else { continue }
-            guard lhs == rhs else { return false }
-            hasMatchingIdentifier = true
-        }
-        return hasMatchingIdentifier
+        AgentRuntimeContextAssociation.matches(
+            eventPlatform: event.agentPlatform,
+            eventSessionID: event.sessionID,
+            eventTurnID: event.turnID,
+            eventAgentID: event.agentID,
+            eventToolUseID: event.toolUseID,
+            contextPlatform: key.contextPlatform,
+            contextSessionID: key.contextSessionID,
+            contextTurnID: key.contextTurnID,
+            contextAgentID: key.contextAgentID,
+            contextToolUseID: key.contextToolUseID,
+            isMCPContext: key.isMCPContext
+        )
     }
 
     private static func matchesTerminalScope(event: AgentCommandEvent, key: GrantMatchKey) -> Bool {

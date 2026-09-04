@@ -77,6 +77,82 @@ public enum AgentAttributionPresentation {
         return "Used by: " + labels.joined(separator: ", ")
     }
 
+    public static func shortSessionID(_ sessionID: String) -> String {
+        let trimmed = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return sessionID }
+        if trimmed.count <= 8 { return trimmed }
+        return "\(trimmed.prefix(4))…\(trimmed.suffix(2))"
+    }
+
+    public static func sessionGroupHeader(
+        platform: String?,
+        sessionID: String,
+        grantCount: Int,
+        subAgentCount: Int
+    ) -> String {
+        let name = platformDisplayName(platform) ?? "Agent"
+        let session = shortSessionID(sessionID)
+        let grants = grantCount == 1 ? "1 grant" : "\(grantCount) grants"
+        let agents = subAgentCount == 1 ? "1 sub-agent" : "\(subAgentCount) sub-agents"
+        return "\(name) · session \(session) · \(grants) · \(agents)"
+    }
+
+    public static func lineageCaption(
+        agentType: String?,
+        startedAt: Date?,
+        endedAt: Date?,
+        timeZone: TimeZone = .current
+    ) -> String? {
+        let type = agentType?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let type, !type.isEmpty else { return nil }
+        let formatter = DateFormatter()
+        formatter.timeZone = timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        var parts = [type]
+        if let startedAt {
+            parts.append("started \(formatter.string(from: startedAt))")
+        }
+        if let endedAt {
+            parts.append("ended \(formatter.string(from: endedAt))")
+        }
+        guard parts.count > 1 else { return type }
+        return parts.joined(separator: " · ")
+    }
+
+    public static func topAgentLabel(platform: String?, agentType: String?) -> String? {
+        identityText(
+            for: AgentRuntimeContext(platform: platform, agentType: agentType),
+            separator: " / "
+        )
+    }
+
+    public static func platformSymbolName(_ platform: String?) -> String {
+        switch platform?.lowercased() {
+        case "claude", "claude-code":
+            return "text.bubble.fill"
+        case "codex":
+            return "terminal.fill"
+        case "vscode", "vs-code", "visual-studio-code":
+            return "chevron.left.forwardslash.chevron.right"
+        case "copilot", "github-copilot", "githubcopilot":
+            return "sparkle"
+        case "cursor":
+            return "cursorarrow"
+        case "windsurf", "devin", "devin-desktop":
+            return "desktopcomputer"
+        default:
+            return "app.dashed"
+        }
+    }
+
+    public static func platformMonogram(_ platform: String?, processName: String? = nil) -> String {
+        let source = platformDisplayName(platform) ?? processName ?? "A"
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return "A" }
+        return String(first).uppercased()
+    }
+
     private static func identityText(for context: AgentRuntimeContext?, separator: String) -> String? {
         guard let context else { return nil }
         let platform = platformDisplayName(context.platform)

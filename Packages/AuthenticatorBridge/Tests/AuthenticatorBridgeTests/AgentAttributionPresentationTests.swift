@@ -79,6 +79,29 @@ final class AgentAttributionPresentationTests: XCTestCase {
         )
     }
 
+    func testSessionHeaderAndPlatformGlyphs() {
+        XCTAssertEqual(
+            AgentAttributionPresentation.sessionGroupHeader(
+                platform: "claude-code",
+                sessionID: "session-abcdef",
+                grantCount: 3,
+                subAgentCount: 2
+            ),
+            "Claude Code · session sess…ef · 3 grants · 2 sub-agents"
+        )
+        XCTAssertEqual(AgentAttributionPresentation.platformSymbolName("codex"), "terminal.fill")
+        XCTAssertEqual(AgentAttributionPresentation.platformSymbolName("mystery"), "app.dashed")
+        XCTAssertEqual(AgentAttributionPresentation.platformMonogram("claude-code"), "C")
+        XCTAssertEqual(
+            AgentAttributionPresentation.platformMonogram(nil, processName: "node"),
+            "N"
+        )
+        XCTAssertEqual(
+            AgentAttributionPresentation.topAgentLabel(platform: "claude-code", agentType: "Explore"),
+            "Claude Code / Explore"
+        )
+    }
+
     func testLegacyContextDecodesWithoutAttributionConfidence() throws {
         let data = Data(#"{"platform":"codex","agentType":"reviewer"}"#.utf8)
         let decoded = try JSONDecoder().decode(AgentRuntimeContext.self, from: data)

@@ -942,6 +942,9 @@ It summarizes:
   records, when the human session toggle is enabled
 - 30-day audit activity
 - top caller
+- top agent by platform and sub-agent type
+- per-platform count chips
+- session chips and group headers when more than one coding-agent session is visible
 - recent usage trend
 - folders and vault items associated with grants or item-read audit records
 
