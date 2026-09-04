@@ -122,7 +122,7 @@ extension BridgeRequestType {
         case .ping, .status, .lock, .workspaceMetadata, .chromeAutofillMatches, .auditVerify, .sshAgentSign,
              .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll, .agentJITRenew,
              .listAccess, .revokeAccess, .validateAccess,
-             .terminalPairingComplete, .terminalPairingRevoke:
+             .terminalPairingComplete, .terminalPairingRevoke, .mcpProxyActivity:
             return false
         case .unlock,
              .list,
@@ -163,7 +163,7 @@ extension BridgeRequestType {
         case .list, .workspaceMetadata,
              .getOTP, .getPassword, .getAPIKey, .getCertificate, .getNote, .getSSH,
              .createAccess, .validateAccess, .directCLIPreflight, .agentJITPreflight,
-             .terminalPairingComplete:
+             .terminalPairingComplete, .mcpProxyActivity:
             return true
         default:
             return false
@@ -843,6 +843,37 @@ final class AuthsiaBridgeClient:
 
     func agentJITPreflight(_ payload: AgentJITPreflightPayload) throws -> AgentJITPreflightResultPayload {
         try approvalPreflight(payload, requestType: .agentJITPreflight)
+    }
+
+    func recordMCPProxyActivity(
+        _ payload: MCPProxyActivityPayload,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?
+    ) throws {
+        let request = BridgeRequest(
+            id: UUID(),
+            type: .mcpProxyActivity,
+            query: "",
+            options: BridgeOptions(field: nil, copy: false),
+            context: Self.currentContext(
+                overriding: agentRuntimeContext,
+                currentDirectoryPath: workspaceRoot?.path
+                    ?? FileManager.default.currentDirectoryPath
+            ),
+            body: try BridgeCoder.encode(payload),
+            sessionToken: nil
+        )
+        let response: BridgeResponse<MCPProxyActivityResultPayload> = try sendRequest(request)
+        if let error = response.error {
+            throw BridgeClientError.bridgeError(
+                code: error.code.rawValue,
+                message: error.message,
+                query: nil
+            )
+        }
+        guard response.payload?.recorded == true else {
+            throw BridgeClientError.invalidResponse
+        }
     }
 
     func agentJITPreflight(
@@ -1915,7 +1946,7 @@ final class AuthsiaBridgeClient:
                 service.auditVerify(requestData, replyHandler)
             case .exportAccounts:
                 service.exportAccounts(requestData, replyHandler)
-            case .addPassword, .addAPIKey, .addCertificate, .addNote, .addSSH, .ensureVaultFolder, .createAccess, .directCLIPreflight, .agentJITPreflight:
+            case .addPassword, .addAPIKey, .addCertificate, .addNote, .addSSH, .ensureVaultFolder, .createAccess, .directCLIPreflight, .agentJITPreflight, .mcpProxyActivity:
                 service.addItem(requestData, replyHandler)
             case .updatePassword, .convertPasswordToAPIKey, .updateAPIKey, .updateCertificate, .updateNote, .updateSSH:
                 service.updateItem(requestData, replyHandler)

@@ -418,6 +418,7 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
     private(set) var calls: [Call] = []
     private(set) var outcomes: [Outcome] = []
     var error: (any Error)?
+    var remainingOutcomeFailures = 0
 
     func record(
         upstreamName: String,
@@ -466,11 +467,20 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
         outcome: MCPProxyCallOutcome
     ) throws {
         try lock.withLock {
+            if remainingOutcomeFailures > 0 {
+                remainingOutcomeFailures -= 1
+                if let error { throw error }
+                throw RecordingMCPProxyOutcomeError.failed
+            }
             if let error { throw error }
             outcomes.append(Outcome(toolName: toolName, outcome: outcome, grantID: grantID))
         }
         _ = (upstreamName, upstreamCommand, agentRuntimeContext, workspaceRoot)
     }
+}
+
+private enum RecordingMCPProxyOutcomeError: Error {
+    case failed
 }
 
 struct NoopMCPProxyToolCallRecorder: MCPProxyToolCallRecording {

@@ -150,6 +150,28 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         return results
     }
 
+    /// Declare an explicit child for a proxy launch that no longer records
+    /// the argv it replaced. Wrap-eligible findings still go through
+    /// `declare(finding:)`.
+    public static func declare(
+        name: String,
+        command: String,
+        arguments: [String],
+        workspaceRoot: URL,
+        fileManager: FileManager = .default
+    ) throws -> Outcome {
+        guard let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: command) else {
+            throw DeclarationError.notWrapEligible
+        }
+        return try writeDeclaration(
+            name: name,
+            command: policyCommand,
+            arguments: arguments,
+            workspaceRoot: workspaceRoot,
+            fileManager: fileManager
+        )
+    }
+
     public static func declare(
         finding: MCPClientServerFinding,
         workspaceRoot: URL,
@@ -160,6 +182,22 @@ public enum MCPLocalMCPWorkspaceDeclaration {
               let command = finding.wrapCommand else {
             throw DeclarationError.notWrapEligible
         }
+        return try declare(
+            name: finding.serverName,
+            command: command,
+            arguments: finding.wrapArguments,
+            workspaceRoot: workspaceRoot,
+            fileManager: fileManager
+        )
+    }
+
+    private static func writeDeclaration(
+        name: String,
+        command: String,
+        arguments: [String],
+        workspaceRoot: URL,
+        fileManager: FileManager
+    ) throws -> Outcome {
         let configURL = workspaceRoot.appendingPathComponent(relativeConfigPath)
         guard fileManager.fileExists(atPath: configURL.path) else {
             throw DeclarationError.missingConfig
@@ -185,22 +223,22 @@ public enum MCPLocalMCPWorkspaceDeclaration {
             upstreams = []
         }
 
-        if let match = upstreams.first(where: { ($0["name"] as? String) == finding.serverName }) {
+        if let match = upstreams.first(where: { ($0["name"] as? String) == name }) {
             let existingCommand = match["command"] as? String
             let existingArgs = stringArray(match["args"]) ?? []
-            if existingCommand == command, existingArgs == finding.wrapArguments {
+            if existingCommand == command, existingArgs == arguments {
                 return .alreadyDeclared
             }
-            throw DeclarationError.duplicateName(finding.serverName)
+            throw DeclarationError.duplicateName(name)
         }
 
         var entry: [String: Any] = [
-            "name": finding.serverName,
+            "name": name,
             "command": command,
             "env": [:] as [String: String],
         ]
-        if !finding.wrapArguments.isEmpty {
-            entry["args"] = finding.wrapArguments
+        if !arguments.isEmpty {
+            entry["args"] = arguments
         }
         upstreams.append(entry)
         root["mcpUpstreams"] = upstreams

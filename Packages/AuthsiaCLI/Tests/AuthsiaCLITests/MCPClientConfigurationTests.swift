@@ -646,6 +646,74 @@ struct MCPClientConfigurationTests {
         #expect(declared?.args == ["serve", "--mcp"])
     }
 
+    @Test("mcp declare writes an explicit child and doctor next is no longer declare")
+    func declareWritesUndeclaredProxyChild() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                workspace: .init(name: "doctor", authsiaFolder: "Workspaces/doctor"),
+                managedEnvFiles: [],
+                agents: nil
+            ),
+            toWorkspaceRoot: fixture.workspace
+        )
+        try writeDoctorJSON([
+            "mcpServers": [
+                "codegraph": [
+                    "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                    "args": ["mcp", "proxy"],
+                    "env": ["AUTHSIA_MCP_UPSTREAM": "codegraph"],
+                ]
+            ]
+        ], to: fixture.home.appendingPathComponent(".cursor/mcp.json"))
+
+        var preview = try MCPCommand.Declare.parse([
+            "--server", "codegraph",
+            "--command", "codegraph",
+            "--arg", "serve",
+            "--workspace", fixture.workspace.path,
+        ])
+        preview.homeDirectory = fixture.home
+        preview.currentDirectoryPath = fixture.workspace.path
+        var previewOutput = ""
+        do {
+            try preview.run { previewOutput = $0 }
+            Issue.record("declare without --yes should exit 2")
+        } catch let code as ExitCode {
+            #expect(code.rawValue == 2)
+        }
+        #expect(previewOutput.contains("Re-run with --yes"))
+
+        var apply = try MCPCommand.Declare.parse([
+            "--server", "codegraph",
+            "--command", "codegraph",
+            "--arg", "serve",
+            "--workspace", fixture.workspace.path,
+            "--yes",
+        ])
+        apply.homeDirectory = fixture.home
+        apply.currentDirectoryPath = fixture.workspace.path
+        var applyOutput = ""
+        try apply.run { applyOutput = $0 }
+        #expect(applyOutput.contains("Declared codegraph"))
+        let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: fixture.workspace)
+        let declared = config.mcpUpstreams.first { $0.name == "codegraph" }
+        #expect(declared?.command == "codegraph")
+        #expect(declared?.args == ["serve"])
+
+        var doctor = try MCPCommand.Doctor.parse([
+            "--client", "cursor",
+            "--workspace", fixture.workspace.path,
+        ])
+        doctor.homeDirectory = fixture.home
+        doctor.currentDirectoryPath = fixture.workspace.path
+        let report = try doctor.makeReport()
+        let finding = report.findings.first { $0.serverName == "codegraph" }
+        #expect(finding?.status == .admittedWrapped)
+        #expect(finding?.isAuthsiaProxyLaunch == true)
+    }
+
     @Test("unwrap previews before writing and names restore consequences")
     func unwrapPreviewsBeforeWriting() throws {
         let fixture = try makeDoctorFixture()

@@ -58,6 +58,8 @@ final class MCPProcessTerminator: @unchecked Sendable {
         }
     }
 
+    var recordedProcessGroupID: pid_t? { knownProcessGroupID }
+
     private var processID: pid_t {
         if let knownProcessID {
             return knownProcessID

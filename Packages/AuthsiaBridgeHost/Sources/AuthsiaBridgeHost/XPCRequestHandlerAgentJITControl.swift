@@ -26,6 +26,7 @@ extension XPCRequestHandler {
         do {
             let now = agentJITApprovalClock()
             _ = try agentJITGrantStore.revokeClosedTerminalGrants(now: now)
+            MCPProxyChildRegistry.reapOrphans()
             let grants = try agentJITGrantStore.loadAll().filter {
                 controlScope.allows($0)
             }
@@ -92,6 +93,7 @@ extension XPCRequestHandler {
                 id: payload.id,
                 revokedAt: agentJITApprovalClock()
             )
+            MCPProxyChildRegistry.terminate(grantID: revoked.id)
             recordGrantRevocation(revoked, requestContext: bridgeRequest.context)
             postAgentJITGrantDidChange()
             replyMutationSuccess(
@@ -229,6 +231,7 @@ extension XPCRequestHandler {
         do {
             let revoked = try agentJITGrantStore.revokeAll(revokedAt: agentJITApprovalClock())
             revoked.forEach {
+                MCPProxyChildRegistry.terminate(grantID: $0.id)
                 recordGrantRevocation($0, requestContext: bridgeRequest.context)
             }
             if !revoked.isEmpty {

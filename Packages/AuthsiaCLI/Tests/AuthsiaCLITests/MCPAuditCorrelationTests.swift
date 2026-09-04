@@ -177,7 +177,7 @@ struct MCPAuditCorrelationTests {
         await proxy.waitUntilCompleted()
     }
 
-    @Test("an audit persistence failure omits the invocationID")
+    @Test("an audit persistence failure returns auditUnavailable without an invocationID")
     func auditPersistenceFailureOmitsInvocationID() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
@@ -213,7 +213,7 @@ struct MCPAuditCorrelationTests {
         let result = try await call.value
 
         #expect(result.isError == true)
-        #expect(toolErrorCode(result) == MCPToolErrorCode.upstreamUnavailable.rawValue)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.auditUnavailable.rawValue)
         #expect(toolErrorInvocationID(result) == nil)
         #expect(recorder.calls.isEmpty)
 
@@ -242,6 +242,48 @@ struct MCPAuditCorrelationTests {
         #expect(toolErrorCode(result) == MCPToolErrorCode.workspaceUnavailable.rawValue)
         #expect(toolErrorInvocationID(result) != nil)
         #expect(recorder.outcomes.first?.outcome == .upstreamUnavailable)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("a lost terminal outcome is retried and the call still succeeds")
+    func lostTerminalOutcomeIsRetried() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let recorder = RecordingMCPProxyToolCallRecorder()
+        recorder.remainingOutcomeFailures = 1
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["AUTHSIA_TEST_TOOLS": "fast"]
+        )
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                stdioJiraUpstream(
+                    env: [:],
+                    allow: ["fast"],
+                    approve: [],
+                    deny: []
+                )
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            toolCallRecorder: recorder
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP outcome retry")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "fast")
+        let result = try await call.value
+
+        #expect(result.isError != true)
+        #expect(recorder.outcomes.map(\.outcome) == [.succeeded])
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()

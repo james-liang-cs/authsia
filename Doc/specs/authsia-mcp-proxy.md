@@ -268,9 +268,9 @@ reported.
 **Declare in workspace** is for a Coverage row that already launches
 `authsia mcp proxy` but has no matching `mcpUpstreams` entry. Wrap cannot infer
 child argv from a proxy launch. Declare writes command and argv into each
-selected workspace; it does not require operators to list child tool names. A
-credential-less empty `allow` / `approve` entry still needs catalog recording
-afterward.
+selected workspace (`authsia mcp declare --server <name> --command <bin>`);
+it does not require operators to list child tool names. A credential-less
+empty `allow` / `approve` entry still needs catalog recording afterward.
 
 If Coverage lists the server as **Pin a PATH binary**, the launch is a shell
 or absolute `npx` / `uvx` launcher. Install a PATH basename for that child,
@@ -357,8 +357,9 @@ Add one named entry to the optional `mcpUpstreams` array in
 **Wrap** is the operator action for a wrap-eligible scanned stdio server: it
 declares command and argv and writes the scanned client launch after
 confirmation. **Declare in workspace** remains for a missing declaration when
-the client already launches `mcp proxy` and Wrap cannot infer child argv.
-Workspace Setup still does not write `mcpUpstreams`.
+the client already launches `mcp proxy` and Wrap cannot infer child argv:
+Access Center and `authsia mcp declare --server <name> --command <bin>` write
+that child. Workspace Setup still does not write `mcpUpstreams`.
 
 - `name` must be unique and match `[A-Za-z][A-Za-z0-9_-]{0,31}`.
 - `command` is a PATH basename or workspace-relative executable, plus a
@@ -586,7 +587,10 @@ after `listTools`.
   approval v2.
 - Both approvals name the declared child argv, not only the upstream name. The
   upstream name is committed repository content; the argv is what the approval
-  actually starts.
+  actually starts. That argv is stored on the grant. A matching grant is reused
+  only when the live `mcpUpstreams` command and args still equal the stored
+  value; a changed declaration drops the child and re-prompts. Grants that
+  predate this field do not reuse.
 - A denied or missing admission grant prevents both capture and the long-lived
   spawn. A declined call-path discovery caches an empty catalog for that proxy
   session so a retrying agent does not re-prompt.
@@ -596,8 +600,11 @@ after `listTools`.
   the product ceiling remains 24 hours. Expiry is absolute and does not slide
   when tools are used.
 - On expiry or revocation, the proxy observes the inactive grant within its
-  polling interval and terminates the child process group. A later tool call
-  requests a fresh admission. Access Center shows a live remaining-time label;
+  polling interval and terminates the child process group. Access Center revoke
+  also kills any recorded child process group when the proxy is already gone
+  (`SIGHUP`, crash, or `kill -9`): the proxy writes a sidecar of grant ID,
+  child pgid, and proxy pid after spawn, and a snapshot or revoke sweeps rows
+  whose proxy pid is dead. A later tool call requests a fresh admission. Access Center shows a live remaining-time label;
   **Renew admission** extends that grant in place from Access Center, keeping
   the same grant ID so the watching child survives and the countdown restarts.
   Renewal is restricted to Authsia.app: the MCP server may revoke its own
@@ -623,6 +630,7 @@ after `listTools`.
     |               |  redact tool name to activity    |
     | Access Center revoke ----------------------------|
     |               |  kill process group (up to 5s)   |
+    |               |  or sidecar pgid if proxy is gone|
 ```
 
 Decline prevents the long-lived spawn. An approved grant is reusable only by that caller,
@@ -652,14 +660,17 @@ authorized its environment. The proxy checks those grants on every call and
 while the child is live. Revocation kills the upstream process group and drops
 the client, secrets, and grant association; the periodic check may take up to
 five seconds after the Bridge snapshot first reports no active associated
-grant. Graceful proxy shutdown performs the same child cleanup and revokes
-active grants owned by that proxy instance. A later call starts a fresh JIT
-session when required.
+grant. Graceful proxy shutdown (`SIGINT`, `SIGTERM`, `SIGHUP`) performs the same
+child cleanup and revokes active grants owned by that proxy instance. A later
+call starts a fresh JIT session when required.
 
 Before forwarding each permitted `tools/call`, Authsia records one redacted
-Agent command event containing only the proxy source, grant ID,
-workspace/runtime correlation, and MCP tool name. If that record cannot be
-persisted, the call fails before it reaches the upstream.
+Agent command event and an HMAC-chained `bridge_audit.log` row containing only
+the proxy source, grant ID, workspace/runtime correlation, MCP tool name, and
+bounded outcome. If that `started` record cannot be persisted, the call fails
+before it reaches the upstream (`auditUnavailable`). A lost terminal outcome
+is retried once, then reported on stderr; the client still receives the
+forwarded result so the tool is not run twice.
 
 ## Client Configuration Scan
 
@@ -760,16 +771,18 @@ admission, and revoke-kill contract those rows display.
 ## Observability
 
 The proxy can see wrapped `tools/call` traffic at runtime. Persistence is a
-redacted Agent command event only: proxy source, optional grant ID,
-workspace/runtime correlation, MCP tool name, and a bounded outcome. An
-admitted call is written as `started` before forwarding, then an appended event
-with the same invocation merge key records `succeeded`, `mcpError`,
-`timedOut`, `cancelled`, or `upstreamUnavailable`. Policy and lifecycle
-failures that occur before a grant exists are recorded as `denied`, `busy`, or
-`upstreamUnavailable` without a grant when the proxy can persist them. If the
-record cannot be saved, the call still fails closed and its error omits the
-invocation identifier. Raw JSON-RPC, tool arguments, results, and child stderr
-are never written to audit or activity stores.
+redacted Agent command event plus an HMAC-chained `bridge_audit.log` row:
+proxy source, optional grant ID, workspace/runtime correlation, MCP tool name,
+and a bounded outcome. An admitted call is written as `started` before
+forwarding, then an appended event with the same invocation merge key records
+`succeeded`, `mcpError`, `timedOut`, `cancelled`, or `upstreamUnavailable`.
+Policy and lifecycle failures that occur before a grant exists are recorded as
+`denied`, `busy`, or `upstreamUnavailable` without a grant when the proxy can
+persist them. If the `started` record cannot be saved, the call fails closed
+with `auditUnavailable` and its error omits the invocation identifier. A lost
+terminal outcome is retried once and named on stderr; it does not fail the
+client. Raw JSON-RPC, tool arguments, results, and child stderr are never
+written to audit or activity stores.
 
 An error envelope carries the invocation UUID only after the redacted decision
 event has been saved. The matching audit row's `turnID` (and `toolUseID`) is
@@ -830,6 +843,7 @@ specific to wrapping:
 | `httpUpstreamUnsupported` | The workspace declares an HTTP, SSE, Streamable HTTP, or URL upstream, which V1 cannot execute. |
 | `timedOut` | The child did not answer a forwarded `tools/call` before the proxy's call deadline. The proxy cancels the request upstream and leaves the child running for the next call. |
 | `busy` | Too many forwarded `tools/call` requests are already in flight for this upstream. The proxy rejects rather than queues. |
+| `auditUnavailable` | The redacted `started` call record could not be persisted, so the proxy did not forward. |
 
 Shared codes such as `mcpAccessDisabled`, `approvalDenied`, and
 `workspaceUnavailable` keep the meanings in [`authsia-mcp.md`](authsia-mcp.md#errors-and-output).

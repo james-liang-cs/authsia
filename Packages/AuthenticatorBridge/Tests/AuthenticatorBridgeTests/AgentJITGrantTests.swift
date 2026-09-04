@@ -62,6 +62,24 @@ final class AgentJITGrantTests: XCTestCase {
         XCTAssertEqual(scopes.count, 1)
     }
 
+    func testAdmissionReuseRequiresMatchingChildArgv() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let matching = AgentJITGrant.fixture(
+            expiresAt: now.addingTimeInterval(60),
+            mcpUpstreamCommand: "tools/fixture --stdio"
+        )
+        let legacy = AgentJITGrant.fixture(expiresAt: now.addingTimeInterval(60))
+
+        XCTAssertTrue(matching.admits(mcpUpstreamCommand: "tools/fixture --stdio"))
+        XCTAssertFalse(matching.admits(mcpUpstreamCommand: "tools/other --stdio"))
+        XCTAssertFalse(matching.admits(mcpUpstreamCommand: nil))
+        XCTAssertFalse(legacy.admits(mcpUpstreamCommand: "tools/fixture --stdio"))
+        XCTAssertEqual(
+            matching.renewed(expiresAt: now.addingTimeInterval(120)).mcpUpstreamCommand,
+            "tools/fixture --stdio"
+        )
+    }
+
     func testFolderScopeEncodingNormalizesDirectFolderCase() throws {
         let data = try JSONEncoder().encode(AgentJITFolderScope.folder(" Team / API "))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
@@ -784,7 +802,8 @@ private extension AgentJITGrant {
         callerFingerprint: AgentJITCallerFingerprint? = nil,
         requestedItems: [AgentJITGrantItemReference] = [],
         agentRuntimeContext: AgentRuntimeContext? = nil,
-        environmentScope: EnvironmentAccessScope? = nil
+        environmentScope: EnvironmentAccessScope? = nil,
+        mcpUpstreamCommand: String? = nil
     ) -> AgentJITGrant {
         AgentJITGrant(
             id: UUID(),
@@ -799,7 +818,8 @@ private extension AgentJITGrant {
             requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
             approvedBy: "biometric",
-            environmentScope: environmentScope
+            environmentScope: environmentScope,
+            mcpUpstreamCommand: mcpUpstreamCommand
         )
     }
 }

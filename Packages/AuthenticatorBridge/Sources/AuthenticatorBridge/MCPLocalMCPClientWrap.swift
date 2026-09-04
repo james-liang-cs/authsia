@@ -72,7 +72,13 @@ public enum MCPLocalMCPClientWrap {
         for finding: MCPClientServerFinding,
         homeDirectory: URL
     ) -> URL {
-        let label = finding.configPathLabel
+        if let path = finding.configFilePath, path.hasPrefix("/") {
+            return URL(fileURLWithPath: path)
+        }
+        var label = finding.configPathLabel
+        if label.hasSuffix(" (local scope)") {
+            label = String(label.dropLast(" (local scope)".count))
+        }
         if label == "~" {
             return homeDirectory
         }
@@ -142,7 +148,8 @@ public enum MCPLocalMCPClientWrap {
                 source: plan.finding.source,
                 serverName: plan.finding.serverName,
                 authsiaCommand: authsiaCommand,
-                workspacePath: plan.workspacePath
+                workspacePath: plan.workspacePath,
+                projectKey: plan.finding.projectKey
             )
         }
         do {
@@ -245,7 +252,8 @@ public enum MCPLocalMCPClientWrap {
                 preserving: preservedJSONKeys(
                     data: data,
                     source: finding.source,
-                    serverName: finding.serverName
+                    serverName: finding.serverName,
+                    projectKey: finding.projectKey
                 )
             ))
         }
@@ -256,10 +264,11 @@ public enum MCPLocalMCPClientWrap {
     static func preservedJSONKeys(
         data: Data,
         source: MCPClientConfigSource,
-        serverName: String
+        serverName: String,
+        projectKey: String? = nil
     ) -> [String: Any] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let servers = root[jsonServersKey(for: source)] as? [String: Any],
+              let servers = jsonServers(in: root, source: source, projectKey: projectKey),
               let existing = servers[serverName] as? [String: Any] else {
             return [:]
         }
@@ -310,7 +319,11 @@ public enum MCPLocalMCPClientWrap {
             return snippet
         case .claude, .cursor, .devin, .vscode, .claudeDesktop:
             guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let servers = root[jsonServersKey(for: finding.source)] as? [String: Any],
+                  let servers = jsonServers(
+                    in: root,
+                    source: finding.source,
+                    projectKey: finding.projectKey
+                  ),
                   let value = servers[finding.serverName] else {
                 throw WrapError.malformedConfig
             }
@@ -323,16 +336,14 @@ public enum MCPLocalMCPClientWrap {
         source: MCPClientConfigSource,
         serverName: String,
         authsiaCommand: String,
-        workspacePath: String?
+        workspacePath: String?,
+        projectKey: String?
     ) throws -> Data {
         guard let authsia = MCPLocalMCPWrapRecipe.sanitizedCommand(authsiaCommand) else {
             throw WrapError.notWrapEligible
         }
-        guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw WrapError.malformedConfig
-        }
-        let key = jsonServersKey(for: source)
-        guard var servers = root[key] as? [String: Any],
+        guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var servers = jsonServers(in: root, source: source, projectKey: projectKey),
               servers[serverName] != nil else {
             throw WrapError.malformedConfig
         }
@@ -341,9 +352,19 @@ public enum MCPLocalMCPClientWrap {
             upstreamName: serverName,
             includeType: source == .vscode,
             workspacePath: workspacePath,
-            preserving: preservedJSONKeys(data: data, source: source, serverName: serverName)
+            preserving: preservedJSONKeys(
+                data: data,
+                source: source,
+                serverName: serverName,
+                projectKey: projectKey
+            )
         )
-        root[key] = servers
+        root = try replacingJSONServers(
+            in: root,
+            source: source,
+            projectKey: projectKey,
+            servers: servers
+        )
         guard let encoded = try? JSONSerialization.data(
             withJSONObject: root,
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -377,6 +398,45 @@ public enum MCPLocalMCPClientWrap {
 
     static func jsonServersKey(for source: MCPClientConfigSource) -> String {
         source == .vscode ? "servers" : "mcpServers"
+    }
+
+    static func jsonServers(
+        in root: [String: Any],
+        source: MCPClientConfigSource,
+        projectKey: String?
+    ) -> [String: Any]? {
+        let container: [String: Any]
+        if let projectKey {
+            guard let projects = root["projects"] as? [String: Any],
+                  let project = projects[projectKey] as? [String: Any] else {
+                return nil
+            }
+            container = project
+        } else {
+            container = root
+        }
+        return container[jsonServersKey(for: source)] as? [String: Any]
+    }
+
+    static func replacingJSONServers(
+        in root: [String: Any],
+        source: MCPClientConfigSource,
+        projectKey: String?,
+        servers: [String: Any]
+    ) throws -> [String: Any] {
+        var next = root
+        if let projectKey {
+            guard var projects = next["projects"] as? [String: Any],
+                  var project = projects[projectKey] as? [String: Any] else {
+                throw WrapError.malformedConfig
+            }
+            project[jsonServersKey(for: source)] = servers
+            projects[projectKey] = project
+            next["projects"] = projects
+            return next
+        }
+        next[jsonServersKey(for: source)] = servers
+        return next
     }
 
     static func prettyJSON(_ value: Any) -> String {

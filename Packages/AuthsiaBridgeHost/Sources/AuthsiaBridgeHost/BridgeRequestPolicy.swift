@@ -26,7 +26,7 @@ public enum BridgeRequestPolicy {
         case .list, .workspaceMetadata, .chromeAutofillMatches,
              .getOTP, .getPassword, .getAPIKey, .getCertificate, .getNote, .getSSH,
              .createAccess, .validateAccess, .directCLIPreflight, .agentJITPreflight,
-             .terminalPairingComplete:
+             .terminalPairingComplete, .mcpProxyActivity:
             return true
         default:
             return false

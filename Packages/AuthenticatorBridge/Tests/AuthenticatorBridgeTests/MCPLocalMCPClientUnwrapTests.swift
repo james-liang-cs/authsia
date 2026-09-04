@@ -273,6 +273,122 @@ final class MCPLocalMCPClientUnwrapTests: XCTestCase {
         XCTAssertEqual(launch.environmentCount, 1)
     }
 
+    func testClaudeLocalScopeUnwrapRewritesTheProjectsMap() throws {
+        let root = try makeWorkspace(upstreams: [
+            ["name": "filesystem", "command": "node", "args": ["server.js"], "env": [:]],
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let claude = home.appendingPathComponent(".claude.json")
+        try writeJSON([
+            "mcpServers": [
+                "keep-global": ["command": "npx"],
+            ],
+            "projects": [
+                root.path: [
+                    "mcpServers": [
+                        "filesystem": [
+                            "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                            "args": ["mcp", "proxy"],
+                            "env": ["AUTHSIA_MCP_UPSTREAM": "filesystem"],
+                        ],
+                    ],
+                ],
+            ],
+        ], to: claude)
+
+        let plan = try MCPLocalMCPClientUnwrap.plan(
+            finding: MCPClientServerFinding(
+                source: .claude,
+                serverName: "filesystem",
+                commandLabel: "authsia",
+                status: .admittedWrapped,
+                declaredUpstreamName: "filesystem",
+                configPathLabel: "~/.claude.json (local scope)",
+                configScope: .project,
+                precedence: .effective,
+                workspacePathLabel: root.path,
+                isAuthsiaProxyLaunch: true,
+                configFilePath: claude.path,
+                projectKey: root.path
+            ),
+            workspaceRoots: [root],
+            homeDirectory: home
+        )
+        try MCPLocalMCPClientUnwrap.apply(plan)
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: claude)) as? [String: Any]
+        )
+        let global = try XCTUnwrap(object["mcpServers"] as? [String: Any])
+        XCTAssertEqual((global["keep-global"] as? [String: Any])?["command"] as? String, "npx")
+        let projects = try XCTUnwrap(object["projects"] as? [String: Any])
+        let project = try XCTUnwrap(projects[root.path] as? [String: Any])
+        let servers = try XCTUnwrap(project["mcpServers"] as? [String: Any])
+        let filesystem = try XCTUnwrap(servers["filesystem"] as? [String: Any])
+        XCTAssertEqual(filesystem["command"] as? String, "node")
+        XCTAssertEqual(filesystem["args"] as? [String], ["server.js"])
+        XCTAssertNil(filesystem["env"])
+    }
+
+    func testClaudeLocalScopeUnwrapResolvesTheFileFromTheDisplayLabel() throws {
+        let root = try makeWorkspace(upstreams: [
+            ["name": "filesystem", "command": "node", "args": ["server.js"], "env": [:]],
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let claude = home.appendingPathComponent(".claude.json")
+        try writeJSON([
+            "mcpServers": [
+                "keep-global": ["command": "npx"],
+            ],
+            "projects": [
+                root.path: [
+                    "mcpServers": [
+                        "filesystem": [
+                            "command": "/Applications/Authsia.app/Contents/Helpers/authsia",
+                            "args": ["mcp", "proxy"],
+                            "env": ["AUTHSIA_MCP_UPSTREAM": "filesystem"],
+                        ],
+                    ],
+                ],
+            ],
+        ], to: claude)
+
+        let plan = try MCPLocalMCPClientUnwrap.plan(
+            finding: MCPClientServerFinding(
+                source: .claude,
+                serverName: "filesystem",
+                commandLabel: "authsia",
+                status: .admittedWrapped,
+                declaredUpstreamName: "filesystem",
+                configPathLabel: "~/.claude.json (local scope)",
+                configScope: .project,
+                precedence: .effective,
+                workspacePathLabel: root.path,
+                isAuthsiaProxyLaunch: true,
+                projectKey: root.path
+            ),
+            workspaceRoots: [root],
+            homeDirectory: home
+        )
+        XCTAssertEqual(plan.fileURL.path, claude.path)
+        try MCPLocalMCPClientUnwrap.apply(plan)
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: claude)) as? [String: Any]
+        )
+        XCTAssertNil((object["mcpServers"] as? [String: Any])?["filesystem"])
+        let projects = try XCTUnwrap(object["projects"] as? [String: Any])
+        let project = try XCTUnwrap(projects[root.path] as? [String: Any])
+        let servers = try XCTUnwrap(project["mcpServers"] as? [String: Any])
+        let filesystem = try XCTUnwrap(servers["filesystem"] as? [String: Any])
+        XCTAssertEqual(filesystem["command"] as? String, "node")
+        XCTAssertEqual(filesystem["args"] as? [String], ["server.js"])
+    }
+
     private func protectedFinding(
         source: MCPClientConfigSource,
         serverName: String = "filesystem",

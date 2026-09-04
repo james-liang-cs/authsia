@@ -717,6 +717,7 @@ extension XPCRequestHandler {
             if let existing = try activeMCPAdmissionGrant(
                 caller: caller,
                 runtime: runtime,
+                expectedCommand: payload.mcpUpstreamCommand,
                 now: timing.issuedAt
             ) {
                 let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
@@ -808,6 +809,7 @@ extension XPCRequestHandler {
             if let existing = try activeMCPAdmissionGrant(
                 caller: caller,
                 runtime: runtime,
+                expectedCommand: payload.mcpUpstreamCommand,
                 now: revalidationDate
             ) {
                 let response: BridgeResponse<AgentJITPreflightResultPayload> = BridgeResponseBuilder.success(
@@ -826,7 +828,8 @@ extension XPCRequestHandler {
                 requestedItems: [],
                 agentRuntimeContext: runtime,
                 environmentScope: nil,
-                approvedBy: approvalAttribution
+                approvedBy: approvalAttribution,
+                mcpUpstreamCommand: payload.mcpUpstreamCommand
             )
             try agentJITGrantStore.save(grant)
             postAgentJITGrantDidChange()
@@ -855,6 +858,7 @@ extension XPCRequestHandler {
     private func activeMCPAdmissionGrant(
         caller: AgentJITCallerFingerprint,
         runtime: AgentRuntimeContext?,
+        expectedCommand: String?,
         now: Date
     ) throws -> AgentJITGrant? {
         try agentJITGrantAuthorizer.activeGrants(
@@ -864,6 +868,7 @@ extension XPCRequestHandler {
             now: now
         ).first { grant in
             grant.agentRuntimeContext?.agentID == runtime?.agentID
+                && grant.admits(mcpUpstreamCommand: expectedCommand)
         }
     }
 
@@ -1147,7 +1152,8 @@ extension XPCRequestHandler {
         requestedItems: [AgentJITGrantItemReference],
         agentRuntimeContext: AgentRuntimeContext?,
         environmentScope: EnvironmentAccessScope?,
-        approvedBy: String
+        approvedBy: String,
+        mcpUpstreamCommand: String? = nil
     ) -> AgentJITGrant {
         AgentJITGrant(
             id: UUID(),
@@ -1162,7 +1168,8 @@ extension XPCRequestHandler {
             requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
             approvedBy: approvedBy,
-            environmentScope: environmentScope
+            environmentScope: environmentScope,
+            mcpUpstreamCommand: mcpUpstreamCommand
         )
     }
 
@@ -1192,7 +1199,8 @@ extension XPCRequestHandler {
             requestedItems: mergedItems,
             agentRuntimeContext: grant.agentRuntimeContext,
             approvedBy: grant.approvedBy,
-            environmentScope: grant.environmentScope
+            environmentScope: grant.environmentScope,
+            mcpUpstreamCommand: grant.mcpUpstreamCommand
         )
     }
 

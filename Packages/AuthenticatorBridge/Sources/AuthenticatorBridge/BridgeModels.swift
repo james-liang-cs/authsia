@@ -65,6 +65,8 @@ public enum BridgeRequestType: String, Codable {
     case terminalPairingComplete
     /// Audit-only lifecycle marker. Pairing revocation is performed by `lock`.
     case terminalPairingRevoke
+    /// Redacted MCP proxy tool-call evidence, HMAC-chained in `bridge_audit.log`.
+    case mcpProxyActivity
 }
 
 public struct BridgeRequest: Codable, Equatable {

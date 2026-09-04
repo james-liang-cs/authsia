@@ -248,6 +248,51 @@ final class MCPLocalMCPWorkspaceDeclarationTests: XCTestCase {
         XCTAssertEqual((loaded?["workspace"] as? [String: Any])?["name"] as? String, "Two")
     }
 
+    func testDeclareExplicitChildWritesPolicyWithoutAWrapEligibleFinding() throws {
+        let root = try makeWorkspace(name: "Proxy")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertEqual(
+            try MCPLocalMCPWorkspaceDeclaration.declare(
+                name: "codegraph",
+                command: "codegraph",
+                arguments: ["serve", "--mcp"],
+                workspaceRoot: root
+            ),
+            .declared
+        )
+        XCTAssertEqual(
+            try MCPLocalMCPWorkspaceDeclaration.declare(
+                name: "codegraph",
+                command: "codegraph",
+                arguments: ["serve", "--mcp"],
+                workspaceRoot: root
+            ),
+            .alreadyDeclared
+        )
+        XCTAssertThrowsError(
+            try MCPLocalMCPWorkspaceDeclaration.declare(
+                name: "codegraph",
+                command: "/bin/bash",
+                arguments: ["-c", "true"],
+                workspaceRoot: root
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? MCPLocalMCPWorkspaceDeclaration.DeclarationError,
+                .notWrapEligible
+            )
+        }
+
+        let loaded = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: root.appendingPathComponent(".authsia/workspace.json"))
+        ) as? [String: Any]
+        let upstreams = loaded?["mcpUpstreams"] as? [[String: Any]]
+        XCTAssertEqual(upstreams?.last?["name"] as? String, "codegraph")
+        XCTAssertEqual(upstreams?.last?["command"] as? String, "codegraph")
+        XCTAssertEqual(upstreams?.last?["args"] as? [String], ["serve", "--mcp"])
+    }
+
     private func makeWorkspace(name: String) throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(

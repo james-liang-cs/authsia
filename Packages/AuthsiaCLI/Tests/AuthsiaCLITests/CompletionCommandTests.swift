@@ -89,6 +89,7 @@ struct CompletionCommandTests {
         #expect(zsh.contains("'serve:Serve Authsia tools over local stdio'"))
         #expect(zsh.contains("'proxy:Proxy a named workspace upstream over local stdio'"))
         #expect(zsh.contains("'unwrap:Restore a wrapped client MCP launch"))
+        #expect(zsh.contains("'declare:Declare a child command for a proxy launch that has no workspace policy'"))
         #expect(zsh.contains("'doctor:Report whether known MCP client configs comply with the Authsia allowlist'"))
         #expect(
             zsh.contains(
@@ -97,13 +98,18 @@ struct CompletionCommandTests {
         )
 
         let bash = Completion.completionScript(for: .bash)
-        #expect(bash.contains("configure|wrap|unwrap|catalog|serve|proxy|doctor"))
-        #expect(bash.contains("compgen -W 'configure wrap unwrap catalog serve proxy doctor'"))
+        #expect(bash.contains("configure|wrap|unwrap|declare|catalog|serve|proxy|doctor"))
+        #expect(bash.contains("compgen -W 'configure wrap unwrap declare catalog serve proxy doctor'"))
 
         let fish = Completion.completionScript(for: .fish)
         #expect(fish.contains("-fa 'serve' -d 'Serve Authsia tools over local stdio'"))
         #expect(fish.contains("-fa 'proxy' -d 'Proxy a named workspace upstream over local stdio'"))
         #expect(fish.contains("-fa 'unwrap' -d 'Restore a wrapped client MCP launch"))
+        #expect(
+            fish.contains(
+                "-fa 'declare' -d 'Declare a child command for a proxy launch that has no workspace policy'"
+            )
+        )
         #expect(
             fish.contains(
                 "-fa 'doctor' -d 'Report whether known MCP client configs comply with the Authsia allowlist'"

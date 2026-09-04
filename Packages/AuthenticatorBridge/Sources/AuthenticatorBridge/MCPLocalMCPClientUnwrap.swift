@@ -262,18 +262,20 @@ public enum MCPLocalMCPClientUnwrap {
                 preserving: MCPLocalMCPClientWrap.preservedJSONKeys(
                     data: data,
                     source: finding.source,
-                    serverName: finding.serverName
+                    serverName: finding.serverName,
+                    projectKey: finding.projectKey
                 )
             ))
         }
     }
 
     private static func rewriteJSON(_ data: Data, plan: Plan) throws -> Data {
-        guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw UnwrapError.malformedConfig
-        }
-        let key = MCPLocalMCPClientWrap.jsonServersKey(for: plan.finding.source)
-        guard var servers = root[key] as? [String: Any],
+        guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var servers = MCPLocalMCPClientWrap.jsonServers(
+                in: root,
+                source: plan.finding.source,
+                projectKey: plan.finding.projectKey
+              ),
               servers[plan.finding.serverName] != nil else {
             throw UnwrapError.malformedConfig
         }
@@ -288,10 +290,20 @@ public enum MCPLocalMCPClientUnwrap {
             preserving: MCPLocalMCPClientWrap.preservedJSONKeys(
                 data: data,
                 source: plan.finding.source,
-                serverName: plan.finding.serverName
+                serverName: plan.finding.serverName,
+                projectKey: plan.finding.projectKey
             )
         )
-        root[key] = servers
+        do {
+            root = try MCPLocalMCPClientWrap.replacingJSONServers(
+                in: root,
+                source: plan.finding.source,
+                projectKey: plan.finding.projectKey,
+                servers: servers
+            )
+        } catch {
+            throw UnwrapError.malformedConfig
+        }
         guard let encoded = try? JSONSerialization.data(
             withJSONObject: root,
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

@@ -459,6 +459,8 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
     public let agentRuntimeContext: AgentRuntimeContext?
     public let approvedBy: String
     public let environmentScope: EnvironmentAccessScope?
+    /// The argv this admission approved. Reuse requires the same child command.
+    public let mcpUpstreamCommand: String?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -475,6 +477,7 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         case agentRuntimeContext
         case approvedBy
         case environmentScope
+        case mcpUpstreamCommand
     }
 
     public init(
@@ -491,7 +494,8 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         requestedItems: [AgentJITGrantItemReference] = [],
         agentRuntimeContext: AgentRuntimeContext? = nil,
         approvedBy: String,
-        environmentScope: EnvironmentAccessScope? = nil
+        environmentScope: EnvironmentAccessScope? = nil,
+        mcpUpstreamCommand: String? = nil
     ) {
         self.id = id
         self.agentName = agentName
@@ -509,6 +513,7 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         self.agentRuntimeContext = agentRuntimeContext
         self.approvedBy = approvedBy
         self.environmentScope = environmentScope
+        self.mcpUpstreamCommand = Self.sanitizedDisplay(mcpUpstreamCommand)
     }
 
     public init(from decoder: Decoder) throws {
@@ -538,6 +543,8 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         )
         self.approvedBy = try container.decode(String.self, forKey: .approvedBy)
         self.environmentScope = try container.decodeIfPresent(EnvironmentAccessScope.self, forKey: .environmentScope)
+        self.mcpUpstreamCommand = try container.decodeIfPresent(String.self, forKey: .mcpUpstreamCommand)
+            .flatMap(Self.sanitizedDisplay)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -556,6 +563,23 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(agentRuntimeContext, forKey: .agentRuntimeContext)
         try container.encode(approvedBy, forKey: .approvedBy)
         try container.encodeIfPresent(environmentScope, forKey: .environmentScope)
+        try container.encodeIfPresent(mcpUpstreamCommand, forKey: .mcpUpstreamCommand)
+    }
+
+    /// Legacy grants with no stored argv cannot be reused: the prompt named a
+    /// binary the store never recorded.
+    public func admits(mcpUpstreamCommand command: String?) -> Bool {
+        guard let expected = Self.sanitizedDisplay(command),
+              let stored = mcpUpstreamCommand else {
+            return false
+        }
+        return stored == expected
+    }
+
+    static func sanitizedDisplay(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : String(trimmed.prefix(256))
     }
 
     public func status(asOf date: Date) -> AgentJITGrantStatus {
@@ -594,7 +618,8 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
             requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
             approvedBy: approvedBy,
-            environmentScope: environmentScope
+            environmentScope: environmentScope,
+            mcpUpstreamCommand: mcpUpstreamCommand
         )
     }
 
@@ -617,7 +642,8 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
             requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
             approvedBy: approvedBy,
-            environmentScope: environmentScope
+            environmentScope: environmentScope,
+            mcpUpstreamCommand: mcpUpstreamCommand
         )
     }
 
@@ -681,5 +707,38 @@ public struct AgentJITGrantRenewalPayload: Codable, Equatable, Sendable {
 
     public init(grant: AgentJITGrant) {
         self.grant = grant
+    }
+}
+
+public struct MCPProxyActivityPayload: Codable, Equatable, Sendable {
+    public let toolName: String
+    public let outcome: MCPProxyCallOutcome
+    public let invocationID: UUID
+    public let grantID: UUID?
+    public let upstreamName: String
+    public let workspaceRoot: String?
+
+    public init(
+        toolName: String,
+        outcome: MCPProxyCallOutcome,
+        invocationID: UUID,
+        grantID: UUID?,
+        upstreamName: String,
+        workspaceRoot: String?
+    ) {
+        self.toolName = toolName
+        self.outcome = outcome
+        self.invocationID = invocationID
+        self.grantID = grantID
+        self.upstreamName = upstreamName
+        self.workspaceRoot = workspaceRoot
+    }
+}
+
+public struct MCPProxyActivityResultPayload: Codable, Equatable, Sendable {
+    public let recorded: Bool
+
+    public init(recorded: Bool) {
+        self.recorded = recorded
     }
 }

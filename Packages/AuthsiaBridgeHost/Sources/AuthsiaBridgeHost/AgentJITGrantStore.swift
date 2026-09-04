@@ -516,7 +516,8 @@ private extension AgentJITGrant {
             requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
             approvedBy: approvedBy,
-            environmentScope: environmentScope
+            environmentScope: environmentScope,
+            mcpUpstreamCommand: mcpUpstreamCommand
         )
     }
 }

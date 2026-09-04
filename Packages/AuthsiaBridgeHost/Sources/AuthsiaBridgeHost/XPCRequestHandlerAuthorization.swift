@@ -287,7 +287,8 @@ extension XPCRequestHandler {
               ) else {
             return nil
         }
-        guard request.type != .agentJITPreflight else {
+        guard request.type != .agentJITPreflight,
+              request.type != .mcpProxyActivity else {
             return nil
         }
         let command = Self.agentJITCommandName(for: request)

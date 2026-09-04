@@ -284,6 +284,11 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     /// wrap does not copy them, so the count is what makes that visible before
     /// the write. Never the names, never the values.
     public let childEnvironmentCount: Int
+    /// Exact on-disk path of the scanned file. Display labels such as
+    /// `~/.claude.json (local scope)` are not paths; wrap and unwrap use this.
+    public let configFilePath: String?
+    /// Claude Code local-scope key into `projects`. Nil for every other file.
+    public let projectKey: String?
 
     public var id: String {
         "\(workspacePathLabel ?? ""):\(source.rawValue):\(serverName):\(configPathLabel)"
@@ -327,7 +332,9 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         hasAdvertisedCatalog: Bool = true,
         canRecordCatalog: Bool = false,
         unsupportedLaunchKeys: [String] = [],
-        childEnvironmentCount: Int = 0
+        childEnvironmentCount: Int = 0,
+        configFilePath: String? = nil,
+        projectKey: String? = nil
     ) {
         self.source = source
         self.serverName = serverName
@@ -347,6 +354,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         self.canRecordCatalog = canRecordCatalog
         self.unsupportedLaunchKeys = unsupportedLaunchKeys
         self.childEnvironmentCount = childEnvironmentCount
+        self.configFilePath = configFilePath
+        self.projectKey = projectKey
     }
 
     enum CodingKeys: String, CodingKey {
@@ -369,6 +378,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         case canRecordCatalog
         case unsupportedLaunchKeys
         case childEnvironmentCount
+        case configFilePath
+        case projectKey
     }
 
     public init(from decoder: Decoder) throws {
@@ -403,6 +414,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
             Int.self,
             forKey: .childEnvironmentCount
         ) ?? 0
+        configFilePath = try container.decodeIfPresent(String.self, forKey: .configFilePath)
+        projectKey = try container.decodeIfPresent(String.self, forKey: .projectKey)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -440,6 +453,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         if canRecordCatalog {
             try container.encode(canRecordCatalog, forKey: .canRecordCatalog)
         }
+        try container.encodeIfPresent(configFilePath, forKey: .configFilePath)
+        try container.encodeIfPresent(projectKey, forKey: .projectKey)
     }
 }
 
@@ -699,7 +714,9 @@ public struct MCPClientConfigScanner {
             canRecordCatalog: status == .admittedWrapped
                 && (declaredMatch?.canRecordCatalog ?? false),
             unsupportedLaunchKeys: entry.unsupportedKeys,
-            childEnvironmentCount: entry.childEnvironmentCount
+            childEnvironmentCount: entry.childEnvironmentCount,
+            configFilePath: Self.safeExactPath(entry.location.fileURL.path),
+            projectKey: entry.location.projectKey
         )
     }
 

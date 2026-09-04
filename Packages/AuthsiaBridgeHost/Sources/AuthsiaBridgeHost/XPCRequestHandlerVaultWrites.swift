@@ -53,6 +53,16 @@ extension XPCRequestHandler {
                 return
             }
 
+            if bridgeRequest.type == .mcpProxyActivity {
+                self.handleMCPProxyActivity(
+                    bridgeRequest,
+                    body: body,
+                    callerIdentity: callerIdentity,
+                    reply: reply
+                )
+                return
+            }
+
             if bridgeRequest.type == .createAccess {
                 guard let payload = try? BridgeCoder.decode(AccessCreateApprovalPayload.self, from: body) else {
                     replyError(id: bridgeRequest.id, code: .invalidRequest, message: "Invalid access approval payload", reply: reply)

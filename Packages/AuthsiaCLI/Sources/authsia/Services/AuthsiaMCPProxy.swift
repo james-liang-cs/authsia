@@ -91,11 +91,14 @@ actor AuthsiaMCPProxy {
     func runStdio() async throws {
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
+        signal(SIGHUP, SIG_IGN)
 
         let interruptSource = shutdownSource(signal: SIGINT)
         let terminateSource = shutdownSource(signal: SIGTERM)
+        let hangupSource = shutdownSource(signal: SIGHUP)
         interruptSource.resume()
         terminateSource.resume()
+        hangupSource.resume()
 
         try await start(transport: StdioTransport())
         await server.waitUntilCompleted()
@@ -103,6 +106,7 @@ actor AuthsiaMCPProxy {
 
         interruptSource.cancel()
         terminateSource.cancel()
+        hangupSource.cancel()
     }
 
     func stop() async {
@@ -261,14 +265,29 @@ actor AuthsiaMCPProxy {
                     )
                 }
                 recordAttempted = true
-                try toolCallRecorder.record(
-                    upstreamName: upstreamName,
-                    upstreamCommand: upstream.command,
-                    toolName: parameters.name,
-                    agentRuntimeContext: agentRuntimeContext,
-                    workspaceRoot: runtimeContext.workspaceRoot,
-                    grantID: grantID
-                )
+                do {
+                    try toolCallRecorder.record(
+                        upstreamName: upstreamName,
+                        upstreamCommand: upstream.command,
+                        toolName: parameters.name,
+                        agentRuntimeContext: agentRuntimeContext,
+                        workspaceRoot: runtimeContext.workspaceRoot,
+                        grantID: grantID
+                    )
+                } catch {
+                    return try proxyFailureResult(
+                        invocationID: invocationID,
+                        upstreamCommand: upstream.command,
+                        toolName: parameters.name,
+                        agentRuntimeContext: agentRuntimeContext,
+                        grantID: grantID,
+                        outcome: .upstreamUnavailable,
+                        code: .auditUnavailable,
+                        message: "The call was not recorded, so it was not forwarded.",
+                        recordAttempted: false,
+                        recordedInvocationID: nil
+                    )
+                }
                 recordedInvocationID = invocationID
                 let result = try await forward(parameters, using: session)
                 recordMCPProxyOutcome(
@@ -438,15 +457,27 @@ actor AuthsiaMCPProxy {
         agentRuntimeContext: AgentRuntimeContext,
         grantID: UUID?
     ) {
-        try? toolCallRecorder.recordOutcome(
-            upstreamName: upstreamName,
-            upstreamCommand: upstreamCommand,
-            toolName: toolName,
-            agentRuntimeContext: agentRuntimeContext,
-            workspaceRoot: runtimeContext.workspaceRoot,
-            grantID: grantID,
-            outcome: outcome
-        )
+        var lastError: (any Error)?
+        for attempt in 0..<2 {
+            do {
+                try toolCallRecorder.recordOutcome(
+                    upstreamName: upstreamName,
+                    upstreamCommand: upstreamCommand,
+                    toolName: toolName,
+                    agentRuntimeContext: agentRuntimeContext,
+                    workspaceRoot: runtimeContext.workspaceRoot,
+                    grantID: grantID,
+                    outcome: outcome
+                )
+                return
+            } catch {
+                lastError = error
+            }
+            _ = attempt
+        }
+        if lastError != nil {
+            stderrOutput.write(Data("Authsia could not record the MCP call outcome.\n".utf8))
+        }
     }
 
     private func proxyFailureInvocationID(
@@ -524,12 +555,9 @@ actor AuthsiaMCPProxy {
         }
         if let spawnTask {
             do {
-                let session = try await spawnTask.value
+                _ = try await spawnTask.value
                 if let live = await liveSession() {
                     return live
-                }
-                if session.isAlive {
-                    return session
                 }
                 await dropChild()
             } catch {
@@ -620,6 +648,12 @@ actor AuthsiaMCPProxy {
             environment: childEnvironment,
             currentDirectory: workspaceRoot
         )
+        MCPProxyChildRegistry.register(
+            grantIDs: Set(prepared.grantIDs),
+            processGroupID: spawned.processGroupID,
+            childProcessID: spawned.processID,
+            proxyProcessID: getpid()
+        )
         MCPProxyStderrDrain.start(
             fileDescriptor: spawned.stderrRead,
             secrets: prepared.secrets,
@@ -666,6 +700,8 @@ actor AuthsiaMCPProxy {
             }
             let session = ChildSession(
                 processID: spawned.processID,
+                processGroupID: spawned.processGroupID,
+                commandLabel: commandLabel,
                 client: client,
                 childToolNames: listed,
                 secrets: prepared.secrets,
@@ -689,6 +725,11 @@ actor AuthsiaMCPProxy {
         guard let session = childSession else { return nil }
         guard session.isAlive else {
             await dropChild()
+            return nil
+        }
+        if let upstream = stdioUpstream(),
+           session.commandLabel != Self.commandLabel(for: upstream) {
+            await dropChild(processID: session.processID)
             return nil
         }
         guard associatedGrantsRemainActive(for: session) else {
@@ -749,6 +790,8 @@ actor AuthsiaMCPProxy {
         childSession = nil
         grantWatchTask?.cancel()
         grantWatchTask = nil
+        MCPProxyChildRegistry.unregister(grantIDs: session.grantIDs)
+        MCPProxyChildRegistry.unregister(processGroupID: session.processGroupID)
         await teardownSpawn(
             client: session.client,
             terminator: session.terminator,
@@ -760,6 +803,9 @@ actor AuthsiaMCPProxy {
     private func consumeInFlight() async {
         guard let inFlight else { return }
         self.inFlight = nil
+        if let processGroupID = inFlight.terminator.recordedProcessGroupID {
+            MCPProxyChildRegistry.unregister(processGroupID: processGroupID)
+        }
         await teardownSpawn(
             client: inFlight.client,
             terminator: inFlight.terminator,
@@ -1111,6 +1157,8 @@ private struct InFlightSpawn {
 
 private struct ChildSession: Sendable {
     let processID: pid_t
+    let processGroupID: pid_t
+    let commandLabel: String?
     let client: Client
     let childToolNames: Set<String>
     let secrets: [String]

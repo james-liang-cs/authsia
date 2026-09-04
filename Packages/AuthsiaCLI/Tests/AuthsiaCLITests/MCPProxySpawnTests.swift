@@ -364,6 +364,74 @@ struct MCPProxySpawnTests {
         await proxy.waitUntilCompleted()
     }
 
+    @Test("a workspace command change drops the live child and re-admits")
+    func workspaceCommandChangeDropsLiveChild() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-other"))
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let grantID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: grantID, serverID: serverID)],
+                history: []
+            )
+        )
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["JIRA_API_TOKEN": "synthetic-token"],
+            secrets: ["synthetic-token"],
+            grantIDs: [grantID]
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(upstreams: [stdioJiraUpstream()])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            grantPollIntervalSeconds: 5,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP argv change")
+        let firstCall: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await firstCall.value.isError != true)
+        let firstChild = try #require(launcher.lastSpawned)
+        #expect(sessionClient.mcpUpstreamCommands == ["mcp-atlassian"])
+
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                schemaVersion: 2,
+                workspace: .init(name: "proxy", authsiaFolder: "Workspaces/proxy"),
+                managedEnvFiles: [],
+                agents: nil,
+                mcpUpstreams: [stdioJiraUpstream(command: "mcp-other")]
+            ),
+            toWorkspaceRoot: root
+        )
+
+        let secondCall: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await secondCall.value.isError != true)
+        #expect(sessionClient.prepareCount == 2)
+        #expect(sessionClient.mcpUpstreamCommands == ["mcp-atlassian", "mcp-other"])
+        #expect(launcher.spawnCount == 2)
+        #expect(launcher.lastSpawned?.processID != firstChild.processID)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
     @Test("relative workspace command is spawned from the workspace root")
     func relativeCommandSpawns() async throws {
         let root = try makeMCPProxyWorkspace(

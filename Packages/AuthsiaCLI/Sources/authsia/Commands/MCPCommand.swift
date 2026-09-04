@@ -21,13 +21,14 @@ struct MCPCommand: AsyncParsableCommand {
               authsia mcp configure --client codex
               authsia mcp wrap --write --server filesystem
               authsia mcp unwrap --write --server filesystem
+              authsia mcp declare --server codegraph --command codegraph --arg serve
               authsia mcp catalog --server filesystem --write
               authsia mcp serve --workspace /path/to/repository
               authsia mcp proxy --upstream jira
               authsia mcp doctor --json
             """,
         subcommands: [
-            Configure.self, Wrap.self, Unwrap.self, Catalog.self, Serve.self, Proxy.self,
+            Configure.self, Wrap.self, Unwrap.self, Declare.self, Catalog.self, Serve.self, Proxy.self,
             Doctor.self,
         ]
     )
@@ -730,6 +731,97 @@ struct MCPCommand: AsyncParsableCommand {
                     + "authsia mcp wrap --write --server \(finding.serverName) protects it again. "
                     + "Reopen the client."
             )
+        }
+    }
+
+    struct Declare: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Declare a child command for a proxy launch that has no workspace policy",
+            discussion: """
+                Write command and argv into mcpUpstreams when the client already
+                launches authsia mcp proxy. Wrap cannot infer that child from the
+                proxy entry. Without --yes this prints the plan and exits 2.
+
+                Examples:
+                  authsia mcp declare --server codegraph --command codegraph --arg serve
+                  authsia mcp declare --server codegraph --command codegraph --arg serve --yes
+                """
+        )
+
+        @Option(help: "Upstream / client server name to declare")
+        var server: String
+
+        @Option(help: "Child executable stored in workspace policy")
+        var command: String
+
+        @Option(name: .customLong("arg"), help: "Child argument. Repeatable.")
+        var arg: [String] = []
+
+        @Flag(name: .customLong("yes"), help: "Write the declaration after printing the plan")
+        var yes = false
+
+        @Option(help: "Workspace root to declare in. Repeatable.")
+        var workspace: [String] = []
+
+        var homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        var currentDirectoryPath = FileManager.default.currentDirectoryPath
+        var environment = ProcessInfo.processInfo.environment
+
+        func run() throws {
+            try run { print($0) }
+        }
+
+        func run(output: (String) -> Void) throws {
+            guard MCPProxyClientLaunch.validUpstreamName(server) != nil else {
+                throw ValidationError("Server name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
+            }
+            guard let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: command) else {
+                throw ValidationError(
+                    "Command must be a PATH basename or workspace-relative executable."
+                )
+            }
+            var doctor = try Doctor.parse([])
+            doctor.workspace = workspace
+            doctor.homeDirectory = homeDirectory
+            doctor.currentDirectoryPath = currentDirectoryPath
+            doctor.environment = environment
+            let report = try doctor.makeReport()
+            let roots = report.workspaceRoots.map {
+                URL(fileURLWithPath: $0, isDirectory: true)
+            }
+            guard !roots.isEmpty else {
+                throw ValidationError(
+                    "No managed workspace resolved from this directory. Pass --workspace "
+                        + "<root> so the child can be declared."
+                )
+            }
+            var message = "Declare \(server) as \(policyCommand)"
+            if !arg.isEmpty {
+                message += " \(arg.joined(separator: " "))"
+            }
+            message += " in:"
+            for root in roots {
+                message += "\n  \(root.path)/\(MCPLocalMCPWorkspaceDeclaration.relativeConfigPath)"
+            }
+            guard yes else {
+                output(message + "\n\nRe-run with --yes to write this declaration.")
+                throw ExitCode(2)
+            }
+            output(message)
+            for root in roots {
+                let outcome = try MCPLocalMCPWorkspaceDeclaration.declare(
+                    name: server,
+                    command: policyCommand,
+                    arguments: arg,
+                    workspaceRoot: root
+                )
+                switch outcome {
+                case .declared:
+                    output("Declared \(server) in \(root.path).")
+                case .alreadyDeclared:
+                    output("\(server) is already declared in \(root.path).")
+                }
+            }
         }
     }
 }

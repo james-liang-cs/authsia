@@ -167,6 +167,16 @@ private struct MCPProxyBridgedSecretResolver: SecretResolverClient {
     }
 }
 
+protocol MCPProxyActivityAuditing: Sendable {
+    func recordMCPProxyActivity(
+        _ payload: MCPProxyActivityPayload,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?
+    ) throws
+}
+
+extension AuthsiaBridgeClient: MCPProxyActivityAuditing {}
+
 protocol MCPProxyToolCallRecording: Sendable {
     func record(
         upstreamName: String,
@@ -226,9 +236,14 @@ extension MCPProxyToolCallRecording {
 
 struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Sendable {
     private let store: AgentCommandHistoryStore
+    private let auditor: (any MCPProxyActivityAuditing)?
 
-    init(store: AgentCommandHistoryStore = AgentCommandHistoryStore()) {
+    init(
+        store: AgentCommandHistoryStore = AgentCommandHistoryStore(),
+        auditor: (any MCPProxyActivityAuditing)? = AuthsiaBridgeClient.shared
+    ) {
         self.store = store
+        self.auditor = auditor
     }
 
     func record(
@@ -239,7 +254,7 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         workspaceRoot: URL?,
         grantID: UUID?
     ) throws {
-        try store.record(event(
+        try persist(
             upstreamName: upstreamName,
             upstreamCommand: upstreamCommand,
             toolName: toolName,
@@ -247,7 +262,7 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             workspaceRoot: workspaceRoot,
             grantID: grantID,
             outcome: .started
-        ))
+        )
     }
 
     func recordRejected(
@@ -259,7 +274,7 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         grantID: UUID?,
         outcome: MCPProxyCallOutcome
     ) throws {
-        try store.record(event(
+        try persist(
             upstreamName: upstreamName,
             upstreamCommand: upstreamCommand,
             toolName: toolName,
@@ -267,7 +282,7 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             workspaceRoot: workspaceRoot,
             grantID: grantID,
             outcome: outcome
-        ))
+        )
     }
 
     func recordOutcome(
@@ -279,6 +294,40 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         grantID: UUID?,
         outcome: MCPProxyCallOutcome
     ) throws {
+        try persist(
+            upstreamName: upstreamName,
+            upstreamCommand: upstreamCommand,
+            toolName: toolName,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot,
+            grantID: grantID,
+            outcome: outcome
+        )
+    }
+
+    private func persist(
+        upstreamName: String,
+        upstreamCommand: String?,
+        toolName: String,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        outcome: MCPProxyCallOutcome
+    ) throws {
+        if let auditor {
+            try auditor.recordMCPProxyActivity(
+                MCPProxyActivityPayload(
+                    toolName: toolName,
+                    outcome: outcome,
+                    invocationID: Self.invocationID(from: agentRuntimeContext),
+                    grantID: grantID,
+                    upstreamName: upstreamName,
+                    workspaceRoot: workspaceRoot?.path
+                ),
+                agentRuntimeContext: agentRuntimeContext,
+                workspaceRoot: workspaceRoot
+            )
+        }
         try store.record(event(
             upstreamName: upstreamName,
             upstreamCommand: upstreamCommand,
@@ -316,5 +365,14 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             command: "\(executable) mcp-tool \(toolName)",
             mcpProxyOutcome: outcome
         )
+    }
+
+    private static func invocationID(from context: AgentRuntimeContext) -> UUID {
+        let prefix = "mcp-call:"
+        if let toolUseID = context.toolUseID, toolUseID.hasPrefix(prefix),
+           let uuid = UUID(uuidString: String(toolUseID.dropFirst(prefix.count))) {
+            return uuid
+        }
+        return UUID()
     }
 }
