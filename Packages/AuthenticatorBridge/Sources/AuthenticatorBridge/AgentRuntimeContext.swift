@@ -48,6 +48,12 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
         )
     }
 
+    /// True when the context is worth encoding or showing. An empty context still matters when it
+    /// is not high-confidence: it carries the fact that attribution was ambiguous.
+    public var carriesAttribution: Bool {
+        !isEmpty || attributionConfidence != .high
+    }
+
     public var isEmpty: Bool {
         platform == nil
             && sessionID == nil

@@ -1071,6 +1071,11 @@ If JIT does not prompt, check:
 - Approval descriptors carry exact stable item identities, caller, workspace,
   environment, duration, and reuse semantics. Local and remote approval use the
   same versioned descriptor and reject mixed canonical versions.
+- A descriptor encodes as canonical schema 2 unless it carries hook attribution,
+  which raises it to schema 3. A peer that predates schema 3 rejects those
+  requests as invalid, so a Mac on a newer build than its paired iPhone loses
+  remote approval for attributed requests only. There is no version floor in the
+  pairing binding to negotiate this; adding one means a new signed pairing field.
 - Bridge-owned authority is the only active authority. Unsigned legacy JIT JSON
   and legacy automation metadata are non-authoritative and require reapproval
   or credential recreation.

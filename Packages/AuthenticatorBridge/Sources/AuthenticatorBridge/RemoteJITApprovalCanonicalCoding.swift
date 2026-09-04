@@ -17,10 +17,7 @@ public enum RemoteJITApprovalCanonicalCoding {
     public static func encodeDescriptor(
         _ descriptor: RemoteJITApprovalDescriptor
     ) throws -> Data {
-        let includeAttribution = {
-            guard let context = descriptor.agentRuntimeContext else { return false }
-            return !context.isEmpty || context.attributionConfidence != .high
-        }()
+        let includeAttribution = descriptor.agentRuntimeContext?.carriesAttribution == true
         var writer = CanonicalWriter()
         writer.append(descriptorDomain)
         writer.append(
@@ -401,7 +398,15 @@ private struct CanonicalWriter {
         try appendOptionalString(context?.agentID)
         try appendOptionalString(context?.agentType)
         try appendOptionalString(context?.toolUseID)
-        append(context?.attributionConfidence == .ambiguous ? UInt8(1) : UInt8(0))
+        // Exhaustive on purpose: a new confidence case must not silently encode as `.high`.
+        let confidence: UInt8
+        switch context?.attributionConfidence ?? .high {
+        case .high:
+            confidence = 0
+        case .ambiguous:
+            confidence = 1
+        }
+        append(confidence)
     }
 }
 
@@ -555,7 +560,7 @@ private struct CanonicalReader {
             toolUseID: toolUseID,
             attributionConfidence: attributionConfidence
         )
-        return context.isEmpty && context.attributionConfidence == .high ? nil : context
+        return context.carriesAttribution ? context : nil
     }
 
     mutating func readItems() throws -> [RemoteJITApprovalItemReference] {

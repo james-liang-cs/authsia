@@ -12,6 +12,11 @@ enum AgentRuntimeContextResolver {
     static let environmentToolUseIDKey = "AUTHSIA_AGENT_TOOL_USE_ID"
     static let environmentHookContextPathKey = "AUTHSIA_HOOK_CONTEXT_PATH"
     static let attributionTTL: TimeInterval = 5 * 60
+    /// How long an unclaimed hook record stays claimable by a new process. A hook writes its
+    /// record immediately before spawning `authsia`, so a genuine match is seconds old. Bounding
+    /// this keeps a record that was written but never consumed (a denied or failed invocation)
+    /// from shifting every later attribution by one for the whole `attributionTTL`.
+    static let claimFreshness: TimeInterval = 60
 
     private struct RecordsCache {
         let path: String
@@ -57,18 +62,22 @@ enum AgentRuntimeContextResolver {
         let detectedPlatforms = detectedAgentPlatforms(in: processAncestry)
         guard !detectedPlatforms.isEmpty else { return nil }
 
-        let candidates = attributionEventURLs(eventsURL: eventsURL, environment: environment)
-            .flatMap { url in
-                loadRecords(from: url).map { SourcedRecord(record: $0, sourceURL: url) }
+        let sources = attributionEventURLs(eventsURL: eventsURL, environment: environment)
+            .map { url -> AttributionSource in
+                let records = loadRecords(from: url)
+                return AttributionSource(
+                    url: url,
+                    knownIDs: Set(records.map(\.id)),
+                    candidates: records
+                        .filter { now.timeIntervalSince($0.recordedAt) <= attributionTTL }
+                        .filter { workingDirectoryMatches($0.workingDirectory, currentDirectoryPath: currentDirectoryPath) }
+                        .filter { recordInvokesAuthsia($0) }
+                        .filter { platformMatches($0.platform, detectedPlatforms: detectedPlatforms) }
+                )
             }
-            .filter { now.timeIntervalSince($0.record.recordedAt) <= attributionTTL }
-            .filter { workingDirectoryMatches($0.record.workingDirectory, currentDirectoryPath: currentDirectoryPath) }
-            .filter { recordInvokesAuthsia($0.record) }
-            .filter { platformMatches($0.record.platform, detectedPlatforms: detectedPlatforms) }
-            .sorted { $0.record.recordedAt < $1.record.recordedAt }
-        guard !candidates.isEmpty else { return nil }
+        guard sources.contains(where: { !$0.candidates.isEmpty }) else { return nil }
 
-        return selectContext(from: candidates, now: now, claimOwner: claimOwner)
+        return selectContext(from: sources, now: now, claimOwner: claimOwner)
     }
 
     static func hasExplicitAgentInvocationMarker(environment: [String: String]) -> Bool {
@@ -342,19 +351,25 @@ enum AgentRuntimeContextResolver {
     }
 
     private static func selectContext(
-        from candidates: [SourcedRecord],
+        from sources: [AttributionSource],
         now: Date,
         claimOwner: pid_t
     ) -> AgentRuntimeContext? {
-        let grouped = Dictionary(grouping: candidates, by: \.sourceURL)
         var owned: [SourcedRecord] = []
         var unclaimed: [SourcedRecord] = []
-        for (url, records) in grouped {
-            let claims = AttributionClaimStore.load(for: url, now: now, liveIDs: Set(records.map(\.record.id)))
-            for sourced in records {
-                if let claim = claims[sourced.record.id], claim.pid == Int32(claimOwner) {
-                    owned.append(sourced)
-                } else if claims[sourced.record.id] == nil {
+        for source in sources where !source.candidates.isEmpty {
+            let claims = AttributionClaimStore.load(
+                for: source.url,
+                now: now,
+                knownIDs: source.knownIDs
+            )
+            for record in source.candidates {
+                let sourced = SourcedRecord(record: record, source: source)
+                if let claim = claims[record.id] {
+                    if claim.pid == Int32(claimOwner) {
+                        owned.append(sourced)
+                    }
+                } else {
                     unclaimed.append(sourced)
                 }
             }
@@ -362,18 +377,36 @@ enum AgentRuntimeContextResolver {
         owned.sort { $0.record.recordedAt < $1.record.recordedAt }
         unclaimed.sort { $0.record.recordedAt < $1.record.recordedAt }
 
+        // Reusing a claim this process already holds stays exact for the whole attribution TTL.
         if let reused = owned.first {
             return context(from: reused.record, confidence: .high)
         }
-        if unclaimed.count == 1, let sourced = unclaimed.first {
-            AttributionClaimStore.claim(sourced.record.id, on: sourced.sourceURL, pid: claimOwner, now: now)
-            return context(from: sourced.record, confidence: .high)
+        let claimable = unclaimed.filter { now.timeIntervalSince($0.record.recordedAt) <= claimFreshness }
+        if claimable.count == 1, let sourced = claimable.first {
+            // Claiming has to be a compare-and-set: two concurrent processes can each see the same
+            // single unclaimed record, and only the one that wins the claim may report it as exact.
+            if AttributionClaimStore.claimIfUnclaimed(
+                sourced.record.id,
+                on: sourced.source,
+                pid: claimOwner,
+                now: now
+            ) {
+                return context(from: sourced.record, confidence: .high)
+            }
+            return ambiguousContext(for: [sourced])
         }
-        if unclaimed.count >= 2 {
-            let platform = unclaimed.first?.record.platform
-            return AgentRuntimeContext(platform: platform, attributionConfidence: .ambiguous)
-        }
-        return nil
+        guard !unclaimed.isEmpty else { return nil }
+        return ambiguousContext(for: claimable.isEmpty ? unclaimed : claimable)
+    }
+
+    /// Names a platform only when every candidate agrees on one; concurrent Codex and Claude Code
+    /// calls must not present one of them as if it were known.
+    private static func ambiguousContext(for candidates: [SourcedRecord]) -> AgentRuntimeContext {
+        let platforms = Set(candidates.compactMap { $0.record.platform })
+        return AgentRuntimeContext(
+            platform: platforms.count == 1 ? platforms.first : nil,
+            attributionConfidence: .ambiguous
+        )
     }
 
     private static func context(
@@ -393,9 +426,15 @@ enum AgentRuntimeContextResolver {
     }
 }
 
+private struct AttributionSource {
+    let url: URL
+    let knownIDs: Set<UUID>
+    let candidates: [AgentRuntimeContextRecord]
+}
+
 private struct SourcedRecord {
     let record: AgentRuntimeContextRecord
-    let sourceURL: URL
+    let source: AttributionSource
 }
 
 private enum AttributionClaimStore {
@@ -412,28 +451,45 @@ private enum AttributionClaimStore {
         eventsURL.deletingPathExtension().appendingPathExtension("claimed.json")
     }
 
-    static func load(for eventsURL: URL, now: Date, liveIDs: Set<UUID>) -> [UUID: Claim] {
+    static func load(for eventsURL: URL, now: Date, knownIDs: Set<UUID>) -> [UUID: Claim] {
         let url = claimsURL(for: eventsURL)
         return (try? withFileLock(url) {
-            var claims = decode(url)
-            let pruned = claims.filter { id, claim in
-                liveIDs.contains(id) && now.timeIntervalSince(claim.claimedAt) <= historyRetention
-            }
-            if pruned.count != claims.count {
-                try encode(pruned, to: url)
-                claims = pruned
-            }
-            return claims
+            try pruned(url, now: now, knownIDs: knownIDs)
         }) ?? [:]
     }
 
-    static func claim(_ id: UUID, on eventsURL: URL, pid: pid_t, now: Date) {
-        let url = claimsURL(for: eventsURL)
-        try? withFileLock(url) {
-            var claims = decode(url)
+    /// Claims `id` only when nothing else holds it, and reports whether this process won. The
+    /// check and the write share one lock so two concurrent processes cannot both claim a record.
+    static func claimIfUnclaimed(
+        _ id: UUID,
+        on source: AttributionSource,
+        pid: pid_t,
+        now: Date
+    ) -> Bool {
+        let url = claimsURL(for: source.url)
+        return (try? withFileLock(url) {
+            var claims = try pruned(url, now: now, knownIDs: source.knownIDs)
+            if let existing = claims[id] {
+                return existing.pid == Int32(pid)
+            }
             claims[id] = Claim(claimedAt: now, pid: Int32(pid))
             try encode(claims, to: url)
+            return true
+        }) ?? false
+    }
+
+    /// Drops claims for records the events file no longer holds, or that aged past the retention
+    /// window. `knownIDs` is every record in the file, not one caller's filtered candidates —
+    /// pruning against a filtered set would release claims another workspace's process still holds.
+    private static func pruned(_ url: URL, now: Date, knownIDs: Set<UUID>) throws -> [UUID: Claim] {
+        let claims = decode(url)
+        let kept = claims.filter { id, claim in
+            knownIDs.contains(id) && now.timeIntervalSince(claim.claimedAt) <= historyRetention
         }
+        if kept.count != claims.count {
+            try encode(kept, to: url)
+        }
+        return kept
     }
 
     private static func decode(_ url: URL) -> [UUID: Claim] {
@@ -461,7 +517,7 @@ private enum AttributionClaimStore {
         let lockPath = url.path + ".lock"
         let fileDescriptor = open(lockPath, O_RDWR | O_CREAT, filePermissionsMode)
         guard fileDescriptor >= 0 else {
-            throw POSIXError(.EIO)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         defer { close(fileDescriptor) }
         try FileManager.default.setAttributes(
@@ -469,7 +525,7 @@ private enum AttributionClaimStore {
             ofItemAtPath: lockPath
         )
         guard flock(fileDescriptor, LOCK_EX) == 0 else {
-            throw POSIXError(.EIO)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         defer { flock(fileDescriptor, LOCK_UN) }
         return try body()

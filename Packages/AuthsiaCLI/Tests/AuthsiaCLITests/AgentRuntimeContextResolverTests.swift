@@ -642,6 +642,179 @@ struct AgentRuntimeContextResolverTests {
         #expect(context?.agentType == "reviewer")
     }
 
+    @Test("resolver claims a contested record for exactly one process")
+    func resolverClaimsContestedRecordOnce() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([
+            record(
+                id: "11111111-1111-1111-1111-111111111111",
+                platform: "codex",
+                agentType: "reviewer",
+                workingDirectory: "/repo",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-1),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+        ])
+        let ancestry = codexAncestry
+        let exact = Locked(0)
+
+        DispatchQueue.concurrentPerform(iterations: 16) { index in
+            let context = AgentRuntimeContextResolver.resolve(
+                now: now,
+                currentDirectoryPath: "/repo",
+                processAncestry: ancestry,
+                eventsURL: eventsURL,
+                environment: [:],
+                claimOwner: pid_t(100 + index)
+            )
+            if context?.attributionConfidence == .high {
+                exact.increment()
+            }
+        }
+
+        #expect(exact.value == 1)
+    }
+
+    @Test("resolver keeps a claim another workspace's process holds")
+    func resolverKeepsClaimFromAnotherWorkspace() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([
+            record(
+                id: "11111111-1111-1111-1111-111111111111",
+                platform: "codex",
+                agentType: "reviewer",
+                workingDirectory: "/repo-a",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-1),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+            record(
+                id: "22222222-2222-2222-2222-222222222222",
+                platform: "codex",
+                agentType: "planner",
+                workingDirectory: "/repo-b",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-1),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+        ])
+
+        let owner = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo-a",
+            processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            environment: [:],
+            claimOwner: 100
+        )
+        // A process in another workspace filters /repo-a out of its candidates. Pruning claims
+        // against that filtered set would release the claim pid 100 still holds.
+        let neighbour = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo-b",
+            processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            environment: [:],
+            claimOwner: 200
+        )
+        let latecomer = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo-a",
+            processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            environment: [:],
+            claimOwner: 300
+        )
+
+        #expect(owner?.agentType == "reviewer")
+        #expect(neighbour?.agentType == "planner")
+        #expect(latecomer == nil)
+    }
+
+    @Test("resolver will not claim a record older than the claim freshness window")
+    func resolverDoesNotClaimStaleRecord() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([
+            record(
+                id: "11111111-1111-1111-1111-111111111111",
+                platform: "codex",
+                agentType: "reviewer",
+                workingDirectory: "/repo",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-90),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+        ])
+
+        let context = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo",
+            processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            environment: [:],
+            claimOwner: 100
+        )
+
+        #expect(context?.platform == "codex")
+        #expect(context?.agentType == nil)
+        #expect(context?.attributionConfidence == .ambiguous)
+    }
+
+    @Test("resolver hides the platform when unclaimed records disagree")
+    func resolverHidesPlatformWhenAmbiguousAcrossPlatforms() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([
+            record(
+                id: "11111111-1111-1111-1111-111111111111",
+                platform: "vscode",
+                agentType: "editor",
+                workingDirectory: "/repo",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-2),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+            record(
+                id: "22222222-2222-2222-2222-222222222222",
+                platform: "copilot",
+                agentType: "agent",
+                workingDirectory: "/repo",
+                command: "authsia list",
+                recordedAt: now.addingTimeInterval(-1),
+                expiresAt: now.addingTimeInterval(20)
+            ),
+        ])
+
+        let context = AgentRuntimeContextResolver.resolve(
+            now: now,
+            currentDirectoryPath: "/repo",
+            processAncestry: vscodeAncestry,
+            eventsURL: eventsURL,
+            environment: [:],
+            claimOwner: 100
+        )
+
+        #expect(context?.attributionConfidence == .ambiguous)
+        #expect(context?.platform == nil)
+    }
+
+    private final class Locked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count: Int
+
+        init(_ count: Int) {
+            self.count = count
+        }
+
+        var value: Int {
+            lock.withLock { count }
+        }
+
+        func increment() {
+            lock.withLock { count += 1 }
+        }
+    }
+
     private var codexAncestry: [AgenticProcessReference] {
         [
             AgenticProcessReference(processName: "authsia", bundleIdentifier: "com.authsia.cli"),

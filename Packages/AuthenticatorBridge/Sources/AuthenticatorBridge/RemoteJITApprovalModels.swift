@@ -240,8 +240,7 @@ public struct RemoteJITApprovalDescriptor: Equatable, Sendable {
         self.requestedItems = input.requestedItems
         self.grantIssuedAtMilliseconds = grantIssuedAtMilliseconds
         self.grantExpiresAtMilliseconds = input.grantExpiresAtMilliseconds
-        self.agentRuntimeContext = agentRuntimeContext?.isEmpty == false
-            || agentRuntimeContext?.attributionConfidence == .ambiguous
+        self.agentRuntimeContext = agentRuntimeContext?.carriesAttribution == true
             ? agentRuntimeContext
             : nil
         self.normalizedInput = input

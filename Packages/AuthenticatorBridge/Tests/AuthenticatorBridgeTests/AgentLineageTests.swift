@@ -57,6 +57,27 @@ final class AgentLineageTests: XCTestCase {
         XCTAssertEqual(records.map(\.agentType), ["Plan"])
     }
 
+    func testMergeCapsRetainedRecordsKeepingTheNewest() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let overflow = AgentLineageStore.maximumRecords + 20
+        let records = AgentLineageStore.merged(
+            (0..<overflow).map { index in
+                AgentLineageRecord(
+                    sessionID: "session-1",
+                    agentID: "agent-\(index)",
+                    agentType: "sub-\(index)",
+                    startedAt: now.addingTimeInterval(TimeInterval(index)),
+                    expiresAt: now.addingTimeInterval(3_600)
+                )
+            },
+            now: now
+        )
+
+        XCTAssertEqual(records.count, AgentLineageStore.maximumRecords)
+        XCTAssertEqual(records.last?.agentType, "sub-\(overflow - 1)")
+        XCTAssertEqual(records.first?.agentType, "sub-20")
+    }
+
     func testSessionGroupingHeaderAndExport() {
         let grantA = makeGrant(
             id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,

@@ -105,10 +105,7 @@ public enum AgentAttributionPresentation {
     ) -> String? {
         let type = agentType?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let type, !type.isEmpty else { return nil }
-        let formatter = DateFormatter()
-        formatter.timeZone = timeZone
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "HH:mm"
+        let formatter = timeFormatters.formatter(for: timeZone)
         var parts = [type]
         if let startedAt {
             parts.append("started \(formatter.string(from: startedAt))")
@@ -157,8 +154,7 @@ public enum AgentAttributionPresentation {
         guard let context else { return nil }
         let platform = platformDisplayName(context.platform)
         if context.attributionConfidence == .ambiguous {
-            return platform.map { "\($0)\(separator == " / " ? " · " : separator)sub-agent unknown" }
-                ?? "sub-agent unknown"
+            return platform.map { "\($0) · sub-agent unknown" } ?? "sub-agent unknown"
         }
         let label = context.agentType ?? shortAgentID(context.agentID)
         if let platform, let label {
@@ -169,6 +165,29 @@ public enum AgentAttributionPresentation {
         }
         return platform
     }
+
+    /// `lineageCaption` runs per row while the activity list renders, and configuring a
+    /// `DateFormatter` parses its pattern every time. Formatters are safe to share once configured.
+    private final class TimeFormatterCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var formatters: [String: DateFormatter] = [:]
+
+        func formatter(for timeZone: TimeZone) -> DateFormatter {
+            lock.lock()
+            defer { lock.unlock() }
+            if let cached = formatters[timeZone.identifier] {
+                return cached
+            }
+            let formatter = DateFormatter()
+            formatter.timeZone = timeZone
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "HH:mm"
+            formatters[timeZone.identifier] = formatter
+            return formatter
+        }
+    }
+
+    private static let timeFormatters = TimeFormatterCache()
 
     private static func subAgentLabel(_ context: AgentRuntimeContext?) -> String {
         guard let context else { return "main thread" }

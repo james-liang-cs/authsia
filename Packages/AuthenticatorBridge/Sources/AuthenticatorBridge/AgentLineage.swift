@@ -216,6 +216,9 @@ public enum AgentSessionGrouping {
 
 public final class AgentLineageStore {
     public static let defaultTTL: TimeInterval = 24 * 60 * 60
+    /// Upper bound on retained sub-agent records. The hook scripts append without a lock, so this
+    /// store is the only writer that can safely compact the file.
+    public static let maximumRecords = 500
     private static let directoryPermissions: NSNumber = 0o700
     private static let filePermissions: NSNumber = 0o600
     private static let filePermissionsMode: mode_t = S_IRUSR | S_IWUSR
@@ -294,6 +297,8 @@ public final class AgentLineageStore {
             }
             return lhsDate < rhsDate
         }
+        .suffix(maximumRecords)
+        .map { $0 }
     }
 
     private static func combine(_ existing: AgentLineageRecord, _ incoming: AgentLineageRecord) -> AgentLineageRecord {
