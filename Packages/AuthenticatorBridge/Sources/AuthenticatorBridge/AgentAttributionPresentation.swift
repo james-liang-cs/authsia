@@ -6,6 +6,9 @@ public enum AgentAttributionPresentation {
     public static let hookTrustSuffix = "reported by hook"
 
     public static func platformDisplayName(_ platform: String?) -> String? {
+        // Match on a normalized key, but fall back to the caller's own casing:
+        // returning the lowercased key rendered unmapped tools as
+        // "visual studio code".
         switch platform?.lowercased() {
         case "claude", "claude-code":
             return "Claude Code"
@@ -19,8 +22,8 @@ public enum AgentAttributionPresentation {
             return "Cursor"
         case "windsurf", "devin", "devin-desktop":
             return "Devin Desktop"
-        case let value?:
-            return value
+        case .some:
+            return platform
         case nil:
             return nil
         }

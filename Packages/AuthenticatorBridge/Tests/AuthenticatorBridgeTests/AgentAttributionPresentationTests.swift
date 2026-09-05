@@ -17,6 +17,19 @@ final class AgentAttributionPresentationTests: XCTestCase {
         XCTAssertNil(AgentAttributionPresentation.promptValue(for: nil))
     }
 
+    func testUnmappedPlatformKeepsItsOwnCasing() {
+        XCTAssertEqual(
+            AgentAttributionPresentation.platformDisplayName("Visual Studio Code"),
+            "Visual Studio Code"
+        )
+        XCTAssertEqual(
+            AgentAttributionPresentation.platformDisplayName("Cursor Helper (Plugin)"),
+            "Cursor Helper (Plugin)"
+        )
+        XCTAssertEqual(AgentAttributionPresentation.platformDisplayName("CLAUDE-CODE"), "Claude Code")
+        XCTAssertNil(AgentAttributionPresentation.platformDisplayName(nil))
+    }
+
     func testAmbiguousContextHidesSubAgentGuess() {
         let context = AgentRuntimeContext(platform: "codex", attributionConfidence: .ambiguous)
 
