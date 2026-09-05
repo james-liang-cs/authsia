@@ -17,7 +17,7 @@ public enum EnvironmentAccessScope: Codable, Equatable, Sendable {
     }
 }
 
-public enum BridgeRequestType: String, Codable {
+public enum BridgeRequestType: String, Codable, CaseIterable {
     case ping
     case status
     case unlock
@@ -67,6 +67,19 @@ public enum BridgeRequestType: String, Codable {
     case terminalPairingRevoke
     /// Redacted MCP proxy tool-call evidence, HMAC-chained in `bridge_audit.log`.
     case mcpProxyActivity
+
+    /// Reads or uses a vault item's secret. Every audit surface that asks
+    /// "did this touch a secret?" must ask here: the classification used to be
+    /// copied per call site and drifted, which dropped API key reads out of
+    /// Access Insights entirely.
+    public var isSecretAccess: Bool {
+        switch self {
+        case .getOTP, .getPassword, .getAPIKey, .getCertificate, .getNote, .getSSH, .sshAgentSign:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 public struct BridgeRequest: Codable, Equatable {
