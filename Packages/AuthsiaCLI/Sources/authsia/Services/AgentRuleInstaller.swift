@@ -204,7 +204,14 @@ enum AgentRuleInstaller {
                         fileManager: fileManager,
                         result: &result
                     )
-                case .cursor, .codex, .devin:
+                case .codex:
+                    try installCodexHooks(
+                        projectRoot: projectRoot,
+                        dryRun: dryRun,
+                        fileManager: fileManager,
+                        result: &result
+                    )
+                case .cursor, .devin:
                     break
                 }
             }
@@ -234,6 +241,9 @@ enum AgentRuleInstaller {
         if !lines.isEmpty { lines.append("") }
         lines.append("Authsia agent rules are ready.")
         lines.append("Restart or reload your agent so it picks up the new project rules.")
+        if (result.created + result.updated + result.unchanged).contains(".codex/hooks.json") {
+            lines.append("In Codex, open /hooks and trust the Authsia hooks before they can run.")
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -270,6 +280,14 @@ enum AgentRuleInstaller {
 
             if agent == .claudeCode {
                 try removeClaudeLocalSettings(
+                    projectRoot: projectRoot,
+                    dryRun: dryRun,
+                    fileManager: fileManager,
+                    result: &result
+                )
+            }
+            if agent == .codex {
+                try removeCodexHooks(
                     projectRoot: projectRoot,
                     dryRun: dryRun,
                     fileManager: fileManager,
@@ -325,7 +343,7 @@ enum AgentRuleInstaller {
             return false
         }
         let rulePaths = [agent.rulePath] + agent.legacyRulePaths
-        return rulePaths.contains { relativePath in
+        let rulesInstalled = rulePaths.contains { relativePath in
             let toolRulesURL = projectRoot.appendingPathComponent(relativePath)
             guard fileManager.fileExists(atPath: toolRulesURL.path),
                   let toolRules = try? String(contentsOf: toolRulesURL, encoding: .utf8),
@@ -336,6 +354,11 @@ enum AgentRuleInstaller {
                 toolRules[range].contains("AUTHSIA_AGENT_PLATFORM=\(platform)")
             }
         }
+        guard rulesInstalled else { return false }
+        return agent != .codex || codexHooksAreInstalled(
+            projectRoot: projectRoot,
+            fileManager: fileManager
+        )
     }
 
     // MARK: - File Installation
@@ -389,11 +412,121 @@ enum AgentRuleInstaller {
             return nil
         }
         guard !jsonObjectsAreEqual(settings, generated) else { return existing }
-        guard mergeClaudeHooks(from: generated, into: &settings),
+        guard mergeHooks(from: generated, into: &settings),
               mergeClaudeSandbox(from: generated, into: &settings) else {
             return nil
         }
         guard JSONSerialization.isValidJSONObject(settings),
+              let data = try? JSONSerialization.data(
+                withJSONObject: settings,
+                options: [.prettyPrinted, .sortedKeys]
+              ),
+              let output = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return output.hasSuffix("\n") ? output : "\(output)\n"
+    }
+
+    private static func installCodexHooks(
+        projectRoot: URL,
+        dryRun: Bool,
+        fileManager: FileManager,
+        result: inout AgentRuleInstallResult
+    ) throws {
+        let configPath = ".codex/config.toml"
+        let configURL = projectRoot.appendingPathComponent(configPath)
+        if fileManager.fileExists(atPath: configURL.path) {
+            let config = try String(contentsOf: configURL, encoding: .utf8)
+            if codexConfigHasInlineHooks(config) {
+                result.manualSteps.append(AgentRuleManualStep(
+                    path: configPath,
+                    reason: "already defines inline hooks. Add these Authsia hooks there manually, " +
+                        "then open /hooks in Codex to review and trust them.",
+                    block: codexHooksTOML
+                ))
+                return
+            }
+        }
+
+        let path = ".codex/hooks.json"
+        let url = projectRoot.appendingPathComponent(path)
+        if fileManager.fileExists(atPath: url.path) {
+            let existing = try String(contentsOf: url, encoding: .utf8)
+            guard let merged = mergedCodexHooksJSON(existing) else {
+                result.manualSteps.append(AgentRuleManualStep(
+                    path: path,
+                    reason: "already exists but could not be parsed or safely merged. " +
+                        "Add these Authsia hooks manually, then open /hooks in Codex to review and trust them.",
+                    block: codexHooksJSON
+                ))
+                return
+            }
+            try writeFile(
+                merged,
+                existing: existing,
+                relativePath: path,
+                projectRoot: projectRoot,
+                dryRun: dryRun,
+                fileManager: fileManager,
+                result: &result
+            )
+            return
+        }
+
+        try writeExactFile(
+            codexHooksJSON,
+            relativePath: path,
+            projectRoot: projectRoot,
+            dryRun: dryRun,
+            fileManager: fileManager,
+            result: &result
+        )
+    }
+
+    private static func codexConfigHasInlineHooks(_ content: String) -> Bool {
+        content.split(separator: "\n").contains { line in
+            let value = line.trimmingCharacters(in: .whitespaces)
+            return value == "[hooks]" || value.hasPrefix("[[hooks.")
+        }
+    }
+
+    private static func codexHooksAreInstalled(
+        projectRoot: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        let hooksURL = projectRoot.appendingPathComponent(".codex/hooks.json")
+        if fileManager.fileExists(atPath: hooksURL.path),
+           let existing = try? String(contentsOf: hooksURL, encoding: .utf8),
+           let settings = jsonObject(from: existing),
+           let generated = jsonObject(from: codexHooksJSON) {
+            var merged = settings
+            if mergeHooks(from: generated, into: &merged),
+               jsonObjectsAreEqual(settings, merged) {
+                return true
+            }
+        }
+
+        let configURL = projectRoot.appendingPathComponent(".codex/config.toml")
+        guard fileManager.fileExists(atPath: configURL.path),
+              let config = try? String(contentsOf: configURL, encoding: .utf8) else {
+            return false
+        }
+        let lineageCommand = "authsia agent record-lineage --platform codex"
+        return config.contains("[[hooks.PreToolUse]]") &&
+            config.contains("[[hooks.SubagentStart]]") &&
+            config.contains("[[hooks.SubagentStop]]") &&
+            config.contains("authsia agent record-command --platform codex --source hook") &&
+            config.components(separatedBy: lineageCommand).count >= 3
+    }
+
+    private static func mergedCodexHooksJSON(_ existing: String) -> String? {
+        guard var settings = jsonObject(from: existing),
+              let generated = jsonObject(from: codexHooksJSON) else {
+            return nil
+        }
+        guard !jsonObjectsAreEqual(settings, generated) else { return existing }
+        guard mergeHooks(from: generated, into: &settings),
+              JSONSerialization.isValidJSONObject(settings),
               let data = try? JSONSerialization.data(
                 withJSONObject: settings,
                 options: [.prettyPrinted, .sortedKeys]
@@ -415,7 +548,7 @@ enum AgentRuleInstaller {
     /// Merges the generated hook block into `settings`. Returns `false` if the existing file has a
     /// value of an unexpected shape where we would need to write (e.g. `hooks` or a hook event is not
     /// an object/array), so the caller can fall back to the manual block instead of clobbering it.
-    private static func mergeClaudeHooks(from generated: [String: Any], into settings: inout [String: Any]) -> Bool {
+    private static func mergeHooks(from generated: [String: Any], into settings: inout [String: Any]) -> Bool {
         guard let generatedHooks = generated["hooks"] as? [String: Any] else { return true }
         guard var hooks = existingObject(settings["hooks"]) else { return false }
         for (eventName, generatedValue) in generatedHooks {
@@ -425,7 +558,7 @@ enum AgentRuleInstaller {
             }
             guard var existingEntries = existingArray(hooks[eventName]) else { return false }
             for generatedEntry in generatedEntries {
-                guard mergeClaudeHookEntry(generatedEntry, into: &existingEntries) else { return false }
+                guard mergeHookEntry(generatedEntry, into: &existingEntries) else { return false }
             }
             hooks[eventName] = existingEntries
         }
@@ -433,7 +566,7 @@ enum AgentRuleInstaller {
         return true
     }
 
-    private static func mergeClaudeHookEntry(
+    private static func mergeHookEntry(
         _ generatedEntry: [String: Any],
         into entries: inout [[String: Any]]
     ) -> Bool {
@@ -721,7 +854,7 @@ enum AgentRuleInstaller {
             return nil
         }
         var didRemove = false
-        guard removeClaudeHooks(from: generated, in: &settings, didRemove: &didRemove),
+        guard removeHooks(from: generated, in: &settings, didRemove: &didRemove),
               removeClaudeSandbox(from: generated, in: &settings, didRemove: &didRemove) else {
             return nil
         }
@@ -737,7 +870,67 @@ enum AgentRuleInstaller {
         return output.hasSuffix("\n") ? output : "\(output)\n"
     }
 
-    private static func removeClaudeHooks(
+    private static func removeCodexHooks(
+        projectRoot: URL,
+        dryRun: Bool,
+        fileManager: FileManager,
+        result: inout AgentRuleRemovalResult
+    ) throws {
+        let relativePath = ".codex/hooks.json"
+        let url = projectRoot.appendingPathComponent(relativePath)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        let existing = try String(contentsOf: url, encoding: .utf8)
+        let semanticallyGenerated: Bool
+        if let existingObject = jsonObject(from: existing),
+           let generatedObject = jsonObject(from: codexHooksJSON) {
+            semanticallyGenerated = jsonObjectsAreEqual(existingObject, generatedObject)
+        } else {
+            semanticallyGenerated = false
+        }
+        if existing == codexHooksJSON || semanticallyGenerated {
+            if !dryRun {
+                try fileManager.removeItem(at: url)
+            }
+            result.removed.append(relativePath)
+            return
+        }
+
+        guard var settings = jsonObject(from: existing),
+              let generated = jsonObject(from: codexHooksJSON) else {
+            result.manualSteps.append(AgentRuleManualStep(
+                path: relativePath,
+                reason: "has a structure that cannot be safely updated. Remove the Authsia hooks manually.",
+                block: ""
+            ))
+            return
+        }
+        var didRemove = false
+        guard removeHooks(from: generated, in: &settings, didRemove: &didRemove),
+              JSONSerialization.isValidJSONObject(settings),
+              let data = try? JSONSerialization.data(
+                withJSONObject: settings,
+                options: [.prettyPrinted, .sortedKeys]
+              ),
+              let output = String(data: data, encoding: .utf8) else {
+            result.manualSteps.append(AgentRuleManualStep(
+                path: relativePath,
+                reason: "has a structure that cannot be safely updated. Remove the Authsia hooks manually.",
+                block: ""
+            ))
+            return
+        }
+        guard didRemove else {
+            result.unchanged.append(relativePath)
+            return
+        }
+        let updated = output.hasSuffix("\n") ? output : "\(output)\n"
+        if !dryRun {
+            try updated.write(to: url, atomically: true, encoding: .utf8)
+        }
+        result.updated.append(relativePath)
+    }
+
+    private static func removeHooks(
         from generated: [String: Any],
         in settings: inout [String: Any],
         didRemove: inout Bool
@@ -1606,6 +1799,72 @@ enum AgentRuleInstaller {
         ]
       }
     }
+    """
+
+    private static let codexHooksJSON = """
+    {
+      "description": "Authsia agent attribution",
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "^Bash$",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-command --platform codex --source hook",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "SubagentStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-lineage --platform codex",
+                "timeout": 5
+              }
+            ]
+          }
+        ],
+        "SubagentStop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-lineage --platform codex",
+                "timeout": 5
+              }
+            ]
+          }
+        ]
+      }
+    }
+    """
+
+    private static let codexHooksTOML = """
+    [[hooks.PreToolUse]]
+    matcher = "^Bash$"
+
+    [[hooks.PreToolUse.hooks]]
+    type = "command"
+    command = "authsia agent record-command --platform codex --source hook"
+    timeout = 5
+
+    [[hooks.SubagentStart]]
+
+    [[hooks.SubagentStart.hooks]]
+    type = "command"
+    command = "authsia agent record-lineage --platform codex"
+    timeout = 5
+
+    [[hooks.SubagentStop]]
+
+    [[hooks.SubagentStop.hooks]]
+    type = "command"
+    command = "authsia agent record-lineage --platform codex"
+    timeout = 5
     """
 
     private static let copilotSettingsJSON = """

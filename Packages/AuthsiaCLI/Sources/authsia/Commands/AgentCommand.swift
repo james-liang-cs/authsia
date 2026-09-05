@@ -13,11 +13,11 @@ struct Agent: ParsableCommand {
     struct Init: ParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "init",
-            abstract: "Create local AI-agent rule files for Authsia",
+            abstract: "Create local AI-agent rules and observability hooks for Authsia",
             discussion: """
-                Creates local project rule files that teach AI agents to use Authsia safely.
-                This command writes rules only; it does not create automation credentials,
-                JIT grants, or new secret access.
+                Creates local project integration files that teach AI agents to use Authsia safely.
+                This command writes rules and supported observability hooks only; it does not create
+                automation credentials, JIT grants, or new secret access.
 
                 Examples:
                   authsia agent init

@@ -1101,21 +1101,196 @@ struct AgentCommandTests {
         #expect(result.manualSteps.isEmpty)
     }
 
-    @Test("Codex init creates AGENTS guidance only")
-    func codexInitCreatesAgentsGuidanceOnly() throws {
+    @Test("Codex init creates AGENTS guidance and attribution hooks")
+    func codexInitCreatesAgentsGuidanceAndHooks() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
 
         let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
 
         let agents = try read("AGENTS.md", in: root)
+        let hooks = try read(".codex/hooks.json", in: root)
 
         #expect(agents.contains("use the Authsia MCP tools"))
         #expect(agents.contains("construct the tool input yourself"))
         #expect(agents.contains("AUTHSIA_AGENT_PLATFORM=codex"))
         #expect(!agents.contains("Authsia Command History"))
         #expect(!agents.contains("Authsia Sandbox Handling"))
+        try expectCodexHooks(hooks)
+        #expect(result.created.contains(".codex/hooks.json"))
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
         #expect(!fileExists(".codex/rules/authsia.rules", in: root))
+        #expect(result.manualSteps.isEmpty)
+        #expect(AgentRuleInstaller.renderResult(result).contains("open /hooks"))
+    }
+
+    @Test("Codex init safely merges existing hooks without duplication")
+    func codexInitMergesExistingHooks() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("""
+        {
+          "description": "Project hooks",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "^Bash$",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "echo custom"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+        """, to: ".codex/hooks.json", in: root)
+
+        let first = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        let installed = try read(".codex/hooks.json", in: root)
+        let second = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+
+        try expectCodexHooks(installed)
+        let object = try expectJSONObject(installed)
+        #expect(object["description"] as? String == "Project hooks")
+        let hooks = try #require(object["hooks"] as? [String: Any])
+        let preToolUse = try #require(hooks["PreToolUse"] as? [[String: Any]])
+        let bash = try #require(preToolUse.first { $0["matcher"] as? String == "^Bash$" })
+        let commands = try #require(bash["hooks"] as? [[String: Any]])
+            .compactMap { $0["command"] as? String }
+        #expect(commands.contains("echo custom"))
+        #expect(commands.filter { $0 == "authsia agent record-command --platform codex --source hook" }.count == 1)
+        #expect(first.updated.contains(".codex/hooks.json"))
+        #expect(second.unchanged.contains(".codex/hooks.json"))
+        #expect(try read(".codex/hooks.json", in: root) == installed)
+    }
+
+    @Test("Codex init leaves inline config hooks unchanged and prints manual guidance")
+    func codexInitRequiresManualMergeForInlineConfigHooks() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = """
+        model = "gpt-5"
+
+        [[hooks.PreToolUse]]
+        matcher = "^Bash$"
+        """
+        try write(config, to: ".codex/config.toml", in: root)
+
+        let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+
+        #expect(try read(".codex/config.toml", in: root) == config)
+        #expect(!fileExists(".codex/hooks.json", in: root))
+        let step = try #require(result.manualSteps.first { $0.path == ".codex/config.toml" })
+        #expect(step.reason.contains("inline hooks"))
+        #expect(step.block.contains("[[hooks.SubagentStart]]"))
+        #expect(step.block.contains("authsia agent record-lineage --platform codex"))
+    }
+
+    @Test("Codex init leaves invalid hooks unchanged and prints manual guidance")
+    func codexInitRequiresManualMergeForInvalidHooks() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("{", to: ".codex/hooks.json", in: root)
+
+        let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+
+        #expect(try read(".codex/hooks.json", in: root) == "{")
+        let step = try #require(result.manualSteps.first { $0.path == ".codex/hooks.json" })
+        #expect(step.reason.contains("could not be parsed or safely merged"))
+        try expectCodexHooks(step.block)
+        #expect(!result.updated.contains(".codex/hooks.json"))
+    }
+
+    @Test("Codex integration is missing when its attribution hooks are absent")
+    func codexIntegrationRequiresAttributionHooks() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        try FileManager.default.removeItem(at: root.appendingPathComponent(".codex/hooks.json"))
+
+        #expect(!AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+    }
+
+    @Test("Codex integration accepts manually installed inline attribution hooks")
+    func codexIntegrationAcceptsInlineAttributionHooks() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        try FileManager.default.removeItem(at: root.appendingPathComponent(".codex/hooks.json"))
+        try write("""
+        [[hooks.PreToolUse]]
+        matcher = "^Bash$"
+
+        [[hooks.PreToolUse.hooks]]
+        type = "command"
+        command = "authsia agent record-command --platform codex --source hook"
+
+        [[hooks.SubagentStart]]
+        [[hooks.SubagentStart.hooks]]
+        type = "command"
+        command = "authsia agent record-lineage --platform codex"
+
+        [[hooks.SubagentStop]]
+        [[hooks.SubagentStop.hooks]]
+        type = "command"
+        command = "authsia agent record-lineage --platform codex"
+        """, to: ".codex/config.toml", in: root)
+
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+    }
+
+    @Test("Codex uninstall removes Authsia hooks and preserves custom hooks")
+    func codexUninstallPreservesCustomHooks() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("""
+        {
+          "description": "Project hooks",
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "^Bash$",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "echo custom"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+        """, to: ".codex/hooks.json", in: root)
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+
+        let result = try AgentRuleInstaller.uninstall(projectRoot: root, agents: [.codex])
+
+        let object = try expectJSONObject(try read(".codex/hooks.json", in: root))
+        #expect(object["description"] as? String == "Project hooks")
+        let hooks = try #require(object["hooks"] as? [String: Any])
+        let commands = hooks.values
+            .compactMap { $0 as? [[String: Any]] }
+            .flatMap { $0 }
+            .compactMap { $0["hooks"] as? [[String: Any]] }
+            .flatMap { $0 }
+            .compactMap { $0["command"] as? String }
+        #expect(commands == ["echo custom"])
+        #expect(result.updated.contains(".codex/hooks.json"))
+        #expect(result.manualSteps.isEmpty)
+    }
+
+    @Test("Codex uninstall deletes untouched generated hooks")
+    func codexUninstallDeletesGeneratedHooks() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+
+        let result = try AgentRuleInstaller.uninstall(projectRoot: root, agents: [.codex])
+
+        #expect(!fileExists(".codex/hooks.json", in: root))
+        #expect(result.removed.contains(".codex/hooks.json"))
         #expect(result.manualSteps.isEmpty)
     }
 
@@ -1578,6 +1753,28 @@ struct AgentCommandTests {
             #expect(hooks.contains {
                 $0["type"] as? String == "command" &&
                     $0["command"] as? String == "authsia agent record-command --platform claude-code --source hook"
+            })
+        }
+    }
+
+    private func expectCodexHooks(_ settings: String) throws {
+        let object = try expectJSONObject(settings)
+        let hooks = try #require(object["hooks"] as? [String: Any])
+        let preToolUse = try #require(hooks["PreToolUse"] as? [[String: Any]])
+        let bash = try #require(preToolUse.first { $0["matcher"] as? String == "^Bash$" })
+        let bashHooks = try #require(bash["hooks"] as? [[String: Any]])
+        #expect(bashHooks.contains {
+            $0["type"] as? String == "command" &&
+                $0["command"] as? String == "authsia agent record-command --platform codex --source hook" &&
+                ($0["timeout"] as? NSNumber)?.intValue == 5
+        })
+        for event in ["SubagentStart", "SubagentStop"] {
+            let entries = try #require(hooks[event] as? [[String: Any]])
+            let commands = entries.compactMap { $0["hooks"] as? [[String: Any]] }.flatMap { $0 }
+            #expect(commands.contains {
+                $0["type"] as? String == "command" &&
+                    $0["command"] as? String == "authsia agent record-lineage --platform codex" &&
+                    ($0["timeout"] as? NSNumber)?.intValue == 5
             })
         }
     }

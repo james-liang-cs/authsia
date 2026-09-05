@@ -34,7 +34,7 @@ struct Authsia: AsyncParsableCommand {
               doctor      Check setup and suggest fixes
               setup       Set up or repair local CLI integration
               access      Manage automation access
-              agent       Configure AI-agent rule files
+              agent       Configure AI-agent rules and observability hooks
               workspace   Initialize and run repo-local Authsia workspaces
               add         Create vault items
               edit        Update vault items
