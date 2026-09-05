@@ -774,16 +774,21 @@ actor AuthsiaMCPProxy {
             watchGrants(session)
             return session
         } catch let error as MCPProxySpawnError {
-            await consumeInFlight()
+            // launchFailed is the initialize deadline: the child is still
+            // wedged, and awaiting teardown/disconnect held the caller until
+            // the live driver gave up (D6). Tear down in the background.
             if case .childExited(let status) = error {
+                await consumeInFlight()
                 rememberSpawnFailure(label: commandLabel, status: status)
+            } else {
+                abandonInFlight()
             }
             throw error
         } catch is CancellationError {
             await consumeInFlight()
             throw CancellationError()
         } catch {
-            await consumeInFlight()
+            abandonInFlight()
             throw MCPProxySpawnError.launchFailed
         }
     }
@@ -922,17 +927,40 @@ actor AuthsiaMCPProxy {
     }
 
     private func consumeInFlight() async {
-        guard let inFlight else { return }
+        guard let snapshot = takeInFlight() else { return }
+        await teardownSpawn(
+            client: snapshot.client,
+            terminator: snapshot.terminator,
+            stdinWrite: snapshot.stdinWrite,
+            stdoutRead: snapshot.stdoutRead
+        )
+    }
+
+    /// Drop a wedged in-flight spawn without waiting for kill or disconnect.
+    /// Shut the child's stdio first so a stuck `connect()` unblocks; SIGTERM
+    /// still comes from the terminator in the background.
+    private func abandonInFlight() {
+        guard let snapshot = takeInFlight() else { return }
+        Darwin.shutdown(snapshot.stdinWrite, SHUT_RDWR)
+        Darwin.shutdown(snapshot.stdoutRead, SHUT_RDWR)
+        snapshot.terminator.start()
+        Task {
+            await self.teardownSpawn(
+                client: snapshot.client,
+                terminator: snapshot.terminator,
+                stdinWrite: snapshot.stdinWrite,
+                stdoutRead: snapshot.stdoutRead
+            )
+        }
+    }
+
+    private func takeInFlight() -> InFlightSpawn? {
+        guard let inFlight else { return nil }
         self.inFlight = nil
         if let processGroupID = inFlight.terminator.recordedProcessGroupID {
             MCPProxyChildRegistry.unregister(processGroupID: processGroupID)
         }
-        await teardownSpawn(
-            client: inFlight.client,
-            terminator: inFlight.terminator,
-            stdinWrite: inFlight.stdinWrite,
-            stdoutRead: inFlight.stdoutRead
-        )
+        return inFlight
     }
 
     private func teardownSpawn(
