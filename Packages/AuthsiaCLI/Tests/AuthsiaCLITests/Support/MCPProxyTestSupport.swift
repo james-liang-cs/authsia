@@ -410,12 +410,16 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
         let agentRuntimeContext: AgentRuntimeContext
         let workspaceRoot: URL?
         let grantID: UUID?
+        let grantIDs: [UUID]
     }
 
     struct Outcome: Equatable {
         let toolName: String
         let outcome: MCPProxyCallOutcome
         let grantID: UUID?
+        let grantIDs: [UUID]
+        let errorCode: String?
+        let stage: MCPProxyCallStage?
     }
 
     private let lock = NSLock()
@@ -430,7 +434,8 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
         toolName: String,
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
-        grantID: UUID?
+        grantID: UUID?,
+        grantIDs: [UUID]
     ) throws {
         try lock.withLock {
             if let error { throw error }
@@ -440,7 +445,8 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
                 toolName: toolName,
                 agentRuntimeContext: agentRuntimeContext,
                 workspaceRoot: workspaceRoot,
-                grantID: grantID
+                grantID: grantID,
+                grantIDs: grantIDs
             ))
         }
     }
@@ -452,11 +458,21 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws {
         try lock.withLock {
             if let error { throw error }
-            outcomes.append(Outcome(toolName: toolName, outcome: outcome, grantID: grantID))
+            outcomes.append(Outcome(
+                toolName: toolName,
+                outcome: outcome,
+                grantID: grantID,
+                grantIDs: grantIDs,
+                errorCode: errorCode,
+                stage: stage
+            ))
         }
         _ = (upstreamName, upstreamCommand, agentRuntimeContext, workspaceRoot)
     }
@@ -468,7 +484,10 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws {
         try lock.withLock {
             if remainingOutcomeFailures > 0 {
@@ -477,7 +496,14 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
                 throw RecordingMCPProxyOutcomeError.failed
             }
             if let error { throw error }
-            outcomes.append(Outcome(toolName: toolName, outcome: outcome, grantID: grantID))
+            outcomes.append(Outcome(
+                toolName: toolName,
+                outcome: outcome,
+                grantID: grantID,
+                grantIDs: grantIDs,
+                errorCode: errorCode,
+                stage: stage
+            ))
         }
         _ = (upstreamName, upstreamCommand, agentRuntimeContext, workspaceRoot)
     }
@@ -494,9 +520,10 @@ struct NoopMCPProxyToolCallRecorder: MCPProxyToolCallRecording {
         toolName: String,
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
-        grantID: UUID?
+        grantID: UUID?,
+        grantIDs: [UUID]
     ) throws {
-        _ = (upstreamName, upstreamCommand, toolName, agentRuntimeContext, workspaceRoot, grantID)
+        _ = (upstreamName, upstreamCommand, toolName, agentRuntimeContext, workspaceRoot, grantID, grantIDs)
     }
 }
 

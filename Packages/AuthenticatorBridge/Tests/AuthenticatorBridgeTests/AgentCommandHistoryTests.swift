@@ -332,6 +332,85 @@ final class AgentCommandHistoryTests: XCTestCase {
         XCTAssertEqual(loaded[0].mcpProxyOutcome, .succeeded)
     }
 
+    func testMCPProxyErrorCodeAndStageRoundTripThroughHistory() throws {
+        let fileURL = try makeTempURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let store = AgentCommandHistoryStore(fileURL: fileURL)
+        let primary = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let secondary = UUID(uuidString: "BBBBBBBB-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let event = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 12),
+            agentPlatform: "codex",
+            captureSource: .mcpProxy,
+            executable: "jira",
+            arguments: ["mcp-tool", "search"],
+            command: "jira mcp-tool search",
+            mcpProxyOutcome: .denied,
+            mcpProxyErrorCode: "mcpAccessDisabled",
+            mcpProxyStage: .settings,
+            mcpProxyGrantIDs: [primary, secondary]
+        )
+
+        try store.record(event)
+        let loaded = try store.loadAll()
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded[0].mcpProxyOutcome, .denied)
+        XCTAssertEqual(loaded[0].mcpProxyErrorCode, "mcpAccessDisabled")
+        XCTAssertEqual(loaded[0].mcpProxyStage, .settings)
+        XCTAssertEqual(loaded[0].mcpProxyGrantIDs, [primary, secondary])
+
+        let exported = try store.exportJSON(loaded)
+        let decoded = try JSONDecoder.agentCommandHistory.decode([AgentCommandEvent].self, from: exported)
+        XCTAssertEqual(decoded[0].mcpProxyErrorCode, "mcpAccessDisabled")
+        XCTAssertEqual(decoded[0].mcpProxyStage, .settings)
+        XCTAssertEqual(decoded[0].mcpProxyGrantIDs, [primary, secondary])
+    }
+
+    func testLegacyMCPProxyHistoryJSONOmitsErrorCodeAndStage() throws {
+        let json = """
+        {"arguments":["mcp-tool","echo_ping"],"captureSource":"mcpProxy","id":"11111111-2222-3333-4444-555555555555","recordedAt":"2026-01-01T00:00:00Z"}
+        """
+        let decoded = try JSONDecoder.agentCommandHistory.decode(
+            AgentCommandEvent.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertNil(decoded.mcpProxyErrorCode)
+        XCTAssertNil(decoded.mcpProxyStage)
+        XCTAssertNil(decoded.mcpProxyGrantIDs)
+        XCTAssertNil(decoded.mcpProxyOutcome)
+    }
+
+    func testEventsForGrantMatchMCPProxyGrantIDsWithoutPrimaryID() {
+        let primary = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let secondary = UUID(uuidString: "BBBBBBBB-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let grant = makeGrant(id: secondary, expiresAt: Date(timeIntervalSince1970: 500))
+        let event = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 20),
+            agentPlatform: "codex",
+            agentJITGrantID: primary,
+            captureSource: .mcpProxy,
+            executable: "jira",
+            arguments: ["mcp-tool", "search"],
+            command: "jira mcp-tool search",
+            mcpProxyOutcome: .succeeded,
+            mcpProxyGrantIDs: [primary, secondary]
+        )
+        let other = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 21),
+            agentPlatform: "codex",
+            agentJITGrantID: primary,
+            captureSource: .mcpProxy,
+            executable: "jira",
+            arguments: ["mcp-tool", "create"],
+            command: "jira mcp-tool create",
+            mcpProxyOutcome: .denied,
+            mcpProxyGrantIDs: [primary]
+        )
+
+        let events = AgentCommandHistoryQuery.events(for: grant, from: [event, other])
+        XCTAssertEqual(events.map(\.id), [event.id])
+    }
+
     func testEventsForGrantMatchByGrantIDRuntimeContextOrTerminalScope() {
         let grantID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
         let grant = AgentJITGrant(

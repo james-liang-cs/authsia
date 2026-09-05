@@ -184,7 +184,8 @@ protocol MCPProxyToolCallRecording: Sendable {
         toolName: String,
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
-        grantID: UUID?
+        grantID: UUID?,
+        grantIDs: [UUID]
     ) throws
 
     func recordRejected(
@@ -194,7 +195,10 @@ protocol MCPProxyToolCallRecording: Sendable {
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws
 
     func recordOutcome(
@@ -204,7 +208,10 @@ protocol MCPProxyToolCallRecording: Sendable {
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws
 }
 
@@ -216,9 +223,23 @@ extension MCPProxyToolCallRecording {
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws {
-        _ = (upstreamName, upstreamCommand, toolName, agentRuntimeContext, workspaceRoot, grantID, outcome)
+        _ = (
+            upstreamName,
+            upstreamCommand,
+            toolName,
+            agentRuntimeContext,
+            workspaceRoot,
+            grantID,
+            grantIDs,
+            outcome,
+            errorCode,
+            stage
+        )
     }
 
     func recordOutcome(
@@ -228,9 +249,23 @@ extension MCPProxyToolCallRecording {
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws {
-        _ = (upstreamName, upstreamCommand, toolName, agentRuntimeContext, workspaceRoot, grantID, outcome)
+        _ = (
+            upstreamName,
+            upstreamCommand,
+            toolName,
+            agentRuntimeContext,
+            workspaceRoot,
+            grantID,
+            grantIDs,
+            outcome,
+            errorCode,
+            stage
+        )
     }
 }
 
@@ -252,7 +287,8 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         toolName: String,
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
-        grantID: UUID?
+        grantID: UUID?,
+        grantIDs: [UUID]
     ) throws {
         try persist(
             upstreamName: upstreamName,
@@ -261,7 +297,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             agentRuntimeContext: agentRuntimeContext,
             workspaceRoot: workspaceRoot,
             grantID: grantID,
-            outcome: .started
+            grantIDs: grantIDs,
+            outcome: .started,
+            errorCode: nil,
+            stage: .forward
         )
     }
 
@@ -272,7 +311,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws {
         try persist(
             upstreamName: upstreamName,
@@ -281,7 +323,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             agentRuntimeContext: agentRuntimeContext,
             workspaceRoot: workspaceRoot,
             grantID: grantID,
-            outcome: outcome
+            grantIDs: grantIDs,
+            outcome: outcome,
+            errorCode: errorCode,
+            stage: stage
         )
     }
 
@@ -292,7 +337,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws {
         try persist(
             upstreamName: upstreamName,
@@ -301,7 +349,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             agentRuntimeContext: agentRuntimeContext,
             workspaceRoot: workspaceRoot,
             grantID: grantID,
-            outcome: outcome
+            grantIDs: grantIDs,
+            outcome: outcome,
+            errorCode: errorCode,
+            stage: stage
         )
     }
 
@@ -312,7 +363,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) throws {
         if let auditor {
             try auditor.recordMCPProxyActivity(
@@ -335,7 +389,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             agentRuntimeContext: agentRuntimeContext,
             workspaceRoot: workspaceRoot,
             grantID: grantID,
-            outcome: outcome
+            grantIDs: grantIDs,
+            outcome: outcome,
+            errorCode: errorCode,
+            stage: stage
         ))
     }
 
@@ -346,7 +403,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         agentRuntimeContext: AgentRuntimeContext,
         workspaceRoot: URL?,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) -> AgentCommandEvent {
         let executable = upstreamCommand ?? upstreamName
         return AgentCommandEvent(
@@ -363,7 +423,10 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             executable: executable,
             arguments: ["mcp-tool", toolName],
             command: "\(executable) mcp-tool \(toolName)",
-            mcpProxyOutcome: outcome
+            mcpProxyOutcome: outcome,
+            mcpProxyErrorCode: errorCode,
+            mcpProxyStage: stage,
+            mcpProxyGrantIDs: grantIDs.isEmpty ? nil : grantIDs
         )
     }
 

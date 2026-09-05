@@ -39,6 +39,27 @@ public enum MCPProxyCallOutcome: String, Codable, Equatable, Sendable {
     }
 }
 
+/// Where a proxied `tools/call` failed. Display-only; not an authorization input.
+public enum MCPProxyCallStage: String, Codable, Equatable, Sendable {
+    case settings
+    case binding
+    case policy
+    case admission
+    case spawn
+    case forward
+
+    public var displayLabel: String {
+        switch self {
+        case .settings: return "Settings"
+        case .binding: return "Workspace"
+        case .policy: return "Policy"
+        case .admission: return "Admission"
+        case .spawn: return "Spawn"
+        case .forward: return "Forward"
+        }
+    }
+}
+
 public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let recordedAt: Date
@@ -59,6 +80,9 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
     public let command: String?
     public let exitStatus: Int32?
     public let mcpProxyOutcome: MCPProxyCallOutcome?
+    public let mcpProxyErrorCode: String?
+    public let mcpProxyStage: MCPProxyCallStage?
+    public let mcpProxyGrantIDs: [UUID]?
     public let responseOutcome: AgentLeakResponseOutcome?
     public let responseEvidence: AgentLeakEvidence?
     public let responsePreventedAction: Bool?
@@ -83,6 +107,9 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         command: String? = nil,
         exitStatus: Int32? = nil,
         mcpProxyOutcome: MCPProxyCallOutcome? = nil,
+        mcpProxyErrorCode: String? = nil,
+        mcpProxyStage: MCPProxyCallStage? = nil,
+        mcpProxyGrantIDs: [UUID]? = nil,
         responseOutcome: AgentLeakResponseOutcome? = nil,
         responseEvidence: AgentLeakEvidence? = nil,
         responsePreventedAction: Bool? = nil
@@ -106,6 +133,9 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         self.command = AgentCommandRedactor.redactedCommand(command)
         self.exitStatus = exitStatus
         self.mcpProxyOutcome = mcpProxyOutcome
+        self.mcpProxyErrorCode = AgentCommandRedactor.sanitized(mcpProxyErrorCode, maxLength: 64)
+        self.mcpProxyStage = mcpProxyStage
+        self.mcpProxyGrantIDs = mcpProxyGrantIDs
         self.responseOutcome = responseOutcome
         self.responseEvidence = responseEvidence
         self.responsePreventedAction = responsePreventedAction
@@ -117,6 +147,7 @@ public enum AgentCommandHistoryQuery {
         events
             .filter { event in
                 event.agentJITGrantID == grant.id
+                    || event.mcpProxyGrantIDs?.contains(grant.id) == true
                     || matchesRuntimeContext(event: event, grant: grant)
                     || matchesTerminalScope(event: event, grant: grant)
             }

@@ -491,6 +491,161 @@ struct MCPProxyLifecycleTests {
         await proxy.waitUntilCompleted()
     }
 
+    @Test("disabled MCP persists mcpAccessDisabled at settings and does not borrow another grant")
+    func disabledMCPPersistsErrorCodeWithoutGrantFallback() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let serverID = UUID()
+        let foreignGrantID = UUID()
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: foreignGrantID, serverID: serverID)],
+                history: []
+            )
+        )
+        let recorder = RecordingMCPProxyToolCallRecorder()
+        let launcher = RecordingMCPProxyChildLauncher()
+        let root = try makeMCPProxyWorkspace(upstreams: [Self.stdioJiraUpstream])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            mcpAccessEnabled: { false },
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: recorder
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let result = try await call.value
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.mcpAccessDisabled.rawValue)
+        #expect(launcher.spawnCount == 0)
+        #expect(recorder.outcomes.count == 1)
+        #expect(recorder.outcomes[0].outcome == .denied)
+        #expect(recorder.outcomes[0].errorCode == MCPToolErrorCode.mcpAccessDisabled.rawValue)
+        #expect(recorder.outcomes[0].stage == .settings)
+        #expect(recorder.outcomes[0].grantID == nil)
+        #expect(recorder.outcomes[0].grantIDs.isEmpty)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("an undeclared upstream persists upstreamUnavailable at policy")
+    func missingUpstreamPersistsPolicyStage() async throws {
+        let recorder = RecordingMCPProxyToolCallRecorder()
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try WorkspaceConfigStore.write(
+            WorkspaceConfig(
+                schemaVersion: 2,
+                workspace: .init(name: "proxy", authsiaFolder: "Workspaces/proxy"),
+                managedEnvFiles: [],
+                agents: nil,
+                mcpUpstreams: [Self.stdioJiraUpstream]
+            ),
+            toWorkspaceRoot: root
+        )
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "missing",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            toolCallRecorder: recorder
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let result = try await call.value
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.upstreamUnavailable.rawValue)
+        #expect(recorder.outcomes.count == 1)
+        #expect(recorder.outcomes[0].outcome == .upstreamUnavailable)
+        #expect(recorder.outcomes[0].errorCode == MCPToolErrorCode.upstreamUnavailable.rawValue)
+        #expect(recorder.outcomes[0].stage == .policy)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("a multi-grant session records every grant ID")
+    func multiGrantSessionRecordsEveryGrantID() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let serverID = UUID()
+        let firstGrant = UUID(uuidString: "BBBBBBBB-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let secondGrant = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [
+                    mcpProxyGrant(id: firstGrant, serverID: serverID),
+                    mcpProxyGrant(id: secondGrant, serverID: serverID),
+                ],
+                history: []
+            )
+        )
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: [:],
+            grantIDs: [firstGrant, secondGrant]
+        )
+        let recorder = RecordingMCPProxyToolCallRecorder()
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                MCPUpstreamConfig(
+                    name: "jira",
+                    command: "mcp-atlassian",
+                    tools: MCPUpstreamToolPolicy(
+                        allow: ["jira_get_issue"],
+                        approve: [],
+                        deny: []
+                    )
+                ),
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: recorder
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "Codex")
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        let result = try await call.value
+        #expect(result.isError != true)
+        let expected = [secondGrant, firstGrant]
+        #expect(recorder.calls.count == 1)
+        #expect(recorder.calls[0].grantID == secondGrant)
+        #expect(recorder.calls[0].grantIDs == expected)
+        #expect(recorder.outcomes.contains { outcome in
+            outcome.outcome == .succeeded
+                && outcome.grantID == secondGrant
+                && outcome.grantIDs == expected
+                && outcome.errorCode == nil
+                && outcome.stage == .forward
+        })
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
     @Test("empty policy does not discover when env contains authsia references")
     func emptyPolicySkipsDiscoveryWhenEnvHasSecretRefs() async throws {
         let bin = try makeWorkspaceRoot()

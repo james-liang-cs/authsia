@@ -210,6 +210,7 @@ actor AuthsiaMCPProxy {
                 grantID: nil,
                 outcome: .upstreamUnavailable,
                 code: .upstreamUnavailable,
+                stage: .policy,
                 message: "The named MCP upstream is not declared in this workspace.",
                 recordAttempted: false,
                 recordedInvocationID: nil
@@ -268,7 +269,8 @@ actor AuthsiaMCPProxy {
                     toolName: parameters.name,
                     agentRuntimeContext: agentRuntimeContext
                 )
-                let grantID = session.grantIDs.sorted { $0.uuidString < $1.uuidString }.first
+                let grantIDs = orderedGrantIDs(from: session)
+                let grantID = grantIDs.first
                 recordedGrantID = grantID
                 guard session.childToolNames.contains(parameters.name) else {
                     return try proxyFailureResult(
@@ -292,7 +294,8 @@ actor AuthsiaMCPProxy {
                         toolName: parameters.name,
                         agentRuntimeContext: agentRuntimeContext,
                         workspaceRoot: runtimeContext.workspaceRoot,
-                        grantID: grantID
+                        grantID: grantID,
+                        grantIDs: grantIDs
                     )
                 } catch {
                     return try proxyFailureResult(
@@ -315,7 +318,10 @@ actor AuthsiaMCPProxy {
                     upstreamCommand: upstream.command,
                     toolName: parameters.name,
                     agentRuntimeContext: agentRuntimeContext,
-                    grantID: grantID
+                    grantID: grantID,
+                    grantIDs: grantIDs,
+                    errorCode: nil,
+                    stage: .forward
                 )
                 return result
             } catch let error as MCPToolInputError {
@@ -427,10 +433,23 @@ actor AuthsiaMCPProxy {
     }
 
     private func currentChildGrantID() -> UUID? {
-        if let grantID = childSession?.grantIDs.sorted(by: { $0.uuidString < $1.uuidString }).first {
-            return grantID
+        orderedGrantIDs().first
+    }
+
+    private func orderedGrantIDs(from session: ChildSession? = nil) -> [UUID] {
+        let ids = session?.grantIDs ?? childSession?.grantIDs ?? []
+        return ids.sorted { $0.uuidString < $1.uuidString }
+    }
+
+    private func attributedGrantIDs(primary: UUID?) -> [UUID] {
+        let fromSession = orderedGrantIDs()
+        if !fromSession.isEmpty {
+            return fromSession
         }
-        return try? grantService.activeOwnedGrantIDs().sorted { $0.uuidString < $1.uuidString }.first
+        if let primary {
+            return [primary]
+        }
+        return []
     }
 
     private func proxyFailureResult(
@@ -441,17 +460,22 @@ actor AuthsiaMCPProxy {
         grantID: UUID?,
         outcome: MCPProxyCallOutcome,
         code: MCPToolErrorCode,
+        stage: MCPProxyCallStage? = nil,
         message: String,
         recordAttempted: Bool,
         recordedInvocationID: UUID?
     ) throws -> CallTool.Result {
+        let grantIDs = attributedGrantIDs(primary: grantID)
         let responseID = proxyFailureInvocationID(
             outcome: outcome,
             invocationID: invocationID,
             upstreamCommand: upstreamCommand,
             toolName: toolName,
             agentRuntimeContext: agentRuntimeContext,
-            grantID: grantID,
+            grantID: grantIDs.first ?? grantID,
+            grantIDs: grantIDs,
+            errorCode: code.rawValue,
+            stage: stage ?? code.mcpProxyCallStage,
             recordAttempted: recordAttempted,
             recordedInvocationID: recordedInvocationID
         )
@@ -465,7 +489,10 @@ actor AuthsiaMCPProxy {
         toolName: String,
         agentRuntimeContext: AgentRuntimeContext,
         grantID: UUID?,
-        outcome: MCPProxyCallOutcome
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) -> UUID? {
         do {
             try toolCallRecorder.recordRejected(
@@ -475,7 +502,10 @@ actor AuthsiaMCPProxy {
                 agentRuntimeContext: agentRuntimeContext,
                 workspaceRoot: runtimeContext.workspaceRoot,
                 grantID: grantID,
-                outcome: outcome
+                grantIDs: grantIDs,
+                outcome: outcome,
+                errorCode: errorCode,
+                stage: stage
             )
             return invocationID
         } catch {
@@ -488,7 +518,10 @@ actor AuthsiaMCPProxy {
         upstreamCommand: String?,
         toolName: String,
         agentRuntimeContext: AgentRuntimeContext,
-        grantID: UUID?
+        grantID: UUID?,
+        grantIDs: [UUID],
+        errorCode: String?,
+        stage: MCPProxyCallStage?
     ) {
         var lastError: (any Error)?
         for attempt in 0..<2 {
@@ -500,7 +533,10 @@ actor AuthsiaMCPProxy {
                     agentRuntimeContext: agentRuntimeContext,
                     workspaceRoot: runtimeContext.workspaceRoot,
                     grantID: grantID,
-                    outcome: outcome
+                    grantIDs: grantIDs,
+                    outcome: outcome,
+                    errorCode: errorCode,
+                    stage: stage
                 )
                 return
             } catch {
@@ -520,6 +556,9 @@ actor AuthsiaMCPProxy {
         toolName: String,
         agentRuntimeContext: AgentRuntimeContext,
         grantID: UUID?,
+        grantIDs: [UUID],
+        errorCode: String?,
+        stage: MCPProxyCallStage?,
         recordAttempted: Bool,
         recordedInvocationID: UUID?
     ) -> UUID? {
@@ -530,7 +569,10 @@ actor AuthsiaMCPProxy {
                     upstreamCommand: upstreamCommand,
                     toolName: toolName,
                     agentRuntimeContext: agentRuntimeContext,
-                    grantID: grantID
+                    grantID: grantID,
+                    grantIDs: grantIDs,
+                    errorCode: errorCode,
+                    stage: stage
                 )
             }
             return recordedInvocationID
@@ -541,7 +583,10 @@ actor AuthsiaMCPProxy {
             toolName: toolName,
             agentRuntimeContext: agentRuntimeContext,
             grantID: grantID,
-            outcome: outcome
+            grantIDs: grantIDs,
+            outcome: outcome,
+            errorCode: errorCode,
+            stage: stage
         )
     }
 
@@ -1471,4 +1516,24 @@ private enum GrantWatchVerdict {
     case active
     case inactive
     case unreachable
+}
+
+extension MCPToolErrorCode {
+    var mcpProxyCallStage: MCPProxyCallStage {
+        switch self {
+        case .mcpAccessDisabled, .cliAccessDisabled:
+            return .settings
+        case .workspaceUnavailable:
+            return .binding
+        case .upstreamDenied, .httpUpstreamUnsupported:
+            return .policy
+        case .grantUnavailable, .grantNotOwned, .approvalDenied:
+            return .admission
+        case .upstreamUnavailable, .executionFailed:
+            return .spawn
+        case .busy, .timedOut, .cancelled, .invalidInput, .internalError,
+             .auditUnavailable, .bridgeUnavailable:
+            return .forward
+        }
+    }
 }

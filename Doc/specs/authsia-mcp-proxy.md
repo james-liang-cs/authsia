@@ -798,7 +798,13 @@ admission, and revoke-kill contract those rows display.
 The proxy can see wrapped `tools/call` traffic at runtime. Persistence is a
 redacted Agent command event plus an HMAC-chained `bridge_audit.log` row:
 proxy source, optional grant ID, workspace/runtime correlation, MCP tool name,
-and a bounded outcome. An admitted call is written as `started` before
+and a bounded outcome. The persisted outcome is the coarse capsule
+(`denied`, `upstreamUnavailable`, …). Failures also store `mcpProxyErrorCode`
+(the protocol error, for example `mcpAccessDisabled`) and `mcpProxyStage`
+(`settings`, `binding`, `policy`, `admission`, `spawn`, `forward`). A multi-grant
+session records every `session.grantIDs` value on `mcpProxyGrantIDs`; the primary
+`agentJITGrantID` remains the sorted-first ID. Attribution never falls back to
+an unrelated owned grant. An admitted call is written as `started` before
 forwarding, then an appended event with the same invocation merge key records
 `succeeded`, `mcpError`, `timedOut`, `cancelled`, or `upstreamUnavailable`.
 Policy and lifecycle failures that occur before a grant exists are recorded as
@@ -815,17 +821,17 @@ event has been saved. The matching audit row's `turnID` (and `toolUseID`) is
 pre-admission decision may have no matching audit row, but remains visible as
 an unowned proxy decision in Access Center.
 
-The compact unowned-decision row deliberately shows a coarse outcome rather
-than the full protocol error. **Denied** covers settings, transport, grant, and
-tool-policy rejections. **Upstream unavailable** covers workspace or upstream
-resolution, child launch, and child-tool drift failures. When an invocation ID
-exists, use the client error envelope and correlated audit/activity evidence to
-recover the more specific error code; do not infer it from the compact label.
+The compact unowned-decision row still leads with a coarse outcome
+(`denied`, `upstreamUnavailable`, `busy`). Access Center Commands, Timeline,
+and the unowned-decision caption also show the persisted protocol error code
+and stage (`settings`, `binding`, `policy`, `admission`, `spawn`, `forward`).
+Those fields travel with the command-history export. Do not infer a code from
+the coarse capsule alone.
 
 Review that event on the owning grant in Access Center: **MCP proxy** filter →
 grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call
-**MCP tool called** and shows the child basename, tool name, and redacted
-outcome. Decisions without a grant appear as recent unowned proxy decisions.
+**MCP tool called** and shows the child basename, tool name, redacted
+outcome, error code, and stage. Decisions without a grant appear as recent unowned proxy decisions.
 Direct client launches outside the proxy produce no call events.
 
 `tools/list`, including the admitted credential-less discovery probe, is not
