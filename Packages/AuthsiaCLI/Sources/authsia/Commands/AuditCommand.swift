@@ -2,6 +2,20 @@ import ArgumentParser
 import AuthenticatorBridge
 import Foundation
 
+enum AuditChainIntegrity: String, Codable, Equatable, Sendable {
+    case ok
+    case failed
+    case unavailable
+
+    static func from(verify: () throws -> Bool) -> Self {
+        do {
+            return try verify() ? .ok : .failed
+        } catch {
+            return .unavailable
+        }
+    }
+}
+
 struct Audit: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Audit log management",
@@ -105,6 +119,7 @@ struct Audit: ParsableCommand {
                 Examples:
                   authsia audit export --out-file audit.json
                   authsia audit export --format ndjson --out-file audit.ndjson
+                  authsia audit export --verify --out-file audit.json
                 """
         )
 
@@ -114,9 +129,41 @@ struct Audit: ParsableCommand {
         @Option(name: .long, help: "Output format: json (default), ndjson")
         var format: ExportFormat = .json
 
+        @Flag(name: .customLong("verify"), help: "Verify the HMAC chain and include a signed-box manifest")
+        var verify = false
+
         func run() throws {
             let events = try Audit.loadEvents()
-            try Audit.writeExport(events: events, format: format, outFile: outFile)
+            var manifest: AuditExportManifest?
+            if verify {
+                let integrity = AuditChainIntegrity.from(
+                    verify: { try AuthsiaBridgeClient.shared.auditVerify() }
+                )
+                switch integrity {
+                case .ok:
+                    break
+                case .failed:
+                    print("Audit log integrity: FAILED")
+                    throw ExitCode.failure
+                case .unavailable:
+                    print("Audit log integrity: UNAVAILABLE")
+                    throw ExitCode.failure
+                }
+                let identity = MachineIdentity.load()
+                manifest = AuditExportManifest(
+                    eventCount: events.count,
+                    headHash: events.first?.entryHash,
+                    deviceID: identity.machineId,
+                    verifiedAt: ISO8601DateFormatter().string(from: Date()),
+                    integrity: integrity
+                )
+            }
+            try Audit.writeExport(
+                events: events,
+                format: format,
+                outFile: outFile,
+                manifest: manifest
+            )
             print("Exported \(events.count) audit events to \(outFile)")
         }
     }
@@ -160,7 +207,32 @@ struct Audit: ParsableCommand {
         return try AuditFormatter.formatList(Array(filtered.reversed()), format: format)
     }
 
-    static func writeExport(events: [AuditEvent], format: ExportFormat, outFile: String) throws {
+    static func writeExport(
+        events: [AuditEvent],
+        format: ExportFormat,
+        outFile: String,
+        manifest: AuditExportManifest? = nil
+    ) throws {
+        if let manifest {
+            switch format {
+            case .json:
+                let payload = VerifiedAuditExport(manifest: manifest, events: events)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+                let data = try encoder.encode(payload)
+                try ReadCmd.writeToFile(value: String(decoding: data, as: UTF8.self), path: outFile)
+            case .ndjson:
+                let output = try AuditFormatter.formatExport(events, format: format)
+                try ReadCmd.writeToFile(value: output, path: outFile)
+                let sidecar = outFile + ".manifest.json"
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(manifest)
+                try ReadCmd.writeToFile(value: String(decoding: data, as: UTF8.self), path: sidecar)
+            }
+            return
+        }
         let output = try AuditFormatter.formatExport(events, format: format)
         try ReadCmd.writeToFile(value: output, path: outFile)
     }
@@ -221,4 +293,17 @@ struct Audit: ParsableCommand {
             }
         }
     }
+}
+
+struct AuditExportManifest: Codable, Equatable, Sendable {
+    let eventCount: Int
+    let headHash: String?
+    let deviceID: String
+    let verifiedAt: String
+    let integrity: AuditChainIntegrity
+}
+
+struct VerifiedAuditExport: Codable, Equatable, Sendable {
+    let manifest: AuditExportManifest
+    let events: [AuditEvent]
 }

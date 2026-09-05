@@ -59,6 +59,8 @@ enum MCPClientConfiguration {
                 shape = "declared, but launches directly and bypasses admission"
             case .unadmitted:
                 shape = "not on the current workspace allowlist"
+            case .skipped:
+                shape = "client file could not be read"
             }
             var state: String
             switch finding.precedence {
@@ -165,6 +167,8 @@ enum MCPClientConfiguration {
             return "bypass"
         case .unadmitted:
             return "unadmitted"
+        case .skipped:
+            return "skipped"
         }
     }
 
@@ -186,6 +190,8 @@ enum MCPClientConfiguration {
             return finding.needsToolPolicy ? "list tools" : "ok"
         case .directBypass, .unadmitted:
             return finding.isAuthsiaProxyLaunch ? "declare" : "protect"
+        case .skipped:
+            return "fix file"
         }
     }
 

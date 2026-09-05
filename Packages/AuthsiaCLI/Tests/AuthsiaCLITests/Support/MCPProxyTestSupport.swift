@@ -422,9 +422,17 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
         let stage: MCPProxyCallStage?
     }
 
+    struct Lifecycle: Equatable {
+        let outcome: MCPProxyCallOutcome
+        let exitReason: MCPProxyChildExitReason?
+        let grantIDs: [UUID]
+        let turnID: String?
+    }
+
     private let lock = NSLock()
     private(set) var calls: [Call] = []
     private(set) var outcomes: [Outcome] = []
+    private(set) var lifecycle: [Lifecycle] = []
     var error: (any Error)?
     var remainingOutcomeFailures = 0
 
@@ -507,6 +515,27 @@ final class RecordingMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unche
         }
         _ = (upstreamName, upstreamCommand, agentRuntimeContext, workspaceRoot)
     }
+
+    func recordLifecycle(
+        upstreamName: String,
+        upstreamCommand: String?,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        exitReason: MCPProxyChildExitReason?
+    ) {
+        lock.withLock {
+            lifecycle.append(Lifecycle(
+                outcome: outcome,
+                exitReason: exitReason,
+                grantIDs: grantIDs,
+                turnID: agentRuntimeContext.turnID
+            ))
+        }
+        _ = (upstreamName, upstreamCommand, workspaceRoot, grantID)
+    }
 }
 
 private enum RecordingMCPProxyOutcomeError: Error {
@@ -532,6 +561,7 @@ final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
     private var snapshot: AgentJITGrantSnapshotPayload
     private var storedRevokedIDs: [UUID] = []
     private var remainingSnapshotFailures = 0
+    private var snapshotAlwaysFails = false
 
     init(snapshot: AgentJITGrantSnapshotPayload) {
         self.snapshot = snapshot
@@ -539,6 +569,10 @@ final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
 
     func failNextSnapshots(_ count: Int) {
         lock.withLock { remainingSnapshotFailures = count }
+    }
+
+    func failSnapshotsPermanently() {
+        lock.withLock { snapshotAlwaysFails = true }
     }
 
     var revokedIDs: [UUID] {
@@ -554,8 +588,10 @@ final class MutableMCPProxyGrantClient: MCPGrantClient, @unchecked Sendable {
     ) throws -> AgentJITGrantSnapshotPayload {
         _ = agentRuntimeContext
         return try lock.withLock {
-            if remainingSnapshotFailures > 0 {
-                remainingSnapshotFailures -= 1
+            if snapshotAlwaysFails || remainingSnapshotFailures > 0 {
+                if remainingSnapshotFailures > 0 {
+                    remainingSnapshotFailures -= 1
+                }
                 throw MCPGrantSnapshotTestError.unreachable
             }
             return snapshot
@@ -579,7 +615,8 @@ enum MCPGrantSnapshotTestError: Error {
 func mcpProxyGrant(
     id: UUID,
     serverID: UUID,
-    revokedAt: Date? = nil
+    revokedAt: Date? = nil,
+    expiresAt: Date = Date.distantFuture
 ) -> AgentJITGrant {
     AgentJITGrant(
         id: id,
@@ -597,7 +634,7 @@ func mcpProxyGrant(
         folderScope: .folder("Team/API"),
         capabilities: [.exec],
         createdAt: Date(timeIntervalSince1970: 1_700_000_000),
-        expiresAt: Date.distantFuture,
+        expiresAt: expiresAt,
         revokedAt: revokedAt,
         lastUsedAt: nil,
         requestedItems: [],
@@ -629,4 +666,25 @@ func waitForMCPProxyProcessGroupExit(
         Thread.sleep(forTimeInterval: 0.02)
     }
     return !mcpProxyProcessGroupIsAlive(processGroupID)
+}
+
+func waitForMCPProxyLifecycle(
+    _ recorder: RecordingMCPProxyToolCallRecorder,
+    outcome: MCPProxyCallOutcome,
+    exitReason: MCPProxyChildExitReason? = nil,
+    timeoutSeconds: Double = 2
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while Date() < deadline {
+        let match = recorder.lifecycle.contains { row in
+            row.outcome == outcome && (exitReason == nil || row.exitReason == exitReason)
+        }
+        if match {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return recorder.lifecycle.contains { row in
+        row.outcome == outcome && (exitReason == nil || row.exitReason == exitReason)
+    }
 }

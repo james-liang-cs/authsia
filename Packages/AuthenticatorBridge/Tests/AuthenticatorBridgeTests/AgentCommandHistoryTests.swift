@@ -361,9 +361,49 @@ final class AgentCommandHistoryTests: XCTestCase {
 
         let exported = try store.exportJSON(loaded)
         let decoded = try JSONDecoder.agentCommandHistory.decode([AgentCommandEvent].self, from: exported)
+        XCTAssertEqual(decoded[0].mcpProxyGrantIDs, [primary, secondary])
         XCTAssertEqual(decoded[0].mcpProxyErrorCode, "mcpAccessDisabled")
         XCTAssertEqual(decoded[0].mcpProxyStage, .settings)
-        XCTAssertEqual(decoded[0].mcpProxyGrantIDs, [primary, secondary])
+    }
+
+    func testMCPProxyChildLifecycleRoundTripThroughHistory() throws {
+        let fileURL = try makeTempURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let store = AgentCommandHistoryStore(fileURL: fileURL)
+        let grantID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let started = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 12),
+            agentPlatform: "codex",
+            turnID: "mcp-child:1",
+            captureSource: .mcpProxy,
+            executable: "jira",
+            arguments: ["mcp-child"],
+            command: "jira mcp-child",
+            mcpProxyOutcome: .childStarted,
+            mcpProxyStage: .spawn,
+            mcpProxyGrantIDs: [grantID]
+        )
+        let exited = AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 13),
+            agentPlatform: "codex",
+            turnID: "mcp-child:1",
+            captureSource: .mcpProxy,
+            executable: "jira",
+            arguments: ["mcp-child"],
+            command: "jira mcp-child",
+            mcpProxyOutcome: .childExited,
+            mcpProxyStage: .spawn,
+            mcpProxyGrantIDs: [grantID],
+            mcpProxyChildExitReason: .revoked
+        )
+
+        try store.record(started)
+        try store.record(exited)
+        let loaded = try store.loadAll()
+        XCTAssertEqual(loaded.map(\.mcpProxyOutcome), [.childStarted, .childExited])
+        XCTAssertEqual(loaded.last?.mcpProxyChildExitReason, .revoked)
+        XCTAssertTrue(started.isMCPProxyLifecycleEvent)
+        XCTAssertTrue(exited.isMCPProxyLifecycleEvent)
     }
 
     func testLegacyMCPProxyHistoryJSONOmitsErrorCodeAndStage() throws {

@@ -154,11 +154,12 @@ final class MCPClientConfigScannerTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(findings.count, 1)
-        XCTAssertEqual(findings.first?.status, .unadmitted)
-        XCTAssertEqual(findings.first?.isWrapEligible, true)
-        XCTAssertEqual(findings.first?.wrapCommand, "node")
-        XCTAssertTrue(findings.first?.shouldShowInAccessCenter == true)
+        XCTAssertEqual(findings.count, 2)
+        XCTAssertEqual(findings.first { $0.serverName == "filesystem" }?.status, .unadmitted)
+        XCTAssertEqual(findings.first { $0.serverName == "filesystem" }?.isWrapEligible, true)
+        XCTAssertEqual(findings.first { $0.serverName == "filesystem" }?.wrapCommand, "node")
+        XCTAssertEqual(findings.first { $0.status == .skipped }?.commandLabel, "unparsable")
+        XCTAssertTrue(findings.contains(where: \.shouldShowInAccessCenter))
         XCTAssertEqual(try Data(contentsOf: cursor), original)
         XCTAssertEqual(try Data(contentsOf: malformed), Data("{not-json".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
@@ -170,7 +171,7 @@ final class MCPClientConfigScannerTests: XCTestCase {
 
         XCTAssertEqual(
             locations.map(\.source),
-            [.codex, .claude, .cursor, .devin, .vscode, .claudeDesktop]
+            [.codex, .claude, .cursor, .devin, .vscode, .vscode, .vscode, .claudeDesktop]
         )
         XCTAssertEqual(locations.map(\.fileURL.path), [
             "/Users/example/.codex/config.toml",
@@ -178,6 +179,8 @@ final class MCPClientConfigScannerTests: XCTestCase {
             "/Users/example/.cursor/mcp.json",
             "/Users/example/.config/devin/mcp_config.json",
             "/Users/example/Library/Application Support/Code/User/mcp.json",
+            "/Users/example/Library/Application Support/Code - Insiders/User/mcp.json",
+            "/Users/example/Library/Application Support/Windsurf/User/mcp.json",
             "/Users/example/Library/Application Support/Claude/claude_desktop_config.json",
         ])
         XCTAssertEqual(locations.map(\.displayPath), [
@@ -186,6 +189,8 @@ final class MCPClientConfigScannerTests: XCTestCase {
             "~/.cursor/mcp.json",
             "~/.config/devin/mcp_config.json",
             "~/Library/Application Support/Code/User/mcp.json",
+            "~/Library/Application Support/Code - Insiders/User/mcp.json",
+            "~/Library/Application Support/Windsurf/User/mcp.json",
             "~/Library/Application Support/Claude/claude_desktop_config.json",
         ])
         XCTAssertTrue(locations.allSatisfy { $0.scope == .userGlobal })
@@ -798,6 +803,46 @@ final class MCPClientConfigScannerTests: XCTestCase {
         )
 
         XCTAssertEqual(findings.map(\.serverName).sorted(), ["accepted", "unanswered"])
+    }
+
+    func testVSCodeJSONCAndOversizeFilesProduceFindings() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let vscode = root.appendingPathComponent("mcp.json")
+        let oversize = root.appendingPathComponent("huge.json")
+        try """
+        {
+          // local MCP servers
+          "servers": {
+            "filesystem": {
+              "command": "node",
+              "args": ["server.js"]
+            }
+          }
+        }
+        """.write(to: vscode, atomically: true, encoding: .utf8)
+        try Data(repeating: 0x61, count: 1_048_577).write(to: oversize)
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: [
+                MCPClientConfigLocation(
+                    source: .vscode,
+                    fileURL: vscode,
+                    displayPath: "~/Library/Application Support/Code/User/mcp.json"
+                ),
+                MCPClientConfigLocation(
+                    source: .vscode,
+                    fileURL: oversize,
+                    displayPath: "~/Library/Application Support/Code - Insiders/User/mcp.json"
+                ),
+            ]
+        )
+
+        XCTAssertEqual(findings.first { $0.serverName == "filesystem" }?.status, .unadmitted)
+        XCTAssertEqual(findings.first { $0.commandLabel == "too large" }?.status, .skipped)
+        XCTAssertEqual(findings.first { $0.status == .skipped }?.shouldShowInAccessCenter, true)
     }
 
 }

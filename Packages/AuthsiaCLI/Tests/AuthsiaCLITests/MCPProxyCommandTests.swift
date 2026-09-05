@@ -1,3 +1,4 @@
+import AuthenticatorBridge
 import Foundation
 import Testing
 @testable import authsia
@@ -84,5 +85,63 @@ struct MCPProxyCommandTests {
         #expect(!proxyHelp.contains("authsia_exec"))
         #expect(!proxyHelp.contains("authsia_list"))
         #expect(!rootHelp.contains("authsia_status"))
+    }
+
+    @Test("activity export filters mcpProxy rows")
+    func activityExportFiltersRows() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "mcp-activity-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("history.jsonl")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentCommandHistoryStore(fileURL: fileURL)
+        let grantID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        try store.record(AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 100),
+            agentPlatform: "codex",
+            agentID: "proxy:jira",
+            agentJITGrantID: grantID,
+            captureSource: .mcpProxy,
+            workingDirectory: "/tmp/project",
+            executable: "jira",
+            arguments: ["mcp-tool", "search"],
+            command: "jira mcp-tool search",
+            mcpProxyOutcome: .succeeded
+        ))
+        try store.record(AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 200),
+            agentPlatform: "codex",
+            agentID: "proxy:codegraph",
+            captureSource: .mcpProxy,
+            workingDirectory: "/tmp/other",
+            executable: "codegraph",
+            arguments: ["mcp-tool", "query"],
+            command: "codegraph mcp-tool query",
+            mcpProxyOutcome: .denied
+        ))
+        try store.record(AgentCommandEvent(
+            recordedAt: Date(timeIntervalSince1970: 150),
+            agentPlatform: "codex",
+            captureSource: .hook,
+            executable: "git",
+            arguments: ["status"],
+            command: "git status"
+        ))
+
+        let command = try MCPCommand.Activity.Export.parse([
+            "--json",
+            "--since", "1970-01-01T00:02:00Z",
+            "--unowned",
+        ])
+        let unowned = try command.filteredEvents(historyFile: fileURL.path)
+        #expect(unowned.map(\.executable) == ["codegraph"])
+
+        let upstream = try MCPCommand.Activity.Export.parse(["--json", "--upstream", "jira"])
+        #expect(try upstream.filteredEvents(historyFile: fileURL.path).map(\.executable) == ["jira"])
+
+        let workspace = try MCPCommand.Activity.Export.parse(["--json", "--workspace", "/tmp/project"])
+        #expect(try workspace.filteredEvents(historyFile: fileURL.path).map(\.executable) == ["jira"])
     }
 }

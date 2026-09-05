@@ -143,7 +143,8 @@ Key properties:
 | `authsia mcp wrap --write` | Declare the upstream and replace a scanned client MCP launch with `mcp proxy` after confirmation | `authsia mcp wrap --write --server filesystem --yes` |
 | `authsia mcp declare` | Declare a child command for a proxy launch that has no workspace policy | `authsia mcp declare --server codegraph --command codegraph --arg serve --yes` |
 | `authsia mcp serve` | Run the local stdio MCP server, discovering one client workspace or using an explicit override | `authsia mcp serve --workspace /path/to/repo` |
-| `authsia mcp doctor` | Scan known MCP client configs and fail on effective or conditional bypasses. Default output is a table; `--json` is the machine verdict | `authsia mcp doctor` |
+| `authsia mcp doctor` | Scan known MCP client configs and fail on effective or conditional bypasses. Default output is a table; `--json` is the machine verdict (schema version 2) | `authsia mcp doctor --json` |
+| `authsia mcp activity export` | Copy redacted MCP proxy command-history rows | `authsia mcp activity export --json --unowned` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
 | `authsia access list` | List automation credentials | `authsia access list --format table` |
 | `authsia access revoke <id>` | Revoke an automation credential | `authsia access revoke <uuid>` |
@@ -1749,14 +1750,18 @@ authsia mcp doctor --json
 authsia mcp doctor --workspace /path/to/repository --json
 ```
 
-`authsia mcp doctor [--client <client>] [--workspace <path> ...] [--json]`
+`authsia mcp doctor [--client <client>] [--workspace <path> ...] [--home <path>] [--json]`
 scans the same known user-global and project MCP client locations as
-`mcp configure`. `--client` is optional; omit it to scan every known location.
+`mcp configure`, plus VS Code Insiders and Windsurf user-global `mcp.json`.
+`--client` is optional; omit it to scan every known location.
 `--workspace` is repeatable and is what makes the verdict precise: user-global
 fallbacks become effective or overridden for those roots. When omitted,
 doctor uses the same bound-workspace fallback as configure. A fleet check
 from an unbound working directory therefore sees user-global entries as
-conditional.
+conditional. `--home` or `AUTHSIA_MCP_SCAN_HOME` selects the home directory
+to scan. VS Code files are parsed as JSONC. A file that exists but is too
+large or unparsable is a `skipped` finding (`Next: fix file`) and does not
+fail the verdict.
 
 A violation is a `direct-bypass` or `unadmitted` finding. Effective and
 conditional violations fail the command; overridden violations are reported
@@ -1765,9 +1770,15 @@ violated. Exit `1` is reserved for ArgumentParser input errors. Default output
 is a summary table of launches (`Client`, `Server`, `Command`, `Status`,
 `Effect`, `Next`, `File`) plus a verdict. Unbound scans print `(none)` for
 workspace roots and tell the operator to pass `--workspace`. `--json` prints
-a versioned object with `schemaVersion`, `workspaceRoots`, `violationCount`,
+a versioned object with `schemaVersion` 2, `generatedAt`, `hostname`, `user`,
+`authsiaVersion`, `mcpIntegrationsEnabled`, `auditIntegrity`
+(`ok` / `failed` / `unavailable`), `workspaceRoots`, `violationCount`,
 and `findings`. Each finding includes its stable `id` for diffable automation.
 An empty `workspaceRoots` array means the conservative conditional path.
+
+`authsia mcp activity export --json [--since <iso8601>] [--upstream <name>]
+[--workspace <path>] [--unowned]` copies redacted `.mcpProxy` command-history
+rows. It never includes tool arguments, results, JSON-RPC, or child stderr.
 
 See [`authsia-mcp.md`](authsia-mcp.md) for the closed tool schemas, lifecycle,
 JIT ownership, audit correlation, and compatibility policy. Wrapping another
@@ -2247,14 +2258,24 @@ on every signature.
 | Parameter | Required | Values | Description |
 |-----------|----------|--------|-------------|
 | `--format` | No | `json` (default), `ndjson` | Export format |
-| `--out` | Yes | file path | Output file path |
+| `--out-file, -o` | Yes | file path | Output file path |
+| `--verify` | No | flag | Verify the HMAC chain and write a manifest |
+
+Without `--verify`, JSON is a top-level array. With `--verify`, JSON is
+`{ "manifest": { eventCount, headHash, deviceID, verifiedAt, integrity }, "events": [...] }`.
+NDJSON keeps one event per line and writes `<out-file>.manifest.json`.
+
+`authsia mcp activity export --json` copies redacted MCP proxy command-history
+rows. Filters: `--since`, `--upstream`, `--workspace`, `--unowned`.
 
 Examples:
 
 ```bash
 authsia audit list --format table
 authsia audit list --type get --limit 50
-authsia audit export --format ndjson --out events.ndjson
+authsia audit export --format ndjson --out-file events.ndjson
+authsia audit export --verify --out-file events.json
+authsia mcp activity export --json --unowned
 ```
 
 ## Agentic AI Workflows

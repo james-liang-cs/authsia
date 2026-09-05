@@ -834,13 +834,29 @@ grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call
 outcome, error code, and stage. Decisions without a grant appear as recent unowned proxy decisions.
 Direct client launches outside the proxy produce no call events.
 
+A long-lived child also writes command-history-only rows `childStarted` and
+`childExited`. Exit reasons are `exit`, `revoked`, `expired`, `stdinClosed`,
+and `timeout`. These rows use a `mcp-child:` turn and never merge with
+`mcp-call:` tool rows. They are not HMAC-chained `bridge_audit.log` activity;
+that channel remains for `tools/call`. Catalog probes never assign a live
+session and therefore write no child rows. On an admission grant, Access
+Center hides `lastUsedAt` (the proxy does not refresh it) and shows
+**Revoke pending** until a `childExited` row with reason `revoked` arrives,
+then **Killed**. Timeline titles those rows **MCP child started** and
+**MCP child exited**.
+
+`authsia mcp activity export --json` copies `.mcpProxy` command-history rows
+with `--since`, `--upstream`, `--workspace`, and `--unowned` filters.
+`authsia audit export --verify` checks the HMAC chain on-box and writes a
+manifest (`eventCount`, `headHash`, `deviceID`) wrapping JSON events, or an
+NDJSON sidecar `.manifest.json`.
+
 `tools/list`, including the admitted credential-less discovery probe, is not
 per-tool command activity. File, network, and Process Tree tabs remain the
 existing Authsia-mediated exec stores; they are not a transcript of a generic
 MCP child. Access Center labels those three surfaces as unavailable for a
 generic proxy grant instead of presenting an empty result as proof of no
-activity. Child liveness is not persisted as a separate status; the grant
-state and last redacted proxy decision are the available status signals.
+activity.
 
 Operator guidance:
 

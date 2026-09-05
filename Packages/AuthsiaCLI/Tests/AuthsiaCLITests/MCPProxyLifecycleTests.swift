@@ -1,4 +1,5 @@
 import AuthenticatorBridge
+import Darwin
 import Foundation
 import MCP
 import Testing
@@ -807,6 +808,160 @@ struct MCPProxyLifecycleTests {
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
+    }
+
+    @Test("child start and exit persist lifecycle rows")
+    func childStartAndNaturalExitPersistLifecycleRows() async throws {
+        let fixture = try await makeLiveChildFixture()
+        defer { fixture.tearDown() }
+        let call: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        #expect(waitForMCPProxyLifecycle(fixture.recorder, outcome: .childStarted))
+        let spawned = try #require(fixture.launcher.lastSpawned)
+        Darwin.kill(spawned.processID, SIGKILL)
+        #expect(waitForMCPProxyLifecycle(fixture.recorder, outcome: .childExited, exitReason: .exit))
+        await fixture.connection.client.disconnect()
+        await fixture.proxy.waitUntilCompleted()
+    }
+
+    @Test("revoking the grant records childExited revoked")
+    func revokePersistsRevokedChildExit() async throws {
+        let fixture = try await makeLiveChildFixture()
+        defer { fixture.tearDown() }
+        let call: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        #expect(waitForMCPProxyLifecycle(fixture.recorder, outcome: .childStarted))
+        fixture.grantClient.setSnapshot(.init(
+            active: [],
+            history: [mcpProxyGrant(
+                id: fixture.grantID,
+                serverID: fixture.serverID,
+                revokedAt: Date()
+            )]
+        ))
+        #expect(waitForMCPProxyLifecycle(fixture.recorder, outcome: .childExited, exitReason: .revoked))
+        await fixture.connection.client.disconnect()
+        await fixture.proxy.waitUntilCompleted()
+    }
+
+    @Test("an expired grant records childExited expired")
+    func expiryPersistsExpiredChildExit() async throws {
+        let fixture = try await makeLiveChildFixture()
+        defer { fixture.tearDown() }
+        let call: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        fixture.grantClient.setSnapshot(.init(
+            active: [],
+            history: [mcpProxyGrant(
+                id: fixture.grantID,
+                serverID: fixture.serverID,
+                expiresAt: Date().addingTimeInterval(-1)
+            )]
+        ))
+        #expect(waitForMCPProxyLifecycle(fixture.recorder, outcome: .childExited, exitReason: .expired))
+        await fixture.connection.client.disconnect()
+        await fixture.proxy.waitUntilCompleted()
+    }
+
+    @Test("graceful stop records childExited stdinClosed")
+    func stopPersistsStdinClosedChildExit() async throws {
+        let fixture = try await makeLiveChildFixture()
+        defer { fixture.tearDown() }
+        let call: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        await fixture.proxy.stop()
+        #expect(waitForMCPProxyLifecycle(fixture.recorder, outcome: .childExited, exitReason: .stdinClosed))
+        await fixture.connection.client.disconnect()
+    }
+
+    @Test("a stuck Bridge watcher records childExited timeout")
+    func unreachableBridgePersistsTimeoutChildExit() async throws {
+        let fixture = try await makeLiveChildFixture()
+        defer { fixture.tearDown() }
+        let call: RequestContext<CallTool.Result> = try await fixture.connection.client.callTool(
+            name: "jira_get_issue"
+        )
+        #expect(try await call.value.isError != true)
+        fixture.grantClient.failSnapshotsPermanently()
+        #expect(waitForMCPProxyLifecycle(
+            fixture.recorder,
+            outcome: .childExited,
+            exitReason: .timeout,
+            timeoutSeconds: 2
+        ))
+        await fixture.connection.client.disconnect()
+        await fixture.proxy.waitUntilCompleted()
+    }
+
+    private struct LiveChildFixture {
+        let proxy: AuthsiaMCPProxy
+        let connection: (client: Client, serverTransport: any Transport)
+        let recorder: RecordingMCPProxyToolCallRecorder
+        let launcher: RecordingMCPProxyChildLauncher
+        let grantClient: MutableMCPProxyGrantClient
+        let grantID: UUID
+        let serverID: UUID
+        let roots: [URL]
+
+        func tearDown() {
+            for root in roots {
+                try? FileManager.default.removeItem(at: root)
+            }
+        }
+    }
+
+    private func makeLiveChildFixture() async throws -> LiveChildFixture {
+        let bin = try makeWorkspaceRoot()
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let serverID = UUID(uuidString: "7E05890F-5C3A-44EF-9208-83A12F17D6CE")!
+        let grantID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let grantClient = MutableMCPProxyGrantClient(
+            snapshot: .init(
+                active: [mcpProxyGrant(id: grantID, serverID: serverID)],
+                history: []
+            )
+        )
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: ["JIRA_API_TOKEN": "synthetic-token"],
+            secrets: ["synthetic-token"],
+            grantIDs: [grantID]
+        )
+        let launcher = RecordingMCPProxyChildLauncher()
+        let recorder = RecordingMCPProxyToolCallRecorder()
+        let root = try makeMCPProxyWorkspace(upstreams: [Self.stdioJiraUpstream])
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root, instanceID: serverID),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            childLauncher: launcher,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 15,
+            killGraceSeconds: 0.05,
+            grantPollIntervalSeconds: 0.05,
+            grantService: MCPGrantService(serverInstanceID: serverID, client: grantClient),
+            toolCallRecorder: recorder
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP lifecycle child")
+        return LiveChildFixture(
+            proxy: proxy,
+            connection: connection,
+            recorder: recorder,
+            launcher: launcher,
+            grantClient: grantClient,
+            grantID: grantID,
+            serverID: serverID,
+            roots: [bin, root]
+        )
     }
 
     private func makeProxy(

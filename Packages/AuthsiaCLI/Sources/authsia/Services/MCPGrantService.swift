@@ -95,6 +95,22 @@ struct MCPGrantService: @unchecked Sendable {
         })
     }
 
+    func inactiveChildExitReason(for grantIDs: Set<UUID>, now: Date = Date()) -> MCPProxyChildExitReason {
+        guard !grantIDs.isEmpty else { return .exit }
+        guard let snapshot = try? client.agentJITSnapshot(agentRuntimeContext: runtimeContext) else {
+            return .revoked
+        }
+        let grants = (snapshot.active + snapshot.history).filter { grantIDs.contains($0.id) }
+        let statuses = Set(grants.map { $0.status(asOf: now) })
+        if statuses.contains(.revoked) {
+            return .revoked
+        }
+        if statuses.contains(.expired) {
+            return .expired
+        }
+        return .revoked
+    }
+
     private var runtimeContext: AgentRuntimeContext {
         AgentRuntimeContext(
             sessionID: "mcp:\(serverInstanceID.uuidString)",

@@ -208,6 +208,20 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
                 displayPath: "~/Library/Application Support/Code/User/mcp.json"
             ),
             Self(
+                source: .vscode,
+                fileURL: homeDirectory.appendingPathComponent(
+                    "Library/Application Support/Code - Insiders/User/mcp.json"
+                ),
+                displayPath: "~/Library/Application Support/Code - Insiders/User/mcp.json"
+            ),
+            Self(
+                source: .vscode,
+                fileURL: homeDirectory.appendingPathComponent(
+                    "Library/Application Support/Windsurf/User/mcp.json"
+                ),
+                displayPath: "~/Library/Application Support/Windsurf/User/mcp.json"
+            ),
+            Self(
                 source: .claudeDesktop,
                 fileURL: homeDirectory.appendingPathComponent(
                     "Library/Application Support/Claude/claude_desktop_config.json"
@@ -249,6 +263,7 @@ public enum MCPClientServerAdmissionStatus: String, Codable, Equatable, Sendable
     case admittedWrapped = "admitted-wrapped"
     case directBypass = "direct-bypass"
     case unadmitted
+    case skipped
 }
 
 public enum MCPClientWrapBlockReason: String, Codable, Equatable, Sendable {
@@ -317,6 +332,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
             || isAuthsiaProxyLaunch
             || isWrapEligible
             || wrapBlockReason != nil
+            || status == .skipped
     }
 
     public init(
@@ -484,7 +500,18 @@ public struct MCPClientConfigScanner {
         // that answer for `.mcp.json` servers in a different file, so the two
         // reads are combined here rather than inside either parser.
         let disabledProjectServers = claudeDisabledProjectServers(in: locations)
-        let observedServers = locations.flatMap { entries(at: $0) }
+        var skippedFindings: [MCPClientServerFinding] = []
+        let observedServers = locations.flatMap { location -> [ObservedServer] in
+            switch read(at: location) {
+            case .missing:
+                return []
+            case .skipped(let reason):
+                skippedFindings.append(skippedFinding(at: location, reason: reason))
+                return []
+            case .entries(let entries):
+                return entries
+            }
+        }
             .filter { entry in
                 guard !entry.isDisabled else { return false }
                 guard entry.location.source == .claude,
@@ -566,7 +593,7 @@ public struct MCPClientConfigScanner {
             }
         }
 
-        return contextualServers.compactMap { contextual in
+        return (contextualServers.compactMap { contextual in
             finding(
                 for: contextual.entry,
                 declaredServers: declaredServers,
@@ -574,7 +601,7 @@ public struct MCPClientConfigScanner {
                 workspacePathLabel: contextual.workspacePathLabel,
                 precedence: contextual.precedence
             )
-        }.sorted { lhs, rhs in
+        } + skippedFindings).sorted { lhs, rhs in
             if lhs.workspacePathLabel != rhs.workspacePathLabel {
                 return (lhs.workspacePathLabel ?? "") < (rhs.workspacePathLabel ?? "")
             }
@@ -620,16 +647,56 @@ public struct MCPClientConfigScanner {
     }
 
     private func entries(at location: MCPClientConfigLocation) -> [ObservedServer] {
-        guard let attributes = try? fileManager.attributesOfItem(atPath: location.fileURL.path),
-              let size = (attributes[.size] as? NSNumber)?.uint64Value,
-              size <= Self.maximumConfigBytes,
-              let data = try? Data(contentsOf: location.fileURL, options: .mappedIfSafe) else {
+        switch read(at: location) {
+        case .entries(let entries):
+            return entries
+        case .missing, .skipped:
             return []
         }
-        if location.source == .codex {
-            return Self.codexEntries(data: data, location: location)
+    }
+
+    private enum ConfigFileRead {
+        case missing
+        case skipped(String)
+        case entries([ObservedServer])
+    }
+
+    private func read(at location: MCPClientConfigLocation) -> ConfigFileRead {
+        do {
+            let attributes = try fileManager.attributesOfItem(atPath: location.fileURL.path)
+            let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+            if size > Self.maximumConfigBytes {
+                return .skipped("too large")
+            }
+            guard let data = try? Data(contentsOf: location.fileURL, options: .mappedIfSafe) else {
+                return .skipped("unparsable")
+            }
+            if location.source == .codex {
+                return .entries(Self.codexEntries(data: data, location: location))
+            }
+            guard let entries = Self.jsonEntries(data: data, location: location) else {
+                return .skipped("unparsable")
+            }
+            return .entries(entries)
+        } catch {
+            return .missing
         }
-        return Self.jsonEntries(data: data, location: location)
+    }
+
+    private func skippedFinding(at location: MCPClientConfigLocation, reason: String) -> MCPClientServerFinding {
+        MCPClientServerFinding(
+            source: location.source,
+            serverName: "(config)",
+            commandLabel: reason,
+            status: .skipped,
+            declaredUpstreamName: nil,
+            configPathLabel: location.displayPath,
+            configScope: location.scope,
+            precedence: .conditional,
+            workspacePathLabel: location.workspacePathLabel,
+            configFilePath: location.fileURL.path,
+            projectKey: location.projectKey
+        )
     }
 
     private func finding(
@@ -762,12 +829,94 @@ public struct MCPClientConfigScanner {
         return (policyCommand, arguments)
     }
 
+    private static func jsonObject(fromJSONC data: Data) -> [String: Any]? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        let stripped = stripJSONC(text)
+        guard let strippedData = stripped.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: strippedData) as? [String: Any] else {
+            return nil
+        }
+        return object
+    }
+
+    private static func stripJSONC(_ input: String) -> String {
+        var output = ""
+        output.reserveCapacity(input.count)
+        var index = input.startIndex
+        var inString = false
+        var escaped = false
+        var inLineComment = false
+        var inBlockComment = false
+        while index < input.endIndex {
+            let character = input[index]
+            let next = input.index(after: index)
+            if inLineComment {
+                if character == "\n" {
+                    inLineComment = false
+                    output.append(character)
+                }
+                index = next
+                continue
+            }
+            if inBlockComment {
+                if character == "*", next < input.endIndex, input[next] == "/" {
+                    inBlockComment = false
+                    index = input.index(after: next)
+                } else {
+                    index = next
+                }
+                continue
+            }
+            if inString {
+                output.append(character)
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                index = next
+                continue
+            }
+            if character == "\"" {
+                inString = true
+                output.append(character)
+                index = next
+                continue
+            }
+            if character == "/", next < input.endIndex {
+                let peeked = input[next]
+                if peeked == "/" {
+                    inLineComment = true
+                    index = input.index(after: next)
+                    continue
+                }
+                if peeked == "*" {
+                    inBlockComment = true
+                    index = input.index(after: next)
+                    continue
+                }
+            }
+            output.append(character)
+            index = next
+        }
+        return output
+    }
+
     private static func jsonEntries(
         data: Data,
         location: MCPClientConfigLocation
-    ) -> [ObservedServer] {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return []
+    ) -> [ObservedServer]? {
+        let root: [String: Any]
+        if location.source == .vscode {
+            guard let parsed = jsonObject(fromJSONC: data) else { return nil }
+            root = parsed
+        } else {
+            guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            root = parsed
         }
         let scopeRoot: [String: Any]
         if let projectKey = location.projectKey {

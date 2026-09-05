@@ -133,7 +133,7 @@ actor AuthsiaMCPProxy {
         grantWatchTask = nil
         let task = spawnTask
         task?.cancel()
-        await dropChild()
+        await dropChild(reason: .stdinClosed)
         await consumeInFlight()
         if let task {
             _ = try? await task.value
@@ -639,7 +639,7 @@ actor AuthsiaMCPProxy {
                 if let live = await liveSession() {
                     return live
                 }
-                await dropChild()
+                await dropChild(reason: .exit)
             } catch {
                 throw error
             }
@@ -812,10 +812,12 @@ actor AuthsiaMCPProxy {
                 grantIDs: Set(prepared.grantIDs),
                 terminator: terminator,
                 stdinWrite: spawned.stdinWrite,
-                stdoutRead: spawned.stdoutRead
+                stdoutRead: spawned.stdoutRead,
+                lifecycleTurnID: "mcp-child:\(UUID().uuidString)"
             )
             childSession = session
             inFlight = nil
+            recordChildLifecycle(.childStarted, session: session)
             watchGrants(session)
             return session
         } catch let error as MCPProxySpawnError {
@@ -841,19 +843,22 @@ actor AuthsiaMCPProxy {
     private func liveSession() async -> ChildSession? {
         guard let session = childSession else { return nil }
         guard session.isAlive else {
-            await dropChild()
+            await dropChild(reason: .exit)
             return nil
         }
         if let upstream = stdioUpstream(),
            session.commandLabel != Self.commandLabel(for: upstream) {
-            await dropChild(processID: session.processID)
+            await dropChild(processID: session.processID, reason: .exit)
             return nil
         }
         switch associatedGrantsRemainActive(for: session) {
         case .active, .unreachable:
             return session
         case .inactive:
-            await dropChild(processID: session.processID)
+            await dropChild(
+                processID: session.processID,
+                reason: grantService.inactiveChildExitReason(for: session.grantIDs)
+            )
             return nil
         }
     }
@@ -884,7 +889,10 @@ actor AuthsiaMCPProxy {
                 case .active:
                     await self.resetGrantWatchFailures()
                 case .inactive:
-                    await self.dropChild(processID: processID)
+                    await self.dropChild(
+                        processID: processID,
+                        reason: self.grantService.inactiveChildExitReason(for: session.grantIDs)
+                    )
                     return
                 case .unreachable:
                     if await self.grantWatchFailedUnreachable(processID: processID) {
@@ -913,7 +921,7 @@ actor AuthsiaMCPProxy {
         stderrOutput.write(Data(
             "authsia mcp proxy: Authsia Bridge stayed unreachable; stopping the wrapped child.\n".utf8
         ))
-        await dropChild(processID: processID)
+        await dropChild(processID: processID, reason: .timeout)
         return true
     }
 
@@ -950,11 +958,14 @@ actor AuthsiaMCPProxy {
     private func spawnedChildDidExit(_ processID: pid_t, status: Int32) async {
         pendingChildExitStatus[processID] = status
         if childSession?.processID == processID {
-            await dropChild()
+            await dropChild(reason: .exit)
         }
     }
 
-    private func dropChild(processID: pid_t? = nil) async {
+    private func dropChild(
+        processID: pid_t? = nil,
+        reason: MCPProxyChildExitReason
+    ) async {
         guard let session = childSession,
               processID == nil || processID == session.processID else { return }
         childSession = nil
@@ -963,11 +974,35 @@ actor AuthsiaMCPProxy {
         MCPProxyChildRegistry.unregister(grantIDs: session.grantIDs)
         MCPProxyChildRegistry.unregister(processGroupID: session.processGroupID)
         pendingChildExitStatus.removeValue(forKey: session.processID)
+        recordChildLifecycle(.childExited, session: session, exitReason: reason)
         await teardownSpawn(
             client: session.client,
             terminator: session.terminator,
             stdinWrite: session.stdinWrite,
             stdoutRead: session.stdoutRead
+        )
+    }
+
+    private func recordChildLifecycle(
+        _ outcome: MCPProxyCallOutcome,
+        session: ChildSession,
+        exitReason: MCPProxyChildExitReason? = nil
+    ) {
+        let grantIDs = session.grantIDs.sorted { $0.uuidString < $1.uuidString }
+        toolCallRecorder.recordLifecycle(
+            upstreamName: upstreamName,
+            upstreamCommand: session.commandLabel,
+            agentRuntimeContext: AgentRuntimeContext(
+                sessionID: "mcp:\(grantService.serverInstanceID.uuidString)",
+                turnID: session.lifecycleTurnID,
+                agentID: "proxy:\(upstreamName)",
+                agentType: "authsia-mcp"
+            ),
+            workspaceRoot: runtimeContext.workspaceRoot,
+            grantID: grantIDs.first,
+            grantIDs: grantIDs,
+            outcome: outcome,
+            exitReason: exitReason
         )
     }
 
@@ -1465,6 +1500,7 @@ private struct ChildSession: Sendable {
     let terminator: MCPProcessTerminator
     let stdinWrite: Int32
     let stdoutRead: Int32
+    let lifecycleTurnID: String
 
     var isAlive: Bool {
         Darwin.kill(processID, 0) == 0 || errno == EPERM

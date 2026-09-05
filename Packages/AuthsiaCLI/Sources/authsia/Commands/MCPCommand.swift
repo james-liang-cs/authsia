@@ -26,10 +26,11 @@ struct MCPCommand: AsyncParsableCommand {
               authsia mcp serve --workspace /path/to/repository
               authsia mcp proxy --upstream jira
               authsia mcp doctor --json
+              authsia mcp activity export --json --unowned
             """,
         subcommands: [
             Configure.self, Wrap.self, Unwrap.self, Declare.self, Catalog.self, Serve.self, Proxy.self,
-            Doctor.self,
+            Doctor.self, Activity.self,
         ]
     )
 
@@ -373,20 +374,25 @@ struct MCPCommand: AsyncParsableCommand {
                 effective or conditional entry bypasses Authsia or is unadmitted.
                 Overridden entries are reported and do not fail. Default output is
                 a table; --json is the machine verdict. Pass --workspace to resolve
-                user-global fallbacks as effective or overridden.
+                user-global fallbacks as effective or overridden. Pass --home or set
+                AUTHSIA_MCP_SCAN_HOME to scan a different home directory.
 
                 Examples:
                   authsia mcp doctor
                   authsia mcp doctor --json
                   authsia mcp doctor --workspace /path/to/repository --json
+                  authsia mcp doctor --home /tmp/fleet-home --json
                 """
         )
 
         @Option(help: "Client: codex, claude, cursor, devin, or vscode")
-        var client: MCPClient?
+        var client: MCPClient? = nil
 
         @Option(help: "Workspace root used to resolve effective vs overridden findings. Repeatable.")
         var workspace: [String] = []
+
+        @Option(name: .customLong("home"), help: "Home directory to scan instead of the current user")
+        var home: String? = nil
 
         @Flag(name: .customLong("json"), help: "Print a machine-readable compliance verdict")
         var json = false
@@ -400,10 +406,18 @@ struct MCPCommand: AsyncParsableCommand {
         }
 
         func run(output: (String) -> Void) throws {
-            let report = try makeReport()
+            try run(output: output, auditIntegrity: nil)
+        }
+
+        func run(output: (String) -> Void, auditIntegrity: AuditChainIntegrity?) throws {
+            let integrity = auditIntegrity ?? AuditChainIntegrity.from(
+                verify: { try AuthsiaBridgeClient(timeout: 2).auditVerify() }
+            )
+            let report = try makeReport(auditIntegrity: integrity)
             if json {
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
                 let data = try encoder.encode(report)
                 output(String(decoding: data, as: UTF8.self))
             } else {
@@ -420,13 +434,14 @@ struct MCPCommand: AsyncParsableCommand {
             }
         }
 
-        func makeReport() throws -> MCPDoctorReport {
+        func makeReport(auditIntegrity: AuditChainIntegrity = .unavailable) throws -> MCPDoctorReport {
+            let scanHome = resolvedHomeDirectory()
             let workspaceRoots = resolvedWorkspaceRoots()
             var locations = MCPClientConfigLocation.knownLocations(
-                homeDirectory: homeDirectory
+                homeDirectory: scanHome
             ) + MCPClientConfigLocation.projectLocations(
                 workspaceRoots: workspaceRoots,
-                homeDirectory: homeDirectory
+                homeDirectory: scanHome
             )
             if let client {
                 locations = locations.filter { $0.source.rawValue == client.rawValue }
@@ -436,11 +451,33 @@ struct MCPCommand: AsyncParsableCommand {
                 locations: locations
             ).sorted { $0.id < $1.id }
             return MCPDoctorReport(
-                schemaVersion: 1,
+                schemaVersion: 2,
+                generatedAt: ISO8601DateFormatter().string(from: Date()),
+                hostname: ProcessInfo.processInfo.hostName,
+                user: NSUserName(),
+                authsiaVersion: Authsia.version(),
+                mcpIntegrationsEnabled: MCPAccessSettings.isEnabled(),
+                auditIntegrity: auditIntegrity,
                 workspaceRoots: workspaceRoots.map(\.path).sorted(),
                 violationCount: findings.filter(Self.isFailingViolation).count,
                 findings: findings
             )
+        }
+
+        private func resolvedHomeDirectory() -> URL {
+            if let home {
+                let trimmed = home.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return URL(fileURLWithPath: trimmed, isDirectory: true)
+                }
+            }
+            if let env = environment["AUTHSIA_MCP_SCAN_HOME"] {
+                let trimmed = env.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return URL(fileURLWithPath: trimmed, isDirectory: true)
+                }
+            }
+            return homeDirectory
         }
 
         private func resolvedWorkspaceRoots() -> [URL] {
@@ -473,7 +510,7 @@ struct MCPCommand: AsyncParsableCommand {
             // has it installed would report a gap nobody can close here.
             guard finding.source.hasWorkspaceOfItsOwn else { return false }
             switch finding.status {
-            case .admittedWrapped:
+            case .admittedWrapped, .skipped:
                 return false
             case .directBypass, .unadmitted:
                 return finding.precedence != .overridden
@@ -502,7 +539,7 @@ struct MCPCommand: AsyncParsableCommand {
         var server: String
 
         @Option(help: "Client: codex, claude, cursor, devin, or vscode")
-        var client: MCPClient?
+        var client: MCPClient? = nil
 
         @Flag(name: .customLong("yes"), help: "Write the replacement after printing the plan")
         var yes = false
@@ -525,7 +562,7 @@ struct MCPCommand: AsyncParsableCommand {
             guard MCPProxyClientLaunch.validUpstreamName(server) != nil else {
                 throw ValidationError("Server name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
             }
-            var doctor = Doctor()
+            var doctor = try Doctor.parse([])
             doctor.client = client
             doctor.workspace = workspace
             doctor.homeDirectory = homeDirectory
@@ -642,7 +679,7 @@ struct MCPCommand: AsyncParsableCommand {
         var server: String
 
         @Option(help: "Client: codex, claude, cursor, devin, or vscode")
-        var client: MCPClient?
+        var client: MCPClient? = nil
 
         @Flag(name: .customLong("yes"), help: "Write the restore after printing the plan")
         var yes = false
@@ -665,7 +702,7 @@ struct MCPCommand: AsyncParsableCommand {
             guard MCPProxyClientLaunch.validUpstreamName(server) != nil else {
                 throw ValidationError("Server name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
             }
-            var doctor = Doctor()
+            var doctor = try Doctor.parse([])
             doctor.client = client
             doctor.workspace = workspace
             doctor.homeDirectory = homeDirectory
@@ -828,11 +865,130 @@ struct MCPCommand: AsyncParsableCommand {
             }
         }
     }
+
+    struct Activity: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "activity",
+            abstract: "Export redacted MCP proxy command history",
+            subcommands: [Export.self]
+        )
+
+        struct Export: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "export",
+                abstract: "Export MCP proxy activity from the local command history",
+                discussion: """
+                    Writes redacted `.mcpProxy` command-history rows. Arguments,
+                    results, JSON-RPC, and child stderr are never stored.
+
+                    Examples:
+                      authsia mcp activity export --json
+                      authsia mcp activity export --json --unowned
+                      authsia mcp activity export --json --upstream jira --workspace /path/to/repo
+                    """
+            )
+
+            @Flag(name: .customLong("json"), help: "Print JSON (the only export format)")
+            var json = false
+
+            @Option(name: .long, help: "Include events at or after this ISO-8601 timestamp")
+            var since: String? = nil
+
+            @Option(name: .long, help: "Filter by upstream name or executable")
+            var upstream: String? = nil
+
+            @Option(name: .long, help: "Filter by workspace path")
+            var workspace: String? = nil
+
+            @Flag(name: .customLong("unowned"), help: "Only events with no grant ID")
+            var unowned = false
+
+            func run() throws {
+                try run { print($0) }
+            }
+
+            func run(output: (String) -> Void) throws {
+                let events = try filteredEvents()
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+                let data = try encoder.encode(MCPActivityExport(events: events))
+                output(String(decoding: data, as: UTF8.self))
+            }
+
+            func filteredEvents(historyFile: String? = nil) throws -> [AgentCommandEvent] {
+                let store: AgentCommandHistoryStore
+                if let historyFile {
+                    store = AgentCommandHistoryStore(fileURL: URL(fileURLWithPath: historyFile))
+                } else {
+                    store = AgentCommandHistoryStore()
+                }
+                var events = try store.loadAll().filter { $0.captureSource == .mcpProxy }
+                if let since {
+                    let parsed = try Self.parseSince(since)
+                    events = events.filter { $0.recordedAt >= parsed }
+                }
+                if let upstream {
+                    let needle = upstream.trimmingCharacters(in: .whitespacesAndNewlines)
+                    events = events.filter { event in
+                        if event.agentID == "proxy:\(needle)" { return true }
+                        if event.executable == needle { return true }
+                        if let executable = event.executable,
+                           URL(fileURLWithPath: executable).lastPathComponent == needle {
+                            return true
+                        }
+                        return false
+                    }
+                }
+                if let workspace {
+                    let path = URL(fileURLWithPath: workspace, isDirectory: true)
+                        .standardizedFileURL.path
+                    events = events.filter { event in
+                        guard let workingDirectory = event.workingDirectory else { return false }
+                        return URL(fileURLWithPath: workingDirectory, isDirectory: true)
+                            .standardizedFileURL.path == path
+                    }
+                }
+                if unowned {
+                    events = events.filter { $0.agentJITGrantID == nil }
+                }
+                return events.sorted { lhs, rhs in
+                    if lhs.recordedAt == rhs.recordedAt {
+                        return lhs.id.uuidString < rhs.id.uuidString
+                    }
+                    return lhs.recordedAt < rhs.recordedAt
+                }
+            }
+
+            private static func parseSince(_ raw: String) throws -> Date {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = formatter.date(from: raw) {
+                    return date
+                }
+                formatter.formatOptions = [.withInternetDateTime]
+                if let date = formatter.date(from: raw) {
+                    return date
+                }
+                throw ValidationError("--since must be an ISO-8601 timestamp.")
+            }
+        }
+    }
 }
 
 struct MCPDoctorReport: Codable, Equatable, Sendable {
     let schemaVersion: Int
+    let generatedAt: String
+    let hostname: String
+    let user: String
+    let authsiaVersion: String
+    let mcpIntegrationsEnabled: Bool
+    let auditIntegrity: AuditChainIntegrity
     let workspaceRoots: [String]
     let violationCount: Int
     let findings: [MCPClientServerFinding]
+}
+
+struct MCPActivityExport: Codable, Equatable, Sendable {
+    let events: [AgentCommandEvent]
 }

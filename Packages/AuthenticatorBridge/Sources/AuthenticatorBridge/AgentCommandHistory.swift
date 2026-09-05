@@ -16,6 +16,8 @@ public enum MCPProxyCallOutcome: String, Codable, Equatable, Sendable {
     case upstreamUnavailable
     case denied
     case busy
+    case childStarted
+    case childExited
 
     public var displayLabel: String {
         switch self {
@@ -35,6 +37,29 @@ public enum MCPProxyCallOutcome: String, Codable, Equatable, Sendable {
             return "Denied"
         case .busy:
             return "Busy"
+        case .childStarted:
+            return "Child started"
+        case .childExited:
+            return "Child exited"
+        }
+    }
+}
+
+/// Why a long-lived proxied child stopped. Display-only.
+public enum MCPProxyChildExitReason: String, Codable, Equatable, Sendable {
+    case exit
+    case revoked
+    case expired
+    case stdinClosed
+    case timeout
+
+    public var displayLabel: String {
+        switch self {
+        case .exit: return "Exited"
+        case .revoked: return "Revoked"
+        case .expired: return "Expired"
+        case .stdinClosed: return "Client disconnected"
+        case .timeout: return "Timed out"
         }
     }
 }
@@ -83,6 +108,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
     public let mcpProxyErrorCode: String?
     public let mcpProxyStage: MCPProxyCallStage?
     public let mcpProxyGrantIDs: [UUID]?
+    public let mcpProxyChildExitReason: MCPProxyChildExitReason?
     public let responseOutcome: AgentLeakResponseOutcome?
     public let responseEvidence: AgentLeakEvidence?
     public let responsePreventedAction: Bool?
@@ -110,6 +136,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         mcpProxyErrorCode: String? = nil,
         mcpProxyStage: MCPProxyCallStage? = nil,
         mcpProxyGrantIDs: [UUID]? = nil,
+        mcpProxyChildExitReason: MCPProxyChildExitReason? = nil,
         responseOutcome: AgentLeakResponseOutcome? = nil,
         responseEvidence: AgentLeakEvidence? = nil,
         responsePreventedAction: Bool? = nil
@@ -136,9 +163,20 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         self.mcpProxyErrorCode = AgentCommandRedactor.sanitized(mcpProxyErrorCode, maxLength: 64)
         self.mcpProxyStage = mcpProxyStage
         self.mcpProxyGrantIDs = mcpProxyGrantIDs
+        self.mcpProxyChildExitReason = mcpProxyChildExitReason
         self.responseOutcome = responseOutcome
         self.responseEvidence = responseEvidence
         self.responsePreventedAction = responsePreventedAction
+    }
+
+    public var isMCPProxyLifecycleEvent: Bool {
+        switch mcpProxyOutcome {
+        case .childStarted, .childExited:
+            return true
+        case .started, .succeeded, .mcpError, .timedOut, .cancelled,
+             .upstreamUnavailable, .denied, .busy, nil:
+            return false
+        }
     }
 }
 

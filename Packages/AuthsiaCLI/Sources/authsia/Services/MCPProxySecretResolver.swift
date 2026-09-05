@@ -213,6 +213,17 @@ protocol MCPProxyToolCallRecording: Sendable {
         errorCode: String?,
         stage: MCPProxyCallStage?
     ) throws
+
+    func recordLifecycle(
+        upstreamName: String,
+        upstreamCommand: String?,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        exitReason: MCPProxyChildExitReason?
+    )
 }
 
 extension MCPProxyToolCallRecording {
@@ -265,6 +276,28 @@ extension MCPProxyToolCallRecording {
             outcome,
             errorCode,
             stage
+        )
+    }
+
+    func recordLifecycle(
+        upstreamName: String,
+        upstreamCommand: String?,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        exitReason: MCPProxyChildExitReason?
+    ) {
+        _ = (
+            upstreamName,
+            upstreamCommand,
+            agentRuntimeContext,
+            workspaceRoot,
+            grantID,
+            grantIDs,
+            outcome,
+            exitReason
         )
     }
 }
@@ -356,6 +389,28 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
         )
     }
 
+    func recordLifecycle(
+        upstreamName: String,
+        upstreamCommand: String?,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        exitReason: MCPProxyChildExitReason?
+    ) {
+        try? store.record(lifecycleEvent(
+            upstreamName: upstreamName,
+            upstreamCommand: upstreamCommand,
+            agentRuntimeContext: agentRuntimeContext,
+            workspaceRoot: workspaceRoot,
+            grantID: grantID,
+            grantIDs: grantIDs,
+            outcome: outcome,
+            exitReason: exitReason
+        ))
+    }
+
     private func persist(
         upstreamName: String,
         upstreamCommand: String?,
@@ -427,6 +482,37 @@ struct LiveMCPProxyToolCallRecorder: MCPProxyToolCallRecording, @unchecked Senda
             mcpProxyErrorCode: errorCode,
             mcpProxyStage: stage,
             mcpProxyGrantIDs: grantIDs.isEmpty ? nil : grantIDs
+        )
+    }
+
+    private func lifecycleEvent(
+        upstreamName: String,
+        upstreamCommand: String?,
+        agentRuntimeContext: AgentRuntimeContext,
+        workspaceRoot: URL?,
+        grantID: UUID?,
+        grantIDs: [UUID],
+        outcome: MCPProxyCallOutcome,
+        exitReason: MCPProxyChildExitReason?
+    ) -> AgentCommandEvent {
+        let executable = upstreamCommand ?? upstreamName
+        return AgentCommandEvent(
+            recordedAt: Date(),
+            agentPlatform: agentRuntimeContext.platform,
+            sessionID: agentRuntimeContext.sessionID,
+            turnID: agentRuntimeContext.turnID,
+            agentID: agentRuntimeContext.agentID,
+            agentType: agentRuntimeContext.agentType,
+            agentJITGrantID: grantID,
+            captureSource: .mcpProxy,
+            workingDirectory: workspaceRoot?.path,
+            executable: executable,
+            arguments: ["mcp-child"],
+            command: "\(executable) mcp-child",
+            mcpProxyOutcome: outcome,
+            mcpProxyStage: .spawn,
+            mcpProxyGrantIDs: grantIDs.isEmpty ? nil : grantIDs,
+            mcpProxyChildExitReason: exitReason
         )
     }
 

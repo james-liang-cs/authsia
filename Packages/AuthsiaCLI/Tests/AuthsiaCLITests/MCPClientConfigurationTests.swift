@@ -469,7 +469,12 @@ struct MCPClientConfigurationTests {
         let report = try JSONDecoder().decode(MCPDoctorReport.self, from: Data(result.output.utf8))
         let object = try #require(JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any])
         let encodedFindings = try #require(object["findings"] as? [[String: Any]])
-        #expect(report.schemaVersion == 1)
+        #expect(report.schemaVersion == 2)
+        #expect(!report.generatedAt.isEmpty)
+        #expect(!report.hostname.isEmpty)
+        #expect(!report.user.isEmpty)
+        #expect(!report.authsiaVersion.isEmpty)
+        #expect(report.auditIntegrity == .unavailable || report.auditIntegrity == .ok || report.auditIntegrity == .failed)
         #expect(report.workspaceRoots.isEmpty)
         #expect(report.violationCount == 2)
         #expect(report.findings.map(\.id) == [
@@ -785,7 +790,7 @@ struct MCPClientConfigurationTests {
             doctor.homeDirectory = fixture.home
             doctor.currentDirectoryPath = fixture.unrelated.path
             doctor.environment = [:]
-            return try doctor.makeReport()
+            return try doctor.makeReport(auditIntegrity: .unavailable)
         }
         let before = try report()
 
@@ -804,6 +809,62 @@ struct MCPClientConfigurationTests {
         // Desktop has no repository of its own.
         #expect(after.violationCount == before.violationCount)
     }
+
+    @Test("doctor --home and AUTHSIA_MCP_SCAN_HOME select the scan root")
+    func doctorHomeOverridesScanRoot() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        let other = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "authsia-doctor-other-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: other) }
+        try writeDoctorJSON([
+            "mcpServers": [
+                "only-here": ["command": "node", "args": ["server.js"]],
+            ]
+        ], to: other.appendingPathComponent(".cursor/mcp.json"))
+
+        var flagged = try MCPCommand.Doctor.parse(["--home", other.path, "--json"])
+        flagged.currentDirectoryPath = fixture.unrelated.path
+        flagged.environment = [:]
+        let homeReport = try flagged.makeReport(auditIntegrity: .unavailable)
+        #expect(homeReport.findings.contains { $0.serverName == "only-here" })
+        #expect(!homeReport.findings.contains { $0.serverName == "jira" })
+
+        var envDoctor = try MCPCommand.Doctor.parse(["--json"])
+        envDoctor.currentDirectoryPath = fixture.unrelated.path
+        envDoctor.environment = ["AUTHSIA_MCP_SCAN_HOME": other.path]
+        let envReport = try envDoctor.makeReport(auditIntegrity: .unavailable)
+        #expect(envReport.findings.contains { $0.serverName == "only-here" })
+    }
+
+    @Test("doctor skipped files do not fail the verdict")
+    func doctorSkippedFilesAreNotViolations() throws {
+        let fixture = try makeDoctorFixture()
+        defer { fixture.tearDown() }
+        let vscode = fixture.home.appendingPathComponent("Library/Application Support/Code/User/mcp.json")
+        try FileManager.default.createDirectory(
+            at: vscode.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(repeating: 0x61, count: 1_048_577).write(to: vscode)
+        var doctor = try MCPCommand.Doctor.parse(["--workspace", fixture.workspace.path])
+        doctor.homeDirectory = fixture.home
+        doctor.currentDirectoryPath = fixture.unrelated.path
+        doctor.environment = [:]
+        let report = try doctor.makeReport(auditIntegrity: .unavailable)
+        let skipped = report.findings.first { $0.status == .skipped }
+        #expect(skipped?.commandLabel == "too large")
+        #expect(!MCPCommand.Doctor.isFailingViolation(try #require(skipped)))
+        let table = MCPClientConfiguration.doctorTable(
+            workspaceRoots: report.workspaceRoots,
+            violationCount: report.violationCount,
+            findings: report.findings
+        )
+        #expect(table.contains("fix file"))
+    }
+
     @Test("catalog names which precondition refused it")
     func catalogRefusalNamesTheCause() async throws {
         let fixture = try makeDoctorFixture()
@@ -970,7 +1031,7 @@ private func runDoctor(
     doctor.environment = environment
     var output = ""
     do {
-        try doctor.run { output = $0 }
+        try doctor.run(output: { output = $0 }, auditIntegrity: .unavailable)
         return (0, output)
     } catch let code as ExitCode {
         return (code.rawValue, output)

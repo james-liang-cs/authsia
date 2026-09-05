@@ -376,6 +376,61 @@ struct AuditCommandTests {
         #expect(decoded.last?.entryHash == "hash-older")
     }
 
+    @Test("writeExport --verify wraps JSON with a manifest")
+    func writeExportVerifyWritesManifest() throws {
+        let events = sampleEvents()
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("audit-export-\(UUID().uuidString).json").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let manifest = AuditExportManifest(
+            eventCount: events.count,
+            headHash: events.first?.entryHash,
+            deviceID: "device-1",
+            verifiedAt: "2026-09-05T00:00:00Z",
+            integrity: .ok
+        )
+
+        try Audit.writeExport(events: events, format: .json, outFile: path, manifest: manifest)
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let decoded = try auditDecoder().decode(VerifiedAuditExport.self, from: data)
+        #expect(decoded.manifest.eventCount == 2)
+        #expect(decoded.manifest.headHash == "hash-newer")
+        #expect(decoded.manifest.deviceID == "device-1")
+        #expect(decoded.manifest.integrity == .ok)
+        #expect(decoded.events.count == 2)
+    }
+
+    @Test("writeExport --verify writes an NDJSON sidecar manifest")
+    func writeExportVerifyWritesNDJSONSidecar() throws {
+        let events = sampleEvents()
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("audit-export-\(UUID().uuidString).ndjson").path
+        let sidecar = path + ".manifest.json"
+        defer {
+            try? FileManager.default.removeItem(atPath: path)
+            try? FileManager.default.removeItem(atPath: sidecar)
+        }
+        let manifest = AuditExportManifest(
+            eventCount: events.count,
+            headHash: events.first?.entryHash,
+            deviceID: "device-1",
+            verifiedAt: "2026-09-05T00:00:00Z",
+            integrity: .ok
+        )
+
+        try Audit.writeExport(events: events, format: .ndjson, outFile: path, manifest: manifest)
+
+        let content = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(content.split(separator: "\n").count == 2)
+        let decoded = try auditDecoder().decode(
+            AuditExportManifest.self,
+            from: try Data(contentsOf: URL(fileURLWithPath: sidecar))
+        )
+        #expect(decoded.eventCount == 2)
+        #expect(decoded.headHash == "hash-newer")
+    }
+
     private func sampleEvents() -> [AuditEvent] {
         let older = makeEvent(
             command: .getPassword,
