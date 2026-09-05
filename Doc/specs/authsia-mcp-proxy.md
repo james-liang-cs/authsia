@@ -165,10 +165,10 @@ from operator visibility. It grants no authority.
 
 1. Initialize and validate the managed Authsia workspace.
 2. Enable **MCP Integrations**.
-3. Open Access Center. When launches still need protection, or MCP Integrations
-   is off and findings exist, **All** shows a Local MCP card; **Review
-   protection** opens the **MCP proxy** filter. Coverage itself stays on that
-   filter (not Authsia MCP or Direct agents).
+3. Open Access Center and choose the **MCP proxy** grant-source filter. The
+   Local MCP status strip and **Review protection** live only on that filter
+   (not All, Authsia MCP, or Direct agents). Coverage itself stays on MCP proxy
+   as well.
 4. Choose the workspace that owns the tool.
 5. Expand Coverage (**Show coverage** or **Review protection**). Coverage is
    collapsed by default.
