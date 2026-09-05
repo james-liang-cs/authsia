@@ -569,17 +569,73 @@ struct MCPProxySpawnTests {
         )
         let connection = try await connectMCPProxy(proxy, clientName: "MCP call timeout")
 
+        let warmup: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "fast")
+        #expect((try await warmup.value).isError != true)
+
         // The fixture sleeps 0.4s on "slow". Without a deadline of its own the
         // proxy would hold the caller for as long as the child stays wedged.
+        let started = Date()
         let slow: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "slow")
         let slowResult = try await slow.value
+        let elapsed = Date().timeIntervalSince(started)
         #expect(slowResult.isError == true)
         #expect(toolErrorCode(slowResult) == MCPToolErrorCode.timedOut.rawValue)
+        #expect(elapsed < 0.3)
 
         // One slow tool does not take the child down with it.
         let fast: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "fast")
         let fastResult = try await fast.value
         #expect(fastResult.isError != true)
+
+        await connection.client.disconnect()
+        await proxy.waitUntilCompleted()
+    }
+
+    @Test("initialize that never answers returns upstreamUnavailable at the deadline")
+    func hungInitializeTimesOutWithoutWaitingForChild() async throws {
+        let bin = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: bin) }
+        try writeExecutableMCPProxyScript(at: bin.appendingPathComponent("mcp-atlassian"))
+        let sessionClient = RecordingMCPProxySessionClient(
+            environment: [
+                "AUTHSIA_TEST_HANG": "1",
+                "AUTHSIA_TEST_TOOLS": "fast",
+            ]
+        )
+        let root = try makeMCPProxyWorkspace(
+            upstreams: [
+                stdioJiraUpstream(
+                    env: [:],
+                    allow: ["fast"],
+                    approve: [],
+                    deny: []
+                )
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proxy = AuthsiaMCPProxy(
+            version: "test",
+            upstreamName: "jira",
+            runtimeContext: MCPRuntimeContext(startingDirectory: root),
+            mcpAccessEnabled: { true },
+            sessionClient: sessionClient,
+            parentEnvironment: ["PATH": "\(bin.path):/usr/bin:/bin"],
+            initializeTimeoutSeconds: 0.2,
+            callTimeoutSeconds: 5,
+            killGraceSeconds: 0.05,
+            toolCallRecorder: NoopMCPProxyToolCallRecorder()
+        )
+        let connection = try await connectMCPProxy(proxy, clientName: "MCP initialize timeout")
+
+        // The fixture sleeps 3s before speaking. A throwing task group would
+        // wait for that whole sleep after the 0.2s deadline "won".
+        let started = Date()
+        let call: RequestContext<CallTool.Result> = try await connection.client.callTool(name: "fast")
+        let result = try await call.value
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.upstreamUnavailable.rawValue)
+        #expect(elapsed < 1.5)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()

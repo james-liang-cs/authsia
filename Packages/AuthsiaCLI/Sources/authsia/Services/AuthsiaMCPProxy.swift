@@ -389,7 +389,7 @@ actor AuthsiaMCPProxy {
                     upstreamCommand: upstream.command,
                     toolName: parameters.name,
                     agentRuntimeContext: agentRuntimeContext,
-                    grantID: recordedGrantID ?? currentChildGrantID(),
+                    grantID: recordedGrantID,
                     outcome: .timedOut,
                     code: .timedOut,
                     message: "The upstream MCP server did not answer this tool call in time.",
@@ -569,7 +569,9 @@ actor AuthsiaMCPProxy {
                     try await request.value
                 }
             } catch let error as MCPProxyCallError {
-                try? await session.client.cancelRequest(request.requestID)
+                // Do not await cancel: a child that is ignoring stdin would
+                // hold timedOut on the caller the same way request.value did.
+                Task { try? await session.client.cancelRequest(request.requestID) }
                 throw error
             }
             return try masker.mask(result)
@@ -1272,22 +1274,103 @@ enum MCPProxyCallError: Error, Equatable, Sendable {
     case timedOut
 }
 
+/// Races `operation` against a deadline and returns as soon as either finishes.
+///
+/// A throwing task group cannot do this: on timeout it still waits for the
+/// cancelled operation, and MCP stdio `connect` / `request.value` ignore
+/// cancellation, so the caller never saw `timedOut` or `launchFailed` until
+/// the child unblocked.
 private func mcpProxyWithTimeout<T: Sendable, Failure: Error & Sendable>(
     _ seconds: Double,
     timeoutError: Failure,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask {
-            try await operation()
+    let gate = MCPProxyTimeoutGate<T>()
+    let work = MCPProxyTimeoutWork()
+    let timer = MCPProxyTimeoutWork()
+    do {
+        let value = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, any Error>) in
+                gate.attach(continuation)
+                if Task.isCancelled {
+                    gate.finish(.failure(CancellationError()))
+                    return
+                }
+                let operationTask = Task {
+                    do {
+                        gate.finish(.success(try await operation()))
+                    } catch {
+                        gate.finish(.failure(error))
+                    }
+                }
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(for: .seconds(max(seconds, 0)))
+                    } catch {
+                        return
+                    }
+                    gate.finish(.failure(timeoutError))
+                    operationTask.cancel()
+                }
+                work.store(operationTask)
+                timer.store(timeoutTask)
+            }
+        } onCancel: {
+            work.cancel()
+            timer.cancel()
+            gate.finish(.failure(CancellationError()))
         }
-        group.addTask {
-            try await Task.sleep(for: .seconds(max(seconds, 0)))
-            throw timeoutError
+        work.cancel()
+        timer.cancel()
+        return value
+    } catch {
+        work.cancel()
+        timer.cancel()
+        throw error
+    }
+}
+
+/// One-shot resume for `mcpProxyWithTimeout`. Two tasks may finish; only the first resumes.
+private final class MCPProxyTimeoutGate<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, any Error>?
+    private var resumed = false
+
+    func attach(_ continuation: CheckedContinuation<T, any Error>) {
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func finish(_ result: Result<T, Error>) {
+        lock.lock()
+        let pending = continuation
+        let shouldResume = !resumed && pending != nil
+        if shouldResume {
+            resumed = true
+            continuation = nil
         }
-        let result = try await group.next()!
-        group.cancelAll()
-        return result
+        lock.unlock()
+        guard shouldResume, let pending else { return }
+        pending.resume(with: result)
+    }
+}
+
+private final class MCPProxyTimeoutWork: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Never>?
+
+    func store(_ task: Task<Void, Never>) {
+        lock.lock()
+        self.task = task
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        let task = self.task
+        lock.unlock()
+        task?.cancel()
     }
 }
 
