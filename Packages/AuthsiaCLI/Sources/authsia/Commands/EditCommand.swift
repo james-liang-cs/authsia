@@ -393,7 +393,7 @@ private func resolveVaultItem(
     )
 }
 
-private func environmentReplacement(
+func environmentReplacement(
     existing: [String],
     add: [String],
     remove: [String],
@@ -404,9 +404,17 @@ private func environmentReplacement(
     }
     guard clear || !add.isEmpty || !remove.isEmpty else { return nil }
     if clear { return [] }
-    return VaultEnvironmentTags.normalize(
-        existing.filter { !VaultEnvironmentTags.contains($0, in: remove) } + add
-    )
+    // Route each tag through VaultEnvironmentTags.applying so the CLI keeps the
+    // same All-vs-named exclusivity the app enforces. A plain merge here would
+    // store All alongside a named tag, which the app collapses on its next edit.
+    var replacement = VaultEnvironmentTags.canonical(existing)
+    for name in remove {
+        replacement = VaultEnvironmentTags.applying(.remove(name), to: replacement)
+    }
+    for name in add {
+        replacement = VaultEnvironmentTags.applying(.add(name), to: replacement)
+    }
+    return replacement
 }
 
 func validateFolderUpdate(

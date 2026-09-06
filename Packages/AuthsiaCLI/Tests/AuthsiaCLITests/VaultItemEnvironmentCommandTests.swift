@@ -31,6 +31,39 @@ struct VaultItemEnvironmentCommandTests {
         #expect(!command.clearEnvironments)
     }
 
+    @Test("edit keeps All and named tags mutually exclusive, matching the app")
+    func editKeepsAllAndNamedTagsMutuallyExclusive() throws {
+        // The app enforces this through VaultEnvironmentTags.applying. A plain
+        // merge here would store All beside a named tag, a state the app
+        // collapses on its next edit and the resolver scores differently.
+        #expect(
+            try environmentReplacement(existing: ["Production"], add: ["All"], remove: [], clear: false)
+                == ["All"]
+        )
+        #expect(
+            try environmentReplacement(existing: ["All"], add: ["Production"], remove: [], clear: false)
+                == ["Production"]
+        )
+        #expect(
+            try environmentReplacement(existing: ["Production"], add: ["Staging"], remove: [], clear: false)
+                == ["Production", "Staging"]
+        )
+        #expect(
+            try environmentReplacement(
+                existing: ["Production", "Staging"],
+                add: [],
+                remove: ["staging"],
+                clear: false
+            ) == ["Production"]
+        )
+        #expect(
+            try environmentReplacement(existing: ["Production"], add: [], remove: [], clear: true) == []
+        )
+        #expect(
+            try environmentReplacement(existing: ["Production"], add: [], remove: [], clear: false) == nil
+        )
+    }
+
     @Test("get and delete accept environment disambiguators")
     func getAndDeleteAcceptEnvironmentDisambiguators() throws {
         let get = try Get.parse(["api-key", "DATABASE_URL", "--environment", "Production"])
