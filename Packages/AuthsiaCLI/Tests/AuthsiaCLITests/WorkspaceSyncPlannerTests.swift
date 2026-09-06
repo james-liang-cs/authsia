@@ -185,6 +185,90 @@ struct WorkspaceSyncPlannerTests {
         #expect(plan.mismatches.isEmpty)
     }
 
+    @Test("sync treats an unscoped UUID in the workspace folder as satisfied")
+    func syncSatisfiesUnscopedUUIDInWorkspaceFolder() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let itemID = "00000000-0000-0000-0000-000000000001"
+        let config = workspaceSyncConfig(bindings: [
+            WorkspaceConfig.EnvBinding(
+                name: "API_KEY",
+                reference: "authsia://password/\(itemID)/password"
+            ),
+        ])
+
+        let plan = WorkspaceSyncPlanner.plan(
+            workspaceRoot: root,
+            config: config,
+            vaultPayload: workspaceSyncPayload(passwords: [
+                password(id: itemID, name: "API_KEY", folderPath: "Workspaces/api"),
+            ])
+        )
+
+        #expect(plan.satisfied.map(\.envName) == ["API_KEY"])
+        #expect(plan.satisfied.first?.itemName == "API_KEY")
+        #expect(plan.satisfied.allSatisfy { !$0.selected && $0.action == .none })
+        #expect(plan.external.isEmpty)
+        #expect(plan.mismatches.isEmpty)
+    }
+
+    @Test("sync satisfies an unscoped UUID whose item name is not a valid env name")
+    func syncSatisfiesUnscopedUUIDWhenItemNameIsNotAnEnvName() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let itemID = "00000000-0000-0000-0000-000000000009"
+        let config = workspaceSyncConfig(bindings: [
+            WorkspaceConfig.EnvBinding(
+                name: "Demo_API_Key",
+                reference: "authsia://api-key/\(itemID)/key"
+            ),
+        ])
+
+        let plan = WorkspaceSyncPlanner.plan(
+            workspaceRoot: root,
+            config: config,
+            vaultPayload: workspaceSyncPayload(
+                passwords: [],
+                apiKeys: [
+                    apiKey(id: itemID, name: "Demo API Key", folderPath: "Workspaces/api"),
+                ]
+            )
+        )
+
+        #expect(plan.satisfied.map(\.envName) == ["Demo_API_Key"])
+        #expect(plan.satisfied.first?.itemName == "Demo API Key")
+        #expect(plan.external.isEmpty)
+        #expect(plan.extras.isEmpty)
+    }
+
+    @Test("sync keeps a cross-folder unscoped UUID external and apply leaves it untouched")
+    func syncKeepsCrossFolderUnscopedUUIDExternal() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let itemID = "00000000-0000-0000-0000-000000000007"
+        let config = workspaceSyncConfig(bindings: [
+            WorkspaceConfig.EnvBinding(
+                name: "SHARED_TOKEN",
+                reference: "authsia://password/\(itemID)/password"
+            ),
+        ])
+
+        let plan = WorkspaceSyncPlanner.plan(
+            workspaceRoot: root,
+            config: config,
+            vaultPayload: workspaceSyncPayload(passwords: [
+                password(id: itemID, name: "SHARED_TOKEN", folderPath: "Shared/team"),
+            ])
+        )
+        let applied = WorkspaceSyncPlanner.applying(.addToConfig, toSelectedRowsIn: plan)
+
+        #expect(plan.external.map(\.envName) == ["SHARED_TOKEN"])
+        #expect(plan.external.allSatisfy { !$0.selected && $0.action == .none })
+        #expect(applied.external.allSatisfy { !$0.selected && $0.action == .none })
+        #expect(plan.satisfied.isEmpty)
+        #expect(plan.mismatches.isEmpty)
+    }
+
     @Test("sync treats managed env file references as tracked")
     func syncTreatsManagedEnvFileReferencesAsTracked() throws {
         let root = try makeWorkspaceRoot()

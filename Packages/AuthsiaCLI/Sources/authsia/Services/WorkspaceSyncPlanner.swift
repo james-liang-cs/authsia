@@ -67,9 +67,11 @@ enum WorkspaceSyncPlanner {
         }
 
         let vaultItems = syncItems(from: vaultPayload)
-        let workspaceItems = vaultItems.filter {
-            WorkspaceSyncReferenceBuilder.isWithinFolderTree($0.folderPath, root: authsiaFolder) &&
-                WorkspaceConfigStore.isValidEnvironmentName($0.envName)
+        let inTreeItems = vaultItems.filter {
+            WorkspaceSyncReferenceBuilder.isWithinFolderTree($0.folderPath, root: authsiaFolder)
+        }
+        let workspaceItems = inTreeItems.filter {
+            WorkspaceConfigStore.isValidEnvironmentName($0.envName)
         }
         var consumedItemIDs = Set<String>()
 
@@ -84,14 +86,7 @@ enum WorkspaceSyncPlanner {
                 )
             }
 
-            if isExternalReference(reference, authsiaFolder: authsiaFolder) {
-                return externalRow(
-                    binding: binding,
-                    reference: reference
-                )
-            }
-
-            if let item = workspaceItems.first(where: { $0.matches(reference) }) {
+            if let item = inTreeItems.first(where: { $0.matches(reference) }) {
                 consumedItemIDs.insert(item.id)
                 return row(
                     envName: binding.name,
@@ -103,6 +98,13 @@ enum WorkspaceSyncPlanner {
                     status: .satisfied,
                     selected: false,
                     action: .none
+                )
+            }
+
+            if isExternalReference(reference, authsiaFolder: authsiaFolder) {
+                return externalRow(
+                    binding: binding,
+                    reference: reference
                 )
             }
 
@@ -360,10 +362,29 @@ private struct WorkspaceSyncItem: Equatable {
     }
 
     func matches(_ reference: SecretReference) -> Bool {
-        itemType == reference.type.rawValue &&
-            itemName == reference.item &&
-            field == reference.resolvedField &&
+        guard itemType == reference.type.rawValue,
+              field == reference.resolvedField else {
+            return false
+        }
+        if matchesItemID(reference.item) {
+            if reference.isFolderScoped {
+                return folderPath == WorkspaceSyncReferenceBuilder.normalizeFolderPath(reference.folder)
+            }
+            return true
+        }
+        return itemName == reference.item &&
             folderPath == WorkspaceSyncReferenceBuilder.normalizeFolderPath(reference.folder)
+    }
+
+    private func matchesItemID(_ value: String) -> Bool {
+        if id.compare(value, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            return true
+        }
+        guard let itemID = UUID(uuidString: id),
+              let referenceID = UUID(uuidString: value) else {
+            return false
+        }
+        return itemID == referenceID
     }
 
     init(id: String, itemType: String, itemName: String, field: String, folderPath: String?) {
