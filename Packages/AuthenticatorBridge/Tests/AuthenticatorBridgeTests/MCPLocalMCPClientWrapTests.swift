@@ -524,4 +524,129 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         XCTAssertTrue(plan.existingSnippet.contains("command = \"/opt/homebrew/bin/node\""))
     }
 
+    func testJSONInsertAddsNamedServerWithoutTouchingNeighbors() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".cursor"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project.appendingPathComponent(".cursor"), withIntermediateDirectories: true)
+        let projectFile = project.appendingPathComponent(".cursor/mcp.json")
+        try writeJSON(["mcpServers": ["keep": ["command": "npx", "args": ["other"]]]], to: projectFile)
+        let authsia = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        let plan = try MCPLocalMCPClientWrap.planInsert(
+            source: .cursor,
+            serverName: "playwright",
+            workspacePath: project.path,
+            authsiaCommand: authsia,
+            homeDirectory: home
+        )
+        XCTAssertEqual(plan.existingSnippet, "Not present in this client file.")
+        XCTAssertTrue(plan.replacementSnippet.contains("AUTHSIA_MCP_UPSTREAM"))
+        XCTAssertEqual(plan.fileURL.path, projectFile.path)
+        try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: authsia)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: projectFile)) as? [String: Any])
+        let servers = try XCTUnwrap(object["mcpServers"] as? [String: Any])
+        XCTAssertEqual((servers["keep"] as? [String: Any])?["command"] as? String, "npx")
+        let playwright = try XCTUnwrap(servers["playwright"] as? [String: Any])
+        XCTAssertEqual(playwright["command"] as? String, authsia)
+        XCTAssertEqual(playwright["args"] as? [String], ["mcp", "proxy"])
+        XCTAssertEqual((playwright["env"] as? [String: String])?[MCPProxyClientLaunch.environmentKey], "playwright")
+    }
+
+    func testJSONInsertCreatesMissingUserGlobalFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let authsia = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        let plan = try MCPLocalMCPClientWrap.planInsert(
+            source: .cursor,
+            serverName: "playwright",
+            workspacePath: project.path,
+            authsiaCommand: authsia,
+            homeDirectory: home
+        )
+        XCTAssertEqual(plan.fileURL.path, home.appendingPathComponent(".cursor/mcp.json").path)
+        try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: authsia)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: plan.fileURL)) as? [String: Any]
+        )
+        let servers = try XCTUnwrap(object["mcpServers"] as? [String: Any])
+        XCTAssertNotNil(servers["playwright"])
+    }
+
+    func testClaudeInsertCreatesProjectLocalScope() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: home.appendingPathComponent(".claude.json"))
+        let authsia = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        let plan = try MCPLocalMCPClientWrap.planInsert(
+            source: .claude,
+            serverName: "playwright",
+            workspacePath: project.path,
+            authsiaCommand: authsia,
+            homeDirectory: home
+        )
+        try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: authsia)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: home.appendingPathComponent(".claude.json"))) as? [String: Any]
+        )
+        let projects = try XCTUnwrap(object["projects"] as? [String: Any])
+        let servers = try XCTUnwrap(
+            (projects[project.path] as? [String: Any])?["mcpServers"] as? [String: Any]
+        )
+        XCTAssertEqual((servers["playwright"] as? [String: Any])?["args"] as? [String], ["mcp", "proxy"])
+    }
+
+    func testJSONInsertRefusesExistingUnsupportedLaunch() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".cursor"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project.appendingPathComponent(".cursor"), withIntermediateDirectories: true)
+        let projectFile = project.appendingPathComponent(".cursor/mcp.json")
+        let before: [String: Any] = [
+            "mcpServers": [
+                "playwright": ["command": "npx", "args": ["@playwright/mcp"], "cwd": project.path],
+            ],
+        ]
+        try writeJSON(before, to: projectFile)
+        XCTAssertThrowsError(
+            try MCPLocalMCPClientWrap.planInsert(
+                source: .cursor,
+                serverName: "playwright",
+                workspacePath: project.path,
+                authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia",
+                homeDirectory: home
+            )
+        ) { error in
+            XCTAssertEqual(error as? MCPLocalMCPClientWrap.WrapError, .notWrapEligible)
+        }
+        let after = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: projectFile)) as? [String: Any])
+        let playwright = try XCTUnwrap((after["mcpServers"] as? [String: Any])?["playwright"] as? [String: Any])
+        XCTAssertEqual(playwright["command"] as? String, "npx")
+        XCTAssertEqual(playwright["cwd"] as? String, project.path)
+    }
+
+    func testCodexInsertIsNotSupported() {
+        XCTAssertThrowsError(
+            try MCPLocalMCPClientWrap.planInsert(
+                source: .codex,
+                serverName: "playwright",
+                workspacePath: "/tmp/project",
+                authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia"
+            )
+        ) { error in
+            XCTAssertEqual(error as? MCPLocalMCPClientWrap.WrapError, .notWrapEligible)
+        }
+    }
+
 }

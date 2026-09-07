@@ -47,6 +47,7 @@ public enum MCPHTTPCatalogCapture {
                 endpoint: url, method: "POST", body: list, version: version, sessionID: sessionID, headers: headers)
             let listData = try MCPHTTPMessageMasker(secrets: secrets).mask(
                 try await MCPHTTPUpstreamConnection.collect(listBytes, response: listResponse))
+            try await validate?()
             guard listResponse.statusCode == 200,
                   let object = try JSONSerialization.jsonObject(with: listData) as? [String: Any],
                   object["error"] == nil,
@@ -61,6 +62,7 @@ public enum MCPHTTPCatalogCapture {
             if page == pageLimit { throw MCPManagementError.catalogIncomplete }
             cursor = next
         }
+        try await validate?()
         guard !descriptors.isEmpty else { throw MCPManagementError.catalogEmpty }
         return descriptors
     }

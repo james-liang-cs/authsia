@@ -99,9 +99,34 @@ public enum MCPLocalMCPClientWrap {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default
     ) throws -> Plan {
+        try plan(
+            finding: finding,
+            authsiaCommand: authsiaCommand,
+            fileURL: fileURL,
+            homeDirectory: homeDirectory,
+            fileManager: fileManager,
+            allowInsert: false
+        )
+    }
+
+    private static func plan(
+        finding: MCPClientServerFinding,
+        authsiaCommand: String,
+        fileURL: URL?,
+        homeDirectory: URL,
+        fileManager: FileManager,
+        allowInsert: Bool
+    ) throws -> Plan {
         try validateFinding(finding, homeDirectory: homeDirectory)
         let url = fileURL ?? Self.fileURL(for: finding, homeDirectory: homeDirectory)
-        let data = try readConfig(at: url, fileManager: fileManager)
+        let data: Data
+        if fileManager.fileExists(atPath: url.path) {
+            data = try readConfig(at: url, fileManager: fileManager)
+        } else if allowInsert {
+            data = Data("{}".utf8)
+        } else {
+            throw WrapError.missingFile
+        }
         let workspacePath = wrapWorkspacePath(for: finding, homeDirectory: homeDirectory)
         let replacement = try replacementSnippet(
             for: finding,
@@ -109,7 +134,10 @@ public enum MCPLocalMCPClientWrap {
             data: data,
             workspacePath: workspacePath
         )
-        let existing = try existingSnippet(for: finding, data: data)
+        let existing = try existingSnippet(for: finding, data: data, allowInsert: allowInsert)
+        guard !allowInsert || existing == "Not present in this client file." else {
+            throw WrapError.notWrapEligible
+        }
         return Plan(
             finding: finding,
             fileURL: url,
@@ -126,7 +154,14 @@ public enum MCPLocalMCPClientWrap {
         fileManager: FileManager = .default
     ) throws {
         try validateFinding(plan.finding, workspacePath: plan.workspacePath)
-        let data = try readConfig(at: plan.fileURL, fileManager: fileManager)
+        let data: Data
+        if fileManager.fileExists(atPath: plan.fileURL.path) {
+            data = try readConfig(at: plan.fileURL, fileManager: fileManager)
+        } else if plan.checksum == checksum(of: Data("{}".utf8)) {
+            data = Data("{}".utf8)
+        } else {
+            throw WrapError.missingFile
+        }
         guard checksum(of: data) == plan.checksum else {
             throw WrapError.checksumMismatch
         }
@@ -155,6 +190,10 @@ public enum MCPLocalMCPClientWrap {
             throw WrapError.notWrapEligible
         }
         do {
+            try fileManager.createDirectory(
+                at: plan.fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
             try encoded.write(to: plan.fileURL, options: .atomic)
         } catch {
             throw WrapError.writeFailed
@@ -173,6 +212,87 @@ public enum MCPLocalMCPClientWrap {
             return project
         }
         return matches.first
+    }
+
+    /// File a confirmed STDIO enroll writes when the client does not already
+    /// name this server. Prefers an existing project file; otherwise the
+    /// user-global JSON config for that client.
+    public static func enrollmentLocation(
+        source: MCPClientConfigSource,
+        workspacePath: String,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        fileManager: FileManager = .default
+    ) throws -> MCPClientConfigLocation {
+        guard source.supportsSTDIOEnrollment else { throw WrapError.notWrapEligible }
+        let root = URL(fileURLWithPath: workspacePath, isDirectory: true).standardizedFileURL
+        let project = MCPClientConfigLocation.projectLocations(
+            workspaceRoots: [root],
+            homeDirectory: homeDirectory
+        ).filter { $0.source == source }
+        if let existingProject = project.first(where: {
+            $0.projectKey == nil && fileManager.fileExists(atPath: $0.fileURL.path)
+        }) {
+            return existingProject
+        }
+        if source == .claude, let local = project.first(where: { $0.projectKey != nil }) {
+            return local
+        }
+        let known = MCPClientConfigLocation.knownLocations(homeDirectory: homeDirectory)
+            .filter { $0.source == source }
+        if let existing = known.first(where: { fileManager.fileExists(atPath: $0.fileURL.path) }) {
+            return existing
+        }
+        guard let fallback = known.first else { throw WrapError.notWrapEligible }
+        return fallback
+    }
+
+    /// Insert `authsia mcp proxy` for a declared STDIO upstream that this
+    /// client file does not yet name. Does not copy workspace env or secrets.
+    public static func planInsert(
+        source: MCPClientConfigSource,
+        serverName: String,
+        workspacePath: String,
+        authsiaCommand: String,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        fileManager: FileManager = .default
+    ) throws -> Plan {
+        guard MCPProxyClientLaunch.validUpstreamName(serverName) != nil else {
+            throw WrapError.notWrapEligible
+        }
+        let location = try enrollmentLocation(
+            source: source,
+            workspacePath: workspacePath,
+            homeDirectory: homeDirectory,
+            fileManager: fileManager
+        )
+        let workspaceLabel = location.workspacePathLabel
+            ?? (source.hasWorkspaceOfItsOwn
+                ? nil
+                : workspacePath)
+        let finding = MCPClientServerFinding(
+            source: source,
+            serverName: serverName,
+            commandLabel: "authsia mcp proxy",
+            status: .unadmitted,
+            declaredUpstreamName: serverName,
+            configPathLabel: location.displayPath,
+            configScope: location.scope,
+            precedence: .effective,
+            workspacePathLabel: workspaceLabel,
+            wrapCommand: "authsia",
+            wrapArguments: MCPProxyClientLaunch.arguments,
+            isWrapEligible: true,
+            configFilePath: location.fileURL.path,
+            projectKey: location.projectKey
+        )
+        return try plan(
+            finding: finding,
+            authsiaCommand: authsiaCommand,
+            fileURL: location.fileURL,
+            homeDirectory: homeDirectory,
+            fileManager: fileManager,
+            allowInsert: true
+        )
     }
 
     private static func validateFinding(
@@ -312,7 +432,8 @@ public enum MCPLocalMCPClientWrap {
 
     static func existingSnippet(
         for finding: MCPClientServerFinding,
-        data: Data
+        data: Data,
+        allowInsert: Bool = false
     ) throws -> String {
         switch finding.source {
         case .codex:
@@ -322,16 +443,18 @@ public enum MCPLocalMCPClientWrap {
             }
             return redactCodexEnvValues(snippet)
         case .claude, .cursor, .devin, .vscode, .claudeDesktop:
-            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let servers = jsonServers(
-                    in: root,
-                    source: finding.source,
-                    projectKey: finding.projectKey
-                  ),
-                  let value = servers[finding.serverName] else {
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw WrapError.malformedConfig
             }
-            return prettyJSON(redactingEnvValues(value))
+            if let servers = jsonServers(
+                in: root,
+                source: finding.source,
+                projectKey: finding.projectKey
+            ), let value = servers[finding.serverName] {
+                return prettyJSON(redactingEnvValues(value))
+            }
+            guard allowInsert else { throw WrapError.malformedConfig }
+            return "Not present in this client file."
         case .authsiaCatalog:
             throw WrapError.notWrapEligible
         }
@@ -380,11 +503,10 @@ public enum MCPLocalMCPClientWrap {
         guard let authsia = MCPLocalMCPWrapRecipe.sanitizedCommand(authsiaCommand) else {
             throw WrapError.notWrapEligible
         }
-        guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var servers = jsonServers(in: root, source: source, projectKey: projectKey),
-              servers[serverName] != nil else {
+        guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw WrapError.malformedConfig
         }
+        var servers = jsonServers(in: root, source: source, projectKey: projectKey) ?? [:]
         servers[serverName] = jsonObject(
             authsiaCommand: authsia,
             upstreamName: serverName,
@@ -464,10 +586,8 @@ public enum MCPLocalMCPClientWrap {
     ) throws -> [String: Any] {
         var next = root
         if let projectKey {
-            guard var projects = next["projects"] as? [String: Any],
-                  var project = projects[projectKey] as? [String: Any] else {
-                throw WrapError.malformedConfig
-            }
+            var projects = next["projects"] as? [String: Any] ?? [:]
+            var project = projects[projectKey] as? [String: Any] ?? [:]
             project[jsonServersKey(for: source)] = servers
             projects[projectKey] = project
             next["projects"] = projects

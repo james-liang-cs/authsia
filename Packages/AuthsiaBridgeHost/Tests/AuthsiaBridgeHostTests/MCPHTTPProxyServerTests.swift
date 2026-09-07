@@ -155,6 +155,27 @@ final class MCPHTTPProxyServerTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 4)
     }
 
+    func testHTTPCatalogCaptureRevalidatesAfterListResponse() async throws {
+        let fixture = try await HTTPMCPFixture.start()
+        addTeardownBlock { try await fixture.stop() }
+        final class Remaining: @unchecked Sendable { var value = 1 }
+        let remaining = Remaining()
+        do {
+            _ = try await MCPHTTPCatalogCapture.run(
+                endpoint: "http://127.0.0.1:\(fixture.port)/mcp",
+                headers: [:],
+                validate: {
+                    remaining.value -= 1
+                    if remaining.value < 0 { throw MCPManagementError.denied }
+                }
+            )
+            XCTFail("revocation after tools/list must deny publication")
+        } catch {
+            XCTAssertEqual(error as? MCPManagementError, .denied)
+        }
+        XCTAssertEqual(remaining.value, -1)
+    }
+
     func testHTTPCatalogCaptureRejectsAnUnboundedList() async throws {
         let fixture = try await HTTPMCPFixture.start(endlessList: true)
         addTeardownBlock { try await fixture.stop() }

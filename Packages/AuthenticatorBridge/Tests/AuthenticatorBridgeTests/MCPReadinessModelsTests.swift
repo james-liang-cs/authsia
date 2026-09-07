@@ -30,6 +30,27 @@ final class MCPReadinessModelsTests: XCTestCase {
         XCTAssertNotEqual(readiness.next?.kind, "configure")
     }
 
+    func testMissingExecutableKeepsLaunchIncompleteAndRecommendsEditServer() {
+        let server = MCPServerSnapshot(
+            id: "missing-bin",
+            identity: MCPServerIdentity(workspacePath: "/tmp/fixture", upstreamName: "missing-bin"),
+            displayName: "missing-bin",
+            transport: .stdio,
+            commandLabel: "missing-bin",
+            policy: .init(),
+            catalog: [],
+            launchCommand: "missing-bin",
+            catalogBlockReason: MCPManagementError.catalogExecutableMissing.localizedDescription
+        )
+        let readiness = MCPServerReadinessProjection.readiness(for: server)
+        XCTAssertEqual(readiness.facts.first { $0.id == "launch" }?.complete, false)
+        XCTAssertEqual(readiness.facts.first { $0.id == "launch" }?.detail, MCPManagementError.catalogExecutableMissing.localizedDescription)
+        XCTAssertEqual(readiness.next?.kind, "configure")
+        XCTAssertEqual(readiness.next?.label, "Edit server")
+        XCTAssertEqual(readiness.next?.reason, MCPManagementError.catalogExecutableMissing.localizedDescription)
+        XCTAssertNotEqual(readiness.next?.kind, "policy")
+    }
+
     func testIncompleteCatalogWithEnvironmentBlockRecommendsPolicyNotLaunchRepair() {
         let server = MCPServerSnapshot(
             id: "headless",

@@ -27,6 +27,23 @@ public enum MCPClientConfigSource: String, Codable, CaseIterable, Equatable, Sen
     public var hasWorkspaceOfItsOwn: Bool {
         self != .claudeDesktop && self != .authsiaCatalog
     }
+
+    /// JSON client files that can receive a new `authsia mcp proxy` entry when
+    /// the named server is not already scanned in that client.
+    public var supportsSTDIOEnrollment: Bool {
+        switch self {
+        case .claude, .cursor, .devin, .vscode, .claudeDesktop:
+            return true
+        case .codex, .authsiaCatalog:
+            return false
+        }
+    }
+
+    /// VS Code and Devin are offered for Protect and client filters only when
+    /// that app is installed on this Mac.
+    public var requiresAppPresence: Bool {
+        self == .vscode || self == .devin
+    }
 }
 
 public enum MCPClientConfigScope: String, Codable, Equatable, Sendable {
@@ -346,6 +363,13 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
             || isWrapEligible
             || wrapBlockReason != nil
             || status == .skipped
+    }
+
+    /// Catalog recording counts child environment values only from launches
+    /// that can actually run. Disabled, overridden, and Authsia proxy entries
+    /// are not active client environment sources.
+    public var contributesObservedCatalogEnvironment: Bool {
+        status != .disabled && precedence != .overridden && !isAuthsiaProxyLaunch
     }
 
     public init(

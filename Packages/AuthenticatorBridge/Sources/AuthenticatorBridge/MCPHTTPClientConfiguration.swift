@@ -30,7 +30,8 @@ public enum MCPHTTPClientConfiguration {
             if containsTOMLServer(bytes, name: name) {
                 guard let replacingEndpoint, let range = sectionRange(text, name: name) else { throw MCPManagementError.stale }
                 let section = String(text[range])
-                guard !section.contains("headers"), !section.contains("bearer_token"),
+                let subtree = serverSubtree(text, name: name)
+                guard !subtree.contains("headers"), !subtree.contains("bearer_token"),
                       let urlRange = section.range(of: "(?m)^\\s*url\\s*=.*$", options: .regularExpression),
                       section[urlRange].contains("\"" + replacingEndpoint + "\"") || section[urlRange].contains("'" + replacingEndpoint + "'") else { throw MCPManagementError.stale }
                 var updated = section; updated.replaceSubrange(urlRange, with: "url = \"\(endpoint)\"")
@@ -72,6 +73,20 @@ public enum MCPHTTPClientConfiguration {
     private static func sectionRange(_ text: String, name: String) -> Range<String.Index>? {
         let name = NSRegularExpression.escapedPattern(for: name)
         return text.range(of: "(?ms)^\\s*\\[mcp_servers\\.(?:" + name + "|\"" + name + "\"|'" + name + "')\\][^\\n]*\\n(?:(?!^\\[).)*", options: .regularExpression)
+    }
+    /// Parent table plus dotted subtables such as `[mcp_servers.name.http_headers]`.
+    private static func serverSubtree(_ text: String, name: String) -> String {
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        let pattern = "(?ms)^\\s*\\[\\s*mcp_servers\\s*\\.\\s*(?:" + escaped + "|\"" + escaped + "\"|'" + escaped + "')(?:\\.[^\\]]*)?\\s*\\][^\\n]*\\n(?:(?!^\\[).)*"
+        var collected = ""
+        var search = text.startIndex
+        while search < text.endIndex,
+              let range = text.range(of: pattern, options: .regularExpression, range: search..<text.endIndex) {
+            collected += String(text[range])
+            collected += "\n"
+            search = range.upperBound
+        }
+        return collected
     }
     public static func prepareRemoval(binding: MCPHTTPAssociationBinding,
                                       home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> MCPPreparedFileChange {

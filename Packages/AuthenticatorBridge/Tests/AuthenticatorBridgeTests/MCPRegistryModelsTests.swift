@@ -78,6 +78,61 @@ final class MCPRegistryModelsTests: XCTestCase {
         XCTAssertFalse(json.localizedCaseInsensitiveContains("token"))
     }
 
+    func testRegistrySnapshotRoundTripsProtectableClientsAndDecodesLegacyJSON() throws {
+        let snapshot = MCPRegistrySnapshot(
+            revision: "fixture-revision",
+            servers: [],
+            protectableClients: [.codex, .claude, .cursor, .vscode, .devin, .claudeDesktop]
+        )
+        let data = try JSONEncoder().encode(snapshot)
+        XCTAssertEqual(
+            try JSONDecoder().decode(MCPRegistrySnapshot.self, from: data).protectableClients,
+            snapshot.protectableClients
+        )
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"vscode\""))
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"devin\""))
+
+        let legacy = try JSONDecoder().decode(
+            MCPRegistrySnapshot.self,
+            from: Data(#"{"revision":"x","servers":[],"diagnostics":[],"workspaces":[]}"#.utf8)
+        )
+        XCTAssertNil(legacy.protectableClients)
+    }
+
+    func testDisabledFindingsDoNotContributeObservedCatalogEnvironment() {
+        let disabled = MCPClientServerFinding(
+            source: .cursor,
+            serverName: "playwright",
+            commandLabel: "npx",
+            status: .disabled,
+            declaredUpstreamName: "playwright",
+            configPathLabel: "~/.cursor/mcp.json",
+            childEnvironmentCount: 2
+        )
+        let overridden = MCPClientServerFinding(
+            source: .cursor,
+            serverName: "playwright",
+            commandLabel: "npx",
+            status: .directBypass,
+            declaredUpstreamName: "playwright",
+            configPathLabel: "~/.cursor/mcp.json",
+            precedence: .overridden,
+            childEnvironmentCount: 2
+        )
+        let active = MCPClientServerFinding(
+            source: .cursor,
+            serverName: "playwright",
+            commandLabel: "npx",
+            status: .directBypass,
+            declaredUpstreamName: "playwright",
+            configPathLabel: "~/.cursor/mcp.json",
+            childEnvironmentCount: 2
+        )
+        XCTAssertFalse(disabled.contributesObservedCatalogEnvironment)
+        XCTAssertFalse(overridden.contributesObservedCatalogEnvironment)
+        XCTAssertTrue(active.contributesObservedCatalogEnvironment)
+    }
+
     func testCatalogQualityAndCaptureTimeRoundTripWithoutInventingTime() throws {
         XCTAssertEqual(
             MCPCatalogQuality.evaluate(catalog: [], policy: MCPUpstreamToolPolicy(allow: ["read"])),

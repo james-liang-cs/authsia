@@ -68,6 +68,55 @@ final class MCPHTTPClientConfigurationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: userFile), before)
     }
 
+    func testCodexHTTPHeadersSubtableIsRejectedBeforeAnyWrite() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent(".codex/config.toml")
+        let before = Data("""
+        [mcp_servers.internal]
+        url = "http://127.0.0.1:9000/mcp"
+
+        [mcp_servers.internal.http_headers]
+        Authorization = "Bearer already-present"
+        """.utf8)
+        try before.write(to: file)
+        let identity = MCPServerIdentity(workspacePath: root.appendingPathComponent("project").path, upstreamName: "internal")
+        let binding = MCPHTTPAssociationBinding(serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .codex)
+        XCTAssertThrowsError(
+            try MCPHTTPClientConfiguration.prepare(
+                binding: binding, token: "replacement", home: root,
+                replacingEndpoint: "http://127.0.0.1:9000/mcp"
+            )
+        )
+        XCTAssertEqual(try Data(contentsOf: file), before)
+        XCTAssertFalse(String(decoding: try Data(contentsOf: file), as: UTF8.self).contains("http_headers = {"))
+    }
+
+    func testQuotedCodexHTTPHeadersSubtableIsRejectedBeforeAnyWrite() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent(".codex/config.toml")
+        let before = Data("""
+        [mcp_servers."internal"]
+        url = "http://127.0.0.1:9000/mcp"
+
+        [mcp_servers."internal".http_headers]
+        Authorization = "Bearer already-present"
+        """.utf8)
+        try before.write(to: file)
+        let identity = MCPServerIdentity(workspacePath: root.appendingPathComponent("project").path, upstreamName: "internal")
+        let binding = MCPHTTPAssociationBinding(serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .codex)
+        XCTAssertThrowsError(
+            try MCPHTTPClientConfiguration.prepare(
+                binding: binding, token: "replacement", home: root,
+                replacingEndpoint: "http://127.0.0.1:9000/mcp"
+            )
+        )
+        XCTAssertEqual(try Data(contentsOf: file), before)
+    }
+
     func testCommentedCodexHeadingIsNotAUserGlobalConflict() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent(".codex"), withIntermediateDirectories: true)

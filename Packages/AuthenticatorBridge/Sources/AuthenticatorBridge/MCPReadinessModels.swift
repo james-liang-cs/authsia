@@ -79,7 +79,8 @@ public enum MCPServerReadinessProjection {
         let protectedConfig = !effective.isEmpty && effective.allSatisfy { $0.status == .admittedWrapped }
         let bypass = effective.contains { $0.status == .directBypass }
         let unclassified = Set(server.catalog.map(\.name)).subtracting(server.policy.allow + server.policy.approve + server.policy.deny)
-        let launchComplete = server.transport == .stdio ? server.launchCommand != nil : server.endpointLabel != nil
+        let executableMissing = server.catalogBlockReason == MCPManagementError.catalogExecutableMissing.localizedDescription
+        let launchComplete = !executableMissing && (server.transport == .stdio ? server.launchCommand != nil : server.endpointLabel != nil)
         let catalogComplete = !server.catalog.isEmpty || !MCPToolPolicyEvaluator.advertisedToolNames(in: server.policy).isEmpty
         let quality = MCPCatalogQuality.evaluate(catalog: server.catalog, policy: server.policy)
         let facts = [
@@ -87,7 +88,11 @@ public enum MCPServerReadinessProjection {
             MCPReadinessFact(
                 id: "launch",
                 state: launchComplete ? "available" : "unknown",
-                detail: launchComplete ? "Launch target is recorded." : "Set the executable or localhost endpoint.",
+                detail: launchComplete
+                    ? "Launch target is recorded."
+                    : (executableMissing
+                        ? (server.catalogBlockReason ?? "Set the executable or localhost endpoint.")
+                        : "Set the executable or localhost endpoint."),
                 complete: launchComplete
             ),
             MCPReadinessFact(
@@ -123,7 +128,13 @@ public enum MCPServerReadinessProjection {
         ]
         let next: MCPReadinessAction?
         if !launchComplete {
-            next = .init(kind: "configure", label: "Edit server", reason: "Set the executable or localhost endpoint.")
+            next = .init(
+                kind: "configure",
+                label: "Edit server",
+                reason: executableMissing
+                    ? (server.catalogBlockReason ?? "Set the executable or localhost endpoint.")
+                    : "Set the executable or localhost endpoint."
+            )
         } else if !catalogComplete {
             if server.catalogBlockReason != nil {
                 next = .init(kind: "policy", label: "Edit tool policy", reason: server.catalogBlockReason ?? "")

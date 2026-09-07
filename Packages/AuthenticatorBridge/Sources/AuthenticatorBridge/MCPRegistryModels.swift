@@ -146,19 +146,24 @@ public struct MCPRegistrySnapshot: Codable, Equatable, Sendable {
     public let diagnostics: [MCPRegistryDiagnostic]
     public let workspaces: [MCPWorkspaceSummary]
     public let discoveredServers: [MCPDiscoveredServer]?
+    /// Clients the portal may offer for filter and Protect. VS Code and Devin
+    /// appear only when that app is installed on this Mac.
+    public let protectableClients: [MCPClientConfigSource]?
 
     public init(
         revision: String,
         servers: [MCPServerSnapshot],
         diagnostics: [MCPRegistryDiagnostic] = [],
         workspaces: [MCPWorkspaceSummary] = [],
-        discoveredServers: [MCPDiscoveredServer]? = nil
+        discoveredServers: [MCPDiscoveredServer]? = nil,
+        protectableClients: [MCPClientConfigSource]? = nil
     ) {
         self.revision = revision
         self.servers = servers
         self.diagnostics = diagnostics
         self.workspaces = workspaces
         self.discoveredServers = discoveredServers
+        self.protectableClients = protectableClients
     }
 }
 

@@ -49,7 +49,9 @@ Authsia an implementation of the upstream service.
 There is no client setting that intercepts a server the client already
 launches. The client must start Authsia instead of the child command. Access
 Center **Wrap** / **Write wrap** and `authsia mcp wrap --write` may replace a
-scanned client launch after confirmation and a checksum check. Authsia never
+scanned client launch after confirmation and a checksum check. The MCP Manager
+**Protect a client** action may insert the same proxy launch when that JSON
+client does not already name the declared server. Authsia never
 silent-rewrites. `mcp configure` still prints only. Workspace Setup does not
 write `mcpUpstreams`.
 
@@ -453,6 +455,17 @@ binary with argv `mcp proxy` and `AUTHSIA_MCP_UPSTREAM=<name>`. A remaining
 direct command/argv entry bypasses admission, redacted call evidence, and
 revoke-kill.
 
+Confirmed **Protect a client** in the MCP Manager may **insert** that proxy
+form when the chosen JSON client (Cursor, Claude Code, VS Code, Devin, Claude
+Desktop) does not already name the declared STDIO server. VS Code and Devin
+appear in Protect and the client filter only when that app is installed on
+this Mac (bundle ID or `/Applications` / `~/Applications` app name). Windsurf
+does not count as VS Code or Devin. The write prefers an existing project
+file; otherwise it uses the user-global JSON config. It does not copy
+workspace environment values or secrets. Codex STDIO enroll still requires a
+scanned entry. `authsia mcp serve` is not an upstream and is not inserted.
+The printed `mcp configure` form remains print-only.
+
 The printed form is a user-global fallback derived from the currently bound
 workspace. It is effective only when that workspace declares the named
 upstream and no project-scoped entry overrides it. For Claude, Cursor, and VS
@@ -487,7 +500,8 @@ The delivered output uses user-global Codex `~/.codex/config.toml`, Claude Code
 shapes. Configuration formats remain client-owned compatibility surfaces, not
 part of Authsia authorization. `mcp configure` still prints only. Confirmed
 **Write wrap** / `authsia mcp wrap --write` may replace a scanned server entry
-after a checksum check; Authsia does not silent-rewrite, launch the client,
+after a checksum check; the manager **Protect a client** path may insert the
+same proxy launch when that client file has no matching key. Authsia does not silent-rewrite, launch the client,
 add credentials, or use a shell wrapper.
 
 ## Technical Flow
@@ -819,8 +833,11 @@ is rejected. Scripts are bundled and authorized by a content hash.
 The registry also retains undeclared scan findings as **discovered** entries.
 The Clients column lists scanned associations for that server, not a directory of
 installed apps. Codex, Claude Code, Cursor, Visual Studio Code, Devin, and Claude
-Desktop appear on a row only when that client's configuration names the server.
-Selecting a workspace with no `mcpUpstreams` still shows applicable user-global
+Desktop appear on a row as associations only when that client's configuration names the server.
+The client filter and **Protect a client** offer Codex, Claude Code, Cursor, and
+Claude Desktop always; Visual Studio Code and Devin only when that app is
+installed. The filter also keeps declared servers that are not in that client yet, so
+**Protect Cursor** (or another offered client) can insert a proxy launch. Selecting a workspace with no `mcpUpstreams` still shows applicable user-global
 and project MCP configurations, with their client, source file, precedence, and
 setup action. A declaration in another workspace does not hide those entries.
 The portal can filter the list by client. Sidebar **Rows per page** (50 or 100)
@@ -837,7 +854,8 @@ client-file bytes before applying. It copies eligible launch command/arguments o
 a validated local HTTP endpoint, never client environment values or credentials.
 Potentially sensitive arguments and unsafe launches require manual setup. No
 client file is changed by this configuration step. Afterwards the managed row
-provides policy, credential association, catalog, Protect, and Remove protection
+provides policy, credential association, catalog, Protect, Protect a client
+(insert when the client has no scanned association), and Remove protection
 actions. Disabled client entries must first be enabled in their owning client;
 Remove protection is not a generic server disable or uninstall command.
 
