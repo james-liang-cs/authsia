@@ -817,9 +817,15 @@ as browsers do with the portal's no-referrer policy; cross-site Fetch Metadata
 is rejected. Scripts are bundled and authorized by a content hash.
 
 The registry also retains undeclared scan findings as **discovered** entries.
+The Clients column lists scanned associations for that server, not a directory of
+installed apps. Codex, Claude Code, Cursor, Visual Studio Code, Devin, and Claude
+Desktop appear on a row only when that client's configuration names the server.
 Selecting a workspace with no `mcpUpstreams` still shows applicable user-global
 and project MCP configurations, with their client, source file, precedence, and
 setup action. A declaration in another workspace does not hide those entries.
+The portal can filter the list by client. Sidebar **Rows per page** (50 or 100)
+paginates Servers, Activity, and Active access.
+
 **Discover servers** rescans the supported client configuration locations; it
 does not enumerate every installed package, start an MCP server, or request
 runtime authority. The scanner's existing enabled-entry and precedence rules
@@ -862,7 +868,9 @@ chosen. Grant rows include workspace/server identity when the native authority
 provides it. Unknown legacy scope is labeled explicitly and is not inferred from
 the server name.
 
-Activity is a filtered command-history page, not a raw event dump. The portal
+Activity is a filtered command-history page, not a raw event dump. Direct client
+launches are unobserved, so a supported client such as Cursor appears in Activity
+only after a call through Authsia. The portal
 discloses source health, retained range, truncation, and an audit-status summary
 that reports history completeness. It does not label a row HMAC-verified because
 another audit log exists. HTTP call identity is the invocation UUID
