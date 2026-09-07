@@ -146,6 +146,10 @@ public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
     public var tools: MCPUpstreamToolPolicy
     public var catalog: [MCPUpstreamToolDescriptor]
     public var credentialHeaders: [MCPUpstreamCredentialHeader]
+    /// Observation time of the last successful catalog capture. Independent of
+    /// authorization revision until launch/policy/credential invalidation is
+    /// proven separately.
+    public var catalogCapturedAt: Date?
 
     public init(
         name: String,
@@ -156,7 +160,8 @@ public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
         env: [String: String] = [:],
         tools: MCPUpstreamToolPolicy = MCPUpstreamToolPolicy(),
         catalog: [MCPUpstreamToolDescriptor] = [],
-        credentialHeaders: [MCPUpstreamCredentialHeader] = []
+        credentialHeaders: [MCPUpstreamCredentialHeader] = [],
+        catalogCapturedAt: Date? = nil
     ) {
         self.name = name
         self.transport = transport
@@ -167,6 +172,7 @@ public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
         self.tools = tools
         self.catalog = catalog
         self.credentialHeaders = credentialHeaders
+        self.catalogCapturedAt = catalogCapturedAt
     }
 
     public var requiresStdioPolicy: Bool {
@@ -183,6 +189,7 @@ public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
         case tools
         case catalog
         case credentialHeaders
+        case catalogCapturedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -200,6 +207,11 @@ public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
             [MCPUpstreamCredentialHeader].self,
             forKey: .credentialHeaders
         ) ?? []
+        if let captured = try container.decodeIfPresent(String.self, forKey: .catalogCapturedAt) {
+            catalogCapturedAt = ISO8601DateFormatter().date(from: captured)
+        } else {
+            catalogCapturedAt = nil
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -222,6 +234,9 @@ public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
         }
         if !credentialHeaders.isEmpty {
             try container.encode(credentialHeaders, forKey: .credentialHeaders)
+        }
+        if let catalogCapturedAt {
+            try container.encode(ISO8601DateFormatter().string(from: catalogCapturedAt), forKey: .catalogCapturedAt)
         }
     }
 }

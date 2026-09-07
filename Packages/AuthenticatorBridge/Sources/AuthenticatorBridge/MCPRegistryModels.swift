@@ -69,6 +69,8 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
     public let authorizationRevision: String
     public let launchCommand: String?
     public let catalogBlockReason: String?
+    public let catalogCapturedAt: Date?
+    public let catalogQuality: String?
     public let credentialBindings: [MCPCredentialBindingView]
     public let readiness: MCPServerReadiness?
 
@@ -88,6 +90,8 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
         authorizationRevision: String = "",
         launchCommand: String? = nil,
         catalogBlockReason: String? = nil,
+        catalogCapturedAt: Date? = nil,
+        catalogQuality: String? = nil,
         credentialBindings: [MCPCredentialBindingView] = [],
         readiness: MCPServerReadiness? = nil
     ) {
@@ -106,6 +110,8 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
         self.authorizationRevision = authorizationRevision
         self.launchCommand = launchCommand
         self.catalogBlockReason = catalogBlockReason
+        self.catalogCapturedAt = catalogCapturedAt
+        self.catalogQuality = catalogQuality
         self.credentialBindings = credentialBindings
         self.readiness = readiness
     }

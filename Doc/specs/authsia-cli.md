@@ -1722,8 +1722,9 @@ receive only their manual configuration because they do not expose a documented
 equivalent command.
 
 The printed proxy entries are a user-global fallback derived from the currently
-bound managed workspace. Project-scoped Claude, Cursor, and VS Code config can
-override them. After the recipe, configure prints a table of that client's
+bound managed workspace. Project-scoped Claude, Cursor, VS Code, and Codex
+config can override them, and a Codex project `.codex/config.toml` that names
+the same server also blocks HTTP enrollment into the user-global file. After the recipe, configure prints a table of that client's
 current launches (`Client`, `Server`, `Command`, `Status`, `Effect`, `Next`,
 `File`). Declaration matching never crosses workspace roots. A wrapped row
 means declared and routed through Authsia, not already approved—admission is

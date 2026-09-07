@@ -44,6 +44,7 @@ struct MCPCatalogCaptureTests {
         #expect(upstream.tools.allow == ["codegraph_explore", "codegraph_node"])
         #expect(upstream.catalog.map(\.name) == ["codegraph_explore", "codegraph_node"])
         #expect(upstream.catalog.first?.description == "Explore the graph")
+        #expect(upstream.catalogCapturedAt != nil)
         // A recorded catalog is what lets the proxy answer a client's connect
         // list from committed policy, with no child and no admission prompt.
         #expect(!MCPProxyCatalog.shouldDiscoverChildCatalog(upstream))

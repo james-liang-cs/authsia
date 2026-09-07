@@ -48,4 +48,35 @@ final class MCPHTTPClientConfigurationTests: XCTestCase {
         XCTAssertThrowsError(try MCPHTTPClientConfiguration.prepare(binding: binding, token: "replacement", home: root))
         XCTAssertEqual(try Data(contentsOf: file), before)
     }
+
+    func testProjectCodexQuotedConflictIsRejectedBeforeAnyWrite() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: project.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        let userFile = home.appendingPathComponent(".codex/config.toml")
+        let projectFile = project.appendingPathComponent(".codex/config.toml")
+        let before = Data("# commented [mcp_servers.other]\n".utf8)
+        try before.write(to: userFile)
+        try Data("[mcp_servers.\"internal\"]\nurl = \"http://127.0.0.1:9000/mcp\"\n".utf8).write(to: projectFile)
+        let identity = MCPServerIdentity(workspacePath: project.path, upstreamName: "internal")
+        let binding = MCPHTTPAssociationBinding(serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .codex)
+        XCTAssertThrowsError(try MCPHTTPClientConfiguration.prepare(binding: binding, token: "replacement", home: home))
+        XCTAssertEqual(try Data(contentsOf: userFile), before)
+    }
+
+    func testCommentedCodexHeadingIsNotAUserGlobalConflict() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent(".codex/config.toml")
+        try Data("# [mcp_servers.internal]\nurl = \"http://127.0.0.1:9000/mcp\"\n".utf8).write(to: file)
+        let identity = MCPServerIdentity(workspacePath: root.appendingPathComponent("project").path, upstreamName: "internal")
+        let binding = MCPHTTPAssociationBinding(serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .codex)
+        let plan = try MCPHTTPClientConfiguration.prepare(binding: binding, token: "synthetic-association", home: root)
+        XCTAssertTrue(String(decoding: plan.replacement, as: UTF8.self).contains("synthetic-association"))
+    }
 }

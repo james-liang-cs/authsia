@@ -400,7 +400,8 @@ enum WorkspaceConfigStore {
             env: upstream.env,
             tools: upstream.tools,
             catalog: upstream.catalog.filter { advertised.contains($0.name) },
-            credentialHeaders: upstream.credentialHeaders
+            credentialHeaders: upstream.credentialHeaders,
+            catalogCapturedAt: upstream.catalogCapturedAt
         )
     }
 

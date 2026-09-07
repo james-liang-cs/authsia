@@ -50,6 +50,7 @@ enum MCPCatalogCapture {
             !denied.contains($0) && !approved.contains($0)
         }
         upstream.catalog = tools.map(descriptor(for:))
+        upstream.catalogCapturedAt = Date()
         let advertised = MCPProxyCatalog.advertisedNames(in: upstream.tools)
 
         do {

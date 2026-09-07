@@ -81,6 +81,7 @@ public enum MCPServerReadinessProjection {
         let unclassified = Set(server.catalog.map(\.name)).subtracting(server.policy.allow + server.policy.approve + server.policy.deny)
         let launchComplete = server.transport == .stdio ? server.launchCommand != nil : server.endpointLabel != nil
         let catalogComplete = !server.catalog.isEmpty || !MCPToolPolicyEvaluator.advertisedToolNames(in: server.policy).isEmpty
+        let quality = MCPCatalogQuality.evaluate(catalog: server.catalog, policy: server.policy)
         let facts = [
             MCPReadinessFact(id: "declaration", state: "valid", detail: "Workspace declaration is present.", complete: true),
             MCPReadinessFact(
@@ -91,8 +92,8 @@ public enum MCPServerReadinessProjection {
             ),
             MCPReadinessFact(
                 id: "catalog",
-                state: server.catalog.isEmpty ? (catalogComplete ? "name-only" : "missing") : "recorded",
-                detail: server.catalog.isEmpty ? "Tool names come from policy until a catalog is recorded." : "\(server.catalog.count) tool descriptor(s) recorded.",
+                state: quality.rawValue,
+                detail: catalogDetail(server: server, quality: quality, complete: catalogComplete),
                 complete: catalogComplete
             ),
             MCPReadinessFact(
@@ -128,7 +129,7 @@ public enum MCPServerReadinessProjection {
         } else if !unclassified.isEmpty {
             next = .init(kind: "policy", label: "Edit tool policy", reason: "Review unclassified catalog tools before protecting a client.")
         } else if !protectedConfig {
-            let enrollable = effective.contains { MCPClientActionSupport.supportsHTTPEnrollment($0.source) }
+            let enrollable = effective.contains { $0.canEnrollHTTP == true }
             if server.transport == .stdio {
                 next = .init(kind: "wrap", label: "Protect connection", reason: "Route a supported client through Authsia.")
             } else if enrollable {
@@ -143,8 +144,43 @@ public enum MCPServerReadinessProjection {
         }
         return MCPServerReadiness(facts: facts, next: next, checkedAt: now)
     }
+
+    private static func catalogDetail(server: MCPServerSnapshot, quality: MCPCatalogQuality, complete: Bool) -> String {
+        let qualityText: String
+        switch quality {
+        case .missing:
+            qualityText = "No catalog or permitted tool names are recorded."
+        case .nameOnly:
+            qualityText = "Tool names are known; descriptors or schemas may be missing."
+        case .recorded:
+            qualityText = "\(server.catalog.count) tool descriptor(s) recorded."
+        }
+        let captured = server.catalogCapturedAt == nil
+            ? (complete ? " Capture time is unknown." : "")
+            : " Capture time is recorded."
+        let revision = server.authorizationRevision.isEmpty ? "" : " Launch revision is recorded."
+        return qualityText + captured + revision
+    }
 }
 #endif
+
+public enum MCPCatalogQuality: String, Codable, Equatable, Sendable {
+    case missing
+    case nameOnly = "name-only"
+    case recorded
+
+    public static func evaluate(catalog: [MCPUpstreamToolDescriptor], policy: MCPUpstreamToolPolicy) -> Self {
+        if catalog.isEmpty {
+            return MCPToolPolicyEvaluator.advertisedToolNames(in: policy).isEmpty ? .missing : .nameOnly
+        }
+        let descriptive = catalog.contains { !$0.description.isEmpty }
+        let schema = catalog.contains {
+            if case .object(let object) = $0.inputSchema { return object["properties"] != nil }
+            return false
+        }
+        return descriptive || schema ? .recorded : .nameOnly
+    }
+}
 
 public enum MCPClientActionSupport {
     public static func supportsHTTPEnrollment(_ source: MCPClientConfigSource) -> Bool {
@@ -159,5 +195,35 @@ public enum MCPClientActionSupport {
     public static func httpEnrollmentReason(_ source: MCPClientConfigSource) -> String? {
         supportsHTTPEnrollment(source) ? nil :
             "Authsia can show this \(source.displayName) HTTP entry, but it has no automatic enrollment writer. Configure the protected localhost endpoint in the client."
+    }
+
+    /// Enrollment writes user-local Codex/Cursor files and Claude's user-local
+    /// project map. A scanner finding must explain the same conflict the writer
+    /// rejects as stale.
+    public static func httpEnrollment(
+        for finding: MCPClientServerFinding,
+        findings: [MCPClientServerFinding] = []
+    ) -> (canEnroll: Bool, reason: String?) {
+        guard finding.commandLabel == "HTTP" else { return (false, nil) }
+        if let reason = httpEnrollmentReason(finding.source) {
+            return (false, reason)
+        }
+        if finding.source == .codex || finding.source == .cursor {
+            let projectConflict = findings.contains {
+                $0.source == finding.source
+                    && $0.serverName == finding.serverName
+                    && $0.configScope == .project
+                    && $0.workspacePathLabel == finding.workspacePathLabel
+                    && $0.status != .disabled
+                    && $0.id != finding.id
+            }
+            if projectConflict {
+                return (false, "A project \(finding.source.displayName) configuration already names this server. HTTP enrollment writes user-local configuration and will not override that project file.")
+            }
+            if finding.configScope == .project {
+                return (false, "HTTP enrollment writes \(finding.source.displayName)'s user-local file. Configure or remove this project entry first.")
+            }
+        }
+        return (true, nil)
     }
 }

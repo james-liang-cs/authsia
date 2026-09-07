@@ -194,8 +194,10 @@ uses the Devin config path), and Visual Studio Code (including Copilot MCP).
 User-global files: `~/.codex/config.toml`, `~/.claude.json`,
 `~/.cursor/mcp.json`, `~/.config/devin/mcp_config.json`, and VS Code user
 `mcp.json`. Project files that outrank those: Claude `.mcp.json`, Cursor
-`.cursor/mcp.json`, and VS Code `.vscode/mcp.json`. Codex and Devin have no
-project scope. Claude Code's `local` scope, the default for `claude mcp add`,
+`.cursor/mcp.json`, VS Code `.vscode/mcp.json`, and Codex
+`.codex/config.toml`. Devin has no project scope. Codex project
+`.codex/config.toml` is enumerated because HTTP enrollment refuses a
+user-global write when that file already names the same server. Claude Code's `local` scope, the default for `claude mcp add`,
 lives in `~/.claude.json` under `projects[<root>].mcpServers` and outranks
 that repository's `.mcp.json`; it is read only for managed workspace roots. A
 `.mcp.json` server the human declined, recorded in that project's
@@ -696,9 +698,11 @@ performs a best-effort read-only scan of the known user-global client paths:
 Codex `~/.codex/config.toml`, Claude `~/.claude.json`, Cursor
 `~/.cursor/mcp.json`, Devin `~/.config/devin/mcp_config.json`, and VS Code's
 user `mcp.json`. It also scans the bound workspace root for the project-scoped
-files that outrank those: Claude `.mcp.json`, Cursor `.cursor/mcp.json`, and
-VS Code `.vscode/mcp.json`. Codex and Devin have no project scope. Project
-scanning stays inside managed workspace roots and opens no new discovery
+files that outrank those: Claude `.mcp.json`, Cursor `.cursor/mcp.json`, VS
+Code `.vscode/mcp.json`, and Codex `.codex/config.toml`. Devin has no project
+scope. Codex project `.codex/config.toml` is enumerated because HTTP
+enrollment refuses a user-global write when that file already names the same
+server. Project scanning stays inside managed workspace roots and opens no new discovery
 surface. It reads server name, command, argv, and the
 `AUTHSIA_MCP_UPSTREAM` name only; other environment values and raw protocol
 frames are neither retained nor reported. Every finding names its config scope,
@@ -843,12 +847,14 @@ applied. An outcome-write failure after an applied change is reported as applied
 with incomplete evidence.
 
 Server details show independent readiness facts (declaration, launch, catalog,
-policy, client route, observed use, and evidence). One recommended next action is
+policy, client route, observed use, and evidence), including catalog quality,
+capture time when recorded, and launch revision. One recommended next action is
 offered after a change. Protected configuration is not proof of a successful call.
 
 Disabled client entries remain in the discovery inventory and are excluded from
 active coverage denominators. HTTP enrollment remains limited to Claude Code,
-Codex, and Cursor; other discovered HTTP clients explain that manual endpoint
+Codex, and Cursor; a scanner finding explains the same project-file conflict
+the writer rejects. Other discovered HTTP clients explain that manual endpoint
 configuration is required.
 
 Active access follows the selected sidebar workspace unless All workspaces is
@@ -870,6 +876,10 @@ initialize and call `tools/list` only; it does not authorize `tools/call`, persi
 an agent grant, or impersonate a client session. New advertised names still enter
 Allow while existing Block and Require approval rules are preserved, which the
 native preview states.
+
+Lock portal ends the browser session without storing proofs. Run
+`authsia mcp start` to reopen; harmless view filters in this tab are restored
+and pending mutations are not replayed.
 
 After a declaration or another server change succeeds, the same portal dialog
 shows setup actions for that exact server: Edit server, Edit policy, credential

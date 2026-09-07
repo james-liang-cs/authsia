@@ -73,4 +73,33 @@ final class MCPDiscoveryProjectionTests: XCTestCase {
         XCTAssertFalse(discovered.first(where: { $0.displayName == "bad" })!.canConfigure)
         XCTAssertFalse(String(decoding: try JSONEncoder().encode(discovered), as: UTF8.self).contains("synthetic-value"))
     }
+
+    func testCodexProjectHTTPConflictIsNotOfferedAsEnrollment() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: workspace.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        try Data("[mcp_servers.internal]\nurl = \"http://127.0.0.1:9000/mcp\"\n".utf8)
+            .write(to: workspace.appendingPathComponent(".codex/config.toml"))
+        try Data("[mcp_servers.internal]\nurl = \"http://127.0.0.1:8788/mcp/placeholder\"\n".utf8)
+            .write(to: root.appendingPathComponent(".codex/config.toml"))
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: MCPClientConfigLocation.knownLocations(homeDirectory: root)
+                + MCPClientConfigLocation.projectLocations(workspaceRoots: [workspace], homeDirectory: root)
+        )
+        let discovered = MCPDiscoveryProjection.servers(
+            findings: findings,
+            declared: [],
+            workspaceRoots: [workspace],
+            homeDirectory: root
+        )
+        XCTAssertTrue(discovered.contains { $0.client == .codex && $0.canEnrollHTTP == false })
+        XCTAssertTrue(discovered.contains {
+            $0.client == .codex && ($0.unsupportedActionReason?.contains("project") == true)
+        })
+        XCTAssertFalse(discovered.contains { $0.client == .codex && $0.canEnrollHTTP })
+    }
 }

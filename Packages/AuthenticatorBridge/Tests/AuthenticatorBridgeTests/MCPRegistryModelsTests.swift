@@ -77,4 +77,31 @@ final class MCPRegistryModelsTests: XCTestCase {
         XCTAssertFalse(json.contains("authsia://"))
         XCTAssertFalse(json.localizedCaseInsensitiveContains("token"))
     }
+
+    func testCatalogQualityAndCaptureTimeRoundTripWithoutInventingTime() throws {
+        XCTAssertEqual(
+            MCPCatalogQuality.evaluate(catalog: [], policy: MCPUpstreamToolPolicy(allow: ["read"])),
+            .nameOnly
+        )
+        let recorded = MCPUpstreamToolDescriptor(
+            name: "read",
+            description: "Read files",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:]),
+            ])
+        )
+        XCTAssertEqual(
+            MCPCatalogQuality.evaluate(catalog: [recorded], policy: MCPUpstreamToolPolicy(allow: ["read"])),
+            .recorded
+        )
+        let captured = Date(timeIntervalSince1970: 1_700_000_000)
+        let upstream = MCPUpstreamConfig(name: "internal", catalog: [MCPUpstreamToolDescriptor(name: "read")], catalogCapturedAt: captured)
+        let encoded = try JSONEncoder().encode(upstream)
+        let decoded = try JSONDecoder().decode(MCPUpstreamConfig.self, from: encoded)
+        XCTAssertEqual(try XCTUnwrap(decoded.catalogCapturedAt).timeIntervalSince1970, captured.timeIntervalSince1970, accuracy: 1)
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains("catalogCapturedAt"))
+        let legacy = try JSONDecoder().decode(MCPUpstreamConfig.self, from: Data(#"{"name":"internal"}"#.utf8))
+        XCTAssertNil(legacy.catalogCapturedAt)
+    }
 }

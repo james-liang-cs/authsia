@@ -31,7 +31,7 @@ public enum MCPDiscoveryProjection {
                 ? "This client entry is disabled. Enable it in the client, then discover again. Disabled entries are not counted as active coverage."
                 : configurationHint(for: finding)
             let http = finding.commandLabel == "HTTP"
-            let enrollReason = http ? MCPClientActionSupport.httpEnrollmentReason(finding.source) : nil
+            let enrollment = MCPClientActionSupport.httpEnrollment(for: finding, findings: findings)
             let environmentHint = finding.childEnvironmentCount > 0
                 ? " \(finding.childEnvironmentCount) client environment value(s) will not be copied. Associate credential references before protecting the client."
                 : " Client credentials and environment values are never imported."
@@ -42,8 +42,8 @@ public enum MCPDiscoveryProjection {
                 configPathLabel: finding.configPathLabel, canConfigure: knownWorkspace != nil && reason == nil && !disabled,
                 configurationHint: reason ?? (knownWorkspace == nil ? "Select a managed workspace, then discover again." : "Configure creates an Authsia workspace declaration. It does not start a server or change the client launch." + environmentHint),
                 isDisabled: disabled,
-                canEnrollHTTP: http && MCPClientActionSupport.supportsHTTPEnrollment(finding.source),
-                unsupportedActionReason: enrollReason)
+                canEnrollHTTP: enrollment.canEnroll,
+                unsupportedActionReason: enrollment.reason)
         }
     }
 }

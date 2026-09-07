@@ -120,12 +120,15 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
     /// user-global ones for the clients that support them. A wrapped
     /// user-global entry with an unwrapped project entry beside it resolves to
     /// the unwrapped one, so leaving these unscanned reports the opposite of
-    /// what runs. Codex and Devin have no project scope.
+    /// what runs. Devin has no project scope. Codex project
+    /// `.codex/config.toml` is scanned because HTTP enrollment refuses a
+    /// user-global write when that file already names the same server.
     public static func projectLocations(
         workspaceRoots: [URL],
         homeDirectory: URL
     ) -> [Self] {
         let relativePaths: [(MCPClientConfigSource, String)] = [
+            (.codex, ".codex/config.toml"),
             (.claude, ".mcp.json"),
             (.cursor, ".cursor/mcp.json"),
             (.vscode, ".vscode/mcp.json"),
@@ -1034,30 +1037,29 @@ public struct MCPClientConfigScanner {
 
         for rawLine in text.split(whereSeparator: \.isNewline) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("["), !line.hasPrefix("[mcp_servers.") {
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            if line.hasPrefix("[") {
+                if let heading = parseCodexHeading(line) {
+                    if heading.isEnvTable {
+                        readingEnvTable = heading.name == name
+                        continue
+                    }
+                    flush()
+                    name = heading.name
+                    command = nil
+                    endpoint = nil
+                    arguments = []
+                    upstreamEnvironmentName = nil
+                    isDisabled = false
+                    unsupportedKeys = []
+                    childEnvironmentCount = 0
+                    readingEnvTable = false
+                    continue
+                }
                 flush(); name = nil; command = nil; endpoint = nil; readingEnvTable = false
                 continue
             }
-            if line.hasPrefix("[mcp_servers."), line.hasSuffix("]") {
-                let start = line.index(line.startIndex, offsetBy: "[mcp_servers.".count)
-                let rawName = String(line[start..<line.index(before: line.endIndex)])
-                let heading = parseTOMLString(rawName) ?? rawName
-                if heading.hasSuffix(".env"), let current = name {
-                    let envOwner = String(heading.dropLast(4))
-                    readingEnvTable = envOwner == current
-                    continue
-                }
-                flush()
-                name = heading
-                command = nil
-                endpoint = nil
-                arguments = []
-                upstreamEnvironmentName = nil
-                isDisabled = false
-                unsupportedKeys = []
-                childEnvironmentCount = 0
-                readingEnvTable = false
-            } else if readingEnvTable,
+            if readingEnvTable,
                       let value = assignmentValue(
                         in: line,
                         key: MCPProxyClientLaunch.environmentKey
@@ -1103,6 +1105,24 @@ public struct MCPClientConfigScanner {
         let lhs = line[..<equals].trimmingCharacters(in: .whitespaces)
         guard lhs == key else { return nil }
         return line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func parseCodexHeading(_ line: String) -> (name: String, isEnvTable: Bool)? {
+        let pattern = #"^\[\s*mcp_servers\s*\.\s*(.+?)\s*\]$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+              let range = Range(match.range(at: 1), in: line) else {
+            return nil
+        }
+        var raw = String(line[range])
+        var isEnvTable = false
+        if raw.hasSuffix(".env") {
+            raw = String(raw.dropLast(4))
+            isEnvTable = true
+        }
+        let heading = parseTOMLString(raw) ?? raw
+        guard !heading.isEmpty else { return nil }
+        return (heading, isEnvTable)
     }
 
     private static func parseTOMLString(_ rawValue: String) -> String? {

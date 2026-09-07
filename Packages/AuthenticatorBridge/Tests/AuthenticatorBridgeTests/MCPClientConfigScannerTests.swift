@@ -459,8 +459,9 @@ final class MCPClientConfigScannerTests: XCTestCase {
             homeDirectory: home
         )
 
-        XCTAssertEqual(locations.map(\.source), [.claude, .cursor, .vscode, .claude])
+        XCTAssertEqual(locations.map(\.source), [.codex, .claude, .cursor, .vscode, .claude])
         XCTAssertEqual(locations.map(\.displayPath), [
+            "~/repo/.codex/config.toml",
             "~/repo/.mcp.json",
             "~/repo/.cursor/mcp.json",
             "~/repo/.vscode/mcp.json",
@@ -468,9 +469,7 @@ final class MCPClientConfigScannerTests: XCTestCase {
         ])
         XCTAssertTrue(locations.allSatisfy { $0.scope == .project })
         XCTAssertTrue(locations.allSatisfy { $0.workspaceRoot == URL(fileURLWithPath: "/Users/dev/repo", isDirectory: true).standardizedFileURL })
-        // Codex and Devin have no project scope; inventing paths for them would
-        // report findings from files those clients never read.
-        XCTAssertFalse(locations.contains { $0.source == .codex || $0.source == .devin })
+        XCTAssertFalse(locations.contains { $0.source == .devin })
     }
 
     func testProjectLocationsKeepFullPathOutsideHomeAndDeduplicate() {
@@ -481,8 +480,8 @@ final class MCPClientConfigScannerTests: XCTestCase {
             homeDirectory: home
         )
 
-        XCTAssertEqual(locations.count, 4)
-        XCTAssertEqual(locations.first?.displayPath, "/srv/repo/.mcp.json")
+        XCTAssertEqual(locations.count, 5)
+        XCTAssertEqual(locations.first?.displayPath, "/srv/repo/.codex/config.toml")
     }
 
     func testFindingPreservesExactLongConfigPath() throws {
@@ -845,4 +844,51 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertEqual(findings.first { $0.status == .skipped }?.shouldShowInAccessCenter, true)
     }
 
+    func testCodexProjectQuotedNameAndCommentsAlignWithHTTPEnrollmentConflict() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let root = home.appendingPathComponent("repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        try """
+        # leftover heading must not become a server
+        # [mcp_servers.ignored]
+        command = "ignored"
+
+        [ mcp_servers . "internal" ]
+        url = "http://127.0.0.1:9000/mcp"
+        """.write(to: root.appendingPathComponent(".codex/config.toml"), atomically: true, encoding: .utf8)
+        try """
+        [mcp_servers.internal]
+        url = "http://127.0.0.1:8788/mcp/placeholder"
+        """.write(to: home.appendingPathComponent(".codex/config.toml"), atomically: true, encoding: .utf8)
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [
+                MCPDeclaredLocalServer(
+                    name: "internal",
+                    command: "",
+                    arguments: [],
+                    workspaceRoot: root,
+                    endpoint: "http://127.0.0.1:9000/mcp",
+                    protectedEndpoint: "http://127.0.0.1:8788/mcp/placeholder"
+                ),
+            ],
+            locations: MCPClientConfigLocation.knownLocations(homeDirectory: home)
+                + MCPClientConfigLocation.projectLocations(workspaceRoots: [root], homeDirectory: home)
+        )
+
+        let project = try XCTUnwrap(findings.first {
+            $0.source == .codex && $0.configScope == .project && $0.serverName == "internal"
+        })
+        let global = try XCTUnwrap(findings.first {
+            $0.source == .codex && $0.configScope == .userGlobal && $0.serverName == "internal"
+        })
+        XCTAssertEqual(project.precedence, .effective)
+        XCTAssertEqual(global.precedence, .overridden)
+        XCTAssertNil(findings.first { $0.serverName == "ignored" })
+        let enrollment = MCPClientActionSupport.httpEnrollment(for: global, findings: findings)
+        XCTAssertFalse(enrollment.canEnroll)
+        XCTAssertTrue(enrollment.reason?.contains("project") == true)
+    }
 }
