@@ -61,6 +61,8 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
     public let clientAssociations: [MCPClientAssociation]
     public let observedCallCount: Int
     public let authorizationRevision: String
+    public let launchCommand: String?
+    public let catalogBlockReason: String?
 
     public init(
         id: String,
@@ -75,7 +77,9 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
         hasCredentialHeaders: Bool = false,
         clientAssociations: [MCPClientAssociation] = [],
         observedCallCount: Int = 0,
-        authorizationRevision: String = ""
+        authorizationRevision: String = "",
+        launchCommand: String? = nil,
+        catalogBlockReason: String? = nil
     ) {
         self.id = id
         self.identity = identity
@@ -90,6 +94,8 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
         self.clientAssociations = clientAssociations
         self.observedCallCount = observedCallCount
         self.authorizationRevision = authorizationRevision
+        self.launchCommand = launchCommand
+        self.catalogBlockReason = catalogBlockReason
     }
 }
 

@@ -420,7 +420,10 @@ private final class MCPPortalRouter: @unchecked Sendable {
                 let command = try JSONDecoder().decode(MCPManagementOperationRequest.self, from: request.body)
                 let change = try await dependencies.prepareOperation(command)
                 return encodedResponse(try await operations.prepare(owner: owner, kind: command.kind, change: change))
-            } catch { return .json(.badRequest, ["code": (error as? MCPManagementError ?? .invalidRequest).rawValue]) }
+            } catch {
+                let failure = error as? MCPManagementError ?? .invalidRequest
+                return .json(.badRequest, ["code": failure.rawValue, "message": failure.localizedDescription])
+            }
         case (.GET, "/api/v1/credentials"):
             do { return encodedResponse(try await dependencies.credentialOptions()) }
             catch { return .json(.serviceUnavailable, ["code":"credentialsUnavailable"]) }

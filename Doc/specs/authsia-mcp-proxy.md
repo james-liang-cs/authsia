@@ -839,6 +839,26 @@ denied, stale, and repeated operations cannot apply again. Credential options ar
 metadata only. Neither a browser request nor a browser confirmation grants vault
 access.
 
+After a declaration or another server change succeeds, the same portal dialog
+shows setup actions for that exact server: Edit server, Edit policy, credential
+association, eligible catalog recording, and per-client Protect. The user does
+not need to return to the row menu or declare the server again in Access Center.
+Edit server updates the existing executable or HTTP endpoint; arguments remain
+unchanged unless explicitly replaced. Policy and credential references are
+preserved. Each subsequent mutation still requires its own native confirmation.
+
+Catalog availability is checked before prompting and again before execution.
+Non-empty declared environments or active direct-client environment values require
+explicit tool policy and credential setup; missing standalone executables require
+launch correction. The portal displays these reasons beside the catalog control.
+The helper uses the existing MCP PATH overlay so GUI launches can find supported
+local runtime dependencies. Helper stderr stays bounded in memory and maps to
+fixed, actionable errors; raw upstream diagnostics are never sent to the browser.
+Catalog helper execution has a bounded timeout. Capture failures retain the
+same-window Edit server and Edit policy recovery actions. Recording preserves
+existing Block/Approval rules and adds newly advertised tools to Allow, which is
+stated in the native preview.
+
 The credential picker shows the vault folder and environment tags alongside each
 name and type. Items with identical display metadata also show an item-ID suffix;
 selection always uses the exact item ID. It defaults to the selected server's

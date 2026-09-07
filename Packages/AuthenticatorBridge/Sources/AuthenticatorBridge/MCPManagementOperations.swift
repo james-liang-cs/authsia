@@ -1,7 +1,7 @@
 import Foundation
 
 public enum MCPManagementOperationKind: String, Codable, Sendable {
-    case declare, policy, credential, catalog, wrap, unwrap, enrollHTTP, revoke
+    case declare, configure, policy, credential, catalog, wrap, unwrap, enrollHTTP, revoke
 }
 public struct MCPManagementOperationRequest: Codable, Sendable {
     public var kind: MCPManagementOperationKind

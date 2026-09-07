@@ -80,6 +80,7 @@ public struct MCPHTTPAuthorityReply: Codable, Sendable {
 
 public enum MCPManagementError: String, Error, LocalizedError, Codable, Sendable {
     case unavailable, invalidRequest, denied, stale, notFound, unsupported, auditUnavailable, busy
+    case catalogExecutableMissing, catalogEnvironmentRequired, catalogEmpty, catalogStartupFailed, catalogHelperUnavailable, catalogTimedOut, catalogAccessDisabled
     public var errorDescription: String? {
         switch self {
         case .unavailable: return "Authsia management is unavailable."
@@ -90,6 +91,13 @@ public enum MCPManagementError: String, Error, LocalizedError, Codable, Sendable
         case .unsupported: return "This MCP operation is not supported."
         case .auditUnavailable: return "MCP activity could not be recorded; the call was not forwarded."
         case .busy: return "The MCP operation limit was reached."
+        case .catalogExecutableMissing: return "The declared executable is not available to Authsia. Use Edit server to set an installed executable and its arguments. Agent-provided commands may not be standalone MCP servers."
+        case .catalogEnvironmentRequired: return "This server requires environment setup. Catalog recording is limited to environment-free STDIO launches. Use Edit policy to name its tools and associate the required credential references before protecting the client."
+        case .catalogEmpty: return "No tools were returned. Admission may have been declined, or the server advertised an empty catalog. Check the server setup and approval, then prepare a new catalog request."
+        case .catalogStartupFailed: return "The server could not start or did not answer tools/list. Check its executable, arguments, runtime requirements, and native admission. Use Edit server or Edit policy to continue setup."
+        case .catalogHelperUnavailable: return "The Authsia catalog helper could not be started. Repair or rebuild the app's bundled CLI, then try again."
+        case .catalogTimedOut: return "Catalog recording timed out. Check the server and any pending native approval, then prepare a new request."
+        case .catalogAccessDisabled: return "Enable MCP Integrations in Authsia Settings > Developer Access before recording a catalog."
         }
     }
 }
