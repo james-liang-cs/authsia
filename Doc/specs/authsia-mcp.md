@@ -47,7 +47,8 @@ The intended security property is:
 > Authsia to return a plaintext secret or grant itself broader authority.
 
 This document owns the public MCP serve protocol and security contract. Wrapping
-another local stdio MCP server is owned by
+another local stdio MCP server, the MCP Manager portal, and validated localhost
+Streamable HTTP are owned by
 [`authsia-mcp-proxy.md`](authsia-mcp-proxy.md). JIT authorization remains owned
 by [`jit-agent-grants.md`](jit-agent-grants.md), the overall boundary by
 [`security-model.md`](security-model.md), and runtime paths by
@@ -55,8 +56,10 @@ by [`jit-agent-grants.md`](jit-agent-grants.md), the overall boundary by
 
 ## Protocol And Process Boundary
 
-- Transport is local `stdio` only. V1 opens no HTTP listener, Unix socket, or
-  network port.
+- Transport is local `stdio` only. `authsia mcp serve` opens no HTTP listener,
+  Unix socket, or network port. The MCP Manager's localhost Streamable HTTP
+  listener is a separate surface owned by
+  [`authsia-mcp-proxy.md`](authsia-mcp-proxy.md).
 - The client launches `authsia mcp serve` outside its agent command sandbox so
   the server can reach the local Authsia Bridge and launch mediated child
   processes. Agents use the client-managed tool connection and must not start
@@ -421,10 +424,12 @@ Wrapping a local stdio MCP server is owned by
 [`authsia-mcp-proxy.md`](authsia-mcp-proxy.md). That document covers user flow,
 company allowlist shape, workspace `mcpUpstreams`, client launch
 (`mcp proxy` plus `AUTHSIA_MCP_UPSTREAM`), admission, catalog discovery, child
-lifecycle, detective scan, and proxy-specific threats.
+lifecycle, detective scan, the MCP Manager portal, validated localhost
+Streamable HTTP, and proxy-specific threats.
 
 `authsia mcp serve` does not add those child tools to its frozen six-tool
-catalog. The proxy is a separate stdio process.
+catalog. The STDIO proxy is a separate process. Localhost HTTP protection is a
+separate app-owned listener, not an HTTP mode of `mcp serve`.
 
 ## Execution Lifecycle
 

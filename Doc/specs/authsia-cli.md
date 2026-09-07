@@ -145,8 +145,11 @@ Key properties:
 | `authsia mcp stop` | Stop manager listeners without stopping Bridge, SSH, or existing STDIO proxies | `authsia mcp stop` |
 | `authsia mcp restart` | Restart manager listeners and invalidate portal/admission sessions | `authsia mcp restart` |
 | `authsia mcp wrap --write` | Declare the upstream and replace a scanned client MCP launch with `mcp proxy` after confirmation | `authsia mcp wrap --write --server filesystem --yes` |
+| `authsia mcp unwrap --write` | Preview and restore a protected launch from its exact workspace declaration while leaving policy in place | `authsia mcp unwrap --write --server filesystem` |
 | `authsia mcp declare` | Declare a STDIO child command or validated localhost Streamable HTTP endpoint and tool policy | `authsia mcp declare --server internal --url http://127.0.0.1:9000/mcp --allow search --yes` |
+| `authsia mcp catalog` | Record what a declared local MCP server advertises into workspace policy, so clients list its tools without starting it | `authsia mcp catalog --server codegraph --write` |
 | `authsia mcp serve` | Run the local stdio MCP server, discovering one client workspace or using an explicit override | `authsia mcp serve --workspace /path/to/repo` |
+| `authsia mcp proxy` | Gate one workspace-declared stdio MCP; secret refs use Agent JIT | `authsia mcp proxy --upstream jira` |
 | `authsia mcp doctor` | Scan known MCP client configs and fail on effective or conditional bypasses. Default output is a table; `--json` is the machine verdict (schema version 2) | `authsia mcp doctor --json` |
 | `authsia mcp activity export` | Copy redacted MCP proxy command-history rows | `authsia mcp activity export --json --unowned` |
 | `authsia access create` | Create an automation credential; SSH authority requires its own SSH-only credential | `authsia access create --name ci --ttl 2h --allow exec` |
@@ -1705,7 +1708,8 @@ different address. `stop` leaves existing client-launched STDIO proxies running.
 
 Declare local HTTP with exactly one `--url` and repeatable `--allow`, `--approve`,
 or `--deny`. Only explicit loopback `http` URLs are accepted. `--command` and
-`--url` are mutually exclusive.
+`--url` are mutually exclusive. The MCP Manager and localhost HTTP contract is
+[`authsia-mcp-proxy.md`](authsia-mcp-proxy.md#mcp-manager-and-local-streamable-http).
 
 `authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints a
 deterministic user-global configuration for the exact installed Authsia binary.
@@ -1804,7 +1808,8 @@ rows. It never includes tool arguments, results, JSON-RPC, or child stderr.
 
 See [`authsia-mcp.md`](authsia-mcp.md) for the closed tool schemas, lifecycle,
 JIT ownership, audit correlation, and compatibility policy. Wrapping another
-local stdio MCP server is specified in
+local stdio MCP server, the MCP Manager portal, and validated localhost
+Streamable HTTP are specified in
 [`authsia-mcp-proxy.md`](authsia-mcp-proxy.md). Wrapped `tools/call` activity
 is the MCP tool name on the grant’s Access Center timeline; arguments are not
 stored.

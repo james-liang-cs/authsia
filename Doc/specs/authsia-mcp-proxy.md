@@ -3,10 +3,11 @@
 Status: release-candidate implementation contract for M14; signed installed-product
 validation pending
 
-This document owns wrapping a local stdio MCP server through Authsia: user
-flow, company allowlist shape, workspace `mcpUpstreams`, client launch,
-admission, catalog discovery, child lifecycle, and detective scan. The frozen
-six-tool Authsia catalog remains in
+This document owns wrapping a local stdio MCP server through Authsia and the
+app-owned MCP Manager: user flow, company allowlist shape, workspace
+`mcpUpstreams`, client launch, admission, catalog discovery, child lifecycle,
+detective scan, the local management portal, and validated localhost Streamable
+HTTP. The frozen six-tool Authsia catalog remains in
 [`authsia-mcp.md`](authsia-mcp.md). JIT grant matching remains in
 [`jit-agent-grants.md`](jit-agent-grants.md). Access Center presentation remains
 in the private Access Center spec.
@@ -34,6 +35,7 @@ in the private Access Center spec.
 - [Child Lifecycle](#child-lifecycle)
 - [Client Configuration Scan](#client-configuration-scan)
 - [Access Center](#access-center)
+- [MCP Manager And Local Streamable HTTP](#mcp-manager-and-local-streamable-http)
 - [Observability](#observability)
 - [Errors](#errors)
 - [Threat Model](#threat-model)
@@ -46,6 +48,11 @@ upstream declared by the bound workspace. It does not add tools to
 `authsia mcp serve`, change the frozen six-tool Authsia catalog, or make
 Authsia an implementation of the upstream service.
 
+`authsia mcp start` opens the app-owned MCP Manager portal. That surface
+aggregates workspace declarations and client scans, prepares confirmed
+configuration changes, and serves validated localhost Streamable HTTP through
+`127.0.0.1:8788`. It does not add tools to `authsia mcp serve`.
+
 There is no client setting that intercepts a server the client already
 launches. The client must start Authsia instead of the child command. Access
 Center **Wrap** / **Write wrap** and `authsia mcp wrap --write` may replace a
@@ -57,13 +64,16 @@ write `mcpUpstreams`.
 
 Company policy allowlists Authsia. Workspace `mcpUpstreams` names each child.
 Admission, redacted call evidence, and revoke-kill apply only on the wrapped
-path.
+stdio path. Validated localhost Streamable HTTP uses the MCP Manager's
+protected endpoint instead of `authsia mcp proxy`.
 
 ## Complementary Lanes
 
 The company MCP gateway and Authsia are complementary, not a pipeline. A local
-stdio server may never traverse the gateway. Authsia MCP V1 does not execute
-HTTP, SSE, Streamable HTTP, or URL upstreams.
+stdio server may never traverse the gateway. Authsia's local lane covers
+`authsia mcp proxy` for declared stdio children and the MCP Manager's
+validated localhost Streamable HTTP listener. Remote HTTP, HTTPS, SSE, and URL
+MCP remain on the company gateway.
 
 ```text
                      coding client + model
@@ -71,14 +81,12 @@ HTTP, SSE, Streamable HTTP, or URL upstreams.
               selects a configured MCP server entry
                      /                    \
                     /                      \
-         local stdio lane              remote service lane
-              Authsia                  company MCP gateway
+         local Authsia lane            remote service lane
+    stdio proxy | localhost HTTP       company MCP gateway
                     |                      |
-          authsia mcp proxy            SSO + remote policy
+          local admission or JIT       SSO + remote policy
                     |                      |
-          local admission or JIT       remote MCP services
-                    |
-          declared local MCP child
+     declared child | loopback server  remote MCP services
 ```
 
 Approved wording: preventive for proxy-wrapped local servers, detective for
@@ -371,7 +379,10 @@ declares command and argv and writes the scanned client launch after
 confirmation. **Declare in workspace** remains for a missing declaration when
 the client already launches `mcp proxy` and Wrap cannot infer child argv:
 Access Center and `authsia mcp declare --server <name> --command <bin>` write
-that child. Workspace Setup still does not write `mcpUpstreams`.
+that child. `authsia mcp declare --server <name> --url <loopback-http>` declares
+a validated localhost Streamable HTTP endpoint instead; that path is served by
+the MCP Manager, not by `mcp proxy`. Workspace Setup still does not write
+`mcpUpstreams`.
 
 - `name` must be unique and match `[A-Za-z][A-Za-z0-9_-]{0,31}`.
 - `command` is a PATH basename or workspace-relative executable, plus a
@@ -396,8 +407,9 @@ that child. Workspace Setup still does not write `mcpUpstreams`.
   upstream still discovers its catalog on that first call, so a tool the client
   already knows works without a prior capture.
 - Do not store live credentials, tokens, private endpoints, or
-  machine-specific paths. HTTP, SSE, Streamable HTTP, and `url` entries decode
-  for forward compatibility but are not executable in V1.
+  machine-specific paths. Validated loopback `http` URLs are declared with
+  `--url` and served by the MCP Manager, not by `authsia mcp proxy`. Remote
+  HTTP, HTTPS, SSE, and URL entries remain unsupported.
 
 Credential-less example with pinned tools (no secret bytes):
 
