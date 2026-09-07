@@ -32,6 +32,16 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
         self.attributionConfidence = attributionConfidence
     }
 
+    enum CodingKeys: String, CodingKey {
+        case platform
+        case sessionID
+        case turnID
+        case agentID
+        case agentType
+        case toolUseID
+        case attributionConfidence
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
@@ -46,6 +56,27 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
                 forKey: .attributionConfidence
             ) ?? .high
         )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(platform, forKey: .platform)
+        try container.encodeIfPresent(sessionID, forKey: .sessionID)
+        try container.encodeIfPresent(turnID, forKey: .turnID)
+        try container.encodeIfPresent(agentID, forKey: .agentID)
+        try container.encodeIfPresent(agentType, forKey: .agentType)
+        try container.encodeIfPresent(toolUseID, forKey: .toolUseID)
+        if attributionConfidence != .high || Self.includeDefaultAttributionConfidence {
+            try container.encode(attributionConfidence, forKey: .attributionConfidence)
+        }
+    }
+
+    /// Historical audit HMAC payloads encoded the default `.high` confidence after
+    /// that field existed. Verify both encodings so older rows still authenticate.
+    @TaskLocal static var includeDefaultAttributionConfidence = false
+
+    public static func encodingDefaultAttributionConfidence<T>(_ operation: () throws -> T) rethrows -> T {
+        try $includeDefaultAttributionConfidence.withValue(true, operation: operation)
     }
 
     /// True when the context is worth encoding or showing. An empty context still matters when it

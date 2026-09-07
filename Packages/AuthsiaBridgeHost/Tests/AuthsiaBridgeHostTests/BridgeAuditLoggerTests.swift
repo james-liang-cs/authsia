@@ -216,6 +216,53 @@ final class BridgeAuditLoggerTests: XCTestCase {
         XCTAssertEqual(entry.record.requestedCommand, "exec")
     }
 
+    func testLegacyAgentRuntimeContextWithoutAttributionConfidenceStillVerifies() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let fileURL = tempDir.appendingPathComponent("bridge_audit.log")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let logger = makeLogger(fileURL: fileURL)
+        let record = BridgeAuditRecord(
+            command: .getPassword,
+            itemId: "item-1",
+            approvedBy: "session",
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            agentRuntimeContext: AgentRuntimeContext(platform: "codex", agentType: "reviewer")
+        )
+
+        try logger.record(record)
+
+        let stored = try String(contentsOf: fileURL, encoding: .utf8)
+        XCTAssertFalse(stored.contains("attributionConfidence"))
+        XCTAssertTrue(try logger.verifyIntegrity())
+    }
+
+    func testExplicitDefaultAttributionConfidenceEncodingStillVerifies() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let fileURL = tempDir.appendingPathComponent("bridge_audit.log")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let logger = makeLogger(fileURL: fileURL)
+        let record = BridgeAuditRecord(
+            command: .getPassword,
+            itemId: "item-1",
+            approvedBy: "session",
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            agentRuntimeContext: AgentRuntimeContext(platform: "codex", agentType: "reviewer")
+        )
+
+        try AgentRuntimeContext.encodingDefaultAttributionConfidence {
+            try logger.record(record)
+        }
+
+        let stored = try String(contentsOf: fileURL, encoding: .utf8)
+        XCTAssertTrue(stored.contains("\"attributionConfidence\":\"high\""))
+        XCTAssertTrue(try logger.verifyIntegrity())
+        let migrated = try String(contentsOf: fileURL, encoding: .utf8)
+        XCTAssertFalse(migrated.contains("attributionConfidence"))
+        XCTAssertTrue(try logger.verifyIntegrity())
+    }
+
     func testLoadRecordsReturnsAuditRecordsInTimestampOrder() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)

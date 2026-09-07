@@ -123,9 +123,17 @@ public final class BridgeAuditLogger {
                         needsMigration = true
                     case Self.entryVersion:
                         // Current entries use HMAC with sorted keys over the current record schema — fully verifiable
-                        let expectedHash = Self.computeHMAC(for: entry.record, previousHash: entry.previousHash, key: key)
-                        guard expectedHash == entry.entryHash else {
+                        let match = Self.hmacMatch(
+                            for: entry.record,
+                            previousHash: entry.previousHash,
+                            storedHash: entry.entryHash,
+                            key: key
+                        )
+                        guard match.matches else {
                             return false
+                        }
+                        if match.usedHistoricalEncoding {
+                            needsMigration = true
                         }
                     default:
                         return false
@@ -271,6 +279,28 @@ public final class BridgeAuditLogger {
         let payload = (try? hashEncoder.encode(input)) ?? Data()
         let mac = HMAC<SHA256>.authenticationCode(for: payload, using: key)
         return Data(mac).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Default `.high` agent attribution confidence was added without an audit
+    /// entry-version bump. Rows hashed before that field, and rows hashed after
+    /// it was always encoded, must both still verify.
+    private static func hmacMatch(
+        for record: BridgeAuditRecord,
+        previousHash: String?,
+        storedHash: String,
+        key: SymmetricKey
+    ) -> (matches: Bool, usedHistoricalEncoding: Bool) {
+        let current = computeHMAC(for: record, previousHash: previousHash, key: key)
+        if current == storedHash {
+            return (true, false)
+        }
+        let historical = AgentRuntimeContext.encodingDefaultAttributionConfidence {
+            computeHMAC(for: record, previousHash: previousHash, key: key)
+        }
+        if historical == storedHash {
+            return (true, true)
+        }
+        return (false, false)
     }
 
     /// Legacy plain SHA256 hash for backward compatibility with v1 log entries

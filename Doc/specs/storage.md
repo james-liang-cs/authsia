@@ -506,7 +506,10 @@ created/appended with `0600` permissions. Bridge and SSH-agent writers acquire
 the `0600` `bridge_audit.log.lock` sidecar before reading the current chain tip
 and appending. Integrity verification uses the same exclusive lock, including
 when it rewrites older audit lines to migrate legacy hash versions to the
-current schema while preserving the records and chain order.
+current schema while preserving the records and chain order. Current-schema
+rows that were hashed before default agent `attributionConfidence` was encoded
+still verify; a successful check may rewrite those hashes to the current
+encoding.
 
 Audit records are operational metadata, not secret storage. They may include the
 bridge command, item ID, item name, approval source, timestamp, caller identity,

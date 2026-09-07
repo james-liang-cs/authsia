@@ -122,4 +122,17 @@ final class AgentAttributionPresentationTests: XCTestCase {
         XCTAssertEqual(decoded.agentType, "reviewer")
         XCTAssertEqual(decoded.attributionConfidence, .high)
     }
+
+    func testDefaultAttributionConfidenceIsOmittedFromEncoding() throws {
+        let encoded = try JSONEncoder().encode(AgentRuntimeContext(platform: "codex", agentType: "reviewer"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(object["platform"] as? String, "codex")
+        XCTAssertNil(object["attributionConfidence"])
+
+        let ambiguous = try JSONEncoder().encode(
+            AgentRuntimeContext(platform: "codex", attributionConfidence: .ambiguous)
+        )
+        let ambiguousObject = try XCTUnwrap(JSONSerialization.jsonObject(with: ambiguous) as? [String: Any])
+        XCTAssertEqual(ambiguousObject["attributionConfidence"] as? String, "ambiguous")
+    }
 }
