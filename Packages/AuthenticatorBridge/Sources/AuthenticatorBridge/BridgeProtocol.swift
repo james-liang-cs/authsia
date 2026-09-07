@@ -25,6 +25,18 @@ import Foundation
     func revokeAccessCredential(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func validateAccessCredential(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func completeTerminalPairing(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    #if os(macOS)
+    func mcpHTTPAuthority(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func mcpHTTPRecordActivity(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func registerMCPManagerEndpoint(
+        _ endpoint: NSXPCListenerEndpoint,
+        _ reply: @escaping (NSError?) -> Void
+    )
+    func mcpManagerEndpoint(
+        _ reply: @escaping (NSXPCListenerEndpoint?, NSError?) -> Void
+    )
+    func clearMCPManagerEndpoint(_ reply: @escaping (NSError?) -> Void)
+    #endif
 }
 
 @objc public protocol AuthsiaBridgeApprovalCallbackProtocol {

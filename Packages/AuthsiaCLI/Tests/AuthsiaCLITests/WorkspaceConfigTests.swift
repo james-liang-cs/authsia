@@ -276,9 +276,9 @@ struct WorkspaceConfigTests {
         let preserved = try WorkspaceConfigStore.migrateToCurrentSchema(config)
         let migrated = WorkspaceConfigStore.migratedToV2(config)
 
-        #expect(WorkspaceConfigStore.currentSchemaVersion == 2)
+        #expect(WorkspaceConfigStore.currentSchemaVersion == 3)
         #expect(preserved == config)
-        #expect(migrated.schemaVersion == WorkspaceConfigStore.currentSchemaVersion)
+        #expect(migrated.schemaVersion == 2)
     }
 
     @Test("schema v2 accepts duplicate binding names while schema v1 rejects them")
@@ -420,7 +420,7 @@ struct WorkspaceConfigTests {
         )
         try """
         {
-          "schemaVersion": 3,
+          "schemaVersion": 4,
           "workspace": {
             "name": "api",
             "authsiaFolder": "Workspaces/api"
@@ -440,8 +440,8 @@ struct WorkspaceConfigTests {
             _ = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
             Issue.record("Expected unsupported schema error")
         } catch let error as WorkspaceConfigError {
-            #expect(error == .unsupportedSchema(3))
-            #expect(error.errorDescription?.contains("supports schema version 2") == true)
+                #expect(error == .unsupportedSchema(4))
+                #expect(error.errorDescription?.contains("supports schema version 3") == true)
             #expect(error.errorDescription?.contains("Update Authsia") == true)
             #expect(error.errorDescription?.contains("authsia workspace update") == true)
         }
@@ -625,7 +625,7 @@ struct WorkspaceConfigTests {
               {
                 "name": "rovo",
                 "transport": "http",
-                "url": "https://example.atlassian.net/mcp"
+                "url": "http://127.0.0.1:9000/mcp"
               }
             ]
             """,
@@ -636,7 +636,7 @@ struct WorkspaceConfigTests {
         #expect(loaded.mcpUpstreams.count == 1)
         #expect(loaded.mcpUpstreams[0].name == "rovo")
         #expect(loaded.mcpUpstreams[0].transport == .http)
-        #expect(loaded.mcpUpstreams[0].url == "https://example.atlassian.net/mcp")
+        #expect(loaded.mcpUpstreams[0].url == "http://127.0.0.1:9000/mcp")
         #expect(loaded.mcpUpstreams[0].command == nil)
         #expect(loaded.mcpUpstreams[0].args.isEmpty)
         #expect(loaded.mcpUpstreams[0].env.isEmpty)
@@ -1088,7 +1088,7 @@ struct WorkspaceConfigTests {
             mcpUpstreams: [MCPUpstreamConfig(name: "jira", command: "mcp-atlassian")]
         )
         let migrated = WorkspaceConfigStore.migratedToV2(config)
-        #expect(WorkspaceConfigStore.currentSchemaVersion == 2)
+        #expect(WorkspaceConfigStore.currentSchemaVersion == 3)
         #expect(migrated.schemaVersion == 2)
         #expect(migrated.mcpUpstreams == config.mcpUpstreams)
     }

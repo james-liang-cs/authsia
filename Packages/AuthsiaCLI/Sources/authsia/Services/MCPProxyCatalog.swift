@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticatorBridge
 import MCP
 
 enum MCPProxyCatalog {
@@ -33,15 +34,7 @@ enum MCPProxyCatalog {
     }
 
     static func advertisedNames(in policy: MCPUpstreamToolPolicy) -> [String] {
-        let denied = Set(policy.deny)
-        var seen = Set<String>()
-        var names: [String] = []
-        for name in policy.allow + policy.approve where !denied.contains(name) {
-            if seen.insert(name).inserted {
-                names.append(name)
-            }
-        }
-        return names
+        MCPToolPolicyEvaluator.advertisedToolNames(in: policy)
     }
 
     /// Sanitizes and caps what a child advertised. `deny` is not applied here:

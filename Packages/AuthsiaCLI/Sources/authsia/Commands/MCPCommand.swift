@@ -18,10 +18,12 @@ struct MCPCommand: AsyncParsableCommand {
             for terminal use.
 
             Examples:
+              authsia mcp start
               authsia mcp configure --client codex
               authsia mcp wrap --write --server filesystem
               authsia mcp unwrap --write --server filesystem
               authsia mcp declare --server codegraph --command codegraph --arg serve
+              authsia mcp declare --server internal --url http://127.0.0.1:9000/mcp --allow search
               authsia mcp catalog --server filesystem --write
               authsia mcp serve --workspace /path/to/repository
               authsia mcp proxy --upstream jira
@@ -30,9 +32,126 @@ struct MCPCommand: AsyncParsableCommand {
             """,
         subcommands: [
             Configure.self, Wrap.self, Unwrap.self, Declare.self, Catalog.self, Serve.self, Proxy.self,
-            Doctor.self, Activity.self,
+            Doctor.self, Activity.self, Start.self, Status.self, Stop.self, Restart.self,
         ]
     )
+
+    struct Start: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Start the local MCP Manager and open its portal"
+        )
+
+        @Flag(help: "Start without opening the management portal")
+        var noOpen = false
+
+        func run() throws {
+            try run(controller: MCPManagerControlClient.shared) { print($0) }
+        }
+
+        func run(
+            controller: any MCPManagerControlling,
+            output: (String) -> Void
+        ) throws {
+            output("Starting Authsia MCP Manager...")
+            let status = try controller.start(openPortal: !noOpen)
+            Self.render(status, output: output)
+        }
+
+        static func render(
+            _ status: MCPManagerStatusPayload,
+            output: (String) -> Void
+        ) {
+            switch status.state {
+            case .running:
+                output("✓ Authsia MCP Manager running")
+            case .stopped:
+                output("Authsia MCP Manager stopped")
+            case .starting, .stopping, .failed:
+                output("Authsia MCP Manager: \(status.state.rawValue)")
+            }
+            if status.registryLoaded {
+                output("✓ MCP registry loaded")
+            }
+            if status.stdioProxyAvailable {
+                output("✓ STDIO proxy available")
+            }
+            if status.httpProxyAvailable {
+                output("✓ Local HTTP proxy available")
+            }
+            if let portalURL = status.portalURL {
+                output(portalURL)
+            }
+            if let failureCode = status.failureCode {
+                output("Failure: \(failureCode)")
+            }
+        }
+    }
+
+    struct Status: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Show local MCP Manager status"
+        )
+
+        @Flag(help: "Print status as JSON")
+        var json = false
+
+        func run() throws {
+            try run(controller: MCPManagerControlClient.shared) { print($0) }
+        }
+
+        func run(
+            controller: any MCPManagerControlling,
+            output: (String) -> Void
+        ) throws {
+            let status = try controller.status()
+            if json {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                output(String(decoding: try encoder.encode(status), as: UTF8.self))
+            } else {
+                Start.render(status, output: output)
+            }
+        }
+    }
+
+    struct Stop: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Stop the local MCP Manager"
+        )
+
+        func run() throws {
+            try run(controller: MCPManagerControlClient.shared) { print($0) }
+        }
+
+        func run(
+            controller: any MCPManagerControlling,
+            output: (String) -> Void
+        ) throws {
+            let status = try controller.stop()
+            output(status.state == .stopped ? "Authsia MCP Manager stopped." : "Authsia MCP Manager: \(status.state.rawValue)")
+        }
+    }
+
+    struct Restart: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Restart the local MCP Manager and open its portal"
+        )
+
+        @Flag(help: "Restart without opening the management portal")
+        var noOpen = false
+
+        func run() throws {
+            try run(controller: MCPManagerControlClient.shared) { print($0) }
+        }
+
+        func run(
+            controller: any MCPManagerControlling,
+            output: (String) -> Void
+        ) throws {
+            let status = try controller.restart(openPortal: !noOpen)
+            Start.render(status, output: output)
+        }
+    }
 
     static func startingDirectory(
         workspace: String?,
@@ -786,6 +905,8 @@ struct MCPCommand: AsyncParsableCommand {
                 Examples:
                   authsia mcp declare --server codegraph --command codegraph --arg serve
                   authsia mcp declare --server codegraph --command codegraph --arg serve --yes
+                  authsia mcp declare --server internal --url http://127.0.0.1:9000/mcp --allow search --yes
+                  authsia mcp declare --server internal --url http://127.0.0.1:9000/mcp --bearer-header Authorization=authsia://api-key/Internal/key --yes
                 """
         )
 
@@ -793,10 +914,28 @@ struct MCPCommand: AsyncParsableCommand {
         var server: String
 
         @Option(help: "Child executable stored in workspace policy")
-        var command: String
+        var command: String?
+
+        @Option(help: "Local Streamable HTTP endpoint stored in workspace policy")
+        var url: String?
 
         @Option(name: .customLong("arg"), help: "Child argument. Repeatable.")
         var arg: [String] = []
+
+        @Option(help: "Tool allowed after reusable admission. Repeatable.")
+        var allow: [String] = []
+
+        @Option(help: "Tool requiring reusable approval. Repeatable.")
+        var approve: [String] = []
+
+        @Option(help: "Tool blocked by policy. Repeatable.")
+        var deny: [String] = []
+
+        @Option(help: "Bearer credential header as NAME=authsia://reference. Repeatable.")
+        var bearerHeader: [String] = []
+
+        @Option(help: "Raw credential header as NAME=authsia://reference. Repeatable.")
+        var rawHeader: [String] = []
 
         @Flag(name: .customLong("yes"), help: "Write the declaration after printing the plan")
         var yes = false
@@ -816,10 +955,47 @@ struct MCPCommand: AsyncParsableCommand {
             guard MCPProxyClientLaunch.validUpstreamName(server) != nil else {
                 throw ValidationError("Server name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
             }
-            guard let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: command) else {
-                throw ValidationError(
-                    "Command must be a PATH basename or workspace-relative executable."
+            let declaration: MCPUpstreamConfig
+            let declarationLabel: String
+            switch (command, url) {
+            case (.some(let command), nil):
+                guard bearerHeader.isEmpty, rawHeader.isEmpty else {
+                    throw ValidationError("Credential headers are available only with --url.")
+                }
+                guard let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: command) else {
+                    throw ValidationError(
+                        "Command must be a PATH basename or workspace-relative executable."
+                    )
+                }
+                declaration = MCPUpstreamConfig(
+                    name: server,
+                    command: policyCommand,
+                    args: arg,
+                    tools: MCPUpstreamToolPolicy(allow: allow, approve: approve, deny: deny)
                 )
+                declarationLabel = ([policyCommand] + arg).joined(separator: " ")
+            case (nil, .some(let url)):
+                guard arg.isEmpty else {
+                    throw ValidationError("--arg is available only with --command.")
+                }
+                let endpoint: URL
+                do {
+                    endpoint = try MCPLocalHTTPEndpointValidator.validate(url)
+                } catch {
+                    throw ValidationError(
+                        "URL must be an explicit http:// localhost, 127.0.0.1, or [::1] endpoint outside Authsia ports."
+                    )
+                }
+                declaration = MCPUpstreamConfig(
+                    name: server,
+                    transport: .streamableHTTP,
+                    url: endpoint.absoluteString,
+                    tools: MCPUpstreamToolPolicy(allow: allow, approve: approve, deny: deny),
+                    credentialHeaders: try credentialHeaders()
+                )
+                declarationLabel = endpoint.absoluteString
+            default:
+                throw ValidationError("Pass exactly one of --command or --url.")
             }
             var doctor = try Doctor.parse([])
             doctor.workspace = workspace
@@ -836,10 +1012,7 @@ struct MCPCommand: AsyncParsableCommand {
                         + "<root> so the child can be declared."
                 )
             }
-            var message = "Declare \(server) as \(policyCommand)"
-            if !arg.isEmpty {
-                message += " \(arg.joined(separator: " "))"
-            }
+            var message = "Declare \(server) as \(declarationLabel)"
             message += " in:"
             for root in roots {
                 message += "\n  \(root.path)/\(MCPLocalMCPWorkspaceDeclaration.relativeConfigPath)"
@@ -850,12 +1023,7 @@ struct MCPCommand: AsyncParsableCommand {
             }
             output(message)
             for root in roots {
-                let outcome = try MCPLocalMCPWorkspaceDeclaration.declare(
-                    name: server,
-                    command: policyCommand,
-                    arguments: arg,
-                    workspaceRoot: root
-                )
+                let outcome = try write(declaration, workspaceRoot: root)
                 switch outcome {
                 case .declared:
                     output("Declared \(server) in \(root.path).")
@@ -863,6 +1031,53 @@ struct MCPCommand: AsyncParsableCommand {
                     output("\(server) is already declared in \(root.path).")
                 }
             }
+        }
+
+        private func credentialHeaders() throws -> [MCPUpstreamCredentialHeader] {
+            try bearerHeader.map { try credentialHeader($0, format: .bearer) }
+                + rawHeader.map { try credentialHeader($0, format: .raw) }
+        }
+
+        private func credentialHeader(
+            _ value: String,
+            format: MCPUpstreamCredentialHeaderFormat
+        ) throws -> MCPUpstreamCredentialHeader {
+            let parts = value.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+                throw ValidationError("Credential headers must use NAME=authsia://reference.")
+            }
+            return MCPUpstreamCredentialHeader(
+                headerName: String(parts[0]),
+                reference: String(parts[1]),
+                format: format
+            )
+        }
+
+        private func write(
+            _ declaration: MCPUpstreamConfig,
+            workspaceRoot: URL
+        ) throws -> MCPLocalMCPWorkspaceDeclaration.Outcome {
+            let existing = try WorkspaceConfigStore.read(fromWorkspaceRoot: workspaceRoot)
+            if let current = existing.mcpUpstreams.first(where: { $0.name == declaration.name }) {
+                guard current == declaration else {
+                    throw ValidationError("An MCP upstream named \(declaration.name) already exists with different settings.")
+                }
+                return .alreadyDeclared
+            }
+            let schemaVersion = declaration.transport == .streamableHTTP
+                ? WorkspaceConfigStore.currentSchemaVersion
+                : existing.schemaVersion
+            let updated = WorkspaceConfig(
+                schemaVersion: schemaVersion,
+                workspace: existing.workspace,
+                managedEnvFiles: existing.managedEnvFiles,
+                agents: existing.agents,
+                guardSettings: existing.guardSettings,
+                envBindings: existing.envBindings,
+                mcpUpstreams: existing.mcpUpstreams + [declaration]
+            )
+            try WorkspaceConfigStore.write(updated, toWorkspaceRoot: workspaceRoot)
+            return .declared
         }
     }
 

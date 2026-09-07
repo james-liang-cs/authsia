@@ -74,6 +74,30 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
     let agentJITApprovalClock: AgentJITApprovalClock
     let auditLogger: BridgeAuditLogger
     let appBundlePath: String
+    let mcpManagerEndpointRegistry: MCPManagerEndpointRegistry
+    @MainActor lazy var httpAuthority: MCPHTTPAuthority = {
+        let resolver = MCPHTTPVaultResolver(repository: repository)
+        return MCPHTTPAuthority(items: resolver.metadata, secret: resolver.value,
+            approve: { [weak self] server, principal, tool, items in
+                guard let self else { return false }
+                let names = items.map { $0.type + ": " + $0.label }.joined(separator: ", ")
+                let outcome = await self.approver.requestApproval(
+                    prompt: "Allow \(principal.binding.client.displayName) to use local MCP \(server.identity.upstreamName)?\nTool: \(tool)\nEndpoint: \(server.upstream.url ?? "")\nCredentials: \(names.isEmpty ? "None" : names)\nApproval covers this endpoint, not a verified server executable.",
+                    command: .agentJITPreflight, itemLabel: server.identity.upstreamName, field: nil,
+                    callback: nil, remoteRequests: [])
+                if case .allowed = RemoteJITApprovalAuthorizationPolicy.authorize(outcome: outcome, command: .agentJITPreflight, remoteRequests: []) { return true }
+                return false
+            }, recordAdmission: { [weak self] grant in
+                guard let self else { throw MCPManagementError.auditUnavailable }
+                try self.auditLogger.record(BridgeAuditRecord(command: .agentJITPreflight,
+                    itemId: grant.id.uuidString, itemName: grant.principal.binding.identity.upstreamName,
+                    approvedBy: "native-http-admission", timestamp: Date(), requestedCommand: "mcp-http-admission",
+                    agentJITGrantID: grant.id, agentRuntimeContext: AgentRuntimeContext(
+                        platform: grant.principal.binding.client.rawValue, sessionID: grant.sessionID,
+                        agentID: "http:\(grant.principal.binding.identity.upstreamName)",
+                        agentType: "authsia-mcp", attributionConfidence: .ambiguous)))
+            })
+    }()
 
     static let sharedSessionManager = BridgeSessionManager.shared
 
@@ -243,7 +267,8 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         },
         agentJITApprovalClock: @escaping AgentJITApprovalClock = Date.init,
         auditLogger: BridgeAuditLogger = BridgeAuditLogger(),
-        appBundlePath: String = Bundle.main.bundlePath
+        appBundlePath: String = Bundle.main.bundlePath,
+        mcpManagerEndpointRegistry: MCPManagerEndpointRegistry = .shared
     ) {
         self.listProvider = listProvider
         self.accountProvider = accountProvider ?? BridgeListPayloadFactory.defaultAccounts
@@ -278,6 +303,7 @@ public final class XPCRequestHandler: NSObject, AuthsiaBridgeXPCProtocol, @unche
         self.agentJITApprovalClock = agentJITApprovalClock
         self.auditLogger = auditLogger
         self.appBundlePath = appBundlePath
+        self.mcpManagerEndpointRegistry = mcpManagerEndpointRegistry
         super.init()
     }
 

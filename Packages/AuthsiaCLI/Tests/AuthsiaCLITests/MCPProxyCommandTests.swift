@@ -144,4 +144,106 @@ struct MCPProxyCommandTests {
         let workspace = try MCPCommand.Activity.Export.parse(["--json", "--workspace", "/tmp/project"])
         #expect(try workspace.filteredEvents(historyFile: fileURL.path).map(\.executable) == ["jira"])
     }
+
+    @Test("manager lifecycle commands parse and render controller state")
+    func managerLifecycleCommands() throws {
+        let controller = MCPManagerControllerFixture()
+        var output: [String] = []
+
+        let start = try MCPCommand.Start.parse(["--no-open"])
+        try start.run(controller: controller, output: { output.append($0) })
+        #expect(controller.startOpenPortal == false)
+        #expect(output.contains("✓ Authsia MCP Manager running"))
+        #expect(output.contains("http://127.0.0.1:8787"))
+
+        output.removeAll()
+        var status = try MCPCommand.Status.parse(["--json"])
+        status.json = true
+        try status.run(controller: controller, output: { output.append($0) })
+        #expect(output.joined().contains("\"state\" : \"running\""))
+
+        output.removeAll()
+        let stop = try MCPCommand.Stop.parse([])
+        try stop.run(controller: controller, output: { output.append($0) })
+        #expect(output == ["Authsia MCP Manager stopped."])
+
+        output.removeAll()
+        let restart = try MCPCommand.Restart.parse(["--no-open"])
+        try restart.run(controller: controller, output: { output.append($0) })
+        #expect(controller.restartOpenPortal == false)
+        #expect(output.contains("✓ Authsia MCP Manager running"))
+    }
+
+    @Test("declare writes a schema-v3 localhost HTTP upstream with tool policy")
+    func declareLocalHTTPUpstream() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let authsia = root.appendingPathComponent(".authsia")
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: authsia, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("""
+        {
+          "schemaVersion": 1,
+          "workspace": {"name": "fixture", "authsiaFolder": "Workspaces/fixture"},
+          "managedEnvFiles": []
+        }
+        """.utf8).write(to: authsia.appendingPathComponent("workspace.json"))
+
+        var command = try MCPCommand.Declare.parse([
+            "--server", "internal",
+            "--url", "http://127.0.0.1:9000/mcp",
+            "--allow", "search",
+            "--deny", "delete",
+            "--raw-header", "X-API-Key=authsia://api-key/Internal/key",
+            "--workspace", root.path,
+            "--yes",
+        ])
+        command.homeDirectory = home
+        try command.run(output: { _ in })
+
+        let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        let upstream = try #require(config.mcpUpstreams.first)
+        #expect(config.schemaVersion == 3)
+        #expect(upstream.transport == .streamableHTTP)
+        #expect(upstream.url == "http://127.0.0.1:9000/mcp")
+        #expect(upstream.tools.allow == ["search"])
+        #expect(upstream.tools.deny == ["delete"])
+        #expect(upstream.credentialHeaders == [
+            MCPUpstreamCredentialHeader(
+                headerName: "X-API-Key",
+                reference: "authsia://api-key/Internal/key",
+                format: .raw
+            ),
+        ])
+    }
+}
+
+private final class MCPManagerControllerFixture: MCPManagerControlling, @unchecked Sendable {
+    var startOpenPortal: Bool?
+    var restartOpenPortal: Bool?
+
+    func start(openPortal: Bool) throws -> MCPManagerStatusPayload {
+        startOpenPortal = openPortal
+        return runningStatus
+    }
+
+    func status() throws -> MCPManagerStatusPayload { runningStatus }
+
+    func stop() throws -> MCPManagerStatusPayload {
+        MCPManagerStatusPayload(state: .stopped)
+    }
+
+    func restart(openPortal: Bool) throws -> MCPManagerStatusPayload {
+        restartOpenPortal = openPortal
+        return runningStatus
+    }
+
+    private var runningStatus: MCPManagerStatusPayload {
+        MCPManagerStatusPayload(
+            state: .running,
+            portalURL: "http://127.0.0.1:8787",
+            registryLoaded: true
+        )
+    }
 }

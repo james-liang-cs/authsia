@@ -793,6 +793,92 @@ authority and no long-lived child was admitted.
 Presentation rules live in the Access Center spec; this document owns the wrap,
 admission, and revoke-kill contract those rows display.
 
+## MCP Manager And Local Streamable HTTP
+
+`authsia mcp start` starts the app-owned local manager and opens its portal at
+`http://127.0.0.1:8787`. `status`, `stop`, and `restart` use an anonymous XPC
+endpoint registered by the signed GUI through `Authsia.Bridge`; the CLI never
+owns either listener. The Bridge clears a registration when its owning GUI
+connection ends. The manager binds its protected MCP listener at
+`http://127.0.0.1:8788`.
+
+The portal aggregates `mcpUpstreams` from pinned and known managed workspaces,
+then overlays the existing client-configuration scan. It exposes only sanitized
+launch labels, tool policy/catalog, credential labels, associations, and redacted
+STDIO and HTTP activity. A one-use 256-bit fragment capability is exchanged for an
+HttpOnly SameSite cookie plus a memory-only request proof. Both are required for
+API access; Host is restricted to the exact portal authority. Mutations require
+the exact Origin. Authenticated same-origin GETs may omit Origin and Referer,
+as browsers do with the portal's no-referrer policy; cross-site Fetch Metadata
+is rejected. Scripts are bundled and authorized by a content hash.
+
+The portal prepares immutable changes for declarations, policy, credential
+references, client protection, STDIO catalog capture, and grant revocation.
+Native confirmation displays the concrete change. Execution rechecks the browser
+session, app lock, declaration revision, and original client-file bytes. Expired,
+denied, stale, and repeated operations cannot apply again. Credential options are
+metadata only. Neither a browser request nor a browser confirmation grants vault
+access.
+
+Declare a local HTTP upstream explicitly:
+
+```text
+authsia mcp declare --server internal \
+  --url http://127.0.0.1:9000/mcp \
+  --allow search --approve create --deny delete --yes
+```
+
+The first HTTP declaration advances that workspace to schema version 3. Endpoints
+must use `http`, an explicit port, and `localhost`, `127.0.0.1`, or `::1`.
+`localhost` is normalized to `127.0.0.1`. Userinfo, query, fragment, redirects,
+system proxy routing, Authsia's own ports, and non-loopback hosts are rejected.
+Schema versions 1 and 2 continue to load; older software rejects schema 3.
+
+Protected endpoints use `/mcp/<opaque-server-id>`. Every request requires a
+32-byte bearer association token. Portal enrollment writes that token only to a
+user-local Claude Code, Codex, or Cursor configuration after native confirmation;
+the verifier is stored in Keychain. Repository MCP files never receive the token,
+and conflicting project entries block enrollment. Preparation does not replace
+an existing verifier. Client writes are checked and read back before activating
+the staged token. Commit is idempotent and queryable after a lost IPC reply.
+
+HTTP protection is tools-focused. It supports initialization, ping, the initialized
+notification, cancellation/progress notifications, `tools/list`, `tools/call`,
+POST, GET/SSE, and DELETE. Resources, prompts, sampling, elicitation, and other
+methods fail explicitly. Complete SSE messages are decoded, masked, and delivered
+incrementally with backpressure. JSON bodies and individual SSE events are capped
+at 4 MiB. Event replay is not implemented: Last-Event-ID is rejected. Upstream and
+downstream session identifiers are distinct and bound to one association;
+a tool call is never automatically replayed after uncertain delivery.
+
+`tools/list` is answered from committed policy and catalog without contacting the
+upstream. `deny` overrides `approve`, which overrides `allow`. The first permitted
+call presents Bridge-owned native admission. A grant is bound to the association,
+authorization generation, downstream session, complete declaration revision, and
+resolved credential identities. Absolute expiry follows the Bridge admission or
+credential TTL. Each dispatch and delivered message revalidates authority.
+Ordinary connection cancellation preserves the session and other calls. App lock,
+manager stop, declaration changes, and revocation invalidate affected authority.
+HTTP revocation closes affected local streams and blocks further forwarding; Authsia
+cannot terminate an independently running HTTP server or undo an accepted call.
+
+Optional `credentialHeaders` entries contain only a header name, an
+`authsia://api-key`, password, or note reference, and `raw` or `bearer` formatting.
+Resolution happens in Authsia Bridge after checking unique identity, folder,
+CLI-access permission, expiry, and native admission. Metadata is checked again
+after approval and immediately before reading the secret. Transport/session/framing
+headers cannot be configured as credentials. Raw values are absent from the
+workspace, portal, verifier store, and activity. Complete JSON messages, including
+SSE data and escaped string values, are masked before delivery to the client.
+
+HTTP activity uses the existing HMAC audit and agent command history. Admission
+audit must succeed before releasing credentials; a started audit must succeed
+before contacting the upstream. Terminal events correlate success, MCP errors,
+cancellation, and upstream failure to that invocation. Activity retains server,
+workspace, tool, configured-association attribution, time, and a coarse outcome.
+It never stores arguments, results, protocol frames,
+headers, tokens, or credentials.
+
 ## Observability
 
 The proxy can see wrapped `tools/call` traffic at runtime. Persistence is a
@@ -868,8 +954,9 @@ Operator guidance:
 2. Review by grant. Expect *which tool ran*, not *what it was asked*.
 3. Treat the client-config scan as detective. A direct entry is a finding, not
    a block, and is not a call log.
-4. Keep remote HTTP, SSE, Streamable HTTP, and URL MCP on the company gateway.
-   This local ladder does not replace gateway audit.
+4. Keep remote HTTP, HTTPS, SSE, and URL MCP on the company gateway. Authsia's
+   HTTP listener covers validated localhost Streamable HTTP only and does not
+   replace gateway audit.
 5. Do not persist proxied JSON. Argument or result logging would become a
    secret and PII store. A child that needs richer traces uses its own redacted
    logs.
@@ -887,7 +974,7 @@ specific to wrapping:
 | `grantUnavailable` | Required grant is absent, expired, revoked, or no longer matches. Also returned when a preflight authorizes the call without issuing an owned grant, since the child would then be unrevokable. |
 | `upstreamDenied` | The requested upstream tool is unknown, denied, or absent from the advertised workspace policy. |
 | `upstreamUnavailable` | The named upstream is missing, cannot start or initialize, or does not implement the advertised tool. |
-| `httpUpstreamUnsupported` | The workspace declares an HTTP, SSE, Streamable HTTP, or URL upstream, which V1 cannot execute. |
+| `httpUpstreamUnsupported` | A client launched the STDIO `mcp proxy` for an HTTP declaration. Local HTTP declarations are served through the app-owned protected endpoint instead. SSE and remote URLs remain unsupported. |
 | `timedOut` | The child did not answer a forwarded `tools/call` before the proxy's call deadline. The proxy cancels the request upstream and leaves the child running for the next call. |
 | `busy` | Too many forwarded `tools/call` requests are already in flight for this upstream. The proxy rejects rather than queues. |
 | `auditUnavailable` | The redacted `started` call record could not be persisted, so the proxy did not forward. |

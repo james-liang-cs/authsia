@@ -140,8 +140,12 @@ Key properties:
 | `authsia workspace guard` | Create guarded-terminal shims and a visible banner for supported developer tools | `eval "$(authsia workspace guard --print-env)"` |
 | `authsia workspace agent` | Preview, open, or print a secret-free AI tool launch or goal handoff from the workspace root | `authsia workspace agent --tool codex --goal "Fix checkout" --dry-run` |
 | `authsia mcp configure` | Print a user-global MCP fallback plus a table of that client's current launches, without editing client files | `authsia mcp configure --client codex` |
+| `authsia mcp start` | Start the app-owned local MCP Manager and open its authenticated portal | `authsia mcp start` |
+| `authsia mcp status` | Report manager, registry, STDIO, portal, and localhost HTTP readiness | `authsia mcp status --json` |
+| `authsia mcp stop` | Stop manager listeners without stopping Bridge, SSH, or existing STDIO proxies | `authsia mcp stop` |
+| `authsia mcp restart` | Restart manager listeners and invalidate portal/admission sessions | `authsia mcp restart` |
 | `authsia mcp wrap --write` | Declare the upstream and replace a scanned client MCP launch with `mcp proxy` after confirmation | `authsia mcp wrap --write --server filesystem --yes` |
-| `authsia mcp declare` | Declare a child command for a proxy launch that has no workspace policy | `authsia mcp declare --server codegraph --command codegraph --arg serve --yes` |
+| `authsia mcp declare` | Declare a STDIO child command or validated localhost Streamable HTTP endpoint and tool policy | `authsia mcp declare --server internal --url http://127.0.0.1:9000/mcp --allow search --yes` |
 | `authsia mcp serve` | Run the local stdio MCP server, discovering one client workspace or using an explicit override | `authsia mcp serve --workspace /path/to/repo` |
 | `authsia mcp doctor` | Scan known MCP client configs and fail on effective or conditional bypasses. Default output is a table; `--json` is the machine verdict (schema version 2) | `authsia mcp doctor --json` |
 | `authsia mcp activity export` | Copy redacted MCP proxy command-history rows | `authsia mcp activity export --json --unowned` |
@@ -1685,6 +1689,23 @@ from the parent process; follow-up secret access still goes through `authsia wor
 | `workspace agent --tool <tool> --goal-file -` | Read UTF-8 goal text from stdin and print the same validated goal handoff | `pbpaste \| authsia workspace agent --tool codex --goal-file -` |
 
 ### `authsia mcp` — Local MCP server
+
+The app-owned manager lifecycle is explicit:
+
+```text
+authsia mcp start [--no-open]
+authsia mcp status [--json]
+authsia mcp stop
+authsia mcp restart [--no-open]
+```
+
+The portal binds only to `127.0.0.1:8787`; protected local Streamable HTTP
+binds to `127.0.0.1:8788`. A port conflict is reported rather than selecting a
+different address. `stop` leaves existing client-launched STDIO proxies running.
+
+Declare local HTTP with exactly one `--url` and repeatable `--allow`, `--approve`,
+or `--deny`. Only explicit loopback `http` URLs are accepted. `--command` and
+`--url` are mutually exclusive.
 
 `authsia mcp configure --client <codex|claude|cursor|devin|vscode>` prints a
 deterministic user-global configuration for the exact installed Authsia binary.

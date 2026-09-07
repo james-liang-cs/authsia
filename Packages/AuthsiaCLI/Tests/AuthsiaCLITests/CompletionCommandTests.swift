@@ -91,6 +91,10 @@ struct CompletionCommandTests {
         #expect(zsh.contains("'unwrap:Restore a wrapped client MCP launch"))
         #expect(zsh.contains("'declare:Declare a child command for a proxy launch that has no workspace policy'"))
         #expect(zsh.contains("'doctor:Report whether known MCP client configs comply with the Authsia allowlist'"))
+        #expect(zsh.contains("'start:Start the local MCP Manager and open its portal'"))
+        #expect(zsh.contains("'status:Show local MCP Manager status'"))
+        #expect(zsh.contains("'stop:Stop the local MCP Manager'"))
+        #expect(zsh.contains("'restart:Restart the local MCP Manager and open its portal'"))
         #expect(
             zsh.contains(
                 "'catalog:Record what a declared local MCP server advertises into workspace policy'"
@@ -98,8 +102,8 @@ struct CompletionCommandTests {
         )
 
         let bash = Completion.completionScript(for: .bash)
-        #expect(bash.contains("configure|wrap|unwrap|declare|catalog|serve|proxy|doctor"))
-        #expect(bash.contains("compgen -W 'configure wrap unwrap declare catalog serve proxy doctor'"))
+        #expect(bash.contains("configure|wrap|unwrap|declare|catalog|serve|proxy|doctor|activity|start|status|stop|restart"))
+        #expect(bash.contains("compgen -W 'configure wrap unwrap declare catalog serve proxy doctor activity start status stop restart'"))
 
         let fish = Completion.completionScript(for: .fish)
         #expect(fish.contains("-fa 'serve' -d 'Serve Authsia tools over local stdio'"))

@@ -2301,6 +2301,11 @@ final class AuthsiaBridgeClient:
         return false
     }
 
+    @discardableResult
+    func launchGUIForMCPManager() -> Bool {
+        launchAppIfNeeded()
+    }
+
     private func runProcess(executablePath: String, arguments: [String]) -> (
         exitCode: Int32,
         standardOutput: String,

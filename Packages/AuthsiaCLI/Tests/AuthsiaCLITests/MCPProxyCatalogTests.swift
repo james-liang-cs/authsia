@@ -1,6 +1,7 @@
 import Foundation
 import MCP
 import Testing
+import AuthenticatorBridge
 @testable import authsia
 
 @Suite("MCP proxy catalog")

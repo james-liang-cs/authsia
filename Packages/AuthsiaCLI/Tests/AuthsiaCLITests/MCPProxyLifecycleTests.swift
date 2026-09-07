@@ -163,14 +163,14 @@ struct MCPProxyLifecycleTests {
     @Test("HTTP upstreams list nothing and reject calls as httpUpstreamUnsupported")
     func httpUpstreamListsNothing() async throws {
         for upstream in [
-            MCPUpstreamConfig(name: "jira", transport: .http, url: "https://example.atlassian.net/mcp"),
-            MCPUpstreamConfig(name: "jira", transport: .sse, url: "https://example.atlassian.net/mcp"),
+            MCPUpstreamConfig(name: "jira", transport: .http, url: "http://127.0.0.1:9000/mcp"),
+            MCPUpstreamConfig(name: "jira", transport: .sse, url: "http://127.0.0.1:9000/mcp"),
             MCPUpstreamConfig(
                 name: "jira",
                 transport: .streamableHTTP,
-                url: "https://example.atlassian.net/mcp"
+                url: "http://127.0.0.1:9000/mcp"
             ),
-            MCPUpstreamConfig(name: "jira", url: "https://example.atlassian.net/mcp"),
+            MCPUpstreamConfig(name: "jira", url: "http://127.0.0.1:9000/mcp"),
         ] {
             let fixture = try makeProxy(upstreams: [upstream])
             defer { try? FileManager.default.removeItem(at: fixture.root) }

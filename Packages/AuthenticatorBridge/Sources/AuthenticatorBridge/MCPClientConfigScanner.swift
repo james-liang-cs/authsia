@@ -241,6 +241,8 @@ public struct MCPDeclaredLocalServer: Equatable, Sendable {
     public let hasAdvertisedCatalog: Bool
     /// True when a credential-less stdio probe can record that catalog.
     public let canRecordCatalog: Bool
+    public let endpoint: String?
+    public let protectedEndpoint: String?
 
     public init(
         name: String,
@@ -248,7 +250,9 @@ public struct MCPDeclaredLocalServer: Equatable, Sendable {
         arguments: [String],
         workspaceRoot: URL? = nil,
         hasAdvertisedCatalog: Bool = false,
-        canRecordCatalog: Bool = false
+        canRecordCatalog: Bool = false,
+        endpoint: String? = nil,
+        protectedEndpoint: String? = nil
     ) {
         self.name = name
         self.command = command
@@ -256,6 +260,7 @@ public struct MCPDeclaredLocalServer: Equatable, Sendable {
         self.workspaceRoot = workspaceRoot?.standardizedFileURL
         self.hasAdvertisedCatalog = hasAdvertisedCatalog
         self.canRecordCatalog = canRecordCatalog
+        self.endpoint = endpoint; self.protectedEndpoint = protectedEndpoint
     }
 }
 
@@ -706,6 +711,18 @@ public struct MCPClientConfigScanner {
         workspacePathLabel: String?,
         precedence: MCPClientConfigPrecedence
     ) -> MCPClientServerFinding? {
+        if let endpoint = entry.endpoint {
+            guard let url = URLComponents(string: endpoint), url.scheme == "http",
+                  ["localhost", "127.0.0.1", "::1", "[::1]"].contains(url.host ?? "") else { return nil }
+            guard let name = Self.safeLabel(entry.name, maximumLength: 128) else { return nil }
+            let declaration = declaredServers.first { $0.name == name && $0.workspaceRoot?.path == workspaceRoot?.path }
+            let protected = declaration?.protectedEndpoint == endpoint
+            return MCPClientServerFinding(source: entry.location.source, serverName: name, commandLabel: "HTTP",
+                status: protected ? .admittedWrapped : declaration?.endpoint == endpoint ? .directBypass : .unadmitted,
+                declaredUpstreamName: declaration?.name, configPathLabel: entry.location.displayPath,
+                configScope: entry.location.scope, precedence: precedence, workspacePathLabel: workspacePathLabel,
+                isWrapEligible: false, configFilePath: entry.location.fileURL.path, projectKey: entry.location.projectKey)
+        }
         guard let serverName = Self.safeLabel(entry.name, maximumLength: 128),
               let commandLabel = Self.commandLabel(entry.command),
               let configPathLabel = Self.safeExactPath(entry.location.displayPath) else {
@@ -934,7 +951,7 @@ public struct MCPClientConfigScanner {
         }
         return servers.compactMap { name, rawValue in
             guard let value = rawValue as? [String: Any],
-                  let command = value["command"] as? String else {
+                  let command = value["command"] as? String ?? (value["url"] is String ? "" : nil) else {
                 return nil
             }
             let arguments: [String]
@@ -959,7 +976,8 @@ public struct MCPClientConfigScanner {
                 childEnvironmentCount: (value["env"] as? [String: Any])?
                     .keys
                     .filter { $0 != MCPProxyClientLaunch.environmentKey }
-                    .count ?? 0
+                    .count ?? 0,
+                endpoint: value["url"] as? String
             )
         }
     }
@@ -972,6 +990,7 @@ public struct MCPClientConfigScanner {
         var entries: [ObservedServer] = []
         var name: String?
         var command: String?
+        var endpoint: String?
         var arguments: [String] = []
         var upstreamEnvironmentName: String?
         var isDisabled = false
@@ -980,7 +999,7 @@ public struct MCPClientConfigScanner {
         var readingEnvTable = false
 
         func flush() {
-            if let name, let command {
+            if let name, let command = command ?? (endpoint != nil ? "" : nil) {
                 entries.append(ObservedServer(
                     name: name,
                     command: command,
@@ -989,13 +1008,18 @@ public struct MCPClientConfigScanner {
                     location: location,
                     isDisabled: isDisabled,
                     unsupportedKeys: unsupportedKeys.sorted(),
-                    childEnvironmentCount: childEnvironmentCount
+                    childEnvironmentCount: childEnvironmentCount,
+                    endpoint: endpoint
                 ))
             }
         }
 
         for rawLine in text.split(whereSeparator: \.isNewline) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("["), !line.hasPrefix("[mcp_servers.") {
+                flush(); name = nil; command = nil; endpoint = nil; readingEnvTable = false
+                continue
+            }
             if line.hasPrefix("[mcp_servers."), line.hasSuffix("]") {
                 let start = line.index(line.startIndex, offsetBy: "[mcp_servers.".count)
                 let rawName = String(line[start..<line.index(before: line.endIndex)])
@@ -1008,6 +1032,7 @@ public struct MCPClientConfigScanner {
                 flush()
                 name = heading
                 command = nil
+                endpoint = nil
                 arguments = []
                 upstreamEnvironmentName = nil
                 isDisabled = false
@@ -1022,6 +1047,9 @@ public struct MCPClientConfigScanner {
                 upstreamEnvironmentName = parseTOMLString(value)
             } else if readingEnvTable, line.contains("=") {
                 childEnvironmentCount += 1
+            } else if !readingEnvTable, name != nil,
+                      let value = assignmentValue(in: line, key: "url") {
+                endpoint = parseTOMLString(value)
             } else if !readingEnvTable, name != nil,
                       let value = assignmentValue(in: line, key: "command") {
                 command = parseTOMLString(value)
@@ -1127,6 +1155,7 @@ public struct MCPClientConfigScanner {
         /// ignoring Authsia's own upstream key. The count only: names and
         /// values of a child's environment are never retained or reported.
         let childEnvironmentCount: Int
+        var endpoint: String? = nil
     }
 
     private struct ContextualObservedServer {

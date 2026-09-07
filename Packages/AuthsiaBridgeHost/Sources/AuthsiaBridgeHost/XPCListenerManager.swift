@@ -82,13 +82,16 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
         newConnection.exportedInterface = NSXPCInterface(with: AuthsiaBridgeXPCProtocol.self)
         newConnection.exportedObject = handler
         
+        let managerConnectionID = ObjectIdentifier(newConnection)
         newConnection.invalidationHandler = {
+            self.handler.mcpManagerConnectionDidInvalidate(connectionID: managerConnectionID)
             #if DEBUG
             print("[XPC] Connection invalidated (pid: \(newConnection.processIdentifier))")
             #endif
         }
 
         newConnection.interruptionHandler = {
+            self.handler.mcpManagerConnectionDidInvalidate(connectionID: managerConnectionID)
             #if DEBUG
             print("[XPC] Connection interrupted (pid: \(newConnection.processIdentifier))")
             #endif
@@ -253,7 +256,7 @@ public final class XPCListenerManager: NSObject, NSXPCListenerDelegate {
     }
     
     /// Retrieves the team identifier of the current process
-    static func getOurTeamIdentifier() -> String? {
+    public static func getOurTeamIdentifier() -> String? {
         var selfCode: SecCode?
         let status = SecCodeCopySelf(SecCSFlags(), &selfCode)
         

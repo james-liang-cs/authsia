@@ -691,13 +691,13 @@ actor AuthsiaMCPProxy {
            cache.until > Date() {
             throw MCPProxySpawnError.childExited(cache.status)
         }
-        let mcpToolPolicy: AgentJITMCPToolPolicy?
-        if upstream.tools.approve.contains(toolName) {
-            mcpToolPolicy = .approve
-        } else if upstream.tools.allow.contains(toolName) {
-            mcpToolPolicy = .allow
-        } else {
-            mcpToolPolicy = nil
+        let mcpToolPolicy: AgentJITMCPToolPolicy? = switch MCPToolPolicyEvaluator.decision(
+            for: toolName,
+            policy: upstream.tools
+        ) {
+        case .approve: .approve
+        case .allow: .allow
+        case .deny, .unlisted: nil
         }
         let prepared = try await Task.detached {
             try sessionClient.prepareChildEnvironment(

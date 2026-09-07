@@ -22,6 +22,10 @@ let package = Package(
         .package(
             url: "https://github.com/modelcontextprotocol/swift-sdk.git",
             exact: "0.12.1"
+        ),
+        .package(
+            url: "https://github.com/apple/swift-nio.git",
+            exact: "2.101.3"
         )
     ],
     targets: [
@@ -60,7 +64,11 @@ let package = Package(
             dependencies: [
                 "AuthenticatorBridge",
                 "AuthenticatorCore",
-                "AuthenticatorData"
+                "AuthenticatorData",
+                .product(name: "MCP", package: "swift-sdk", condition: .when(platforms: [.macOS])),
+                .product(name: "NIOCore", package: "swift-nio", condition: .when(platforms: [.macOS])),
+                .product(name: "NIOHTTP1", package: "swift-nio", condition: .when(platforms: [.macOS])),
+                .product(name: "NIOPosix", package: "swift-nio", condition: .when(platforms: [.macOS]))
             ],
             path: "Packages/AuthsiaBridgeHost/Sources/AuthsiaBridgeHost",
             linkerSettings: [
@@ -72,7 +80,10 @@ let package = Package(
             dependencies: [
                 "AuthsiaBridgeHost",
                 "AuthenticatorBridge",
-                "AuthenticatorCore"
+                "AuthenticatorCore",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio")
             ],
             path: "Packages/AuthsiaBridgeHost/Tests/AuthsiaBridgeHostTests"
         ),

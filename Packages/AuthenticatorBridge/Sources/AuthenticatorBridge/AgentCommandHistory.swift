@@ -765,7 +765,7 @@ public extension JSONDecoder {
     }
 }
 
-enum AgentCommandRedactor {
+public enum AgentCommandRedactor {
     private static let sensitiveFragments = [
         "password",
         "passwd",
@@ -793,7 +793,7 @@ enum AgentCommandRedactor {
         return String(filtered.prefix(maxLength))
     }
 
-    static func redactedArguments(_ arguments: [String]) -> [String] {
+    public static func redactedArguments(_ arguments: [String]) -> [String] {
         var redacted: [String] = []
         var redactNext = false
         for rawArgument in arguments {

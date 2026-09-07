@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticatorBridge
 import MCP
 
 enum MCPCatalogCaptureError: LocalizedError, Equatable {

@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticatorBridge
 import MCP
 import Testing
 @testable import authsia

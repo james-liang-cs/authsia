@@ -605,6 +605,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             requestedCommand: "exec",
             references: [],
             mcpUpstreamName: "jira",
+            mcpUpstreamCommand: "jira-mcp",
             mcpAdmissionRequested: true
         )
         let context = execContext(agentRuntimeContext: runtime)
