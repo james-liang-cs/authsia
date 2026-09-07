@@ -151,6 +151,8 @@ public enum MCPLocalMCPClientWrap {
                 workspacePath: plan.workspacePath,
                 projectKey: plan.finding.projectKey
             )
+        case .authsiaCatalog:
+            throw WrapError.notWrapEligible
         }
         do {
             try encoded.write(to: plan.fileURL, options: .atomic)
@@ -256,6 +258,8 @@ public enum MCPLocalMCPClientWrap {
                     projectKey: finding.projectKey
                 )
             ))
+        case .authsiaCatalog:
+            throw WrapError.notWrapEligible
         }
     }
 
@@ -328,6 +332,8 @@ public enum MCPLocalMCPClientWrap {
                 throw WrapError.malformedConfig
             }
             return prettyJSON(redactingEnvValues(value))
+        case .authsiaCatalog:
+            throw WrapError.notWrapEligible
         }
     }
 

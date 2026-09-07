@@ -87,8 +87,8 @@ public enum MCPServerReadinessProjection {
             MCPReadinessFact(
                 id: "launch",
                 state: launchComplete ? "available" : "unknown",
-                detail: server.catalogBlockReason ?? (launchComplete ? "Launch target is recorded." : "Set the executable or localhost endpoint."),
-                complete: launchComplete && server.catalogBlockReason == nil
+                detail: launchComplete ? "Launch target is recorded." : "Set the executable or localhost endpoint.",
+                complete: launchComplete
             ),
             MCPReadinessFact(
                 id: "catalog",
@@ -122,10 +122,14 @@ public enum MCPServerReadinessProjection {
             ),
         ]
         let next: MCPReadinessAction?
-        if server.catalogBlockReason != nil {
-            next = .init(kind: "configure", label: "Edit server", reason: server.catalogBlockReason ?? "")
+        if !launchComplete {
+            next = .init(kind: "configure", label: "Edit server", reason: "Set the executable or localhost endpoint.")
         } else if !catalogComplete {
-            next = .init(kind: "catalog", label: "Record catalog", reason: "Record or name the tools this server may expose.")
+            if server.catalogBlockReason != nil {
+                next = .init(kind: "policy", label: "Edit tool policy", reason: server.catalogBlockReason ?? "")
+            } else {
+                next = .init(kind: "catalog", label: "Record catalog", reason: "Record or name the tools this server may expose.")
+            }
         } else if !unclassified.isEmpty {
             next = .init(kind: "policy", label: "Edit tool policy", reason: "Review unclassified catalog tools before protecting a client.")
         } else if !protectedConfig {
@@ -187,7 +191,7 @@ public enum MCPClientActionSupport {
         switch source {
         case .codex, .claude, .cursor:
             return true
-        case .vscode, .devin, .claudeDesktop:
+        case .vscode, .devin, .claudeDesktop, .authsiaCatalog:
             return false
         }
     }

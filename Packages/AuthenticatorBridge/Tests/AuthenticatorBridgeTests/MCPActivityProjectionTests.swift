@@ -86,6 +86,39 @@ final class MCPActivityProjectionTests: XCTestCase {
         XCTAssertEqual(page.records.count, 1)
     }
 
+    func testDuplicateActivityQueryKeysKeepTheFirstValueWithoutTrapping() {
+        let query = MCPActivityQuery.parse(uri: "/api/v1/activity?outcome=denied&outcome=succeeded&limit=1&limit=50")
+        XCTAssertEqual(query.outcome, "denied")
+        XCTAssertEqual(query.limit, 1)
+    }
+
+    func testSameSecondActivityPagesByIdentityInsteadOfDroppingRows() throws {
+        let instant = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = UUID(uuidString: "00000000-0000-0000-0000-00000000000a")!
+        let second = UUID(uuidString: "00000000-0000-0000-0000-00000000000b")!
+        let third = UUID(uuidString: "00000000-0000-0000-0000-00000000000c")!
+        let events = [first, second, third].map { id in
+            MCPHTTPActivityRecording.commandEvent(from: event(
+                id: id, workspace: "/tmp/a", tool: "read", outcome: .succeeded, at: instant))
+        }
+        var seen: [UUID] = []
+        var cursor: String?
+        for index in 0..<3 {
+            let page = MCPActivityProjection.page(events: events, query: .init(cursor: cursor, limit: 1))
+            XCTAssertEqual(page.records.count, 1)
+            seen.append(page.records[0].id)
+            cursor = page.cursor
+            if index < 2 {
+                XCTAssertTrue(page.truncated)
+                XCTAssertNotNil(cursor)
+            } else {
+                XCTAssertFalse(page.truncated)
+                XCTAssertNil(cursor)
+            }
+        }
+        XCTAssertEqual(Set(seen), [first, second, third])
+    }
+
     func testOlderGrantJSONStillDecodesWithoutInventingWorkspaceIdentity() throws {
         let data = Data(#"{"id":"11111111-1111-1111-1111-111111111111","serverName":"codegraph","clientLabel":"Codex","transport":"stdio","expiresAt":0}"#.utf8)
         let grant = try JSONDecoder().decode(MCPManagerGrantView.self, from: data)

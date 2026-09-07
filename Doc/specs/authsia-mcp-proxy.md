@@ -872,10 +872,13 @@ lifecycle outcomes stay distinct from tool-call failures. A history read failure
 an unavailable source, not an empty healthy window.
 
 Local HTTP catalog capture is a separately confirmed manager capability. It may
-initialize and call `tools/list` only; it does not authorize `tools/call`, persist
-an agent grant, or impersonate a client session. New advertised names still enter
-Allow while existing Block and Require approval rules are preserved, which the
-native preview states.
+initialize and follow bounded `tools/list` pages only; it does not authorize
+`tools/call` or impersonate a coding-client session. Capture persists a short-lived
+manager grant so revoke, lock, and required admission audit fail closed, including
+between initialize and `tools/list`. A leftover `nextCursor` or a catalog larger
+than the capture bound is reported incomplete rather than stored as success. New
+advertised names still enter Allow while existing Block and Require approval rules
+are preserved, which the native preview states.
 
 Lock portal ends the browser session without storing proofs. Run
 `authsia mcp start` to reopen; harmless view filters in this tab are restored
@@ -890,9 +893,11 @@ unchanged unless explicitly replaced. Policy and credential references are
 preserved. Each subsequent mutation still requires its own native confirmation.
 
 Catalog availability is checked before prompting and again before execution.
-Non-empty declared environments or active direct-client environment values require
-explicit tool policy and credential setup; missing standalone executables require
-launch correction. The portal displays these reasons beside the catalog control.
+Non-empty declared environments or active direct-client environment values disable
+Record catalog; they are not a launch failure when the executable or endpoint is
+already recorded. Name tools in Edit policy, then protect a client. Missing
+standalone executables still require launch correction. The portal displays these
+reasons beside the catalog control.
 The helper uses the existing MCP PATH overlay so GUI launches can find supported
 local runtime dependencies. Helper stderr stays bounded in memory and maps to
 fixed, actionable errors; raw upstream diagnostics are never sent to the browser.

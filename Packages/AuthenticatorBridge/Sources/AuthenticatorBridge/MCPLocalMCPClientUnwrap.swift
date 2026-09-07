@@ -174,6 +174,8 @@ public enum MCPLocalMCPClientUnwrap {
             encoded = Data(rewritten.utf8)
         case .claude, .cursor, .devin, .vscode, .claudeDesktop:
             encoded = try rewriteJSON(data, plan: plan)
+        case .authsiaCatalog:
+            throw UnwrapError.notProtected
         }
         do {
             try encoded.write(to: plan.fileURL, options: .atomic)
@@ -266,6 +268,8 @@ public enum MCPLocalMCPClientUnwrap {
                     projectKey: finding.projectKey
                 )
             ))
+        case .authsiaCatalog:
+            return ""
         }
     }
 

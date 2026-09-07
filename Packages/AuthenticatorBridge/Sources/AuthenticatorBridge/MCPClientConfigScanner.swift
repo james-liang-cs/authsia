@@ -7,6 +7,7 @@ public enum MCPClientConfigSource: String, Codable, CaseIterable, Equatable, Sen
     case devin
     case vscode
     case claudeDesktop = "claude-desktop"
+    case authsiaCatalog = "authsia-catalog"
 
     public var displayName: String {
         switch self {
@@ -16,6 +17,7 @@ public enum MCPClientConfigSource: String, Codable, CaseIterable, Equatable, Sen
         case .devin: return "Devin"
         case .vscode: return "Visual Studio Code"
         case .claudeDesktop: return "Claude Desktop"
+        case .authsiaCatalog: return "Authsia manager"
         }
     }
 
@@ -23,7 +25,7 @@ public enum MCPClientConfigSource: String, Codable, CaseIterable, Equatable, Sen
     /// reporting, but they cannot be closed per pilot repository, so they are
     /// advisory rather than a compliance failure.
     public var hasWorkspaceOfItsOwn: Bool {
-        self != .claudeDesktop
+        self != .claudeDesktop && self != .authsiaCatalog
     }
 }
 

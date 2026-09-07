@@ -49,9 +49,9 @@ public struct MCPActivityQuery: Equatable, Sendable {
 
     public static func parse(uri: String) -> MCPActivityQuery {
         let components = URLComponents(string: uri.hasPrefix("/") ? "http://127.0.0.1\(uri)" : uri)
-        let items = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).compactMap { item in
+        let items = Dictionary((components?.queryItems ?? []).compactMap { item in
             item.value.map { (item.name, $0) }
-        })
+        }, uniquingKeysWith: { first, _ in first })
         func value(_ key: String) -> String? {
             items[key].flatMap { $0.isEmpty ? nil : $0 }
         }
@@ -227,15 +227,15 @@ public enum MCPActivityProjection {
         let records = Dictionary(grouping: mcpEvents.compactMap(record(from:)), by: { $0.callID ?? $0.id.uuidString })
             .values.map { rows in rows.first { $0.outcome != .started } ?? rows[0] }
             .filter { matches($0, query: query) }
-            .sorted { $0.recordedAt > $1.recordedAt }
-        let cursorDate = query.cursor.flatMap(decodeCursor)
-        let paged = records.filter { cursorDate == nil || $0.recordedAt < cursorDate! }
+            .sorted(by: newerThan)
+        let cursor = query.cursor.flatMap(decodeCursor)
+        let paged = records.filter { cursor == nil || afterCursor($0, cursor: cursor!) }
         let limit = query.limit
         let pageRecords = Array(paged.prefix(limit))
         let truncated = paged.count > limit
         return MCPActivityPage(
             records: pageRecords,
-            cursor: truncated ? encodeCursor(pageRecords.last?.recordedAt) : nil,
+            cursor: truncated ? encodeCursor(pageRecords.last) : nil,
             asOf: now,
             retainedFrom: retainedFrom,
             retainedTo: retainedTo,
@@ -335,12 +335,36 @@ public enum MCPActivityProjection {
         return true
     }
 
-    private static func encodeCursor(_ date: Date?) -> String? {
-        date.map { ISO8601DateFormatter().string(from: $0) }
+    private static func newerThan(_ lhs: MCPActivityRecord, _ rhs: MCPActivityRecord) -> Bool {
+        if lhs.recordedAt != rhs.recordedAt { return lhs.recordedAt > rhs.recordedAt }
+        return lhs.id.uuidString > rhs.id.uuidString
     }
 
-    private static func decodeCursor(_ value: String) -> Date? {
-        ISO8601DateFormatter().date(from: value)
+    private static func afterCursor(_ record: MCPActivityRecord, cursor: (date: Date, id: UUID?)) -> Bool {
+        if record.recordedAt != cursor.date { return record.recordedAt < cursor.date }
+        guard let id = cursor.id else { return false }
+        return record.id.uuidString < id.uuidString
+    }
+
+    private static func encodeCursor(_ record: MCPActivityRecord?) -> String? {
+        guard let record else { return nil }
+        return "\(isoFormatter(fractional: true).string(from: record.recordedAt))|\(record.id.uuidString)"
+    }
+
+    private static func decodeCursor(_ value: String) -> (date: Date, id: UUID?)? {
+        let parts = value.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let dateString = String(parts[0])
+        guard let date = isoFormatter(fractional: true).date(from: dateString)
+                ?? ISO8601DateFormatter().date(from: dateString) else { return nil }
+        return (date, parts.count == 2 ? UUID(uuidString: String(parts[1])) : nil)
+    }
+
+    private static func isoFormatter(fractional: Bool) -> ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        if fractional {
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        }
+        return formatter
     }
 }
 #endif

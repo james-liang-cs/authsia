@@ -91,4 +91,59 @@ final class MCPHTTPAuthorityTests: XCTestCase {
         XCTAssertEqual(first.principal, retry.principal)
         XCTAssertEqual(status.principal, first.principal)
     }
+    func testCatalogCaptureMissingAdmissionAuditPreventsGrantAndSecretRelease() async throws {
+        let server = try definition()
+        var reads = 0
+        let storage = MemoryHTTPAuthorityBlob()
+        let item = MCPHTTPResolvedItem(
+            header: server.upstream.credentialHeaders[0], id: UUID(), type: "api-key", field: "key",
+            label: "secret", revision: "1")
+        let authority = MCPHTTPAuthority(storage: storage, definition: { _ in server }, items: { _ in [item] },
+            secret: { _ in reads += 1; return "synthetic" }, approve: { _,_,_,_ in true }, enabled: { true })
+        do {
+            _ = try await authority.execute(.catalogCapture(identity: server.identity, revision: server.revision))
+            XCTFail("expected audit failure")
+        } catch {
+            XCTAssertEqual(error as? MCPManagementError, .auditUnavailable)
+        }
+        XCTAssertEqual(reads, 0)
+        XCTAssertNil(storage.data)
+    }
+    func testCatalogCapturePersistsManagerGrantAndHonorsRevocationEpoch() async throws {
+        let server = try definition()
+        let item = MCPHTTPResolvedItem(
+            header: server.upstream.credentialHeaders[0], id: UUID(), type: "api-key", field: "key",
+            label: "secret", revision: "1")
+        final class Box: @unchecked Sendable { var authority: MCPHTTPAuthority! }
+        let box = Box()
+        var reads = 0
+        box.authority = MCPHTTPAuthority(storage: MemoryHTTPAuthorityBlob(), definition: { _ in server }, items: { _ in [item] },
+            secret: { _ in reads += 1; return "synthetic" }, approve: { _,_,_,_ in
+                do { _ = try await box.authority.execute(.revoke(grantID: nil)) } catch { }
+                return true
+            }, recordAdmission: { _ in }, enabled: { true })
+        do {
+            _ = try await box.authority.execute(.catalogCapture(identity: server.identity, revision: server.revision))
+            XCTFail("revocation during approval must deny capture")
+        } catch {
+            XCTAssertEqual(error as? MCPManagementError, .denied)
+        }
+        XCTAssertEqual(reads, 0)
+
+        let storage = MemoryHTTPAuthorityBlob()
+        let authority = MCPHTTPAuthority(storage: storage, definition: { _ in server }, items: { _ in [item] },
+            secret: { _ in "synthetic" }, approve: { _,_,_,_ in true }, recordAdmission: { _ in }, enabled: { true })
+        let reply = try await authority.execute(.catalogCapture(identity: server.identity, revision: server.revision))
+        let grant = try XCTUnwrap(reply.lease?.grant)
+        XCTAssertEqual(grant.principal.binding.client, .authsiaCatalog)
+        let snapshot = try await authority.execute(.snapshot)
+        XCTAssertEqual(snapshot.grants?.map(\.id), [grant.id])
+        let valid = try await authority.execute(.validate(
+            grantID: grant.id, principal: grant.principal, sessionID: grant.sessionID, revision: server.revision))
+        XCTAssertTrue(valid.valid)
+        _ = try await authority.execute(.revoke(grantID: grant.id))
+        let revoked = try await authority.execute(.validate(
+            grantID: grant.id, principal: grant.principal, sessionID: grant.sessionID, revision: server.revision))
+        XCTAssertFalse(revoked.valid)
+    }
 }

@@ -175,9 +175,18 @@ final class MCPHTTPAuthority {
         case .validate(let id, let principal, let sessionID, let revision):
             guard enabled() else { return MCPHTTPAuthorityReply(valid: false) }
             do {
-                let server = try checkedDefinition(principal, revision: revision)
-                let resolved = try items(server.upstream.credentialHeaders)
-                let found = matchingGrant(try load(), principal: principal, sessionID: sessionID, revision: revision, items: resolved)
+                let state = try load()
+                let current: MCPServerDefinition
+                if principal.binding.client == .authsiaCatalog {
+                    current = try definition(principal.binding.identity)
+                    guard current.serverID == principal.binding.serverID, current.revision == revision else {
+                        return MCPHTTPAuthorityReply(valid: false)
+                    }
+                } else {
+                    current = try checkedDefinition(principal, revision: revision)
+                }
+                let resolved = try items(current.upstream.credentialHeaders)
+                let found = matchingGrant(state, principal: principal, sessionID: sessionID, revision: revision, items: resolved)
                 return MCPHTTPAuthorityReply(valid: found?.summary.id == id)
             } catch { return MCPHTTPAuthorityReply(valid: false) }
         case .revoke(let id):
@@ -208,15 +217,28 @@ final class MCPHTTPAuthority {
             guard server.revision == revision, !server.upstream.requiresStdioPolicy else { throw MCPManagementError.stale }
             guard (try? MCPLocalHTTPEndpointValidator.validate(server.upstream.url ?? "")) != nil else { throw MCPManagementError.invalidRequest }
             let resolved = try items(server.upstream.credentialHeaders)
+            let originalEpoch = epoch
+            let principal = MCPHTTPPrincipal(
+                id: UUID(),
+                binding: MCPHTTPAssociationBinding(serverID: server.serverID, identity: identity, client: .authsiaCatalog),
+                generation: UUID())
             if !resolved.isEmpty {
-                let principal = MCPHTTPPrincipal(
-                    id: UUID(),
-                    binding: MCPHTTPAssociationBinding(serverID: server.serverID, identity: identity, client: .claudeDesktop),
-                    generation: UUID())
-                guard await approve(server, principal, "catalog", resolved), enabled() else { throw MCPManagementError.denied }
+                guard await approve(server, principal, "catalog", resolved), epoch == originalEpoch, enabled() else { throw MCPManagementError.denied }
                 guard try definition(identity).revision == revision else { throw MCPManagementError.stale }
                 guard try items(server.upstream.credentialHeaders) == resolved else { throw MCPManagementError.stale }
             }
+            var state = try load()
+            state.grants.removeAll { $0.summary.expiresAt <= clock() }
+            guard state.grants.count < 128 else { throw MCPManagementError.busy }
+            let grant = MCPHTTPAuthorityState.Grant(summary: MCPHTTPGrantSummary(
+                id: UUID(), principal: principal, sessionID: UUID().uuidString, revision: revision,
+                expiresAt: clock().addingTimeInterval(60), credentialLabels: resolved.map(\.label)), items: resolved)
+            try recordAdmission(grant.summary)
+            state.grants.append(grant)
+            try save(state)
+            guard enabled() else { throw MCPManagementError.denied }
+            guard try definition(identity).revision == revision else { throw MCPManagementError.stale }
+            guard try items(server.upstream.credentialHeaders) == resolved else { throw MCPManagementError.stale }
             var headers: [String: String] = [:], secrets: [String] = []
             for item in resolved {
                 let value = try secret(item)
@@ -225,17 +247,7 @@ final class MCPHTTPAuthority {
                 headers[item.header.headerName] = header
                 secrets.append(contentsOf: [value, header])
             }
-            let grant = MCPHTTPGrantSummary(
-                id: UUID(),
-                principal: MCPHTTPPrincipal(
-                    id: UUID(),
-                    binding: MCPHTTPAssociationBinding(serverID: server.serverID, identity: identity, client: .claudeDesktop),
-                    generation: UUID()),
-                sessionID: UUID().uuidString,
-                revision: revision,
-                expiresAt: clock().addingTimeInterval(60),
-                credentialLabels: resolved.map(\.label))
-            return MCPHTTPAuthorityReply(lease: MCPHTTPLease(grant: grant, headers: headers, secrets: secrets))
+            return MCPHTTPAuthorityReply(lease: MCPHTTPLease(grant: grant.summary, headers: headers, secrets: secrets))
         }
     }
 

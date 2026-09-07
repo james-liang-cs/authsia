@@ -168,6 +168,8 @@ public enum MCPLocalMCPWrapRecipe {
             Or paste this object:
             \(jsonServerObject(authsiaCommand: authsiaCommand, environment: env, includeType: true))
             """
+        case .authsiaCatalog:
+            return nil
         }
     }
 

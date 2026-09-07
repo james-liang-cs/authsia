@@ -147,6 +147,25 @@ final class MCPHTTPProxyServerTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 3) // initialize, initialized, tools/list
     }
 
+    func testHTTPCatalogCaptureFollowsBoundedListCursors() async throws {
+        let fixture = try await HTTPMCPFixture.start(paginatedList: true)
+        addTeardownBlock { try await fixture.stop() }
+        let tools = try await MCPHTTPCatalogCapture.run(endpoint: "http://127.0.0.1:\(fixture.port)/mcp", headers: [:])
+        XCTAssertEqual(tools.map(\.name), ["read", "write"])
+        XCTAssertEqual(fixture.requestCount, 4)
+    }
+
+    func testHTTPCatalogCaptureRejectsAnUnboundedList() async throws {
+        let fixture = try await HTTPMCPFixture.start(endlessList: true)
+        addTeardownBlock { try await fixture.stop() }
+        do {
+            _ = try await MCPHTTPCatalogCapture.run(endpoint: "http://127.0.0.1:\(fixture.port)/mcp", headers: [:])
+            XCTFail("incomplete catalogs must not succeed")
+        } catch {
+            XCTAssertEqual(error as? MCPManagementError, .catalogIncomplete)
+        }
+    }
+
     func testAuditFailurePreventsToolDispatch() async throws {
         let fixture = try await HTTPMCPFixture.start()
         addTeardownBlock { try await fixture.stop() }
@@ -239,11 +258,14 @@ private final class HTTPMCPFixture: @unchecked Sendable {
     }
 
     static func start(streaming: Bool = false, holdCallHeaders: Bool = false,
+                      paginatedList: Bool = false, endlessList: Bool = false,
                       callReceived: @escaping @Sendable () -> Void = {}) async throws -> HTTPMCPFixture {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let box = FixtureBox()
         box.streaming = streaming
         box.holdCallHeaders = holdCallHeaders
+        box.paginatedList = paginatedList
+        box.endlessList = endlessList
         box.callReceived = callReceived
         let channel = try await ServerBootstrap(group: group)
             .childChannelInitializer { channel in
@@ -276,6 +298,8 @@ private final class FixtureBox: @unchecked Sendable {
     let lock = NSLock()
     var streaming = false
     var holdCallHeaders = false
+    var paginatedList = false
+    var endlessList = false
     var callReceived: @Sendable () -> Void = {}
     private var finish: (@Sendable () -> Void)?
     func setFinish(_ value: @escaping @Sendable () -> Void) { lock.withLock { finish = value } }
@@ -313,7 +337,25 @@ private final class HTTPMCPFixtureHandler: ChannelInboundHandler, @unchecked Sen
                 response["result"] = ["protocolVersion":"2025-11-25", "capabilities":["tools":[:]], "serverInfo":["name":"fixture","version":"1"]]
             }
             if request["method"] as? String == "tools/list" {
-                response["result"] = ["tools": [["name": "read", "description": "Read fixture data.", "inputSchema": ["type": "object"]]]]
+                let params = request["params"] as? [String: Any]
+                let cursor = params?["cursor"] as? String
+                if box.endlessList {
+                    response["result"] = [
+                        "tools": [["name": "read", "description": "Read fixture data.", "inputSchema": ["type": "object"]]],
+                        "nextCursor": "more",
+                    ]
+                } else if box.paginatedList {
+                    if cursor == "page-2" {
+                        response["result"] = ["tools": [["name": "write", "description": "Write fixture data.", "inputSchema": ["type": "object"]]]]
+                    } else {
+                        response["result"] = [
+                            "tools": [["name": "read", "description": "Read fixture data.", "inputSchema": ["type": "object"]]],
+                            "nextCursor": "page-2",
+                        ]
+                    }
+                } else {
+                    response["result"] = ["tools": [["name": "read", "description": "Read fixture data.", "inputSchema": ["type": "object"]]]]
+                }
             }
             if request["method"] as? String == "tools/call" {
                 box.callReceived()
