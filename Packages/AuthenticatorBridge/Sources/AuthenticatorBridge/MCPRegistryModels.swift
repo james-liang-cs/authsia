@@ -121,18 +121,38 @@ public struct MCPRegistrySnapshot: Codable, Equatable, Sendable {
     public let servers: [MCPServerSnapshot]
     public let diagnostics: [MCPRegistryDiagnostic]
     public let workspaces: [MCPWorkspaceSummary]
+    public let discoveredServers: [MCPDiscoveredServer]?
 
     public init(
         revision: String,
         servers: [MCPServerSnapshot],
         diagnostics: [MCPRegistryDiagnostic] = [],
-        workspaces: [MCPWorkspaceSummary] = []
+        workspaces: [MCPWorkspaceSummary] = [],
+        discoveredServers: [MCPDiscoveredServer]? = nil
     ) {
         self.revision = revision
         self.servers = servers
         self.diagnostics = diagnostics
         self.workspaces = workspaces
+        self.discoveredServers = discoveredServers
     }
+}
+
+/// Metadata-only view of an observed client entry that has no workspace declaration.
+public struct MCPDiscoveredServer: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let findingID: String
+    public let displayName: String
+    public let workspaceID: String?
+    public let workspacePath: String?
+    public let client: MCPClientConfigSource
+    public let scope: MCPClientConfigScope
+    public let precedence: MCPClientConfigPrecedence
+    public let commandLabel: String
+    public let transportLabel: String
+    public let configPathLabel: String
+    public let canConfigure: Bool
+    public let configurationHint: String
 }
 
 public enum MCPHTTPActivityOutcome: String, Codable, Equatable, Sendable {

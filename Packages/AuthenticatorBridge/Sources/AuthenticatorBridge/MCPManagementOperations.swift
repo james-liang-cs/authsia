@@ -42,7 +42,15 @@ public struct MCPCredentialOption: Codable, Sendable {
     public let id: String
     public let label: String
     public let type: String
-    public init(id: String, label: String, type: String) { self.id = id; self.label = label; self.type = type }
+    /// Presentation metadata only; never contains a credential value.
+    public let folderPath: String?
+    public let environments: [String]?
+    public let workspaceIDs: [String]?
+    public init(id: String, label: String, type: String, folderPath: String? = nil,
+                environments: [String]? = nil, workspaceIDs: [String]? = nil) {
+        self.id = id; self.label = label; self.type = type
+        self.folderPath = folderPath; self.environments = environments; self.workspaceIDs = workspaceIDs
+    }
 }
 public struct MCPManagerGrantView: Codable, Sendable, Identifiable {
     public let id: UUID

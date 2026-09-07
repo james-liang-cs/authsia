@@ -309,6 +309,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
     public let configFilePath: String?
     /// Claude Code local-scope key into `projects`. Nil for every other file.
     public let projectKey: String?
+    /// Validated, credential-free loopback endpoint, for management discovery.
+    public let localHTTPEndpoint: String?
 
     public var id: String {
         "\(workspacePathLabel ?? ""):\(source.rawValue):\(serverName):\(configPathLabel)"
@@ -360,7 +362,8 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         unsupportedLaunchKeys: [String] = [],
         childEnvironmentCount: Int = 0,
         configFilePath: String? = nil,
-        projectKey: String? = nil
+        projectKey: String? = nil,
+        localHTTPEndpoint: String? = nil
     ) {
         self.source = source
         self.serverName = serverName
@@ -382,6 +385,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         self.childEnvironmentCount = childEnvironmentCount
         self.configFilePath = configFilePath
         self.projectKey = projectKey
+        self.localHTTPEndpoint = localHTTPEndpoint
     }
 
     enum CodingKeys: String, CodingKey {
@@ -406,6 +410,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         case childEnvironmentCount
         case configFilePath
         case projectKey
+        case localHTTPEndpoint
     }
 
     public init(from decoder: Decoder) throws {
@@ -442,6 +447,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         ) ?? 0
         configFilePath = try container.decodeIfPresent(String.self, forKey: .configFilePath)
         projectKey = try container.decodeIfPresent(String.self, forKey: .projectKey)
+        localHTTPEndpoint = try container.decodeIfPresent(String.self, forKey: .localHTTPEndpoint)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -481,6 +487,7 @@ public struct MCPClientServerFinding: Codable, Equatable, Identifiable, Sendable
         }
         try container.encodeIfPresent(configFilePath, forKey: .configFilePath)
         try container.encodeIfPresent(projectKey, forKey: .projectKey)
+        try container.encodeIfPresent(localHTTPEndpoint, forKey: .localHTTPEndpoint)
     }
 }
 
@@ -721,7 +728,9 @@ public struct MCPClientConfigScanner {
                 status: protected ? .admittedWrapped : declaration?.endpoint == endpoint ? .directBypass : .unadmitted,
                 declaredUpstreamName: declaration?.name, configPathLabel: entry.location.displayPath,
                 configScope: entry.location.scope, precedence: precedence, workspacePathLabel: workspacePathLabel,
-                isWrapEligible: false, configFilePath: entry.location.fileURL.path, projectKey: entry.location.projectKey)
+                isWrapEligible: false, configFilePath: entry.location.fileURL.path, projectKey: entry.location.projectKey,
+                // Preserve the validated spelling so enrollment can match the original client entry.
+                localHTTPEndpoint: (try? MCPLocalHTTPEndpointValidator.validate(endpoint)) == nil ? nil : endpoint)
         }
         guard let serverName = Self.safeLabel(entry.name, maximumLength: 128),
               let commandLabel = Self.commandLabel(entry.command),

@@ -812,6 +812,25 @@ the exact Origin. Authenticated same-origin GETs may omit Origin and Referer,
 as browsers do with the portal's no-referrer policy; cross-site Fetch Metadata
 is rejected. Scripts are bundled and authorized by a content hash.
 
+The registry also retains undeclared scan findings as **discovered** entries.
+Selecting a workspace with no `mcpUpstreams` still shows applicable user-global
+and project MCP configurations, with their client, source file, precedence, and
+setup action. A declaration in another workspace does not hide those entries.
+**Discover servers** rescans the supported client configuration locations; it
+does not enumerate every installed package, start an MCP server, or request
+runtime authority. The scanner's existing enabled-entry and precedence rules
+still apply. Unreadable configurations are reported as diagnostics.
+
+**Configure in Authsia** prepares a declaration from an eligible finding, then
+requests native confirmation. It rechecks the finding's workspace and original
+client-file bytes before applying. It copies eligible launch command/arguments or
+a validated local HTTP endpoint, never client environment values or credentials.
+Potentially sensitive arguments and unsafe launches require manual setup. No
+client file is changed by this configuration step. Afterwards the managed row
+provides policy, credential association, catalog, Protect, and Remove protection
+actions. Disabled client entries must first be enabled in their owning client;
+Remove protection is not a generic server disable or uninstall command.
+
 The portal prepares immutable changes for declarations, policy, credential
 references, client protection, STDIO catalog capture, and grant revocation.
 Native confirmation displays the concrete change. Execution rechecks the browser
@@ -819,6 +838,23 @@ session, app lock, declaration revision, and original client-file bytes. Expired
 denied, stale, and repeated operations cannot apply again. Credential options are
 metadata only. Neither a browser request nor a browser confirmation grants vault
 access.
+
+The credential picker shows the vault folder and environment tags alongside each
+name and type. Items with identical display metadata also show an item-ID suffix;
+selection always uses the exact item ID. It defaults to the selected server's
+workspace vault folder (`workspace.authsiaFolder`) and descendants, using the
+existing workspace folder-matching rules. Search matches names, folders, and
+environment tags. Users can explicitly include other folders. This is a
+presentation filter, not a new credential permission or grant. The native preview
+also includes folder and environment context. Add server restricts its workspace
+dropdown when a workspace is selected in the sidebar.
+
+The top-right Guide opens bundled, offline help with a setup flow and explanations
+of Add server, Protect, Record catalog, policy, credential binding, HTTP enrollment,
+prepared changes, removal, activity, grants, revocation, refresh, and portal lock.
+It does not perform those actions. In particular, recording a catalog discovers
+tool metadata; it is not recording calls, and locking the portal does not revoke
+runtime grants or stop the manager.
 
 Declare a local HTTP upstream explicitly:
 
