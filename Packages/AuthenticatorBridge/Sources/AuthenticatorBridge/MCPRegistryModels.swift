@@ -25,6 +25,8 @@ public struct MCPClientAssociation: Codable, Equatable, Identifiable, Sendable {
     public let precedence: MCPClientConfigPrecedence
     public let status: MCPClientServerAdmissionStatus
     public let configPathLabel: String
+    public let canEnrollHTTP: Bool?
+    public let managementReason: String?
 
     public init(
         id: String,
@@ -32,7 +34,9 @@ public struct MCPClientAssociation: Codable, Equatable, Identifiable, Sendable {
         scope: MCPClientConfigScope,
         precedence: MCPClientConfigPrecedence,
         status: MCPClientServerAdmissionStatus,
-        configPathLabel: String
+        configPathLabel: String,
+        canEnrollHTTP: Bool? = nil,
+        managementReason: String? = nil
     ) {
         self.id = id
         self.source = source
@@ -40,6 +44,8 @@ public struct MCPClientAssociation: Codable, Equatable, Identifiable, Sendable {
         self.precedence = precedence
         self.status = status
         self.configPathLabel = configPathLabel
+        self.canEnrollHTTP = canEnrollHTTP
+        self.managementReason = managementReason
     }
 }
 
@@ -63,6 +69,8 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
     public let authorizationRevision: String
     public let launchCommand: String?
     public let catalogBlockReason: String?
+    public let credentialBindings: [MCPCredentialBindingView]
+    public let readiness: MCPServerReadiness?
 
     public init(
         id: String,
@@ -79,7 +87,9 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
         observedCallCount: Int = 0,
         authorizationRevision: String = "",
         launchCommand: String? = nil,
-        catalogBlockReason: String? = nil
+        catalogBlockReason: String? = nil,
+        credentialBindings: [MCPCredentialBindingView] = [],
+        readiness: MCPServerReadiness? = nil
     ) {
         self.id = id
         self.identity = identity
@@ -96,6 +106,8 @@ public struct MCPServerSnapshot: Codable, Equatable, Identifiable, Sendable {
         self.authorizationRevision = authorizationRevision
         self.launchCommand = launchCommand
         self.catalogBlockReason = catalogBlockReason
+        self.credentialBindings = credentialBindings
+        self.readiness = readiness
     }
 }
 
@@ -159,6 +171,45 @@ public struct MCPDiscoveredServer: Codable, Equatable, Sendable, Identifiable {
     public let configPathLabel: String
     public let canConfigure: Bool
     public let configurationHint: String
+    public let isDisabled: Bool
+    public let canEnrollHTTP: Bool
+    public let unsupportedActionReason: String?
+
+    public init(
+        id: String,
+        findingID: String,
+        displayName: String,
+        workspaceID: String?,
+        workspacePath: String?,
+        client: MCPClientConfigSource,
+        scope: MCPClientConfigScope,
+        precedence: MCPClientConfigPrecedence,
+        commandLabel: String,
+        transportLabel: String,
+        configPathLabel: String,
+        canConfigure: Bool,
+        configurationHint: String,
+        isDisabled: Bool = false,
+        canEnrollHTTP: Bool = false,
+        unsupportedActionReason: String? = nil
+    ) {
+        self.id = id
+        self.findingID = findingID
+        self.displayName = displayName
+        self.workspaceID = workspaceID
+        self.workspacePath = workspacePath
+        self.client = client
+        self.scope = scope
+        self.precedence = precedence
+        self.commandLabel = commandLabel
+        self.transportLabel = transportLabel
+        self.configPathLabel = configPathLabel
+        self.canConfigure = canConfigure
+        self.configurationHint = configurationHint
+        self.isDisabled = isDisabled
+        self.canEnrollHTTP = canEnrollHTTP
+        self.unsupportedActionReason = unsupportedActionReason
+    }
 }
 
 public enum MCPHTTPActivityOutcome: String, Codable, Equatable, Sendable {
@@ -169,6 +220,10 @@ public enum MCPHTTPActivityOutcome: String, Codable, Equatable, Sendable {
     case mcpError
     case cancelled
     case timedOut
+    case busy
+    case childStarted
+    case childExited
+    case incomplete
 }
 
 public struct MCPHTTPActivityEvent: Codable, Equatable, Identifiable, Sendable {
@@ -180,6 +235,9 @@ public struct MCPHTTPActivityEvent: Codable, Equatable, Identifiable, Sendable {
     public let toolName: String
     public let outcome: MCPHTTPActivityOutcome
     public let attribution: String
+    public let grantIDs: [UUID]
+    public let transport: MCPUpstreamTransport?
+    public let reasonCode: String?
 
     public init(
         id: UUID = UUID(),
@@ -189,7 +247,10 @@ public struct MCPHTTPActivityEvent: Codable, Equatable, Identifiable, Sendable {
         workspacePath: String,
         toolName: String,
         outcome: MCPHTTPActivityOutcome,
-        attribution: String = "configured-association"
+        attribution: String = "configured-association",
+        grantIDs: [UUID] = [],
+        transport: MCPUpstreamTransport? = nil,
+        reasonCode: String? = nil
     ) {
         self.id = id
         self.recordedAt = recordedAt
@@ -199,5 +260,8 @@ public struct MCPHTTPActivityEvent: Codable, Equatable, Identifiable, Sendable {
         self.toolName = toolName
         self.outcome = outcome
         self.attribution = attribution
+        self.grantIDs = grantIDs
+        self.transport = transport
+        self.reasonCode = reasonCode
     }
 }

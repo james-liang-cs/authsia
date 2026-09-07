@@ -105,6 +105,48 @@ final class MCPHTTPProxyServerTests: XCTestCase {
         let stillOwned = await router.handle(request(method:"tools/list", session:sid))
         XCTAssertEqual(stillOwned.status,200)
     }
+    func testDeniedToolCallRecordsActivityWithoutUpstream() async throws {
+        let fixture = try await HTTPMCPFixture.start()
+        addTeardownBlock { try await fixture.stop() }
+        let events = HTTPActivityCollector()
+        let router = HTTPRouterHarness(port: fixture.port).router(events: events)
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let before = fixture.requestCount
+        _ = await router.handle(request(method: "tools/call", session: sid, tool: "delete"))
+        XCTAssertEqual(fixture.requestCount, before)
+        let recorded = await events.events
+        XCTAssertEqual(recorded.map(\.outcome), [.denied])
+        XCTAssertEqual(recorded.first?.toolName, "delete")
+        XCTAssertEqual(recorded.first?.reasonCode, "policy")
+    }
+
+    func testBusyToolCallRecordsActivityWithoutASecondDispatch() async throws {
+        let received = expectation(description: "first call held")
+        received.expectedFulfillmentCount = 1
+        let fixture = try await HTTPMCPFixture.start(holdCallHeaders: true, callReceived: { received.fulfill() })
+        addTeardownBlock { try await fixture.stop() }
+        let events = HTTPActivityCollector()
+        let router = HTTPRouterHarness(port: fixture.port).router(events: events)
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let first = request(method: "tools/call", session: sid, tool: "read")
+        let pending = Task { await router.handle(first) }
+        await fulfillment(of: [received], timeout: 5)
+        _ = await router.handle(first)
+        let recorded = await events.events
+        XCTAssertTrue(recorded.contains { $0.outcome == .busy })
+        pending.cancel()
+    }
+
+    func testHTTPCatalogCaptureListsToolsWithoutCallingThem() async throws {
+        let fixture = try await HTTPMCPFixture.start()
+        addTeardownBlock { try await fixture.stop() }
+        let tools = try await MCPHTTPCatalogCapture.run(endpoint: "http://127.0.0.1:\(fixture.port)/mcp", headers: [:])
+        XCTAssertEqual(tools.map(\.name), ["read"])
+        XCTAssertEqual(fixture.requestCount, 3) // initialize, initialized, tools/list
+    }
+
     func testAuditFailurePreventsToolDispatch() async throws {
         let fixture = try await HTTPMCPFixture.start()
         addTeardownBlock { try await fixture.stop() }
@@ -269,6 +311,9 @@ private final class HTTPMCPFixtureHandler: ChannelInboundHandler, @unchecked Sen
             ]
             if request["method"] as? String == "initialize" {
                 response["result"] = ["protocolVersion":"2025-11-25", "capabilities":["tools":[:]], "serverInfo":["name":"fixture","version":"1"]]
+            }
+            if request["method"] as? String == "tools/list" {
+                response["result"] = ["tools": [["name": "read", "description": "Read fixture data.", "inputSchema": ["type": "object"]]]]
             }
             if request["method"] as? String == "tools/call" {
                 box.callReceived()

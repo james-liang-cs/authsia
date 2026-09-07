@@ -19,6 +19,7 @@ public struct MCPManagementOperationRequest: Codable, Sendable {
     public var bindingName: String?
     public var headerFormat: MCPUpstreamCredentialHeaderFormat?
     public var grantID: UUID?
+    public var removeBinding: Bool?
     public init(kind: MCPManagementOperationKind, serverID: String? = nil) { self.kind = kind; self.serverID = serverID }
 }
 public struct MCPManagementOperationView: Codable, Sendable, Identifiable {
@@ -54,11 +55,64 @@ public struct MCPCredentialOption: Codable, Sendable {
 }
 public struct MCPManagerGrantView: Codable, Sendable, Identifiable {
     public let id: UUID
+    public let serverID: String?
     public let serverName: String
+    public let workspaceID: String?
+    public let workspacePath: String?
     public let clientLabel: String
     public let transport: MCPUpstreamTransport
     public let expiresAt: Date
-    public init(id: UUID, serverName: String, clientLabel: String, transport: MCPUpstreamTransport, expiresAt: Date) {
-        self.id = id; self.serverName = serverName; self.clientLabel = clientLabel; self.transport = transport; self.expiresAt = expiresAt
+    public let issuedAt: Date?
+    public let scopeLabel: String?
+    public let approvalOrigin: String?
+    public let credentialLabels: [String]
+    public init(
+        id: UUID,
+        serverName: String,
+        clientLabel: String,
+        transport: MCPUpstreamTransport,
+        expiresAt: Date,
+        serverID: String? = nil,
+        workspaceID: String? = nil,
+        workspacePath: String? = nil,
+        issuedAt: Date? = nil,
+        scopeLabel: String? = nil,
+        approvalOrigin: String? = nil,
+        credentialLabels: [String] = []
+    ) {
+        self.id = id
+        self.serverID = serverID
+        self.serverName = serverName
+        self.workspaceID = workspaceID
+        self.workspacePath = workspacePath
+        self.clientLabel = clientLabel
+        self.transport = transport
+        self.expiresAt = expiresAt
+        self.issuedAt = issuedAt
+        self.scopeLabel = scopeLabel
+        self.approvalOrigin = approvalOrigin
+        self.credentialLabels = credentialLabels
+    }
+}
+
+extension MCPManagerGrantView {
+    enum CodingKeys: String, CodingKey {
+        case id, serverID, serverName, workspaceID, workspacePath, clientLabel, transport, expiresAt, issuedAt, scopeLabel, approvalOrigin, credentialLabels
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        serverID = try container.decodeIfPresent(String.self, forKey: .serverID)
+        serverName = try container.decode(String.self, forKey: .serverName)
+        workspaceID = try container.decodeIfPresent(String.self, forKey: .workspaceID)
+        workspacePath = try container.decodeIfPresent(String.self, forKey: .workspacePath)
+        clientLabel = try container.decode(String.self, forKey: .clientLabel)
+        transport = try container.decode(MCPUpstreamTransport.self, forKey: .transport)
+        expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+        issuedAt = try container.decodeIfPresent(Date.self, forKey: .issuedAt)
+        scopeLabel = try container.decodeIfPresent(String.self, forKey: .scopeLabel)
+        approvalOrigin = try container.decodeIfPresent(String.self, forKey: .approvalOrigin)
+        credentialLabels = try container.decodeIfPresent([String].self, forKey: .credentialLabels) ?? []
     }
 }

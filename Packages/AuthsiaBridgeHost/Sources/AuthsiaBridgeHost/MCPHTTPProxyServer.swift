@@ -189,9 +189,17 @@ actor MCPHTTPRouter {
         guard method == "tools/call", let id, let p = object?["params"] as? [String: Any],
               let name = p["name"] as? String else { return .error(-32601, id: id, status: 200) }
         let decision = MCPToolPolicyEvaluator.decision(for: name, policy: session.server.policy)
-        guard decision == .allow || decision == .approve else { return .error(-32010, id: id, status: 200) }
+        guard decision == .allow || decision == .approve else {
+            let invocation = UUID()
+            try? await record(session, tool: name, id: invocation, outcome: .denied, reason: "policy")
+            return .error(-32010, id: id, status: 200)
+        }
         let requestKey = String(describing: id)
-        guard session.inFlight.count < 8, session.inFlight.insert(requestKey).inserted else { return .error(-32013, id: id, status: 200) }
+        guard session.inFlight.count < 8, session.inFlight.insert(requestKey).inserted else {
+            let invocation = UUID()
+            try? await record(session, tool: name, id: invocation, outcome: .busy, reason: "capacity")
+            return .error(-32013, id: id, status: 200)
+        }
         let invocation = UUID()
         do {
             let lease = try await lease(for: session, tool: name)
@@ -329,10 +337,11 @@ actor MCPHTTPRouter {
         if object["error"] != nil || (object["result"] as? [String: Any])?["isError"] as? Bool == true { return .mcpError }
         return object["result"] != nil ? .succeeded : nil
     }
-    private func record(_ session: MCPHTTPSession, tool: String, id: UUID, outcome: MCPHTTPActivityOutcome) async throws {
+    private func record(_ session: MCPHTTPSession, tool: String, id: UUID, outcome: MCPHTTPActivityOutcome, reason: String? = nil) async throws {
         do { try await dependencies.recordHTTPActivity(MCPHTTPActivityEvent(id: id, serverID: session.server.id,
             serverName: session.server.displayName, workspacePath: session.server.identity.workspacePath,
-            toolName: tool, outcome: outcome, attribution: session.principal.binding.client.rawValue)) }
+            toolName: tool, outcome: outcome, attribution: session.principal.binding.client.rawValue,
+            grantIDs: session.grant.map { [$0.id] } ?? [], transport: .streamableHTTP, reasonCode: reason)) }
         catch { throw MCPManagementError.auditUnavailable }
     }
     private func disconnected(_ session: MCPHTTPSession, streamID: UUID, requestKey: String?, invocation: UUID?, tool: String?) async {

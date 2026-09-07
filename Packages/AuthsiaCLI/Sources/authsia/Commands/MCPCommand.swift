@@ -631,8 +631,10 @@ struct MCPCommand: AsyncParsableCommand {
             switch finding.status {
             case .admittedWrapped, .skipped:
                 return false
-            case .directBypass, .unadmitted:
-                return finding.precedence != .overridden
+        case .directBypass, .unadmitted:
+            return finding.precedence != .overridden
+        case .disabled:
+            return false
             }
         }
     }

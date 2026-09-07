@@ -832,12 +832,44 @@ actions. Disabled client entries must first be enabled in their owning client;
 Remove protection is not a generic server disable or uninstall command.
 
 The portal prepares immutable changes for declarations, policy, credential
-references, client protection, STDIO catalog capture, and grant revocation.
-Native confirmation displays the concrete change. Execution rechecks the browser
-session, app lock, declaration revision, and original client-file bytes. Expired,
-denied, stale, and repeated operations cannot apply again. Credential options are
-metadata only. Neither a browser request nor a browser confirmation grants vault
-access.
+references, client protection, STDIO and localhost HTTP catalog capture, and grant
+revocation. Native confirmation displays the concrete change. Execution rechecks the
+browser session, app lock, declaration revision, and original client-file bytes.
+Expired, denied, stale, and repeated operations cannot apply again. Credential
+options are metadata only. Neither a browser request nor a browser confirmation
+grants vault access. Confirmed mutations write a redacted intent record before
+apply and an outcome afterwards. If intent cannot be recorded, the change is not
+applied. An outcome-write failure after an applied change is reported as applied
+with incomplete evidence.
+
+Server details show independent readiness facts (declaration, launch, catalog,
+policy, client route, observed use, and evidence). One recommended next action is
+offered after a change. Protected configuration is not proof of a successful call.
+
+Disabled client entries remain in the discovery inventory and are excluded from
+active coverage denominators. HTTP enrollment remains limited to Claude Code,
+Codex, and Cursor; other discovered HTTP clients explain that manual endpoint
+configuration is required.
+
+Active access follows the selected sidebar workspace unless All workspaces is
+chosen. Grant rows include workspace/server identity when the native authority
+provides it. Unknown legacy scope is labeled explicitly and is not inferred from
+the server name.
+
+Activity is a filtered command-history page, not a raw event dump. The portal
+discloses source health, retained range, truncation, and an audit-status summary
+that reports history completeness. It does not label a row HMAC-verified because
+another audit log exists. HTTP call identity is the invocation UUID
+(`mcp-call:<uuid>`), never the tool name. Authenticated policy denials and in-flight
+busy rejections are recorded before return, with no upstream dispatch. Server
+lifecycle outcomes stay distinct from tool-call failures. A history read failure is
+an unavailable source, not an empty healthy window.
+
+Local HTTP catalog capture is a separately confirmed manager capability. It may
+initialize and call `tools/list` only; it does not authorize `tools/call`, persist
+an agent grant, or impersonate a client session. New advertised names still enter
+Allow while existing Block and Require approval rules are preserved, which the
+native preview states.
 
 After a declaration or another server change succeeds, the same portal dialog
 shows setup actions for that exact server: Edit server, Edit policy, credential
@@ -929,11 +961,18 @@ SSE data and escaped string values, are masked before delivery to the client.
 
 HTTP activity uses the existing HMAC audit and agent command history. Admission
 audit must succeed before releasing credentials; a started audit must succeed
-before contacting the upstream. Terminal events correlate success, MCP errors,
-cancellation, and upstream failure to that invocation. Activity retains server,
-workspace, tool, configured-association attribution, time, and a coarse outcome.
-It never stores arguments, results, protocol frames,
-headers, tokens, or credentials.
+before contacting the upstream. Authenticated, well-formed policy denials and
+capacity (`busy`) rejections are recorded before return and do not contact the
+upstream. Terminal events correlate success, MCP errors, cancellation, and
+upstream failure to that invocation. The merge identity is `mcp-call:` plus the
+invocation UUID in both `turnID` and `toolUseID`; the tool name is never that
+key. Activity retains server, workspace, tool, configured-association
+attribution, grant IDs when known, time, event kind, and a coarse outcome. It
+never stores arguments, results, protocol frames, headers, tokens, or
+credentials. Portal Activity is a command-history projection with completeness
+and source-health fields. HMAC chain verification remains a native
+`authsia audit export --verify` responsibility and is not implied by a portal
+row.
 
 ## Observability
 
@@ -1122,10 +1161,20 @@ Implementation is not complete until automated tests prove:
 - the scanner reports wrapped, direct bypass, and unadmitted without retaining
   other environment values;
 - Access Center presents a wrapped `tools/call` as the child basename plus MCP
-  tool name, and does not persist arguments, results, or JSON-RPC.
+  tool name, and does not persist arguments, results, or JSON-RPC;
+- HTTP authenticated denials and busy rejections record one terminal activity
+  row with zero extra upstream dispatch, and two invocations of the same tool
+  remain separate call identities;
+- manager Activity distinguishes unavailable history from an empty healthy
+  window, filters before pagination, and never presents command-history rows as
+  HMAC-verified;
+- localhost HTTP catalog capture initializes and lists tools only, and cannot
+  execute `tools/call`.
 
 Installed-product validation must exercise at least Codex, Claude Code, Cursor,
-and VS Code from a real managed workspace before M14 is marked delivered.
+and VS Code from a real managed workspace before M14 is marked delivered. A
+signed app/helper build with the headless provisioning profile remains a
+release gate; packaging without that profile is not an installed-product result.
 
 Related: [`authsia-mcp.md`](authsia-mcp.md) (serve catalog),
 [`jit-agent-grants.md`](jit-agent-grants.md) (grant matching),

@@ -26,15 +26,11 @@ extension XPCRequestHandler {
             try auditLogger.record(BridgeAuditRecord(command: .mcpProxyActivity, itemId: event.serverID,
                 itemName: event.serverName, approvedBy: event.outcome.rawValue, timestamp: event.recordedAt,
                 requestedCommand: "mcp-http", agentRuntimeContext: AgentRuntimeContext(
-                    platform: event.attribution, sessionID: "mcp-http", turnID: "mcp-call:\(event.id)",
-                    agentID: "http:\(event.serverName)", agentType: "authsia-mcp", toolUseID: event.toolName,
+                    platform: event.attribution, sessionID: "mcp-http", turnID: MCPHTTPActivityRecording.toolUseID(event.id),
+                    agentID: "http:\(event.serverName)", agentType: "authsia-mcp",
+                    toolUseID: MCPHTTPActivityRecording.toolUseID(event.id),
                     attributionConfidence: .ambiguous)))
-            try AgentCommandHistoryStore().record(AgentCommandEvent(recordedAt: event.recordedAt,
-                agentPlatform: event.attribution, sessionID: "mcp-http", turnID: "mcp-call:\(event.id)",
-                agentID: "http:\(event.serverName)", captureSource: .mcpProxy,
-                workingDirectory: event.workspacePath, executable: event.serverName,
-                arguments: ["mcp-tool", event.toolName], command: "MCP HTTP tool",
-                mcpProxyOutcome: MCPProxyCallOutcome(rawValue: event.outcome.rawValue) ?? .upstreamUnavailable))
+            try AgentCommandHistoryStore().record(MCPHTTPActivityRecording.commandEvent(from: event))
             reply(Data(), nil)
         } catch { reply(nil, makeNSError(code: .appUnavailable, message: "HTTP audit is unavailable")) }
     }

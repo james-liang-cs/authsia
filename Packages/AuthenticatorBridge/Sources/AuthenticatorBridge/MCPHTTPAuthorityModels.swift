@@ -63,6 +63,7 @@ public enum MCPHTTPAuthorityCommand: Codable, Sendable {
     case revokeAssociation(UUID)
     case revokeBinding(MCPHTTPAssociationBinding)
     case snapshot
+    case catalogCapture(identity: MCPServerIdentity, revision: String)
 }
 
 public struct MCPHTTPAuthorityReply: Codable, Sendable {

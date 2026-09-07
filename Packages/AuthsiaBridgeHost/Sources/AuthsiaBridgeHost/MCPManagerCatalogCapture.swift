@@ -10,7 +10,12 @@ public enum MCPManagerCatalogCapture {
                                    observedEnvironmentCount: Int,
                                    path: String = ProcessInfo.processInfo.environment["PATH"] ?? "",
                                    home: URL = FileManager.default.homeDirectoryForCurrentUser) -> MCPManagementError? {
-        guard upstream.requiresStdioPolicy else { return .unsupported }
+        guard upstream.requiresStdioPolicy else {
+            guard let endpoint = upstream.url, (try? MCPLocalHTTPEndpointValidator.validate(endpoint)) != nil else {
+                return .invalidRequest
+            }
+            return nil
+        }
         guard upstream.env.isEmpty, observedEnvironmentCount == 0 else { return .catalogEnvironmentRequired }
         guard let command = upstream.command, !command.isEmpty else { return .catalogExecutableMissing }
         let candidates: [URL]

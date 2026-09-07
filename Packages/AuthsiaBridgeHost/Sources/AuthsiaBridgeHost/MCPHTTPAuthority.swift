@@ -202,6 +202,40 @@ final class MCPHTTPAuthority {
             return MCPHTTPAuthorityReply()
         case .snapshot:
             return MCPHTTPAuthorityReply(grants: try load().grants.filter { $0.summary.expiresAt > clock() }.map(\.summary))
+        case .catalogCapture(let identity, let revision):
+            guard enabled() else { throw MCPManagementError.denied }
+            let server = try definition(identity)
+            guard server.revision == revision, !server.upstream.requiresStdioPolicy else { throw MCPManagementError.stale }
+            guard (try? MCPLocalHTTPEndpointValidator.validate(server.upstream.url ?? "")) != nil else { throw MCPManagementError.invalidRequest }
+            let resolved = try items(server.upstream.credentialHeaders)
+            if !resolved.isEmpty {
+                let principal = MCPHTTPPrincipal(
+                    id: UUID(),
+                    binding: MCPHTTPAssociationBinding(serverID: server.serverID, identity: identity, client: .claudeDesktop),
+                    generation: UUID())
+                guard await approve(server, principal, "catalog", resolved), enabled() else { throw MCPManagementError.denied }
+                guard try definition(identity).revision == revision else { throw MCPManagementError.stale }
+                guard try items(server.upstream.credentialHeaders) == resolved else { throw MCPManagementError.stale }
+            }
+            var headers: [String: String] = [:], secrets: [String] = []
+            for item in resolved {
+                let value = try secret(item)
+                guard !value.isEmpty, !value.contains("\r"), !value.contains("\n") else { throw MCPManagementError.invalidRequest }
+                let header = item.header.format == .bearer ? "Bearer " + value : value
+                headers[item.header.headerName] = header
+                secrets.append(contentsOf: [value, header])
+            }
+            let grant = MCPHTTPGrantSummary(
+                id: UUID(),
+                principal: MCPHTTPPrincipal(
+                    id: UUID(),
+                    binding: MCPHTTPAssociationBinding(serverID: server.serverID, identity: identity, client: .claudeDesktop),
+                    generation: UUID()),
+                sessionID: UUID().uuidString,
+                revision: revision,
+                expiresAt: clock().addingTimeInterval(60),
+                credentialLabels: resolved.map(\.label))
+            return MCPHTTPAuthorityReply(lease: MCPHTTPLease(grant: grant, headers: headers, secrets: secrets))
         }
     }
 

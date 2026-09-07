@@ -19,7 +19,11 @@ actor MCPManagementOperationStore {
     private var entries: [UUID: Entry] = [:]
     private var applying = false
     private let clock: @Sendable () -> Date
-    init(clock: @escaping @Sendable () -> Date = Date.init) { self.clock = clock }
+    private let audit: MCPManagementAuditing?
+    init(clock: @escaping @Sendable () -> Date = Date.init, audit: MCPManagementAuditing? = nil) {
+        self.clock = clock
+        self.audit = audit
+    }
     func prepare(owner: String, kind: MCPManagementOperationKind, change: MCPPreparedManagementChange) throws -> MCPManagementOperationView {
         entries = entries.filter { $0.value.view.expiresAt > clock() || [.applying, .awaitingNativeConfirmation].contains($0.value.view.state) }
         guard entries.count < 128 else { throw MCPManagementError.busy }
@@ -45,11 +49,26 @@ actor MCPManagementOperationStore {
         applying = true
         defer { applying = false }
         do {
+            try audit?.record(MCPManagementAuditEvent(operationID: id, kind: entry.view.kind.rawValue, phase: "intent",
+                summary: entry.view.preview, result: "pending"))
+        } catch {
+            return finish(id, state: .failed, message: "The change was not applied because its intent could not be recorded.")
+        }
+        do {
             try await entry.change.validate()
             guard sessionValid(), entry.view.expiresAt > clock() else { return finish(id, state: .expired) }
             _ = finish(id, state: .applying)
-            return finish(id, state: .succeeded, message: try await entry.change.apply())
+            let message = try await entry.change.apply()
+            do {
+                try audit?.record(MCPManagementAuditEvent(operationID: id, kind: entry.view.kind.rawValue, phase: "outcome",
+                    summary: entry.view.preview, result: "applied"))
+                return finish(id, state: .succeeded, message: message)
+            } catch {
+                return finish(id, state: .succeeded, message: message + " The change applied, but evidence recording was incomplete.")
+            }
         } catch {
+            try? audit?.record(MCPManagementAuditEvent(operationID: id, kind: entry.view.kind.rawValue, phase: "outcome",
+                summary: entry.view.preview, result: "notApplied"))
             let error = error as? MCPManagementError ?? .unavailable
             return finish(id, state: error == .stale ? .stale : .failed, message: error.localizedDescription)
         }

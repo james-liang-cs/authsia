@@ -61,6 +61,8 @@ enum MCPClientConfiguration {
                 shape = "not on the current workspace allowlist"
             case .skipped:
                 shape = "client file could not be read"
+            case .disabled:
+                shape = "disabled in the client; not counted as active coverage"
             }
             var state: String
             switch finding.precedence {
@@ -169,6 +171,8 @@ enum MCPClientConfiguration {
             return "unadmitted"
         case .skipped:
             return "skipped"
+        case .disabled:
+            return "disabled"
         }
     }
 
@@ -192,6 +196,8 @@ enum MCPClientConfiguration {
             return finding.isAuthsiaProxyLaunch ? "declare" : "protect"
         case .skipped:
             return "fix file"
+        case .disabled:
+            return "enable in client"
         }
     }
 

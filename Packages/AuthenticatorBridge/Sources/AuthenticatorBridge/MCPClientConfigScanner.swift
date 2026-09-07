@@ -269,6 +269,7 @@ public enum MCPClientServerAdmissionStatus: String, Codable, Equatable, Sendable
     case directBypass = "direct-bypass"
     case unadmitted
     case skipped
+    case disabled
 }
 
 public enum MCPClientWrapBlockReason: String, Codable, Equatable, Sendable {
@@ -505,7 +506,8 @@ public struct MCPClientConfigScanner {
 
     public func scan(
         declaredServers: [MCPDeclaredLocalServer],
-        locations: [MCPClientConfigLocation]
+        locations: [MCPClientConfigLocation],
+        includeDisabled: Bool = false
     ) -> [MCPClientServerFinding] {
         // A launch the client file marks off cannot run, so it is neither a
         // bypass to report nor protection debt to work off. Claude Code keeps
@@ -525,13 +527,12 @@ public struct MCPClientConfigScanner {
             }
         }
             .filter { entry in
-                guard !entry.isDisabled else { return false }
-                guard entry.location.source == .claude,
-                      entry.location.rank == .projectFile,
-                      let root = entry.location.workspaceRoot else {
-                    return true
-                }
-                return disabledProjectServers[root.path]?.contains(entry.name) != true
+                let claudeDisabled = entry.location.source == .claude
+                    && entry.location.rank == .projectFile
+                    && entry.location.workspaceRoot.map { disabledProjectServers[$0.path]?.contains(entry.name) == true } == true
+                let disabled = entry.isDisabled || claudeDisabled
+                if disabled { return includeDisabled }
+                return true
             }
         var rootsByPath: [String: URL] = [:]
         var labelsByRootPath: [String: String] = [:]
@@ -606,12 +607,16 @@ public struct MCPClientConfigScanner {
         }
 
         return (contextualServers.compactMap { contextual in
-            finding(
+            let claudeDisabled = contextual.entry.location.source == .claude
+                && contextual.entry.location.rank == .projectFile
+                && contextual.workspaceRoot.map { disabledProjectServers[$0.path]?.contains(contextual.entry.name) == true } == true
+            return finding(
                 for: contextual.entry,
                 declaredServers: declaredServers,
                 workspaceRoot: contextual.workspaceRoot,
                 workspacePathLabel: contextual.workspacePathLabel,
-                precedence: contextual.precedence
+                precedence: contextual.precedence,
+                isDisabled: contextual.entry.isDisabled || claudeDisabled
             )
         } + skippedFindings).sorted { lhs, rhs in
             if lhs.workspacePathLabel != rhs.workspacePathLabel {
@@ -716,7 +721,8 @@ public struct MCPClientConfigScanner {
         declaredServers: [MCPDeclaredLocalServer],
         workspaceRoot: URL?,
         workspacePathLabel: String?,
-        precedence: MCPClientConfigPrecedence
+        precedence: MCPClientConfigPrecedence,
+        isDisabled: Bool = false
     ) -> MCPClientServerFinding? {
         if let endpoint = entry.endpoint {
             guard let url = URLComponents(string: endpoint), url.scheme == "http",
@@ -725,7 +731,7 @@ public struct MCPClientConfigScanner {
             let declaration = declaredServers.first { $0.name == name && $0.workspaceRoot?.path == workspaceRoot?.path }
             let protected = declaration?.protectedEndpoint == endpoint
             return MCPClientServerFinding(source: entry.location.source, serverName: name, commandLabel: "HTTP",
-                status: protected ? .admittedWrapped : declaration?.endpoint == endpoint ? .directBypass : .unadmitted,
+                status: isDisabled ? .disabled : protected ? .admittedWrapped : declaration?.endpoint == endpoint ? .directBypass : .unadmitted,
                 declaredUpstreamName: declaration?.name, configPathLabel: entry.location.displayPath,
                 configScope: entry.location.scope, precedence: precedence, workspacePathLabel: workspacePathLabel,
                 isWrapEligible: false, configFilePath: entry.location.fileURL.path, projectKey: entry.location.projectKey,
@@ -762,7 +768,10 @@ public struct MCPClientConfigScanner {
         }
         let status: MCPClientServerAdmissionStatus
         let declaredUpstreamName: String?
-        if let wrappedUpstream, declaredNames.contains(wrappedUpstream) {
+        if isDisabled {
+            status = .disabled
+            declaredUpstreamName = wrappedUpstream ?? directMatch?.name
+        } else if let wrappedUpstream, declaredNames.contains(wrappedUpstream) {
             status = .admittedWrapped
             declaredUpstreamName = wrappedUpstream
         } else if let directMatch {
@@ -797,7 +806,7 @@ public struct MCPClientConfigScanner {
             isAuthsiaProxyLaunch: isAuthsiaProxyLaunch,
             wrapCommand: wrap?.command,
             wrapArguments: wrap?.arguments ?? [],
-            isWrapEligible: wrap != nil && entry.unsupportedKeys.isEmpty,
+            isWrapEligible: wrap != nil && entry.unsupportedKeys.isEmpty && !isDisabled,
             wrapBlockReason: entry.unsupportedKeys.isEmpty
                 ? (wrap == nil
                     ? MCPUpstreamCommandRules.accessCenterBlockReason(

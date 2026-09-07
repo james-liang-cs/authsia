@@ -730,13 +730,9 @@ private extension AgentCommandEvent {
             ].joined(separator: "\u{1f}")
         case .mcpProxy:
             guard let toolUseID else { return nil }
-            return [
-                "mcpProxy",
-                agentJITGrantID?.uuidString ?? "",
-                toolUseID,
-                executable ?? "",
-                command,
-            ].joined(separator: "\u{1f}")
+            // Invocation identity is toolUseID. Grant correlation can appear
+            // only on the terminal row and must not split one call in two.
+            return ["mcpProxy", toolUseID].joined(separator: "\u{1f}")
         }
     }
 }

@@ -55,6 +55,22 @@ final class MCPManagementOperationStoreTests: XCTestCase {
         XCTAssertEqual(result.state, .stale)
         XCTAssertEqual(try Data(contentsOf: file), external)
     }
+    func testMissingIntentRecordFailsClosedBeforeApply() async throws {
+        let store = MCPManagementOperationStore(audit: FailingAuditStore())
+        let applied = OperationCounter()
+        let prepared = try await store.prepare(owner: "owner", kind: .policy,
+            change: .init(preview: "Policy", validate: {}, apply: { await applied.increment(); return "Applied" }))
+        let result = try await store.confirm(prepared.id, owner: "owner", present: { _ in true }, sessionValid: { true })
+        XCTAssertEqual(result.state, .failed)
+        XCTAssertTrue(result.message?.contains("intent") == true)
+        let count = await applied.value
+        XCTAssertEqual(count, 0)
+    }
+}
+private final class FailingAuditStore: MCPManagementAuditing, @unchecked Sendable {
+    func record(_ event: MCPManagementAuditEvent) throws {
+        throw MCPManagementError.auditUnavailable
+    }
 }
 private actor OperationCounter { var value = 0; func increment() { value += 1 } }
 private final class OperationClock: @unchecked Sendable {

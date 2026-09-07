@@ -21,7 +21,7 @@ public struct MCPManagerRuntimeDependencies: @unchecked Sendable {
     public var confirmOperation: @Sendable (MCPManagementOperationView) async -> Bool
     public var credentialOptions: @Sendable () async throws -> [MCPCredentialOption]
     public var listGrants: @Sendable () async throws -> [MCPManagerGrantView]
-    public var loadHTTPActivity: @Sendable () -> [MCPHTTPActivityEvent]
+    public var loadHTTPActivity: @Sendable (MCPActivityQuery) -> MCPActivityPage
     public var recordHTTPActivity: @Sendable (MCPHTTPActivityEvent) async throws -> Void
     public var openAccessCenter: @Sendable () async -> Bool
 
@@ -34,7 +34,7 @@ public struct MCPManagerRuntimeDependencies: @unchecked Sendable {
         confirmOperation: @escaping @Sendable (MCPManagementOperationView) async -> Bool = { _ in false },
         credentialOptions: @escaping @Sendable () async throws -> [MCPCredentialOption] = { [] },
         listGrants: @escaping @Sendable () async throws -> [MCPManagerGrantView] = { [] },
-        loadHTTPActivity: @escaping @Sendable () -> [MCPHTTPActivityEvent] = { [] },
+        loadHTTPActivity: @escaping @Sendable (MCPActivityQuery) -> MCPActivityPage = { _ in .unavailable("Activity is unavailable.") },
         recordHTTPActivity: @escaping @Sendable (MCPHTTPActivityEvent) async throws -> Void = { _ in throw MCPManagementError.auditUnavailable },
         openAccessCenter: @escaping @Sendable () async -> Bool = { false }
     ) {
@@ -354,7 +354,7 @@ private struct MCPPortalResponse {
 private final class MCPPortalRouter: @unchecked Sendable {
     private let dependencies: MCPManagerRuntimeDependencies
     private let sessions: MCPPortalSessionStore
-    private let operations = MCPManagementOperationStore()
+    private let operations = MCPManagementOperationStore(audit: MCPManagementAuditStore())
     private let encoder = JSONEncoder()
     private let allowedHost = "127.0.0.1:8787"
     private let allowedOrigin = "http://127.0.0.1:8787"
@@ -413,7 +413,7 @@ private final class MCPPortalRouter: @unchecked Sendable {
                 return .json(.serviceUnavailable, ["code": "registryUnavailable"])
             }
         case (.GET, "/api/v1/activity"):
-            return encodedResponse(Array(dependencies.loadHTTPActivity().suffix(200).reversed()))
+            return encodedResponse(dependencies.loadHTTPActivity(MCPActivityQuery.parse(uri: request.uri)))
         case (.POST, "/api/v1/operations"):
             do {
                 guard let owner = sessionID else { throw MCPManagementError.denied }
