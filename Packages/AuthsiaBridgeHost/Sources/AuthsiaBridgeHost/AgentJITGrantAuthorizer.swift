@@ -30,9 +30,29 @@ public final class AgentJITGrantAuthorizer {
         agentRuntimeContext: AgentRuntimeContext? = nil,
         now: Date = Date()
     ) throws -> AgentJITGrant? {
+        try activeGrant(
+            capability: capability,
+            itemIdentities: Set(itemIdentity.map { [$0] } ?? []),
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            agentRuntimeContext: agentRuntimeContext,
+            now: now
+        )
+    }
+
+    public func activeGrant(
+        capability: AgentJITCapability,
+        itemIdentities: Set<AgentJITItemIdentity>,
+        itemFolderPath: String?,
+        itemEnvironments: [String] = [],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext? = nil,
+        now: Date = Date()
+    ) throws -> AgentJITGrant? {
         try store.markUsedIfAllowedForRuntime(
             capability: capability,
-            itemIdentity: itemIdentity,
+            itemIdentities: itemIdentities,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             caller: caller,

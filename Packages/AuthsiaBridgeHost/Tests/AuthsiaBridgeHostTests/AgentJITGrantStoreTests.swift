@@ -67,6 +67,92 @@ final class AgentJITGrantStoreTests: XCTestCase {
         )
     }
 
+    func testCoveringGrantLookupReuses21ItemsAfter19AndPreservesAuthorityBoundaries() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentJITGrantStore(
+            authorityStore: KeychainAuthorityStore(blobStore: JITTestAuthorityBlobStore()),
+            legacyFileURL: directory.appendingPathComponent("agent-jit-grants.json"),
+            terminalSessionLiveness: { _ in .active }
+        )
+        let authorizer = AgentJITGrantAuthorizer(store: store)
+        let caller = grant(id: "00000000-0000-0000-0000-000000000001", folder: "Team/API").callerFingerprint
+        let runtime = AgentRuntimeContext(sessionID: "mcp:store-reuse", agentType: "authsia-mcp")
+        let items = (1...21).map {
+            AgentJITItemIdentity(type: "api-key", id: UUID(uuidString: String(
+                format: "00000000-0000-0000-0000-%012d", $0
+            ))!)
+        }
+        func approvedGrant(_ count: Int) -> AgentJITGrant {
+            AgentJITGrant(
+                id: UUID(), agentName: "Synthetic agent", callerFingerprint: caller,
+                folderScope: .folder("Team/API"), resourceScope: .items(Set(items.prefix(count))),
+                capabilities: [.exec], createdAt: now.addingTimeInterval(Double(count - 60)),
+                expiresAt: now.addingTimeInterval(300), revokedAt: nil, lastUsedAt: nil,
+                agentRuntimeContext: runtime, approvedBy: "macBiometric", environmentScope: .named("dev")
+            )
+        }
+        let older = approvedGrant(19)
+        let covering = approvedGrant(21)
+        try store.save(older)
+
+        XCTAssertNil(try authorizer.activeGrant(
+            capability: .exec, itemIdentities: Set(items), itemFolderPath: "Team/API",
+            itemEnvironments: ["dev"], caller: caller, agentRuntimeContext: runtime, now: now
+        ))
+        XCTAssertNil(try store.loadAll().first?.lastUsedAt)
+        try store.save(covering)
+        XCTAssertEqual(try store.loadAll().map(\.id), [older.id, covering.id])
+        for offset in 0..<2 {
+            let usedAt = now.addingTimeInterval(Double(offset))
+            let reused = try authorizer.activeGrant(
+                capability: .exec, itemIdentities: Set(items), itemFolderPath: "Team/API",
+                itemEnvironments: ["dev"], caller: caller, agentRuntimeContext: runtime, now: usedAt
+            )
+            XCTAssertEqual(reused?.id, covering.id)
+            XCTAssertEqual(reused?.lastUsedAt, usedAt)
+        }
+        XCTAssertNil(try store.loadAll().first(where: { $0.id == older.id })?.lastUsedAt)
+        XCTAssertEqual(try store.loadAll().count, 2)
+
+        let cases: [(String, Set<AgentJITItemIdentity>, AgentJITCapability, [String], AgentRuntimeContext?, Date)] = [
+            ("empty items", [], .exec, ["dev"], runtime, now),
+            ("same UUID with another type", [AgentJITItemIdentity(type: "password", id: items[0].id)], .exec, ["dev"], runtime, now),
+            ("unapproved UUID", [AgentJITItemIdentity(type: "api-key", id: UUID())], .exec, ["dev"], runtime, now),
+            ("capability", Set(items), .list, ["dev"], runtime, now),
+            ("environment", Set(items), .exec, ["prod"], runtime, now),
+            ("missing session", Set(items), .exec, ["dev"], nil, now),
+            ("another session", Set(items), .exec, ["dev"], AgentRuntimeContext(sessionID: "mcp:other", agentType: "authsia-mcp"), now),
+            ("expired", Set(items), .exec, ["dev"], runtime, covering.expiresAt),
+        ]
+        let beforeDenied = try store.loadAll()
+        for (label, identities, capability, environments, context, date) in cases {
+            XCTAssertNil(try authorizer.activeGrant(
+                capability: capability, itemIdentities: identities, itemFolderPath: "Team/API",
+                itemEnvironments: environments, caller: caller, agentRuntimeContext: context, now: date
+            ), label)
+        }
+        XCTAssertEqual(try store.loadAll(), beforeDenied)
+
+        let otherCaller = AgentJITCallerFingerprint(
+            processName: "another-client", bundleIdentifier: caller.bundleIdentifier,
+            signingTeamId: caller.signingTeamId, signingIdentity: caller.signingIdentity,
+            parentProcessName: caller.parentProcessName, parentBundleIdentifier: caller.parentBundleIdentifier,
+            sessionScope: caller.sessionScope, workingDirectory: caller.workingDirectory
+        )
+        XCTAssertNil(try authorizer.activeGrant(
+            capability: .exec, itemIdentities: Set(items), itemFolderPath: "Team/API",
+            itemEnvironments: ["dev"], caller: otherCaller, agentRuntimeContext: runtime, now: now
+        ))
+        XCTAssertEqual(try store.loadAll(), beforeDenied)
+
+        _ = try store.revoke(id: covering.id, revokedAt: now)
+        XCTAssertNil(try authorizer.activeGrant(
+            capability: .exec, itemIdentities: Set(items), itemFolderPath: "Team/API",
+            itemEnvironments: ["dev"], caller: caller, agentRuntimeContext: runtime, now: now
+        ))
+    }
+
     func testMissingPayloadFailsClosed() throws {
         let authority = KeychainAuthorityStore(blobStore: JITTestAuthorityBlobStore())
         try authority.insert(

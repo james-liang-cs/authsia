@@ -49,7 +49,7 @@ public nonisolated protocol AgentJITGrantStoring {
     ) throws -> AgentJITAuthorityViolation?
     func markUsedIfAllowedForRuntime(
         capability: AgentJITCapability,
-        itemIdentity: AgentJITItemIdentity?,
+        itemIdentities: Set<AgentJITItemIdentity>,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
@@ -292,7 +292,7 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
     ) throws -> AgentJITGrant? {
         try markUsedIfAllowedForRuntime(
             capability: capability,
-            itemIdentity: itemIdentity,
+            itemIdentities: Set(itemIdentity.map { [$0] } ?? []),
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             caller: caller,
@@ -303,7 +303,7 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
 
     public func markUsedIfAllowedForRuntime(
         capability: AgentJITCapability,
-        itemIdentity: AgentJITItemIdentity?,
+        itemIdentities: Set<AgentJITItemIdentity>,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
@@ -313,16 +313,22 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
         try locked {
             var grants = try loadAllUnlocked()
             let revoked = try revokeClosedTerminalGrantsUnlocked(&grants, now: now)
+            // Select full coverage before marking used, so an older partial grant
+            // cannot mask a later covering grant or receive its usage timestamp.
             guard let index = grants.firstIndex(where: {
                 $0.allows(
                     capability: capability,
-                    itemIdentity: itemIdentity,
+                    itemIdentity: itemIdentities.first,
                     itemFolderPath: itemFolderPath,
                     itemEnvironments: itemEnvironments,
                     caller: caller,
                     now: now
                 )
                     && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+                    && $0.resourceScope.covers(
+                        itemIdentities: itemIdentities,
+                        itemFolderPath: itemFolderPath
+                    )
             }) else {
                 if !revoked.isEmpty {
                     try persistUnlocked(grants)

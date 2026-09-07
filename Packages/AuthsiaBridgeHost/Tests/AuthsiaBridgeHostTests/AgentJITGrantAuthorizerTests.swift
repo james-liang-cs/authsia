@@ -705,7 +705,7 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
 
     func markUsedIfAllowedForRuntime(
         capability: AgentJITCapability,
-        itemIdentity: AgentJITItemIdentity?,
+        itemIdentities: Set<AgentJITItemIdentity>,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
@@ -715,12 +715,16 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
         guard let grant = grants.first(where: {
             $0.allows(
                 capability: capability,
-                itemIdentity: itemIdentity,
+                itemIdentity: itemIdentities.first,
                 itemFolderPath: itemFolderPath,
                 itemEnvironments: itemEnvironments,
                 caller: caller,
                 now: now
             ) && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+                    && $0.resourceScope.covers(
+                        itemIdentities: itemIdentities,
+                        itemFolderPath: itemFolderPath
+                    )
         }) else {
             return nil
         }
@@ -851,17 +855,20 @@ private final class RevokingAtomicGrantStore: AgentJITGrantStoring {
 
     func markUsedIfAllowedForRuntime(
         capability: AgentJITCapability,
-        itemIdentity: AgentJITItemIdentity?,
+        itemIdentities: Set<AgentJITItemIdentity>,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
         agentRuntimeContext: AgentRuntimeContext?,
         now: Date
     ) throws -> AgentJITGrant? {
-        guard grant.matchesAgentRuntimeContext(agentRuntimeContext) else { return nil }
+        guard grant.matchesAgentRuntimeContext(agentRuntimeContext),
+              grant.resourceScope.covers(itemIdentities: itemIdentities, itemFolderPath: itemFolderPath) else {
+            return nil
+        }
         return try markUsedIfAllowed(
             capability: capability,
-            itemIdentity: itemIdentity,
+            itemIdentity: itemIdentities.first,
             itemFolderPath: itemFolderPath,
             itemEnvironments: itemEnvironments,
             caller: caller,
@@ -940,7 +947,7 @@ private final class BatchOnlyScopeStore: AgentJITGrantStoring {
 
     func markUsedIfAllowedForRuntime(
         capability: AgentJITCapability,
-        itemIdentity: AgentJITItemIdentity?,
+        itemIdentities: Set<AgentJITItemIdentity>,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,

@@ -296,7 +296,7 @@ extension XPCRequestHandler {
                 let requestedIdentities = Set(resolution.requestedItems.compactMap(\.itemIdentity))
                 if let existing = try agentJITGrantAuthorizer.activeGrant(
                     capability: capability,
-                    itemIdentity: requestedIdentities.first,
+                    itemIdentities: requestedIdentities,
                     itemFolderPath: resolution.scope.storageValue,
                     itemEnvironments: resolution.itemEnvironments.isEmpty
                         ? agentJITItemEnvironments(payload.environmentScope)
@@ -304,9 +304,6 @@ extension XPCRequestHandler {
                     caller: caller,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                     now: timing.issuedAt
-                ), existing.resourceScope.covers(
-                    itemIdentities: requestedIdentities,
-                    itemFolderPath: resolution.scope.storageValue
                 ) {
                     let merged = grant(existing, adding: resolution.requestedItems)
                     if merged.requestedItems != existing.requestedItems {

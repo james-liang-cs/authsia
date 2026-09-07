@@ -588,6 +588,51 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertTrue(descriptor.requestedItems.isEmpty)
     }
 
+    func testMCPPreflightReusesCoveringGrantAfterOlderPartialGrants() async throws {
+        let approver = JITApprovalTracker(result: true)
+        let store = MemoryAgentJITGrantStore()
+        let metadata = listPayloadWithRootPasswords(count: 2)
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            listProvider: { metadata },
+            clock: { self.now }
+        )
+        let context = execContext(agentRuntimeContext: AgentRuntimeContext(
+            sessionID: "mcp:covering-grant",
+            agentID: "server:authsia",
+            agentType: "authsia-mcp"
+        ))
+        let references = metadata.passwords.map {
+            AgentJITPreflightReference(type: "password", query: $0.id.uuidString, folderPath: nil)
+        }
+
+        // Either first identity hits an older partial grant before the covering grant.
+        for reference in references {
+            let response = try await addItem(handler, body: AgentJITPreflightPayload(
+                requestedCommand: "exec", references: [reference]
+            ), context: context)
+            XCTAssertNil(response.error)
+        }
+        let payload = AgentJITPreflightPayload(requestedCommand: "exec", references: references)
+        let approved = try await addItem(handler, body: payload, context: context)
+        XCTAssertNil(approved.error)
+        XCTAssertEqual(store.grants.count, 3)
+        XCTAssertEqual(approver.requests.count, 3)
+        let partialLastUsed = store.grants.prefix(2).map(\.lastUsedAt)
+
+        for _ in 0..<2 {
+            let reused = try await addItem(handler, body: payload, context: context)
+            XCTAssertNil(reused.error)
+            XCTAssertEqual(reused.payload?.grantIDs, approved.payload?.grantIDs)
+        }
+
+        XCTAssertEqual(approver.requests.count, 3)
+        XCTAssertEqual(store.grants.count, 3)
+        XCTAssertEqual(store.grants.prefix(2).map(\.lastUsedAt), partialLastUsed)
+        XCTAssertEqual(store.grants[2].lastUsedAt, now)
+    }
+
     func testMCPAdmissionReusesGrantForSameProxySession() async throws {
         let approver = JITApprovalTracker(result: true)
         let store = MemoryAgentJITGrantStore()
@@ -4899,7 +4944,7 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
 
     func markUsedIfAllowedForRuntime(
         capability: AgentJITCapability,
-        itemIdentity: AgentJITItemIdentity?,
+        itemIdentities: Set<AgentJITItemIdentity>,
         itemFolderPath: String?,
         itemEnvironments: [String],
         caller: AgentJITCallerFingerprint,
@@ -4909,12 +4954,16 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
         guard let grant = grants.first(where: {
             $0.allows(
                 capability: capability,
-                itemIdentity: itemIdentity,
+                itemIdentity: itemIdentities.first,
                 itemFolderPath: itemFolderPath,
                 itemEnvironments: itemEnvironments,
                 caller: caller,
                 now: now
             ) && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+                    && $0.resourceScope.covers(
+                        itemIdentities: itemIdentities,
+                        itemFolderPath: itemFolderPath
+                    )
         }) else {
             return nil
         }
