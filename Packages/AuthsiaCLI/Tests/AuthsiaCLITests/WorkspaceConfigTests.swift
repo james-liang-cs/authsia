@@ -704,7 +704,7 @@ struct WorkspaceConfigTests {
 
         #expect(loaded.mcpUpstreams.count == 1)
         #expect(loaded.mcpUpstreams[0].command == "mcp-atlassian")
-        #expect(loaded.mcpUpstreams[0].catalog.map(\.name) == ["jira_get_issue", "jira_search"])
+        #expect(loaded.mcpUpstreams[0].catalog.map(\.name) == ["jira_get_issue", "jira_search", "jira_delete_issue", "other_tool"])
         #expect(loaded.mcpUpstreams[0].catalog[1].description.isEmpty)
         #expect(loaded.mcpUpstreams[0].catalog[1].inputSchema == .object([
             "additionalProperties": .bool(true),

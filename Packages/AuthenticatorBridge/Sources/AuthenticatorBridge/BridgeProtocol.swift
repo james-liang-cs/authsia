@@ -28,6 +28,7 @@ import Foundation
     #if os(macOS)
     func mcpHTTPAuthority(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func mcpHTTPRecordActivity(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
+    func mcpManagementRecordActivity(_ request: Data, _ reply: @escaping (Data?, NSError?) -> Void)
     func registerMCPManagerEndpoint(
         _ endpoint: NSXPCListenerEndpoint,
         _ reply: @escaping (NSError?) -> Void

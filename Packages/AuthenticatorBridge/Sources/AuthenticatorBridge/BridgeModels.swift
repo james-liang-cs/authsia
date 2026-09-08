@@ -67,6 +67,8 @@ public enum BridgeRequestType: String, Codable, CaseIterable {
     case terminalPairingRevoke
     /// Redacted MCP proxy tool-call evidence, HMAC-chained in `bridge_audit.log`.
     case mcpProxyActivity
+    /// Audit-only management intent/outcome; not a client execution command.
+    case mcpManagementActivity
 
     /// Reads or uses a vault item's secret. Every audit surface that asks
     /// "did this touch a secret?" must ask here: the classification used to be

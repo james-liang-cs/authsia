@@ -59,7 +59,7 @@ public final class BridgeAuditLogger {
 
     nonisolated deinit {}
 
-    public func record(_ record: BridgeAuditRecord) throws {
+    public func record(_ record: BridgeAuditRecord, synchronize: Bool = false) throws {
         try queue.sync {
             // Resolved before taking the lock: the Keychain call can block on securityd
             // and does not depend on the chain tip.
@@ -77,7 +77,7 @@ public final class BridgeAuditLogger {
                 let data = try JSONEncoder.bridge.encode(entry)
                 var lineData = data
                 lineData.append(0x0A)
-                try appendLineData(lineData)
+                try appendLineData(lineData, synchronize: synchronize)
             }
         }
         AccessCenterActivityNotifier.post()
@@ -409,7 +409,7 @@ public final class BridgeAuditLogger {
         return entry.entryHash
     }
 
-    private func appendLineData(_ data: Data) throws {
+    private func appendLineData(_ data: Data, synchronize: Bool = false) throws {
         let fd = open(fileURL.path, O_WRONLY | O_CREAT | O_APPEND, Self.fileMode)
         guard fd >= 0 else {
             throw BridgeAuditLoggerError.failedToOpen(errno)
@@ -432,6 +432,7 @@ public final class BridgeAuditLogger {
         if fchmod(fd, Self.fileMode) != 0 {
             throw BridgeAuditLoggerError.failedToSetPermissions(errno)
         }
+        if synchronize, fsync(fd) != 0 { throw BridgeAuditLoggerError.failedToWrite(errno) }
     }
 
     @usableFromInline

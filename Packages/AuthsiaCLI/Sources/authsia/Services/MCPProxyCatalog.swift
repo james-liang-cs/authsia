@@ -29,6 +29,7 @@ enum MCPProxyCatalog {
 
     static func shouldDiscoverChildCatalog(_ upstream: MCPUpstreamConfig) -> Bool {
         canProbeChildCatalog(upstream)
+            && upstream.catalogCapturedAt == nil && upstream.catalog.isEmpty
             && upstream.tools.allow.isEmpty
             && upstream.tools.approve.isEmpty
     }

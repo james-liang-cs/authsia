@@ -42,15 +42,9 @@ enum MCPCatalogCapture {
         guard MCPProxyCatalog.canProbeChildCatalog(upstream) else {
             throw MCPCatalogCaptureError.notProbeable(upstreamName)
         }
-        // A re-capture refreshes what the child offers. Where a human already
-        // placed a name -- denied, or moved to approve -- that placement stands.
-        let denied = Set(upstream.tools.deny)
-        let approved = Set(upstream.tools.approve)
-        upstream.tools.allow = tools.map(\.name).filter {
-            !denied.contains($0) && !approved.contains($0)
-        }
-        upstream.catalog = tools.map(descriptor(for:))
-        upstream.catalogCapturedAt = Date()
+        // Discovery records metadata only. All permission decisions belong to
+        // explicit policy editing, including previously allowed absent tools.
+        upstream = upstream.recordingCatalog(tools.map(descriptor(for:)))
         let advertised = MCPProxyCatalog.advertisedNames(in: upstream.tools)
 
         do {
@@ -59,7 +53,7 @@ enum MCPCatalogCapture {
         } catch WorkspaceConfigError.invalidMCPUpstreamCatalog {
             // Descriptions and schemas past the committed bound are dropped
             // rather than losing the tool names they belong to.
-            upstream.catalog = []
+            upstream.catalog = tools.map { MCPUpstreamToolDescriptor(name: $0.name) }
             try write(upstream, at: index, in: config, workspaceRoot: workspaceRoot)
             return Outcome(advertised: advertised, wroteDescriptors: false)
         }

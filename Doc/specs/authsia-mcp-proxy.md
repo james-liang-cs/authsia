@@ -566,11 +566,10 @@ bind, not as a process-exit condition.
 The proxy does not expose the serve-only `authsia_access_status` or
 `authsia_access_revoke` tools.
 
-Unknown and denied calls fail before JIT or the long-lived spawn. Extra child
-tools never become visible when `allow` or `approve` is set. Empty-policy
-credential-less discovery is the only path that advertises extra child tools
-(minus `deny`). A policy-advertised or discovered tool missing from the child
-fails closed.
+Unknown and denied calls fail before JIT or spawn. Only explicit `allow` or
+`approve` decisions permit calls, including on credential-less upstreams with
+empty policy. Captured metadata never grants authority. A policy-advertised tool
+missing from the child fails closed.
 
 Overlapping forwarded `tools/call` requests are multiplexed against one child.
 At most eight calls may be in flight at once; a ninth is rejected with `busy`
@@ -591,9 +590,8 @@ deadline documented under Errors.
              on stderr, advertise nothing                 and sanitized schemas
                                                           in mcpUpstreams
 
-  tools/call on an unrecorded credential-less upstream
-       +-- same admission-gated probe, cached for this proxy session
-           declined admission: cache empty; transient failure: cache nothing
+  tools/call without an explicit allow/approve decision
+       +-- deny before admission or spawn (no discovery fallback)
 ```
 
 Listing is answered from committed policy, so opening a workspace starts no
@@ -602,13 +600,16 @@ separate, human-initiated step: `authsia mcp catalog` takes `mcp-admission`
 before it resolves or spawns the declared child, reads `tools/list` once, kills
 and reaps the probe, and drops its grant so the next client call still prompts.
 
-The first permitted `tools/call` requires the same grant before the long-lived
-child starts; the Bridge can reuse a matching one. On an upstream with no
-recorded catalog, that call falls back to the same bounded probe, and a
-concurrent call joins the in-flight probe instead of reading an empty catalog.
+Capture refreshes names, schemas, and capture time only. Existing `allow`,
+`approve`, and `deny` decisions are preserved, including names absent from the
+latest catalog. Newly discovered tools are unreviewed and blocked until a human
+assigns policy in **Edit policy**. CLI normalization retains these metadata-only
+names. Oversized descriptors fall back to name-only catalog entries, without
+adding permissions. The first permitted `tools/call` requires admission before
+the long-lived child starts; the Bridge can reuse a matching grant.
 
 Any non-empty declared env, whether literal or `authsia://`, disables catalog
-capture and the call-path probe. Listing must not resolve or forward
+capture. Listing must not resolve or forward
 environment values. Those upstreams require explicit `allow`/`approve`.
 
 ## Approval And Grants
@@ -630,8 +631,8 @@ after `listTools`.
   value; a changed declaration drops the child and re-prompts. Grants that
   predate this field do not reuse.
 - A denied or missing admission grant prevents both capture and the long-lived
-  spawn. A declined call-path discovery caches an empty catalog for that proxy
-  session so a retrying agent does not re-prompt.
+  spawn. Unreviewed calls are rejected without requesting admission, including
+  repeated and concurrent attempts.
 - Local `mcp-admission` grants use the dedicated `mcpAdmissionTTL` preference,
   default 30 minutes, instead of the 15-second CLI session default. The
   `mcpAdmissionMaximumTTL` managed preference can lower the company maximum;
@@ -881,7 +882,11 @@ Expired, denied, stale, and repeated operations cannot apply again. Credential
 options are metadata only. Neither a browser request nor a browser confirmation
 grants vault access. Confirmed mutations write a redacted intent record before
 apply and an outcome afterwards. If intent cannot be recorded, the change is not
-applied. An outcome-write failure after an applied change is reported as applied
+applied. Production recording awaits the signed-app-only Bridge audit endpoint;
+it writes the complete redacted management event into the existing HMAC chain
+as `mcpManagementActivity`, with the operation ID, phase, result, and context.
+The intent is synchronized before acknowledgement. An absent recorder fails
+closed. An outcome-write failure after an applied change is reported as applied
 with incomplete evidence.
 
 The Activity view merges command history with the management journal using the
@@ -889,7 +894,14 @@ operation ID and captured server/workspace metadata. It filters the merged data
 before pagination. Older journal entries without identity remain visible under
 All workspaces as unknown scope. Each source reports its own read health; a
 missing outcome or unreadable source is incomplete evidence, not an empty healthy
-history.
+history. The local journal is a bounded rolling projection, capped at 30 days,
+2,000 events, and 1 MiB. Atomic rollover and a cross-process writer lock prevent
+partial snapshots and lost concurrent writes. Reads of legacy oversized journals
+use only a bounded tail. Pruning persists a retention marker and Activity reports
+the management source as truncated; malformed or partial records are unavailable.
+The journal is not itself HMAC-verified. `authsia audit export --verify` verifies
+the canonical Bridge records, including new management events; legacy journal
+rows are not retroactively certified.
 
 Both loopback listeners impose a 15-second absolute deadline to finish each
 incoming HTTP request, including silent sockets, partial headers and trickled
@@ -1161,7 +1173,7 @@ Shared codes such as `mcpAccessDisabled`, `approvalDenied`, and
 | --- | --- |
 | Proxy policy is mistaken for live upstream authority | Derive `tools/list` from commit-safe policy only, then reject deny and unknown tools before the long-lived spawn, and privately verify advertised names after child initialization. |
 | Opening a workspace starts repository code, or trains the human to approve prompts they did not cause | Answer `tools/list` from committed policy without starting the child or requesting admission. Record the catalog in a separate human-initiated `authsia mcp catalog` run, and raise the admission prompt on the first `tools/call`. |
-| A catalog probe starts repository code before approval | Require `mcp-admission` before resolving or spawning the declared child, for capture and for the call-path fallback alike. Allow either only when declared `env` is entirely empty, and kill the probe after `listTools`. |
+| A catalog probe starts repository code before approval | Require `mcp-admission` before resolving or spawning the declared child for explicit capture, only when declared `env` is entirely empty. Kill the probe after `listTools`; calls never initiate discovery. |
 | One workspace declaration makes another workspace look admitted | Match declarations by standardized workspace root, report the workspace on every finding, and evaluate user-global fallbacks separately for each root. |
 | Project config silently overrides a protected user-global entry | Report both entries with user-global/project scope and effective/overridden precedence; generate project wrap recipes for the exact project file without user-global CLI commands. |
 | Upstream receives ambient credentials or Authsia runtime markers | Build a stripped environment, add only declared literals and freshly resolved refs, and omit `AUTHSIA_AGENT_*` and automation authority from the child. |
@@ -1186,12 +1198,10 @@ Implementation is not complete until automated tests prove:
 
 - `tools/list` never JITs or spawns, whatever the policy holds;
 - catalog capture takes `mcp-admission` before the probe, records the advertised
-  names and sanitized schemas in `mcpUpstreams`, keeps an existing `deny` and
-  `approve` placement, and refuses an upstream with any declared env;
-- the first `tools/call` on an unrecorded credential-less upstream takes
-  `mcp-admission` before the probe;
-- a declined discovery admission starts no child, caches empty for the proxy
-  session, and does not re-prompt; a transient probe failure is not cached;
+  names and sanitized schemas in `mcpUpstreams`, preserves all existing tool
+  decisions, and refuses an upstream with any declared env;
+- unreviewed calls on credential-less upstreams fail before admission or spawn,
+  including empty policy, repeated calls, and concurrent calls;
 - denied tools fail before JIT, and missing/unbound/HTTP declarations return
   their stable errors;
 - a permitted proxy call starts one no-shell child with only declared

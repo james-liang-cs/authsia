@@ -122,7 +122,7 @@ extension BridgeRequestType {
         case .ping, .status, .lock, .workspaceMetadata, .chromeAutofillMatches, .auditVerify, .sshAgentSign,
              .agentJITSnapshot, .agentJITRevoke, .agentJITRevokeAll, .agentJITRenew,
              .listAccess, .revokeAccess, .validateAccess,
-             .terminalPairingComplete, .terminalPairingRevoke, .mcpProxyActivity:
+             .terminalPairingComplete, .terminalPairingRevoke, .mcpProxyActivity, .mcpManagementActivity:
             return false
         case .unlock,
              .list,
@@ -1980,6 +1980,10 @@ final class AuthsiaBridgeClient:
                     message: "Terminal pairing revocation is performed by authsia lock.",
                     query: nil
                 ))
+            case .mcpManagementActivity:
+                proxyErrorHandler(BridgeClientError.bridgeError(
+                    code: BridgeErrorCode.invalidRequest.rawValue,
+                    message: "Management audit records are written by Authsia.app.", query: nil))
             }
         }
 

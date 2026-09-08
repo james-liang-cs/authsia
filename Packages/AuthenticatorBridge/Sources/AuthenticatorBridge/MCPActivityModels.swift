@@ -242,18 +242,27 @@ public final class MCPActivityEvidenceBuffer: @unchecked Sendable {
 public enum MCPActivityProjection {
     public static func page(loading: () throws -> [AgentCommandEvent],
                             loadingManagement: () throws -> [MCPManagementAuditEvent] = { [] },
+                            loadingManagementSnapshot: (() throws -> MCPManagementAuditSnapshot)? = nil,
                             pendingEvidence: [MCPHTTPActivityEvent] = [], evidenceOverflow: Bool = false,
                             query: MCPActivityQuery = .init(), now: Date = Date()) -> MCPActivityPage {
         var events: [AgentCommandEvent] = [], management: [MCPManagementAuditEvent] = [], failures: [String] = []
+        var retentionLimited = false
         do { events = try loading() } catch { failures.append("commandHistory") }
-        do { management = try loadingManagement() } catch { failures.append("managementJournal") }
+        do {
+            if let loadingManagementSnapshot {
+                let snapshot = try loadingManagementSnapshot()
+                management = snapshot.events; retentionLimited = snapshot.retentionLimited
+            } else { management = try loadingManagement() }
+        } catch { failures.append("managementJournal") }
         return page(events: events, managementEvents: management, pendingEvidence: pendingEvidence,
-                    evidenceOverflow: evidenceOverflow, unavailableSources: failures, query: query, now: now)
+                    evidenceOverflow: evidenceOverflow, unavailableSources: failures,
+                    managementRetentionLimited: retentionLimited, query: query, now: now)
     }
 
     public static func page(events: [AgentCommandEvent], managementEvents: [MCPManagementAuditEvent] = [],
                             pendingEvidence: [MCPHTTPActivityEvent] = [], evidenceOverflow: Bool = false,
-                            unavailableSources: [String] = [], query: MCPActivityQuery = .init(), now: Date = Date()) -> MCPActivityPage {
+                            unavailableSources: [String] = [], managementRetentionLimited: Bool = false,
+                            query: MCPActivityQuery = .init(), now: Date = Date()) -> MCPActivityPage {
         let pendingIDs = Set(pendingEvidence.map(\.id))
         let mcpEvents = events.filter { $0.captureSource == .mcpProxy && !pendingIDs.contains($0.id) }
         let calls = Dictionary(grouping: mcpEvents.compactMap { record(from: $0) }, by: { $0.callID ?? $0.id.uuidString })
@@ -281,19 +290,20 @@ public enum MCPActivityProjection {
         let truncated = paged.count > query.limit
         let incomplete = evidenceOverflow || !unavailableSources.isEmpty || all.contains { $0.evidenceStatus != "recorded" }
         let health: MCPActivitySourceHealth = !unavailableSources.isEmpty && all.isEmpty ? .unavailable
-            : incomplete ? .incomplete : truncated ? .truncated : .ok
+            : incomplete ? .incomplete : truncated || managementRetentionLimited ? .truncated : .ok
         let completeness = health.rawValue == "ok" ? "complete" : health.rawValue
         let message: String? = !unavailableSources.isEmpty
             ? "Some activity sources could not be read: " + unavailableSources.joined(separator: ", ") + "."
-            : incomplete ? "Evidence is incomplete or a call has no recorded terminal outcome yet." : nil
+            : incomplete ? "Evidence is incomplete or a call has no recorded terminal outcome yet."
+            : managementRetentionLimited ? "Older management activity was pruned by the 30-day, 2,000-event, 1 MiB retention limits. Use authsia audit export --verify for retained Bridge evidence." : nil
         return MCPActivityPage(records: pageRecords, cursor: truncated ? encodeCursor(pageRecords.last) : nil,
             asOf: now, retainedFrom: all.map(\.recordedAt).min(), retainedTo: all.map(\.recordedAt).max(),
-            truncated: truncated, completeness: completeness, sourceHealth: health, lastUpdate: now, message: message,
+            truncated: truncated || managementRetentionLimited, completeness: completeness, sourceHealth: health, lastUpdate: now, message: message,
             auditStatus: MCPAuditStatusView(verificationState: health == .unavailable ? "unavailable" : "unverified",
                 completeness: completeness, checkedAt: now,
                 message: "This summary covers command history and the management journal. It does not claim HMAC verification."),
             sources: ["commandHistory": unavailableSources.contains("commandHistory") ? .unavailable : .ok,
-                      "managementJournal": unavailableSources.contains("managementJournal") ? .unavailable : .ok])
+                      "managementJournal": unavailableSources.contains("managementJournal") ? .unavailable : managementRetentionLimited ? .truncated : .ok])
     }
 
     private static func record(from event: AgentCommandEvent, evidenceStatus: String? = nil) -> MCPActivityRecord? {

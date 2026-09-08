@@ -255,7 +255,7 @@ struct MCPProxyLifecycleTests {
         await fixture.proxy.waitUntilCompleted()
     }
 
-    @Test("empty credential-less policy lists nothing and discovers on the first call")
+    @Test("empty credential-less policy blocks guessed tools without admission or spawn")
     func emptyPolicyDiscoversChildCatalogOnFirstCall() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
@@ -301,14 +301,10 @@ struct MCPProxyLifecycleTests {
             name: "jira_get_issue"
         )
         let result = try await call.value
-        #expect(result.isError != true)
-        // Invoking a tool is what pays for discovery and then for the
-        // long-lived child, each named by the declared argv.
-        #expect(sessionClient.prepareCount == 2)
-        #expect(sessionClient.mcpToolNames == [nil, "jira_get_issue"])
-        #expect(sessionClient.mcpUpstreamNames == ["codegraph", "codegraph"])
-        #expect(sessionClient.mcpUpstreamCommands == ["codegraph serve --mcp", "codegraph serve --mcp"])
-        #expect(launcher.spawnCount == 2)
+        #expect(result.isError == true)
+        #expect(toolErrorCode(result) == MCPToolErrorCode.upstreamDenied.rawValue)
+        #expect(sessionClient.prepareCount == 0)
+        #expect(launcher.spawnCount == 0)
 
         let denied: RequestContext<CallTool.Result> = try await connection.client.callTool(
             name: "jira_search"
@@ -324,7 +320,7 @@ struct MCPProxyLifecycleTests {
         await proxy.waitUntilCompleted()
     }
 
-    @Test("declined admission blocks catalog discovery before spawn")
+    @Test("unreviewed calls never request admission even on repeated attempts")
     func declinedAdmissionBlocksCatalogDiscoveryBeforeSpawn() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
@@ -367,22 +363,21 @@ struct MCPProxyLifecycleTests {
         let result = try await call.value
         #expect(result.isError == true)
         #expect(launcher.spawnCount == 0)
-        #expect(sessionClient.prepareCount == 1)
+        #expect(sessionClient.prepareCount == 0)
 
-        // The declined result is cached for this proxy session, avoiding an
-        // approval loop when an agent retries.
+        // Retrying cannot turn an unknown tool into an approved one.
         let retry: RequestContext<CallTool.Result> = try await connection.client.callTool(
             name: "jira_get_issue"
         )
         #expect(try await retry.value.isError == true)
-        #expect(sessionClient.prepareCount == 1)
+        #expect(sessionClient.prepareCount == 0)
         #expect(launcher.spawnCount == 0)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
     }
 
-    @Test("concurrent calls join one in-flight catalog discovery")
+    @Test("concurrent unreviewed calls remain blocked without discovering tools")
     func concurrentCallsJoinOneCatalogDiscovery() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
@@ -434,15 +429,11 @@ struct MCPProxyLifecycleTests {
             results.append(try await request.value)
         }
 
-        // The second call must wait for the in-flight probe instead of reading
-        // a cache that was published before the probe finished, which would
-        // reject it as an unadvertised tool.
         for result in results {
-            #expect(result.isError != true)
+            #expect(result.isError == true)
         }
-        // One probe, then one long-lived child shared by both calls.
-        #expect(launcher.spawnCount == 2)
-        #expect(sessionClient.prepareCount == 2)
+        #expect(launcher.spawnCount == 0)
+        #expect(sessionClient.prepareCount == 0)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
@@ -746,7 +737,7 @@ struct MCPProxyLifecycleTests {
         #expect(reapErrno == ECHILD)
     }
 
-    @Test("a deny added after discovery applies without a second probe")
+    @Test("a deny added after an allowed call applies without discovery")
     func denyAddedAfterDiscoveryApplies() async throws {
         let bin = try makeWorkspaceRoot()
         defer { try? FileManager.default.removeItem(at: bin) }
@@ -754,7 +745,8 @@ struct MCPProxyLifecycleTests {
         let sessionClient = RecordingMCPProxySessionClient(environment: [:], grantIDs: [UUID()])
         let launcher = RecordingMCPProxyChildLauncher()
         let root = try makeMCPProxyWorkspace(
-            upstreams: [MCPUpstreamConfig(name: "codegraph", command: "codegraph")]
+            upstreams: [MCPUpstreamConfig(name: "codegraph", command: "codegraph",
+                tools: .init(allow: ["jira_get_issue", "jira_search"]))]
         )
         defer { try? FileManager.default.removeItem(at: root) }
         let proxy = AuthsiaMCPProxy(
@@ -775,12 +767,10 @@ struct MCPProxyLifecycleTests {
             name: "jira_get_issue"
         )
         #expect(try await first.value.isError != true)
-        // One probe child, then the long-lived one.
-        #expect(launcher.spawnCount == 2)
+        #expect(launcher.spawnCount == 1)
 
         // Policy is committed repository content and can change while the
-        // client is still connected. The discovered catalog is cached for the
-        // proxy session, so deny has to be re-read, not baked into the cache.
+        // client is still connected, so permission must be re-read.
         try WorkspaceConfigStore.write(
             WorkspaceConfig(
                 schemaVersion: 2,
@@ -804,7 +794,7 @@ struct MCPProxyLifecycleTests {
         let result = try await call.value
         #expect(result.isError == true)
         #expect(toolErrorCode(result) == MCPToolErrorCode.upstreamDenied.rawValue)
-        #expect(launcher.spawnCount == 2)
+        #expect(launcher.spawnCount == 1)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()

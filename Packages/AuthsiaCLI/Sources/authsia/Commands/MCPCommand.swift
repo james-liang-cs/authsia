@@ -312,6 +312,8 @@ struct MCPCommand: AsyncParsableCommand {
                 tool list, then stops it. With --write the names and schemas land in
                 .authsia/workspace.json, so opening the workspace never starts the
                 child and the admission prompt falls on the first tool call instead.
+                Capture never changes permissions. Review new tools in MCP Manager
+                > Edit policy before use; unreviewed tools remain blocked.
 
                 Examples:
                   authsia mcp catalog --server codegraph
@@ -383,9 +385,10 @@ struct MCPCommand: AsyncParsableCommand {
                 workspaceRoot: workspaceRoot
             )
             output(
-                "\nRecorded \(Self.toolCount(outcome.advertised.count)) in "
+                "\nRecorded \(Self.toolCount(tools.count)) in "
                     + WorkspaceConfigStore.relativeConfigPath + "."
             )
+            output("Permissions are unchanged. Review new tools in Authsia MCP Manager > Edit policy before use.")
             if !outcome.wroteDescriptors {
                 output("Descriptions and schemas exceeded the committed catalog bound and were omitted.")
             }

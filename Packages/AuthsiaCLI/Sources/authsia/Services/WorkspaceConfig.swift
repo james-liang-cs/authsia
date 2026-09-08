@@ -312,7 +312,7 @@ enum WorkspaceConfigStore {
             agents: config.agents,
             guardSettings: config.guardSettings,
             envBindings: config.envBindings,
-            mcpUpstreams: config.mcpUpstreams.map(normalizeUpstream)
+            mcpUpstreams: config.mcpUpstreams
         )
     }
 
@@ -387,22 +387,6 @@ enum WorkspaceConfigStore {
 
     static func isValidMCPUpstreamName(_ name: String) -> Bool {
         MCPUpstreamValidator.isValidName(name)
-    }
-
-    private static func normalizeUpstream(_ upstream: MCPUpstreamConfig) -> MCPUpstreamConfig {
-        let advertised = Set(upstream.tools.allow + upstream.tools.approve)
-        return MCPUpstreamConfig(
-            name: upstream.name,
-            transport: upstream.transport,
-            url: upstream.url,
-            command: upstream.command,
-            args: upstream.args,
-            env: upstream.env,
-            tools: upstream.tools,
-            catalog: upstream.catalog.filter { advertised.contains($0.name) },
-            credentialHeaders: upstream.credentialHeaders,
-            catalogCapturedAt: upstream.catalogCapturedAt
-        )
     }
 
     private static func validateMCPUpstream(_ upstream: MCPUpstreamConfig) throws {

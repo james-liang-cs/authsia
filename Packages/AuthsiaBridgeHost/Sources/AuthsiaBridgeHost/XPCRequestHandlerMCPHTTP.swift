@@ -3,6 +3,19 @@ import AuthenticatorBridge
 import Foundation
 
 extension XPCRequestHandler {
+    public func mcpManagementRecordActivity(_ data: Data, _ callback: @escaping (Data?, NSError?) -> Void) {
+        let reply = XPCReply(callback)
+        let caller = callerIdentityProvider()
+        guard caller?.bundleIdentifier == "app.authsia", data.count <= 64 * 1_024,
+              let event = try? JSONDecoder().decode(MCPManagementAuditEvent.self, from: data) else {
+            reply(nil, makeNSError(code: .policyDenied, message: "Management audit is restricted to Authsia.app")); return
+        }
+        do {
+            try MCPManagementAuditRecorder(audit: auditLogger).record(event, caller: caller)
+            reply(Data(), nil)
+        } catch { reply(nil, makeNSError(code: .appUnavailable, message: "Management audit is unavailable")) }
+    }
+
     public func mcpHTTPAuthority(_ data: Data, _ callback: @escaping (Data?, NSError?) -> Void) {
         let reply = XPCReply(callback)
         guard callerIdentityProvider()?.bundleIdentifier == "app.authsia", data.count <= 1_048_576,

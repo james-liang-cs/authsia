@@ -158,6 +158,8 @@ public struct SSHAgentAuditInfo: Codable, Equatable {
 }
 
 public struct BridgeAuditRecord: Codable, Equatable, @unchecked Sendable {
+    /// Absent on older records, so their encoded HMAC payload is unchanged.
+    public let mcpManagementEvent: MCPManagementAuditEvent?
     public let command: BridgeRequestType
     public let itemId: String
     public let itemName: String?
@@ -191,9 +193,11 @@ public struct BridgeAuditRecord: Codable, Equatable, @unchecked Sendable {
         agentRuntimeContext: AgentRuntimeContext? = nil,
         workspaceContext: WorkspaceRuntimeContext? = nil,
         environmentScope: EnvironmentAccessScope? = nil,
-        sshAgent: SSHAgentAuditInfo? = nil
+        sshAgent: SSHAgentAuditInfo? = nil,
+        mcpManagementEvent: MCPManagementAuditEvent? = nil
     ) {
         self.command = command
+        self.mcpManagementEvent = mcpManagementEvent
         self.itemId = itemId
         self.itemName = itemName
         self.approvedBy = approvedBy

@@ -24,6 +24,7 @@ public struct MCPManagerRuntimeDependencies: @unchecked Sendable {
     public var loadHTTPActivity: @Sendable (MCPActivityQuery) -> MCPActivityPage
     public var recordHTTPActivity: @Sendable (MCPHTTPActivityEvent) async throws -> Void
     public var openAccessCenter: @Sendable () async -> Bool
+    public var managementAudit: (any MCPManagementAuditing)?
 
     public init(
         registrySnapshot: @escaping () throws -> MCPRegistrySnapshot,
@@ -36,7 +37,8 @@ public struct MCPManagerRuntimeDependencies: @unchecked Sendable {
         listGrants: @escaping @Sendable () async throws -> [MCPManagerGrantView] = { [] },
         loadHTTPActivity: @escaping @Sendable (MCPActivityQuery) -> MCPActivityPage = { _ in .unavailable("Activity is unavailable.") },
         recordHTTPActivity: @escaping @Sendable (MCPHTTPActivityEvent) async throws -> Void = { _ in throw MCPManagementError.auditUnavailable },
-        openAccessCenter: @escaping @Sendable () async -> Bool = { false }
+        openAccessCenter: @escaping @Sendable () async -> Bool = { false },
+        managementAudit: (any MCPManagementAuditing)? = nil
     ) {
         self.registrySnapshot = registrySnapshot
         self.portalDocument = portalDocument
@@ -49,6 +51,7 @@ public struct MCPManagerRuntimeDependencies: @unchecked Sendable {
         self.loadHTTPActivity = loadHTTPActivity
         self.recordHTTPActivity = recordHTTPActivity
         self.openAccessCenter = openAccessCenter
+        self.managementAudit = managementAudit
     }
 }
 
@@ -355,7 +358,7 @@ private struct MCPPortalResponse {
 private final class MCPPortalRouter: @unchecked Sendable {
     private let dependencies: MCPManagerRuntimeDependencies
     private let sessions: MCPPortalSessionStore
-    private let operations = MCPManagementOperationStore(audit: MCPManagementAuditStore())
+    private let operations: MCPManagementOperationStore
     private let encoder = JSONEncoder()
     private let allowedHost = "127.0.0.1:8787"
     private let allowedOrigin = "http://127.0.0.1:8787"
@@ -363,6 +366,7 @@ private final class MCPPortalRouter: @unchecked Sendable {
     init(dependencies: MCPManagerRuntimeDependencies, sessions: MCPPortalSessionStore) {
         self.dependencies = dependencies
         self.sessions = sessions
+        self.operations = MCPManagementOperationStore(audit: dependencies.managementAudit)
         encoder.outputFormatting = [.sortedKeys]
     }
 

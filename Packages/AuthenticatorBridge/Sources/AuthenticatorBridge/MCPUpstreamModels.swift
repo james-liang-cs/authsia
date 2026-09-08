@@ -137,6 +137,15 @@ public struct MCPUpstreamCredentialHeader: Codable, Equatable, Sendable {
 }
 
 public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
+    /// Catalog refresh is metadata-only for both transports. New names remain
+    /// unlisted until a separate policy edit explicitly permits them.
+    public func recordingCatalog(_ descriptors: [MCPUpstreamToolDescriptor], at date: Date = Date()) -> Self {
+        var updated = self
+        updated.catalog = descriptors
+        updated.catalogCapturedAt = date
+        return updated
+    }
+
     public var name: String
     public var transport: MCPUpstreamTransport
     public var url: String?

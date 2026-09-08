@@ -32,9 +32,6 @@ actor AuthsiaMCPProxy {
     private var grantWatchTask: Task<Void, Never>?
     private var isStopped = false
     private var inFlightCallCount = 0
-    /// What the child advertised, sanitized and capped, before `deny`.
-    private var discoveredChildTools: [Tool]?
-    private var discoveryTask: Task<[Tool]?, Never>?
     private var warnedMissingCatalog = false
     private var pendingChildExitStatus: [pid_t: Int32] = [:]
     private var consecutiveGrantCheckFailures = 0
@@ -1072,7 +1069,7 @@ actor AuthsiaMCPProxy {
         // list on connect, which would prompt the human for merely opening the
         // workspace. Listing answers from committed policy only; the approval
         // belongs on the first tools/call, where a tool is actually invoked.
-        if let upstream, MCPProxyCatalog.shouldDiscoverChildCatalog(upstream) {
+        if upstream != nil {
             warnMissingCatalog()
         }
         return []
@@ -1085,8 +1082,9 @@ actor AuthsiaMCPProxy {
         guard !warnedMissingCatalog else { return }
         warnedMissingCatalog = true
         let message = """
-            authsia mcp proxy: no tool catalog recorded for upstream '\(upstreamName)'. \
-            Run: authsia mcp catalog --server \(upstreamName) --write
+            authsia mcp proxy: no permitted tools for upstream '\(upstreamName)'. \
+            Record metadata with: authsia mcp catalog --server \(upstreamName) --write. \
+            Then review tools in Authsia MCP Manager > Edit policy. Capture does not grant permission.
 
             """
         stderrOutput.write(Data(message.utf8))
@@ -1127,46 +1125,7 @@ actor AuthsiaMCPProxy {
     }
 
     private func advertisedNames(for upstream: MCPUpstreamConfig) async -> Set<String> {
-        let names = MCPProxyCatalog.advertisedNames(in: upstream.tools)
-        if !names.isEmpty {
-            return Set(names)
-        }
-        guard MCPProxyCatalog.shouldDiscoverChildCatalog(upstream) else {
-            return []
-        }
-        return Set((await discoveredTools(for: upstream)).map(\.name))
-    }
-
-    private func discoveredTools(for upstream: MCPUpstreamConfig) async -> [Tool] {
-        // `deny` is subtracted on every read, not baked into the cache, so a
-        // deny added to workspace policy after the probe takes effect without
-        // restarting the proxy.
-        MCPProxyCatalog.subtractingDeny(
-            await discoveredChildCatalog(upstream),
-            deny: upstream.tools.deny
-        )
-    }
-
-    private func discoveredChildCatalog(_ upstream: MCPUpstreamConfig) async -> [Tool] {
-        if let discoveredChildTools {
-            return discoveredChildTools
-        }
-        // Probing suspends, so a concurrent list or call must join the in-flight
-        // probe. Publishing the cache before it finished would answer those with
-        // an empty catalog and fail their calls as policy-denied.
-        if let discoveryTask {
-            return await discoveryTask.value ?? []
-        }
-        let task = Task { await self.probeChildCatalog(upstream) }
-        discoveryTask = task
-        let discovered = await task.value
-        discoveryTask = nil
-        // A transient probe failure caches nothing so a later list retries. A
-        // declined admission and a genuinely empty child both cache.
-        if let discovered {
-            discoveredChildTools = discovered
-        }
-        return discovered ?? []
+        Set(MCPProxyCatalog.advertisedNames(in: upstream.tools))
     }
 
     private func probeChildCatalog(_ upstream: MCPUpstreamConfig) async -> [Tool]? {
