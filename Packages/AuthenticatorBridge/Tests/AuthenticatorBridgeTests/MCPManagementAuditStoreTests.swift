@@ -80,9 +80,11 @@ final class MCPManagementAuditStoreTests: XCTestCase {
             for original in [policy, MCPUpstreamToolPolicy()] {
                 let upstream = MCPUpstreamConfig(name: "fixture", transport: transport, tools: original)
                 let updated = upstream.recordingCatalog([.init(name: "new_tool"), .init(name: "read")])
-                XCTAssertEqual(updated.tools, original)
+                XCTAssertEqual(updated.tools, original == MCPUpstreamToolPolicy()
+                    ? MCPUpstreamToolPolicy(allow: ["new_tool", "read"]) : original)
                 XCTAssertEqual(updated.catalog.map(\.name), ["new_tool", "read"])
-                XCTAssertEqual(MCPToolPolicyEvaluator.decision(for: "new_tool", policy: updated.tools), .unlisted)
+                XCTAssertEqual(MCPToolPolicyEvaluator.decision(for: "new_tool", policy: updated.tools),
+                    original == MCPUpstreamToolPolicy() ? .allow : .unlisted)
                 XCTAssertNotNil(updated.catalogCapturedAt)
             }
         }

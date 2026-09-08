@@ -137,12 +137,15 @@ public struct MCPUpstreamCredentialHeader: Codable, Equatable, Sendable {
 }
 
 public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
-    /// Catalog refresh is metadata-only for both transports. New names remain
-    /// unlisted until a separate policy edit explicitly permits them.
+    /// Catalog capture defaults an empty policy to allow the recorded tools.
+    /// Existing policy decisions are preserved for both transports.
     public func recordingCatalog(_ descriptors: [MCPUpstreamToolDescriptor], at date: Date = Date()) -> Self {
         var updated = self
         updated.catalog = descriptors
         updated.catalogCapturedAt = date
+        if tools.allow.isEmpty && tools.approve.isEmpty && tools.deny.isEmpty {
+            updated.tools.allow = Array(Set(descriptors.map(\.name))).sorted()
+        }
         return updated
     }
 

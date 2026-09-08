@@ -42,8 +42,8 @@ enum MCPCatalogCapture {
         guard MCPProxyCatalog.canProbeChildCatalog(upstream) else {
             throw MCPCatalogCaptureError.notProbeable(upstreamName)
         }
-        // Discovery records metadata only. All permission decisions belong to
-        // explicit policy editing, including previously allowed absent tools.
+        // Capture seeds an empty policy with the recorded names and preserves
+        // existing decisions, including previously allowed absent tools.
         upstream = upstream.recordingCatalog(tools.map(descriptor(for:)))
         let advertised = MCPProxyCatalog.advertisedNames(in: upstream.tools)
 

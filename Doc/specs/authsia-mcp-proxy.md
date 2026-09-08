@@ -654,12 +654,13 @@ separate, human-initiated step: `authsia mcp catalog` takes `mcp-admission`
 before it resolves or spawns the declared child, reads `tools/list` once, kills
 and reaps the probe, and drops its grant so the next client call still prompts.
 
-Capture refreshes names, schemas, and capture time only. Existing `allow`,
+Capture refreshes names, schemas, and capture time. When all policy lists are
+empty, every recorded tool defaults to `allow` for both transports. Existing `allow`,
 `approve`, and `deny` decisions are preserved, including names absent from the
-latest catalog. Newly discovered tools are unreviewed and blocked until a human
+latest catalog. With an existing policy, newly discovered tools are blocked until a human
 assigns policy in **Edit policy**. CLI normalization retains these metadata-only
-names. Oversized descriptors fall back to name-only catalog entries, without
-adding permissions. The first permitted `tools/call` requires admission before
+names. Oversized descriptors fall back to name-only catalog entries with the
+same default policy behavior. The first permitted `tools/call` requires admission before
 the long-lived child starts; the Bridge can reuse a matching grant.
 
 Any non-empty declared env, whether literal or `authsia://`, disables catalog

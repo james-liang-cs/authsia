@@ -6,7 +6,7 @@ import Testing
 
 @Suite("MCP catalog capture")
 struct MCPCatalogCaptureTests {
-    @Test("oversized metadata retains unreviewed names without granting permission")
+    @Test("oversized metadata retains names and default allow policy")
     func oversizedMetadataKeepsNamesOnly() throws {
         let root = try makeMCPProxyWorkspace(upstreams: [.init(name: "fixture", command: "fixture")])
         defer { try? FileManager.default.removeItem(at: root) }
@@ -16,8 +16,8 @@ struct MCPCatalogCaptureTests {
         let upstream = try #require(WorkspaceConfigStore.read(fromWorkspaceRoot: root).mcpUpstreams.first)
         #expect(!outcome.wroteDescriptors)
         #expect(upstream.catalog.map(\.name) == ["new_tool"])
-        #expect(upstream.tools.allow.isEmpty)
-        #expect(MCPProxyCatalog.listedTools(for: upstream).isEmpty)
+        #expect(upstream.tools.allow == upstream.catalog.map(\.name))
+        #expect(MCPProxyCatalog.listedTools(for: upstream).map(\.name) == ["new_tool"])
     }
     private func probedTools() -> [Tool] {
         MCPProxyCatalog.listedTools(fromChild: [
@@ -49,12 +49,12 @@ struct MCPCatalogCaptureTests {
             upstreamName: "codegraph",
             workspaceRoot: root
         )
-        #expect(outcome.advertised.isEmpty)
+        #expect(outcome.advertised == ["codegraph_explore", "codegraph_node"])
         #expect(outcome.wroteDescriptors)
 
         let stored = try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
         let upstream = try #require(stored.mcpUpstreams.first)
-        #expect(upstream.tools.allow.isEmpty)
+        #expect(upstream.tools.allow == upstream.catalog.map(\.name))
         #expect(upstream.catalog.map(\.name) == ["codegraph_explore", "codegraph_node"])
         #expect(upstream.catalog.first?.description == "Explore the graph")
         #expect(upstream.catalogCapturedAt != nil)
@@ -63,7 +63,7 @@ struct MCPCatalogCaptureTests {
         #expect(!MCPProxyCatalog.shouldDiscoverChildCatalog(upstream))
         #expect(
             MCPProxyCatalog.listedTools(for: upstream).map(\.name)
-                == []
+                == ["codegraph_explore", "codegraph_node"]
         )
     }
 
