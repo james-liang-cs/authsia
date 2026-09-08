@@ -24,7 +24,8 @@ final class MCPClientConfigScannerTests: XCTestCase {
         ] {
             try writeJSON(["mcpServers": ["Playwright": ["command": command, "args": ["--headless"]]]], to: file)
             let finding = try XCTUnwrap(MCPClientConfigScanner().scan(declaredServers: [], locations: [
-                MCPClientConfigLocation(source: .cursor, fileURL: file, displayPath: file.path),
+                MCPClientConfigLocation(source: .cursor, fileURL: file, displayPath: file.path,
+                    scope: .project, workspaceRoot: root),
             ]).first)
             XCTAssertTrue(finding.isWrapEligible)
             XCTAssertEqual(finding.wrapCommand, expected[0])

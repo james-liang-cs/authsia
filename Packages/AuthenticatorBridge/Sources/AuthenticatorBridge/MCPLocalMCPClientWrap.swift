@@ -8,15 +8,23 @@ import Foundation
 public enum MCPLocalMCPClientWrap {
     public static let maximumConfigBytes: UInt64 = 1_048_576
 
+    public struct GlobalChange: Equatable, Sendable {
+        public let fileURL: URL
+        public let checksum: String
+        public let replacement: Data
+        public let projectReplacement: Data
+    }
+
     public struct Plan: Equatable, Sendable {
         public let finding: MCPClientServerFinding
         public let fileURL: URL
         public let checksum: String
         public let existingSnippet: String
         public let replacementSnippet: String
-        /// Resolved once, when the plan is built, so the write cannot bind a
-        /// different workspace than the diff the human approved.
+        /// Launch hint captured in the reviewed plan. Cursor expands its
+        /// project variable when starting that project's server.
         public let workspacePath: String?
+        public let globalChange: GlobalChange?
 
         public init(
             finding: MCPClientServerFinding,
@@ -24,7 +32,8 @@ public enum MCPLocalMCPClientWrap {
             checksum: String,
             existingSnippet: String,
             replacementSnippet: String,
-            workspacePath: String? = nil
+            workspacePath: String? = nil,
+            globalChange: GlobalChange? = nil
         ) {
             self.finding = finding
             self.fileURL = fileURL
@@ -32,6 +41,7 @@ public enum MCPLocalMCPClientWrap {
             self.existingSnippet = existingSnippet
             self.replacementSnippet = replacementSnippet
             self.workspacePath = workspacePath
+            self.globalChange = globalChange
         }
     }
 
@@ -62,8 +72,7 @@ public enum MCPLocalMCPClientWrap {
             case .writeFailed:
                 return "Could not write the client file."
             case .missingWorkspaceBinding:
-                return "This client has no repository of its own, so a managed workspace "
-                    + "must be selected before its launch can be protected."
+                return "Select a managed workspace before protecting this client launch."
             }
         }
     }
@@ -99,7 +108,11 @@ public enum MCPLocalMCPClientWrap {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default
     ) throws -> Plan {
-        try plan(
+        if finding.source == .cursor, finding.configScope == .userGlobal {
+            return try planCursorProject(finding: finding, authsiaCommand: authsiaCommand,
+                fileURL: fileURL, homeDirectory: homeDirectory, fileManager: fileManager)
+        }
+        return try plan(
             finding: finding,
             authsiaCommand: authsiaCommand,
             fileURL: fileURL,
@@ -107,6 +120,75 @@ public enum MCPLocalMCPClientWrap {
             fileManager: fileManager,
             allowInsert: false
         )
+    }
+
+    private static func planCursorProject(
+        finding: MCPClientServerFinding,
+        authsiaCommand: String,
+        fileURL: URL?,
+        homeDirectory: URL,
+        fileManager: FileManager
+    ) throws -> Plan {
+        guard finding.precedence != .overridden else { throw WrapError.overriddenByProject }
+        guard finding.isWrapEligible || finding.isAuthsiaProxyLaunch,
+              finding.status != .disabled else { throw WrapError.notWrapEligible }
+        guard let label = finding.workspacePathLabel else { throw WrapError.missingWorkspaceBinding }
+        let root = label.hasPrefix("~/")
+            ? homeDirectory.appendingPathComponent(String(label.dropFirst(2))).path : label
+        guard root.hasPrefix("/") else { throw WrapError.missingWorkspaceBinding }
+        let globalURL = fileURL ?? Self.fileURL(for: finding, homeDirectory: homeDirectory)
+        let before = try readConfig(at: globalURL, fileManager: fileManager)
+        // Keep the global fallback protected but unbound. A project override is
+        // the only entry that may carry that project's policy location.
+        guard var globalObject = try JSONSerialization.jsonObject(with: before) as? [String: Any],
+              var globalServers = globalObject["mcpServers"] as? [String: Any],
+              var globalEntry = globalServers[finding.serverName] as? [String: Any] else {
+            throw WrapError.malformedConfig
+        }
+        let inheritedEntry = globalEntry
+        globalEntry.removeValue(forKey: "cwd")
+        globalServers[finding.serverName] = globalEntry
+        globalObject["mcpServers"] = globalServers
+        let globalAfter = try rewriteJSON(JSONSerialization.data(withJSONObject: globalObject), source: .cursor,
+            serverName: finding.serverName, authsiaCommand: authsiaCommand,
+            workspacePath: nil, projectKey: nil, recoveryValue: recoveryValue(for: finding))
+        let projectURL = URL(fileURLWithPath: root).appendingPathComponent(".cursor/mcp.json")
+        guard projectURL.standardizedFileURL != globalURL.standardizedFileURL else {
+            throw WrapError.notWrapEligible
+        }
+        let projectFinding = MCPClientServerFinding(source: .cursor,
+            serverName: finding.serverName, commandLabel: finding.commandLabel,
+            status: .unadmitted, declaredUpstreamName: finding.declaredUpstreamName,
+            configPathLabel: projectURL.path, configScope: .project, precedence: .effective,
+            workspacePathLabel: root, wrapCommand: finding.wrapCommand,
+            wrapArguments: finding.wrapArguments, isWrapEligible: true,
+            childEnvironmentCount: finding.childEnvironmentCount, configFilePath: projectURL.path)
+        let projectPlan = try plan(finding: projectFinding, authsiaCommand: authsiaCommand,
+            fileURL: projectURL, homeDirectory: homeDirectory, fileManager: fileManager, allowInsert: true)
+        let projectBefore = fileManager.fileExists(atPath: projectURL.path)
+            ? try readConfig(at: projectURL, fileManager: fileManager) : Data("{}".utf8)
+        guard checksum(of: projectBefore) == projectPlan.checksum else { throw WrapError.checksumMismatch }
+        guard var projectObject = try JSONSerialization.jsonObject(with: projectBefore) as? [String: Any] else {
+            throw WrapError.malformedConfig
+        }
+        var projectServers = projectObject["mcpServers"] as? [String: Any] ?? [:]
+        projectServers[finding.serverName] = inheritedEntry
+        projectObject["mcpServers"] = projectServers
+        let inheritedData = try JSONSerialization.data(withJSONObject: projectObject)
+        let projectAfter = try rewriteJSON(inheritedData, source: .cursor,
+            serverName: finding.serverName, authsiaCommand: authsiaCommand,
+            workspacePath: projectPlan.workspacePath, projectKey: nil, recoveryValue: recoveryValue(for: finding))
+        return Plan(finding: projectPlan.finding, fileURL: projectPlan.fileURL,
+            checksum: projectPlan.checksum,
+            existingSnippet: projectPlan.existingSnippet + "\nGlobal entry (\(globalURL.path)):\n"
+                + (try existingSnippet(for: finding, data: before)),
+            replacementSnippet: (try replacementSnippet(for: projectFinding, authsiaCommand: authsiaCommand,
+                data: inheritedData, workspacePath: projectPlan.workspacePath))
+                + "\nGlobal entry (\(globalURL.path)):\n"
+                + (try existingSnippet(for: finding, data: globalAfter)),
+            workspacePath: projectPlan.workspacePath,
+            globalChange: GlobalChange(fileURL: globalURL, checksum: checksum(of: before),
+                replacement: globalAfter, projectReplacement: projectAfter))
     }
 
     private static func plan(
@@ -165,32 +247,46 @@ public enum MCPLocalMCPClientWrap {
         guard checksum(of: data) == plan.checksum else {
             throw WrapError.checksumMismatch
         }
-        let encoded: Data
-        switch plan.finding.source {
-        case .codex:
-            guard let text = String(data: data, encoding: .utf8),
-                  let rewritten = rewriteCodex(
-                    text,
-                    serverName: plan.finding.serverName,
-                    replacement: plan.replacementSnippet
-                  ) else {
-                throw WrapError.malformedConfig
+        if let global = plan.globalChange {
+            guard checksum(of: try readConfig(at: global.fileURL, fileManager: fileManager)) == global.checksum else {
+                throw WrapError.checksumMismatch
             }
-            encoded = Data(rewritten.utf8)
-        case .claude, .cursor, .devin, .vscode, .claudeDesktop:
-            encoded = try rewriteJSON(
-                data,
-                source: plan.finding.source,
-                serverName: plan.finding.serverName,
-                authsiaCommand: authsiaCommand,
-                workspacePath: plan.workspacePath,
-                projectKey: plan.finding.projectKey,
-                recoveryValue: recoveryValue(for: plan.finding)
-            )
-        case .authsiaCatalog:
-            throw WrapError.notWrapEligible
+        }
+        let encoded: Data
+        if let global = plan.globalChange {
+            encoded = global.projectReplacement
+        } else {
+            switch plan.finding.source {
+            case .codex:
+                guard let text = String(data: data, encoding: .utf8),
+                      let rewritten = rewriteCodex(
+                        text,
+                        serverName: plan.finding.serverName,
+                        replacement: plan.replacementSnippet
+                      ) else {
+                    throw WrapError.malformedConfig
+                }
+                encoded = Data(rewritten.utf8)
+            case .claude, .cursor, .devin, .vscode, .claudeDesktop:
+                encoded = try rewriteJSON(
+                    data,
+                    source: plan.finding.source,
+                    serverName: plan.finding.serverName,
+                    authsiaCommand: authsiaCommand,
+                    workspacePath: plan.workspacePath,
+                    projectKey: plan.finding.projectKey,
+                    recoveryValue: recoveryValue(for: plan.finding)
+                )
+            case .authsiaCatalog:
+                throw WrapError.notWrapEligible
+            }
         }
         do {
+            // Clear the global pin first: a subsequent project write failure
+            // must not leave other projects using the old workspace policy.
+            if let global = plan.globalChange {
+                try global.replacement.write(to: global.fileURL, options: .atomic)
+            }
             try fileManager.createDirectory(
                 at: plan.fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
@@ -207,7 +303,9 @@ public enum MCPLocalMCPClientWrap {
         in findings: [MCPClientServerFinding]
     ) -> MCPClientServerFinding? {
         let matches = findings.filter {
-            $0.serverName == serverName && $0.isWrapEligible && $0.precedence != .overridden
+            $0.serverName == serverName
+                && ($0.isWrapEligible || ($0.source == .cursor && $0.configScope == .userGlobal && $0.isAuthsiaProxyLaunch))
+                && $0.precedence != .overridden && $0.status != .disabled
         }
         if let project = matches.first(where: { $0.configScope == .project }) {
             return project
@@ -216,8 +314,8 @@ public enum MCPLocalMCPClientWrap {
     }
 
     /// File a confirmed STDIO enroll writes when the client does not already
-    /// name this server. Prefers an existing project file; otherwise the
-    /// user-global JSON config for that client.
+    /// name this server. Cursor always uses a project file. Other clients prefer
+    /// an existing project file, otherwise their user-global JSON config.
     public static func enrollmentLocation(
         source: MCPClientConfigSource,
         workspacePath: String,
@@ -230,6 +328,7 @@ public enum MCPLocalMCPClientWrap {
             workspaceRoots: [root],
             homeDirectory: homeDirectory
         ).filter { $0.source == source }
+        if source == .cursor, let location = project.first { return location }
         if let existingProject = project.first(where: {
             $0.projectKey == nil && fileManager.fileExists(atPath: $0.fileURL.path)
         }) {
@@ -268,7 +367,7 @@ public enum MCPLocalMCPClientWrap {
             fileManager: fileManager
         )
         let workspaceLabel = location.workspacePathLabel
-            ?? (source.hasWorkspaceOfItsOwn && ![.cursor, .devin].contains(source)
+            ?? (source.hasWorkspaceOfItsOwn
                 ? nil
                 : workspacePath)
         let finding = MCPClientServerFinding(
@@ -318,13 +417,16 @@ public enum MCPLocalMCPClientWrap {
     }
 
     /// The workspace a wrapped launch binds to when the client does not launch
-    /// in its repository (Cursor and Devin desktop launches). Named in the
+    /// in its repository (Cursor project launches). Named in the
     /// environment rather than argv, preserving company command allowlists.
     public static func wrapWorkspacePath(
         for finding: MCPClientServerFinding,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> String? {
-        guard (!finding.source.hasWorkspaceOfItsOwn || [.cursor, .devin].contains(finding.source)),
+        if finding.source == .cursor {
+            return finding.configScope == .project ? "${workspaceFolder}" : nil
+        }
+        guard !finding.source.hasWorkspaceOfItsOwn,
               let label = finding.workspacePathLabel,
               !label.isEmpty else {
             return nil

@@ -240,15 +240,19 @@ Because company allowlists match command plus argv, naming the workspace there
 rather than in argv keeps the two-entry allowlist intact. A Desktop row with no
 managed workspace selected cannot be protected.
 
-Cursor's shared MCP process can launch from the home directory even for a
-project entry. Manager protection and enrollment therefore also record the
-selected workspace in `WORKSPACE_FOLDER_PATHS` for Cursor. The reviewed entry
-binds that workspace explicitly; a user-global entry retains that binding in
-other Cursor projects. Use project entries for separate workspace bindings.
+Cursor protection and enrollment write `.cursor/mcp.json` in the selected
+project, creating the file when necessary. Its `WORKSPACE_FOLDER_PATHS` value is
+`${workspaceFolder}`, expanded by Cursor for that project, never a saved absolute
+path. A missing or unresolved project hint cannot fall back to another project's
+policy. The proxy rejects unresolved or ambiguous hints before startup.
 
-Devin protection and enrollment also record the selected workspace, so its
-global launch does not depend on the client's working directory. VS Code keeps
-its workspace-directory default and receives no pinned environment binding.
+Protecting a user-global Cursor entry prepares two reviewed changes: an unbound
+Authsia proxy fallback in the global file and a project override. Both file
+checksums are checked before writing; the global pin is cleared first, so a
+project write failure cannot leave other projects using the old policy. Existing
+global proxy entries can be repaired through **Protect a client > Cursor**.
+Devin and VS Code global entries use their launch context without a saved project
+pin. Selecting a workspace in Manager never changes another running session.
 
 ### Protect A Listed Server
 
@@ -577,9 +581,14 @@ add credentials, or use a shell wrapper.
 
 The proxy starts and initializes even when it is unbound, the named upstream
 is absent, or its transport is unsupported. Workspace-dependent work then fails
-closed with a stable error. Binding matches `mcp serve`: optional `--workspace`
-is authoritative; otherwise one safe `WORKSPACE_FOLDER_PATHS` hint and then the
-process working directory.
+closed with a stable error. Optional `--workspace` is authoritative; otherwise
+the proxy uses a safe client workspace hint, then the process working directory.
+It accepts `WORKSPACE_FOLDER_PATHS` (one absolute path) and Claude Code's
+`CLAUDE_PROJECT_DIR` (one absolute directory, including names with commas).
+Unresolved, malformed, or conflicting hints stop proxy startup rather than
+falling back to another project's policy. Matching hints are compared after
+path normalization and symlink resolution. Explicit `--workspace` overrides hints.
+This stricter hint handling applies to `mcp proxy`, not `mcp serve`.
 
 ## Runtime Contract
 
@@ -595,9 +604,18 @@ Client configuration and Authsia workspace policy are separate layers:
 
 Global availability does not grant access in every workspace. For STDIO, an
 explicit `--workspace` determines the binding; otherwise the proxy uses a safe
-`WORKSPACE_FOLDER_PATHS` hint, then its process working directory. Selecting a
+`WORKSPACE_FOLDER_PATHS` or `CLAUDE_PROJECT_DIR` hint, then its process working directory. Selecting a
 workspace in Manager only changes the management view and the target of setup
 actions; it does not retarget a running client or proxy.
+
+Claude Code supplies `CLAUDE_PROJECT_DIR` in the MCP child environment for its
+CLI and IDE runtime; Authsia reads it directly, without adding config-time
+interpolation or a global project pin. Codex CLI and its VS Code extension use
+Codex's own MCP configuration, not VS Code's built-in MCP host. An unpinned
+Codex launch uses its session working directory; an explicitly configured MCP
+`cwd` or proxy `--workspace` remains fixed. Open a session in the new project
+when switching; changing Manager's selected workspace does not move an existing
+session. Do not generate global project pins for these clients.
 
 For clients that supply the active repository at launch, an unpinned global
 `playwright` proxy entry can be used from both `project-a`

@@ -6,6 +6,68 @@ import Testing
 
 @Suite("MCP client configuration")
 struct MCPClientConfigurationTests {
+    @Test("proxy workspace hints select each project and never reuse the previous cwd")
+    func proxyWorkspaceSwitching() throws {
+        let previous = try makeWorkspaceRoot()
+        let next = try makeWorkspaceRoot()
+        let unconfigured = try makeWorkspaceRoot()
+        defer {
+            for root in [previous, next, unconfigured] { try? FileManager.default.removeItem(at: root) }
+        }
+        for (root, name) in [(previous, "previous"), (next, "next")] {
+            try WorkspaceConfigStore.write(WorkspaceConfig(
+                workspace: .init(name: name, authsiaFolder: "Workspaces/\(name)"),
+                managedEnvFiles: [], agents: nil), toWorkspaceRoot: root)
+            for key in ["WORKSPACE_FOLDER_PATHS", "CLAUDE_PROJECT_DIR"] {
+                let selected = try MCPCommand.Proxy.startingDirectory(workspace: nil,
+                    environment: [key: root.path], currentDirectoryPath: previous.path)
+                #expect(MCPRuntimeContext(startingDirectory: selected).workspaceName == name)
+            }
+        }
+        let selected = try MCPCommand.Proxy.startingDirectory(workspace: nil,
+            environment: ["WORKSPACE_FOLDER_PATHS": unconfigured.path], currentDirectoryPath: previous.path)
+        #expect(MCPRuntimeContext(startingDirectory: selected).workspaceRoot == nil)
+        for hint in ["${workspaceFolder}", "", "relative", "\(previous.path),\(next.path)"] {
+            #expect(throws: ValidationError.self) {
+                try MCPCommand.Proxy.startingDirectory(workspace: nil,
+                    environment: ["WORKSPACE_FOLDER_PATHS": hint], currentDirectoryPath: previous.path)
+            }
+        }
+        let claudeUnconfigured = try MCPCommand.Proxy.startingDirectory(workspace: nil,
+            environment: ["CLAUDE_PROJECT_DIR": unconfigured.path], currentDirectoryPath: previous.path)
+        #expect(MCPRuntimeContext(startingDirectory: claudeUnconfigured).workspaceRoot == nil)
+        for hint in ["${workspaceFolder}", "", "relative", "/tmp/project\nother"] {
+            #expect(throws: ValidationError.self) {
+                try MCPCommand.Proxy.startingDirectory(workspace: nil,
+                    environment: ["CLAUDE_PROJECT_DIR": hint], currentDirectoryPath: previous.path)
+            }
+        }
+        #expect(throws: ValidationError.self) {
+            try MCPCommand.Proxy.startingDirectory(workspace: nil,
+                environment: ["WORKSPACE_FOLDER_PATHS": previous.path, "CLAUDE_PROJECT_DIR": next.path],
+                currentDirectoryPath: previous.path)
+        }
+        let matching = try MCPCommand.Proxy.startingDirectory(workspace: nil,
+            environment: ["WORKSPACE_FOLDER_PATHS": next.path, "CLAUDE_PROJECT_DIR": next.path],
+            currentDirectoryPath: previous.path)
+        #expect(MCPRuntimeContext(startingDirectory: matching).workspaceName == "next")
+        let explicit = try MCPCommand.Proxy.startingDirectory(workspace: next.path,
+            environment: ["CLAUDE_PROJECT_DIR": "relative"], currentDirectoryPath: previous.path)
+        #expect(MCPRuntimeContext(startingDirectory: explicit).workspaceName == "next")
+        let fallback = try MCPCommand.Proxy.startingDirectory(workspace: nil,
+            environment: [:], currentDirectoryPath: next.path)
+        #expect(MCPRuntimeContext(startingDirectory: fallback).workspaceName == "next")
+        let commaPath = next.appendingPathComponent("project,with-comma").path
+        let commaDirectory = try MCPCommand.Proxy.startingDirectory(workspace: nil,
+            environment: ["CLAUDE_PROJECT_DIR": commaPath], currentDirectoryPath: previous.path)
+        #expect(commaDirectory.path == URL(fileURLWithPath: commaPath).resolvingSymlinksInPath().path)
+        #expect(throws: ValidationError.self) {
+            try MCPCommand.Proxy.startingDirectory(workspace: nil,
+                environment: ["WORKSPACE_FOLDER_PATHS": next.path, "CLAUDE_PROJECT_DIR": "relative"],
+                currentDirectoryPath: previous.path)
+        }
+    }
+
     @Test("all supported clients receive deterministic global configuration")
     func supportedClients() throws {
         let fixture = try makeFixture()

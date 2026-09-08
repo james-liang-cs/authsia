@@ -63,6 +63,7 @@ public enum MCPProxyClientLaunch: Sendable {
         arguments: [String],
         environmentName: String?
     ) -> String? {
+        guard let arguments = withoutWorkspaceArgument(arguments) else { return nil }
         if arguments.count == 4,
            Array(arguments.prefix(3)) == ["mcp", "proxy", legacyUpstreamFlag] {
             return validUpstreamName(arguments[3])
@@ -74,9 +75,20 @@ public enum MCPProxyClientLaunch: Sendable {
     }
 
     public static func isProxyLaunch(arguments: [String]) -> Bool {
-        arguments == Self.arguments
+        guard let arguments = withoutWorkspaceArgument(arguments) else { return false }
+        return arguments == Self.arguments
             || (arguments.count == 4
                 && Array(arguments.prefix(3)) == ["mcp", "proxy", legacyUpstreamFlag])
+    }
+
+    private static func withoutWorkspaceArgument(_ arguments: [String]) -> [String]? {
+        guard let index = arguments.firstIndex(of: "--workspace") else { return arguments }
+        guard index >= 2, arguments.indices.contains(index + 1),
+              arguments[index + 1].hasPrefix("/"),
+              arguments.filter({ $0 == "--workspace" }).count == 1 else { return nil }
+        var result = arguments
+        result.removeSubrange(index...index + 1)
+        return result
     }
 
     public static func validUpstreamName(_ value: String?) -> String? {

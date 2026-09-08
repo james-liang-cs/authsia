@@ -441,6 +441,29 @@ struct MCPCommand: AsyncParsableCommand {
     struct Proxy: AsyncParsableCommand {
         var mcpAccessEnabledOverride: Bool?
 
+        static func startingDirectory(
+            workspace: String?, environment: [String: String], currentDirectoryPath: String
+        ) throws -> URL {
+            if let workspace { return URL(fileURLWithPath: workspace, isDirectory: true) }
+            var hintedDirectory: URL?
+            // Claude Code supplies this for both its CLI and IDE runtime. Read it
+            // in the child process; config interpolation happens before it is set.
+            for key in [MCPProxyClientLaunch.workspaceEnvironmentKey, "CLAUDE_PROJECT_DIR"] {
+                guard let hint = environment[key] else { continue }
+                guard hint.hasPrefix("/"), !hint.contains("${"),
+                      (key != MCPProxyClientLaunch.workspaceEnvironmentKey || !hint.contains(",")),
+                      hint.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+                    throw ValidationError("The MCP proxy workspace hint is unresolved or ambiguous. Reopen the project in the client before retrying.")
+                }
+                let directory = URL(fileURLWithPath: hint, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
+                if let hintedDirectory, hintedDirectory != directory {
+                    throw ValidationError("The MCP proxy workspace hints conflict. Reopen the project with matching client workspace context before retrying.")
+                }
+                hintedDirectory = directory
+            }
+            return hintedDirectory ?? URL(fileURLWithPath: currentDirectoryPath, isDirectory: true)
+        }
+
         static let configuration = CommandConfiguration(
             abstract: "Proxy a named workspace upstream over local stdio"
         )
@@ -465,7 +488,7 @@ struct MCPCommand: AsyncParsableCommand {
                 flag: upstream,
                 environment: environment
             )
-            let startingDirectory = MCPCommand.startingDirectory(
+            let startingDirectory = try Self.startingDirectory(
                 workspace: workspace,
                 environment: environment,
                 currentDirectoryPath: FileManager.default.currentDirectoryPath
