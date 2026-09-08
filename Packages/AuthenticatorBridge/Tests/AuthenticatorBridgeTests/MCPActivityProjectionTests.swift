@@ -2,6 +2,19 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPActivityProjectionTests: XCTestCase {
+    func testIncompleteEvidenceInAnotherWorkspaceDoesNotWarnForFilteredWorkspace() {
+        let events = [MCPHTTPActivityRecording.commandEvent(from: event(
+            id: UUID(), workspace: "/tmp/quiet", tool: "read", outcome: .succeeded))]
+        let pending = [event(id: UUID(), workspace: "/tmp/other", tool: "read", outcome: .started)]
+        let query = MCPActivityQuery(workspacePath: "/tmp/quiet")
+        let page = MCPActivityProjection.page(events: events, pendingEvidence: pending, query: query)
+        XCTAssertEqual(page.sourceHealth, .ok)
+        XCTAssertNil(page.message)
+        XCTAssertEqual(MCPActivityProjection.page(events: events, pendingEvidence: pending).sourceHealth, .incomplete)
+        XCTAssertEqual(MCPActivityProjection.page(events: events, evidenceOverflow: true, query: query).sourceHealth, .incomplete)
+        XCTAssertEqual(MCPActivityProjection.page(events: events, unavailableSources: ["managementJournal"], query: query).sourceHealth, .incomplete)
+    }
+
     func testHTTPWriterHistoryProjectionMergesOneCallAndKeepsRepeatedInvocationsSeparate() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

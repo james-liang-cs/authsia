@@ -288,7 +288,7 @@ public enum MCPActivityProjection {
         let paged = records.filter { cursor == nil || afterCursor($0, cursor: cursor!) }
         let pageRecords = Array(paged.prefix(query.limit))
         let truncated = paged.count > query.limit
-        let incomplete = evidenceOverflow || !unavailableSources.isEmpty || all.contains { $0.evidenceStatus != "recorded" }
+        let incomplete = evidenceOverflow || !unavailableSources.isEmpty || records.contains { $0.evidenceStatus != "recorded" }
         let health: MCPActivitySourceHealth = !unavailableSources.isEmpty && all.isEmpty ? .unavailable
             : incomplete ? .incomplete : truncated || managementRetentionLimited ? .truncated : .ok
         let completeness = health.rawValue == "ok" ? "complete" : health.rawValue

@@ -147,7 +147,7 @@ public enum MCPServerReadinessProjection {
             let enrollable = effective.contains { $0.canEnrollHTTP == true }
             if server.transport == .stdio {
                 next = .init(kind: "wrap", label: "Protect connection", reason: "Route a supported client through Authsia.")
-            } else if enrollable {
+            } else if effective.isEmpty || enrollable {
                 next = .init(kind: "enrollHTTP", label: "Protect connection", reason: "Point a supported client at the protected localhost endpoint.")
             } else {
                 next = .init(kind: "observe", label: "Configure the client endpoint", reason: "This HTTP client has no automatic enrollment writer.")

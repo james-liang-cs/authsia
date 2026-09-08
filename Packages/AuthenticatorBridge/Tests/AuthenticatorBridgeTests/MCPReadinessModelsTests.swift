@@ -3,6 +3,20 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPReadinessModelsTests: XCTestCase {
+    func testHTTPWithoutClientRecommendsEnrollment() {
+        let server = MCPServerSnapshot(
+            id: "fixture-http",
+            identity: MCPServerIdentity(workspacePath: "/tmp/fixture", upstreamName: "fixture-http"),
+            displayName: "fixture-http",
+            transport: .http,
+            endpointLabel: "http://127.0.0.1:9000/mcp",
+            policy: .init(allow: ["read"]),
+            catalog: []
+        )
+        let readiness = MCPServerReadinessProjection.readiness(for: server)
+        XCTAssertEqual(readiness.next?.kind, "enrollHTTP")
+    }
+
     func testCredentialedSTDIOCatalogBlockDoesNotResetLaunchOrProtectNext() {
         let association = MCPClientAssociation(
             id: "filesystem-codex",
