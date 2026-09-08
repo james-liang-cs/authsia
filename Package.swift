@@ -17,7 +17,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/apple/swift-argument-parser",
-            exact: "1.7.0"
+            exact: "1.8.2"
         ),
         .package(
             url: "https://github.com/modelcontextprotocol/swift-sdk.git",
@@ -25,7 +25,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/apple/swift-nio.git",
-            exact: "2.101.3"
+            exact: "2.102.0"
         )
     ],
     targets: [
