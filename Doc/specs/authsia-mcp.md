@@ -623,8 +623,9 @@ Authsia binary. It always prints the `authsia mcp serve` entry. Proxy wrap
 write, company allowlist shape, and the known-client scan are specified in
 [`authsia-mcp-proxy.md`](authsia-mcp-proxy.md#user-flow).
 `mcp configure` does not edit third-party configuration, launch the client, add
-credentials, or use a shell wrapper. Confirmed Wrap / `mcp wrap --write` may
-replace a scanned launch after a checksum check.
+credentials, or use a shell wrapper. Confirmed MCP Manager **Protect
+connection** / `mcp wrap --write` may replace a scanned launch after a
+checksum check.
 
 Before using the configured client, the user explicitly enables **MCP
 Integrations** under Authsia **Settings > Developer Access**. Client

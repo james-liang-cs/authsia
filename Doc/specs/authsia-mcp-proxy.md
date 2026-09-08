@@ -17,7 +17,7 @@ in the private Access Center spec.
 - [Purpose](#purpose)
 - [Complementary Lanes](#complementary-lanes)
 - [User Flow](#user-flow)
-  - [Read The MCP Proxy Tab](#read-the-mcp-proxy-tab)
+  - [Operator Surfaces](#operator-surfaces)
   - [Preconditions](#preconditions)
   - [Find The Server](#find-the-server)
   - [Protect A Listed Server](#protect-a-listed-server)
@@ -54,13 +54,13 @@ configuration changes, and serves validated localhost Streamable HTTP through
 `127.0.0.1:8788`. It does not add tools to `authsia mcp serve`.
 
 There is no client setting that intercepts a server the client already
-launches. The client must start Authsia instead of the child command. Access
-Center **Wrap** / **Write wrap** and `authsia mcp wrap --write` may replace a
-scanned client launch after confirmation and a checksum check. The MCP Manager
-**Protect a client** action may insert the same proxy launch when that JSON
-client does not already name the declared server. Authsia never
-silent-rewrites. `mcp configure` still prints only. Workspace Setup does not
-write `mcpUpstreams`.
+launches. The client must start Authsia instead of the child command. MCP
+Manager **Protect connection** / **Protect a client** and
+`authsia mcp wrap --write` may replace a scanned client launch after
+confirmation and a checksum check. **Protect a client** may insert the same
+proxy launch when that JSON client does not already name the declared server.
+Authsia never silent-rewrites. `mcp configure` still prints only. Workspace
+Setup does not write `mcpUpstreams`.
 
 Company policy allowlists Authsia. Workspace `mcpUpstreams` names each child.
 Admission, redacted call evidence, and revoke-kill apply only on the wrapped
@@ -95,10 +95,12 @@ parity, executable attestation, or DLP.
 
 ## User Flow
 
-Coverage lists wrap-safe stdio launches already present in a known client MCP
-file. **Protect server** exists only on those rows. A local tool that is not
-scanned, or that Coverage hides, has no Protect button. Follow [Find The
-Server](#find-the-server), then the matching branch.
+MCP Manager **Servers** lists wrap-safe stdio launches already present in a
+known client MCP file. **Protect connection** / **Protect a client** exist only
+on those rows. A local tool that is not scanned, or that Servers hides, has no
+Protect action. Follow [Find The Server](#find-the-server), then the matching
+branch. Access Center does not host protection coverage or unowned proxy
+decisions.
 
 Managed wrap writes retain validated, credential-free launch metadata in
 `AUTHSIA_MCP_LAUNCH`. Manager can use it to prepare a missing workspace
@@ -119,12 +121,12 @@ without opening details. Compact layouts retain the client labels with the badge
  scanned client entry
           |
           v
- Access Center → MCP proxy → Protection coverage
+ MCP Manager → Servers (protection coverage)
           |
-          +-- direct / not wrapped ------> Protect server
-          +-- proxy missing policy ------> Declare in workspace
+          +-- direct / not wrapped ------> Protect connection
+          +-- proxy missing policy ------> Configure / Use existing setup
           +-- unsafe launch -------------> fix the client entry, then Protect
-          +-- no row --------------------> declare + wrap manually
+          +-- no row --------------------> Add server, then Protect a client
           |
           v
  client launches: authsia mcp proxy
@@ -137,8 +139,8 @@ without opening details. Compact layouts retain the client labels with the badge
           |
           +-- first tools/call
                    |
-                   +-- fails before grant -> Recent proxy decisions
-                   |                         without a grant
+                   +-- fails before grant -> Manager Activity
+                   |                         Grants: None recorded
                    |
                    +-- grant reused or admission / secret JIT approved
                               |
@@ -146,44 +148,51 @@ without opening details. Compact layouts retain the client labels with the badge
                        owned active grant → child starts
                               |
                               v
-                       redacted tool activity
+                       Manager Activity + Access Center grant
                               |
                               v
                        revoke / expiry → child stops
 ```
 
-### Read The MCP Proxy Tab
+### Operator Surfaces
 
-The tab combines three related views. They are not three names for the same
-state:
+These three views are not three names for the same state. Coverage and unowned
+call history live in MCP Manager. Access Center keeps runtime grants.
 
-| Area | What it answers | Does it mean the child is running? |
-| --- | --- | --- |
-| Admission and proxy grants | Which approved proxy sessions are active or retained in grant history? | An active grant is the authority; the proxy stops the child after it observes revoke or expiry. |
-| Protection coverage | Which known client launches are wrapped, bypassing, incomplete, or ready to protect in each workspace? | No. This is configuration state from the read-only client scan. |
-| Recent proxy decisions without a grant | Which proxy calls failed or were rejected before Authsia created an owned grant? | No. These are historical failure decisions, not grants or server rows. |
+| Surface | Area | What it answers | Does it mean the child is running? |
+| --- | --- | --- | --- |
+| Access Center → **MCP proxy** | Admission and proxy grants | Which approved proxy sessions are active or retained in grant history? | An active grant is the authority; the proxy stops the child after it observes revoke or expiry. |
+| MCP Manager → **Servers** | Protection coverage | Which known client launches are wrapped, bypassing, incomplete, or ready to protect in each workspace? | No. This is configuration state from the read-only client scan. Footer copy: protection describes configuration; runtime access is **Active access**. |
+| MCP Manager → **Activity** | Calls, including decisions without a grant | Which proxy or HTTP calls were observed, including those that failed or were rejected before Authsia created an owned grant? | No. An inspector **Grants: None recorded** row is historical evidence, not a grant or server row. |
 
-**Protected, awaiting use** means the scanned client launch points through
-Authsia, its workspace declaration is usable, and no matching active grant has
-yet verified runtime use. “Protected” describes the launch configuration; it
-does not mean a child is currently running or that access is already approved.
-A user-global row may represent several workspaces. Its **N workspaces** menu
-lists their shortest unique path labels; choosing one filters grants,
-Coverage, and recent unowned proxy decisions to that workspace.
+Access Center’s MCP proxy filter shows a Local MCP status strip and **Open MCP
+Manager**. The strip states that server setup, protection status, and catalogs
+are managed in MCP Manager, and that Access Center shows runtime grants and
+approvals. That strip appears only on **MCP proxy**, not All, Authsia MCP, or
+Direct agents.
+
+**Protected configuration** on a Servers row means the scanned client launch
+points through Authsia and its workspace declaration is usable. It does not
+mean a child is currently running or that access is already approved. Manager
+**Active access** and Access Center list matching grants when runtime use has
+been verified. A user-global client entry may represent several workspaces.
+Choose the workspace in Manager’s sidebar, or Access Center’s Workspace menu
+for grants; a declaration in repository A never authorizes repository B.
 
 **No grant created** means the proxy failed closed before it obtained an owned,
 revocable grant. The request may have been denied by settings or tool policy,
 or failed because the workspace, upstream, transport, child, or advertised tool
-was unavailable. Access Center titles that list **Recent proxy decisions
-without a grant**; the row is retained so a failed attempt does not disappear
-from operator visibility. It grants no authority.
+was unavailable. Manager Activity retains that row so a failed attempt does not
+disappear from operator visibility. It grants no authority. Export the same
+slice with `authsia mcp activity export --json --unowned`.
 
 ### Preconditions
 
 - An initialized, validated Authsia workspace.
 - **MCP Integrations** enabled under Authsia **Settings > Developer Access**.
   The setting is off by default. Configuring a client does not turn it on.
-  The Settings toggle opens Coverage; Coverage can turn it on. Enabling it
+  The Settings toggle opens Access Center’s **MCP proxy** filter. That strip
+  can turn the setting on and offers **Open MCP Manager**. Enabling it
   creates no grant and bypasses no Bridge or JIT check.
 
 MCP setup and launch commands (`configure`, `wrap`, `unwrap`, `declare`, `catalog`, `serve`, `proxy`, `start`, and `restart`) fail while MCP Integrations is off, before starting listeners or changing configuration. The error directs you to enable **MCP Integrations** in **Authsia Settings > Developer Access**, then retry. The CLI never changes the toggle. Help, `status`, `doctor`, `activity export`, `stop`, and portal revocation remain available for inspection and cleanup. Portal changes also recheck the toggle when prepared and confirmed.
@@ -192,29 +201,31 @@ MCP setup and launch commands (`configure`, `wrap`, `unwrap`, `declare`, `catalo
 
 1. Initialize and validate the managed Authsia workspace.
 2. Enable **MCP Integrations**.
-3. Open Access Center and choose the **MCP proxy** grant-source filter. The
-   Local MCP status strip and **Review protection** live only on that filter
-   (not All, Authsia MCP, or Direct agents). Coverage itself stays on MCP proxy
-   as well.
-4. Choose the workspace that owns the tool.
-5. Expand Coverage (**Show coverage** or **Review protection**). Coverage is
-   collapsed by default.
+3. Open MCP Manager (`authsia mcp start`, or Access Center → **MCP proxy** →
+   **Open MCP Manager**). The Local MCP status strip lives only on that Access
+   Center filter (not All, Authsia MCP, or Direct agents).
+4. Choose the workspace that owns the tool in Manager’s sidebar.
+5. Review **Servers**. Filter by protection status (**Bypassing Authsia**,
+   **Protected configuration**, **Needs setup**) or client. **Discover
+   servers** rescans supported client files; it does not start servers or
+   request runtime authority.
 
-Coverage shows wrap-eligible **Direct launch** and **Not wrapped** rows, a
-proxy launch whose upstream is missing from that workspace, **Pin a PATH
-binary** rows for shells and absolute `npx` / `uvx` launchers (no Protect),
-**Launch setting not carried** rows for an entry that sets something workspace
-policy has no field for (`cwd`; no Protect until it is resolved in the client
-file), **Protected, record tools**, and **Protected, no tools listed** for a
-wrapped upstream whose declared env forbids the probe, or whose scanned client
-entry set child environment values, and whose policy names
-no tool. **Protected, awaiting use** is a valid wrapped launch with no matching
-active grant; use its workspace label or **N workspaces** menu to see where the
+Servers shows wrap-eligible **Direct launch** and **Not wrapped** associations
+as **Bypassing Authsia** or **Needs setup**, a proxy launch whose upstream is
+missing from that workspace, **Pin a PATH binary** rows for shells and
+absolute `npx` / `uvx` launchers (no Protect), **Launch setting not carried**
+rows for an entry that sets something workspace policy has no field for
+(`cwd`; no Protect until it is resolved in the client file), and wrapped
+upstreams whose declared env forbids the probe, or whose scanned client entry
+set child environment values, and whose policy names no tool. Open the server
+to **Record catalog** or name tools in **Edit policy**. A **Protected
+configuration** row with no matching active grant is wrapped and awaiting
+runtime use; choose the workspace in the sidebar to see where the
 configuration applies. It hides a launch the client file marks disabled, an
-Authsia proxy launch with no valid upstream name, and wrapped rows that already
-have a live grant plus a recorded catalog. Absolute Homebrew or `/usr/local`
-binaries wrap as a PATH basename. Coverage rescans when Access Center appears,
-when the app becomes active, and every 30 seconds while the pane is open.
+Authsia proxy launch with no valid upstream name, and does not treat a live
+grant as extra coverage. Absolute Homebrew or `/usr/local` binaries wrap as a
+PATH basename. Discover and Refresh reload the registry; they do not run on
+Access Center.
 
 Supported scanned clients: Codex, Claude Code, Cursor, Devin Desktop (Windsurf
 uses the Devin config path), and Visual Studio Code (including Copilot MCP).
@@ -256,8 +267,8 @@ pin. Selecting a workspace in Manager never changes another running session.
 
 ### Protect A Listed Server
 
-When Coverage shows the server and **Protect server** is available, use it on
-the winning (usually project) file. Authsia declares command and argv in
+When Servers shows the server and **Protect connection** / **Protect a
+client** is available, use it on the winning (usually project) file. Authsia declares command and argv in
 `mcpUpstreams` when needed and, after showing the current entry, protected
 entry, and a SHA256 checksum, writes the scanned client file. For a
 credential-less stdio entry with empty `allow` and `approve`, Protect then
@@ -275,16 +286,16 @@ set for the child, and states how many there were; and a bare `npx` / `uvx`
 launcher pins the launcher rather than what it fetches. Keys the entry sets
 that `mcpUpstreams` cannot carry block Protect instead of being dropped. Project-scoped Claude, Cursor, and VS Code entries override matching
 user-global entries; an overridden write is refused. Authsia never rewrites a
-client file silently. If catalog recording is skipped or declined, Coverage
-keeps **Protected, record tools** and **Record catalog**. `authsia mcp catalog
---write` remains the terminal equivalent, including after `mcp wrap --write`.
+client file silently. If catalog recording is skipped or declined, the server
+detail keeps **Record catalog**. `authsia mcp catalog --write` remains the
+terminal equivalent, including after `mcp wrap --write`.
 
 Then continue at [After Wrap](#after-wrap).
 
 ### When Coverage Does Not List The Server
 
-There is no Protect button. Declare policy by hand, then point the client at
-the proxy. Details of the `mcpUpstreams` object are in
+There is no Protect action on Servers. Declare policy by hand, then point the
+client at the proxy. Details of the `mcpUpstreams` object are in
 [Declare The Upstream](#declare-the-upstream). Client file shapes are in
 [Print And Apply Client Configuration](#print-and-apply-client-configuration).
 
@@ -316,21 +327,22 @@ reported.
 
 ### When Protect Is Unavailable
 
-**Declare in workspace** is for a Coverage row that already launches
-`authsia mcp proxy` but has no matching `mcpUpstreams` entry. Wrap cannot infer
-child argv from a proxy launch. Declare writes command and argv into each
-selected workspace (`authsia mcp declare --server <name> --command <bin>`);
-it does not require operators to list child tool names. A credential-less
-empty `allow` / `approve` entry still needs catalog recording afterward.
+**Configure in Authsia** / **Use existing setup** is for a Servers row that
+already launches `authsia mcp proxy` but has no matching `mcpUpstreams` entry
+in the selected workspace. Wrap cannot infer child argv from a proxy launch.
+`authsia mcp declare --server <name> --command <bin>` writes command and argv
+into that workspace; it does not require operators to list child tool names.
+A credential-less empty `allow` / `approve` entry still needs catalog
+recording afterward.
 
-If Coverage lists the server as **Pin a PATH binary**, the launch is a shell
+If Servers lists the server as **Pin a PATH binary**, the launch is a shell
 or absolute `npx` / `uvx` launcher. Install a PATH basename for that child,
 change the client entry to that command, then Protect when the row becomes
 wrap-eligible. An Authsia proxy with no valid upstream name stays hidden.
 
 **Copy manual recipe** and `authsia mcp wrap --write --server <name> --yes`
 remain fallbacks for wrap-eligible scanned rows. They are not a substitute
-when Coverage has no row.
+when Servers has no row.
 
 ### After Wrap
 
@@ -346,8 +358,9 @@ Access Center when done.
 
 ### Remove Protection
 
-Protection is reversible. **Remove protection** on a protected Coverage row,
-and `authsia mcp unwrap --write --server <name>`, restore the client entry to
+Protection is reversible. **Remove protection** on a protected Servers
+association, and `authsia mcp unwrap --write --server <name>`, restore the
+client entry to
 the command and argv the workspace declares, after showing the protected entry,
 the restored entry, and a SHA256 checksum. The write is refused when the client
 file changed underfoot, when that exact workspace no longer declares the
@@ -363,10 +376,11 @@ written into a client file, because only the proxy resolves them. Both are
 named before the write.
 
 Workspace policy is left alone. The `mcpUpstreams` entry keeps its recorded
-catalog and any hand-placed `allow` / `approve`, so Coverage moves the row to
-**Bypasses protection** and Protect restores protection without recording the
-catalog again. Reopen the client afterwards. A restored launch is a direct
-launch: its tool calls are no longer admitted, audited, or revocable.
+catalog and any hand-placed `allow` / `approve`, so Servers moves the
+association to **Bypassing Authsia** and Protect restores protection without
+recording the catalog again. Reopen the client afterwards. A restored launch
+is a direct launch: its tool calls are no longer admitted, audited, or
+revocable.
 
 ## Company Local MCP Allowlist
 
@@ -404,14 +418,15 @@ Generated client configuration uses a stable `mcp proxy` argv plus
 ## Declare The Upstream
 
 Add one named entry to the optional `mcpUpstreams` array in
-`.authsia/workspace.json`. That array is the admission allowlist. Access Center
-**Wrap** is the operator action for a wrap-eligible scanned stdio server: it
-declares command and argv and writes the scanned client launch after
-confirmation. **Declare in workspace** remains for a missing declaration when
-the client already launches `mcp proxy` and Wrap cannot infer child argv:
-Access Center and `authsia mcp declare --server <name> --command <bin>` write
-that child. `authsia mcp declare --server <name> --url <loopback-http>` declares
-a validated localhost Streamable HTTP endpoint instead; that path is served by
+`.authsia/workspace.json`. That array is the admission allowlist. MCP Manager
+**Protect connection** / **Protect a client** is the operator action for a
+wrap-eligible scanned stdio server: it declares command and argv and writes
+the scanned client launch after confirmation. **Configure in Authsia** /
+**Use existing setup** remains for a missing declaration when the client
+already launches `mcp proxy` and Wrap cannot infer child argv:
+`authsia mcp declare --server <name> --command <bin>` writes that child.
+`authsia mcp declare --server <name> --url <loopback-http>` declares a
+validated localhost Streamable HTTP endpoint instead; that path is served by
 the MCP Manager, not by `mcp proxy`. Workspace Setup still does not write
 `mcpUpstreams`.
 
@@ -476,9 +491,9 @@ Credential-less example that lets Authsia discover the child catalog:
 
 ## Print And Apply Client Configuration
 
-The write path is Access Center **Wrap** / **Write wrap**, or `authsia mcp wrap
---write --server <name>` (prints a plan; `--yes` writes). `mcp configure`
-stays print-only.
+The write path is MCP Manager **Protect connection** / **Protect a client**,
+or `authsia mcp wrap --write --server <name>` (prints a plan; `--yes` writes).
+`mcp configure` stays print-only.
 
 From the managed workspace, the fallback print is:
 
@@ -512,7 +527,7 @@ The printed `mcp configure` form remains print-only.
 The printed form is a user-global fallback derived from the currently bound
 workspace. It is effective only when that workspace declares the named
 upstream and no project-scoped entry overrides it. For Claude, Cursor, and VS
-Code, prefer Wrap on the matching project file. Access Center copy
+Code, prefer Protect on the matching project file. Manager and CLI copy
 recipes remain a fallback and target the exact scanned scope; they never emit a
 user-global install command for a project file.
 
@@ -542,10 +557,10 @@ The delivered output uses user-global Codex `~/.codex/config.toml`, Claude Code
 `~/.config/devin/mcp_config.json`, and the VS Code user-profile `mcp.json`
 shapes. Configuration formats remain client-owned compatibility surfaces, not
 part of Authsia authorization. `mcp configure` still prints only. Confirmed
-**Write wrap** / `authsia mcp wrap --write` may replace a scanned server entry
-after a checksum check; the manager **Protect a client** path may insert the
-same proxy launch when that client file has no matching key. Authsia does not silent-rewrite, launch the client,
-add credentials, or use a shell wrapper.
+MCP Manager **Protect connection** / `authsia mcp wrap --write` may replace a
+scanned server entry after a checksum check; **Protect a client** may insert
+the same proxy launch when that client file has no matching key. Authsia does
+not silent-rewrite, launch the client, add credentials, or use a shell wrapper.
 
 ## Technical Flow
 
@@ -861,8 +876,9 @@ protection debt to work off. The scanner counts how many environment values an
 entry sets for its child, never their names or values, so the wrap can say what
 it will not copy. Findings from a client with no repository of its own are
 advisory and excluded from the doctor verdict. The scanner never edits client
-configuration. Confirmed **Wrap** / **Write wrap** may replace a
-scanned launch after a checksum check; that write is not the scan. A direct or
+configuration. Confirmed MCP Manager **Protect connection** /
+`authsia mcp wrap --write` may replace a scanned launch after a checksum
+check; that write is not the scan. A direct or
 unadmitted entry is visibility only until wrapped: Authsia cannot audit those
 calls, kill them on revoke, or prevent launch. An empty or partial allowlist
 therefore fails open and can only affect the displayed finding. Command/argv
@@ -871,60 +887,33 @@ instead of a drifting package launcher when stronger identity matters.
 
 ## Access Center
 
-Access Center remains the operator surface for proxy grants. It labels them as
-`<client> via Authsia MCP proxy <upstream>`, derives its timeline from existing
-grant and activity records without retaining raw frames, and revokes through
-the existing Bridge-owned control. A long-lived proxy observes the revoked
-snapshot and terminates its child process group; Access Center does not signal
-the child directly.
+Access Center remains the operator surface for proxy **grants**. It labels them
+as `<client> via Authsia MCP proxy <upstream>`, derives its timeline from
+existing grant and activity records without retaining raw frames, and revokes
+through the existing Bridge-owned control. A long-lived proxy observes the
+revoked snapshot and terminates its child process group; Access Center does
+not signal the child directly.
 
 The **MCP proxy** filter lists admission and `proxy:<upstream>` grants first.
 Active admission rows show **Access expires in** with a live countdown and an
 explicit **Renew admission** action. Renewal extends that grant in place: the
 same grant ID, a fresh expiry, and a wrapped server that keeps running. Only
 Authsia.app may renew, and only an active admission.
-Scan findings sit in a protection-coverage strip grouped by effective status,
-not workspace path. Coverage is collapsed by default; the operator expands
-it. The strip still shows progress and the next onboarding step while hidden.
-**Protect server** declares and/or writes as required by that row. It requires
-confirmation for client writes and refuses an overridden user-global row. The
-plan snippet keeps child env keys and replaces every value. For a
-credential-less launch whose scanned entry set no child environment and whose
-policy still has empty `allow` and `approve`,
-Protect then records the catalog behind the same local admission. If that
-probe is skipped because the scanned entry set environment values, the row
-lands in **Protected, no tools listed**. If the probe fails, the row stays
-**Protected, record tools** until
-**Record catalog** captures what the child advertises. Coverage rows show one
-line of status explanation for Bypasses protection, Ready to protect, and
-Protected, awaiting use, not only in VoiceOver. The strip shows
-protected known launches over total
-effective known launches, plus the next onboarding step. The Agent grants Workspace menu filters every source tab; it
-lists **~** for grants with no workspace, the same pinned and recent local
-workspaces Workspace Center shows that still exist on this Mac, and existing
-roots of active proxy grants. It omits
-historical grant paths even when the folder is still on disk. Project config
-scans use the same roots so a newly used workspace is visible before it is
-added to Workspace Center. The strip includes wrap-eligible Direct
-launch and Not wrapped rows,
-**Pin a PATH binary** rows for shells and absolute package launchers,
-**Protected, awaiting use** for wrapped entries with no matching active grant,
-and valid Authsia proxy entries even when
-their upstream is not declared in that workspace. It hides an Authsia proxy
-launch with no valid upstream name. A collapsed user-global row exposes an
-**N workspaces** menu that names each represented workspace and filters grants
-and Coverage when one is chosen.
 
-Below Coverage, **Recent proxy decisions without a grant** shows at most the
-five newest proxy command events whose grant ID is absent, filtered by the
-same Workspace menu as grants and Coverage. Each row is historical evidence:
-the declared upstream name when `agentID` is `proxy:<name>`, else the
-executable basename; MCP tool name; coarse outcome capsule; and age. It is
-not an active-server list and does not add to protection coverage. The
-section title states that no grant was created; the request received no
-authority and no long-lived child was admitted.
-Presentation rules live in the Access Center spec; this document owns the wrap,
-admission, and revoke-kill contract those rows display.
+That filter’s Local MCP status strip reports MCP Integrations on/off and
+directs setup to MCP Manager. **Open MCP Manager** is the action. The strip
+does not host protection coverage or unowned proxy decisions. When no grants
+match, the empty-result copy tells the operator to review server setup and
+protection in MCP Manager.
+
+The Agent grants Workspace menu filters every source tab; it lists **~** for
+grants with no workspace, the same pinned and recent local workspaces
+Workspace Center shows that still exist on this Mac, and existing roots of
+active proxy grants. It omits historical grant paths even when the folder is
+still on disk. Presentation rules live in the Access Center spec; this
+document owns the wrap, admission, and revoke-kill contract those grant rows
+display. Coverage, Protect, catalog recording, and unowned call history are
+owned by [MCP Manager](#mcp-manager-and-local-streamable-http).
 
 ## MCP Manager And Local Streamable HTTP
 
@@ -936,14 +925,20 @@ connection ends. The manager binds its protected MCP listener at
 `http://127.0.0.1:8788`.
 
 The portal aggregates `mcpUpstreams` from pinned and known managed workspaces,
-then overlays the existing client-configuration scan. It exposes only sanitized
-launch labels, tool policy/catalog, credential labels, associations, and redacted
-STDIO and HTTP activity. A one-use 256-bit fragment capability is exchanged for an
-HttpOnly SameSite cookie plus a memory-only request proof. Both are required for
-API access; Host is restricted to the exact portal authority. Mutations require
-the exact Origin. Authenticated same-origin GETs may omit Origin and Referer,
-as browsers do with the portal's no-referrer policy; cross-site Fetch Metadata
-is rejected. Scripts are bundled and authorized by a content hash.
+then overlays the existing client-configuration scan. **Servers** is the
+protection-coverage surface: declared servers, discovered client entries, and
+per-client **Protected configuration** / **Bypassing Authsia** / **Needs
+setup** badges. **Activity** is the call-history surface, including decisions
+that never received a grant (inspector **Grants: None recorded**). **Active
+access** lists live grants for the selected workspace. The portal exposes only
+sanitized launch labels, tool policy/catalog, credential labels, associations,
+and redacted STDIO and HTTP activity. A one-use 256-bit fragment capability is
+exchanged for an HttpOnly SameSite cookie plus a memory-only request proof.
+Both are required for API access; Host is restricted to the exact portal
+authority. Mutations require the exact Origin. Authenticated same-origin GETs
+may omit Origin and Referer, as browsers do with the portal's no-referrer
+policy; cross-site Fetch Metadata is rejected. Scripts are bundled and
+authorized by a content hash.
 
 The registry also retains undeclared scan findings as **discovered** entries.
 The Clients column lists scanned associations for that server, not a directory of
@@ -1035,16 +1030,20 @@ chosen. Grant rows include workspace/server identity when the native authority
 provides it. Unknown legacy scope is labeled explicitly and is not inferred from
 the server name.
 
-Activity is a filtered command-history page, not a raw event dump. Direct client
-launches are unobserved, so a supported client such as Cursor appears in Activity
-only after a call through Authsia. The portal
-discloses source health, retained range, truncation, and an audit-status summary
-that reports history completeness. It does not label a row HMAC-verified because
-another audit log exists. HTTP call identity is the invocation UUID
-(`mcp-call:<uuid>`), never the tool name. Authenticated policy denials and in-flight
-busy rejections are recorded before return, with no upstream dispatch. Server
-lifecycle outcomes stay distinct from tool-call failures. A history read failure is
-an unavailable source, not an empty healthy window.
+Activity is a filtered command-history page, not a raw event dump. It includes
+calls that never received a grant: the inspector shows **Grants: None
+recorded**, with the declared upstream or executable basename, MCP tool name,
+coarse outcome, error code, and stage. Those rows grant no authority and are
+not server rows. Direct client launches are unobserved, so a supported client
+such as Cursor appears in Activity only after a call through Authsia. The
+portal discloses source health, retained range, truncation, and an
+audit-status summary that reports history completeness. It does not label a
+row HMAC-verified because another audit log exists. HTTP call identity is the
+invocation UUID (`mcp-call:<uuid>`), never the tool name. Authenticated policy
+denials and in-flight busy rejections are recorded before return, with no
+upstream dispatch. Server lifecycle outcomes stay distinct from tool-call
+failures. A history read failure is an unavailable source, not an empty
+healthy window.
 
 Local HTTP catalog capture is a separately confirmed manager capability. It may
 initialize and follow bounded `tools/list` pages only; it does not authorize
@@ -1227,20 +1226,21 @@ An error envelope carries the invocation UUID only after the redacted decision
 event has been saved. The matching audit row's `turnID` (and `toolUseID`) is
 `mcp-call:` followed by that UUID when a Bridge authorization row exists. A
 pre-admission decision may have no matching audit row, but remains visible as
-an unowned proxy decision in Access Center.
+an unowned proxy decision in MCP Manager **Activity**.
 
 The compact unowned-decision row still leads with a coarse outcome
-(`denied`, `upstreamUnavailable`, `busy`). Access Center Commands, Timeline,
-and the unowned-decision caption also show the persisted protocol error code
-and stage (`settings`, `binding`, `policy`, `admission`, `spawn`, `forward`).
+(`denied`, `upstreamUnavailable`, `busy`). Manager Activity and Access Center
+Commands / Timeline also show the persisted protocol error code and stage
+(`settings`, `binding`, `policy`, `admission`, `spawn`, `forward`).
 Those fields travel with the command-history export. Do not infer a code from
 the coarse capsule alone.
 
-Review that event on the owning grant in Access Center: **MCP proxy** filter →
+Review an owned call on the grant in Access Center: **MCP proxy** filter →
 grant → **Activity** → Timeline or Commands. Timeline titles a wrapped call
 **MCP tool called** and shows the child basename, tool name, redacted
-outcome, error code, and stage. Decisions without a grant appear as recent unowned proxy decisions.
-Direct client launches outside the proxy produce no call events.
+outcome, error code, and stage. Decisions without a grant appear in Manager
+Activity with **Grants: None recorded**. Direct client launches outside the
+proxy produce no call events.
 
 A long-lived child also writes command-history-only rows `childStarted` and
 `childExited`. Exit reasons are `exit`, `revoked`, `expired`, `stdinClosed`,
@@ -1270,9 +1270,10 @@ Operator guidance:
 
 1. Wrap every local stdio server that should be auditable. Visibility and
    revoke-kill exist only when the client starts `authsia mcp proxy` with
-   `AUTHSIA_MCP_UPSTREAM`. On **MCP proxy**, review grants first; wrap remaining
-   Direct launch and Not wrapped rows from Coverage. If Coverage has no row,
-   follow [When Coverage Does Not List The Server](#when-coverage-does-not-list-the-server).
+   `AUTHSIA_MCP_UPSTREAM`. In MCP Manager **Servers**, wrap remaining Direct
+   launch and Not wrapped associations. If Servers has no row, follow
+   [When Coverage Does Not List The Server](#when-coverage-does-not-list-the-server).
+   Review owned grants in Access Center **MCP proxy**.
 2. Review by grant. Expect *which tool ran*, not *what it was asked*.
 3. Treat the client-config scan as detective. A direct entry is a finding, not
    a block, and is not a call log.
