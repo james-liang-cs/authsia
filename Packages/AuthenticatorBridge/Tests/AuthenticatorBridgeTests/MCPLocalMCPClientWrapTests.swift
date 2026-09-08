@@ -2,6 +2,41 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPLocalMCPClientWrapTests: XCTestCase {
+    func testDevinEnrollmentBindsWorkspaceWhileVSCodeKeepsWorkspaceDefault() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        for source in [MCPClientConfigSource.devin, .vscode] {
+            let plan = try MCPLocalMCPClientWrap.planInsert(source: source,
+                serverName: "example", workspacePath: project.path,
+                authsiaCommand: "authsia", homeDirectory: home)
+            try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: "authsia")
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: plan.fileURL)) as? [String: Any])
+            let servers = try XCTUnwrap(object[source == .vscode ? "servers" : "mcpServers"] as? [String: Any])
+            let entry = try XCTUnwrap(servers["example"] as? [String: Any])
+            XCTAssertEqual(entry["args"] as? [String], ["mcp", "proxy"])
+            let env = try XCTUnwrap(entry["env"] as? [String: String])
+            XCTAssertEqual(env[MCPProxyClientLaunch.environmentKey], "example")
+            XCTAssertEqual(env[MCPProxyClientLaunch.workspaceEnvironmentKey], source == .devin ? project.path : nil)
+            if source == .vscode { XCTAssertEqual(entry["type"] as? String, "stdio") }
+        }
+    }
+
+    func testDevinWrapExpandsSelectedWorkspaceWithoutChangingVSCodeBinding() {
+        for source in [MCPClientConfigSource.devin, .vscode] {
+            let finding = MCPClientServerFinding(source: source, serverName: "example",
+                commandLabel: "fixture-server", status: .unadmitted,
+                declaredUpstreamName: nil, configPathLabel: "mcp.json",
+                workspacePathLabel: "~/project")
+            XCTAssertEqual(MCPLocalMCPClientWrap.wrapWorkspacePath(for: finding,
+                homeDirectory: URL(fileURLWithPath: "/Users/example")),
+                source == .devin ? "/Users/example/project" : nil)
+        }
+    }
+
     func testJSONWriteReplacesOnlyTheNamedServerAndRefusesStaleChecksum() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -21,6 +56,7 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
             status: .unadmitted,
             declaredUpstreamName: nil,
             configPathLabel: cursor.path,
+            workspacePathLabel: root.path,
             wrapCommand: "node",
             wrapArguments: ["server.js"],
             isWrapEligible: true
@@ -44,6 +80,7 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         let filesystem = try XCTUnwrap(servers["filesystem"] as? [String: Any])
         XCTAssertEqual(filesystem["command"] as? String, authsia)
         XCTAssertEqual(filesystem["args"] as? [String], ["mcp", "proxy"])
+        XCTAssertEqual((filesystem["env"] as? [String: String])?[MCPProxyClientLaunch.workspaceEnvironmentKey], root.path)
         XCTAssertEqual(
             (filesystem["env"] as? [String: String])?[MCPProxyClientLaunch.environmentKey],
             "filesystem"
@@ -552,6 +589,7 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         XCTAssertEqual(playwright["command"] as? String, authsia)
         XCTAssertEqual(playwright["args"] as? [String], ["mcp", "proxy"])
         XCTAssertEqual((playwright["env"] as? [String: String])?[MCPProxyClientLaunch.environmentKey], "playwright")
+        XCTAssertEqual((playwright["env"] as? [String: String])?[MCPProxyClientLaunch.workspaceEnvironmentKey], project.path)
     }
 
     func testJSONInsertCreatesMissingUserGlobalFile() throws {
@@ -575,7 +613,9 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
             JSONSerialization.jsonObject(with: Data(contentsOf: plan.fileURL)) as? [String: Any]
         )
         let servers = try XCTUnwrap(object["mcpServers"] as? [String: Any])
-        XCTAssertNotNil(servers["playwright"])
+        let playwright = try XCTUnwrap(servers["playwright"] as? [String: Any])
+        XCTAssertEqual(playwright["args"] as? [String], ["mcp", "proxy"])
+        XCTAssertEqual((playwright["env"] as? [String: String])?[MCPProxyClientLaunch.workspaceEnvironmentKey], project.path)
     }
 
     func testClaudeInsertCreatesProjectLocalScope() throws {

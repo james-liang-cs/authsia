@@ -240,6 +240,16 @@ Because company allowlists match command plus argv, naming the workspace there
 rather than in argv keeps the two-entry allowlist intact. A Desktop row with no
 managed workspace selected cannot be protected.
 
+Cursor's shared MCP process can launch from the home directory even for a
+project entry. Manager protection and enrollment therefore also record the
+selected workspace in `WORKSPACE_FOLDER_PATHS` for Cursor. The reviewed entry
+binds that workspace explicitly; a user-global entry retains that binding in
+other Cursor projects. Use project entries for separate workspace bindings.
+
+Devin protection and enrollment also record the selected workspace, so its
+global launch does not depend on the client's working directory. VS Code keeps
+its workspace-directory default and receives no pinned environment binding.
+
 ### Protect A Listed Server
 
 When Coverage shows the server and **Protect server** is available, use it on
@@ -589,7 +599,8 @@ explicit `--workspace` determines the binding; otherwise the proxy uses a safe
 workspace in Manager only changes the management view and the target of setup
 actions; it does not retarget a running client or proxy.
 
-For example, a global `playwright` proxy entry can be used from both `project-a`
+For clients that supply the active repository at launch, an unpinned global
+`playwright` proxy entry can be used from both `project-a`
 and `project-b`. Each workspace needs its own `playwright` declaration. A
 declaration in `project-a` is never implicitly used to authorize `project-b`.
 If the second declaration is missing, Manager shows the client entry as

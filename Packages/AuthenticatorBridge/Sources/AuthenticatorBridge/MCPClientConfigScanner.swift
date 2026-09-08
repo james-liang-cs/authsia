@@ -1029,6 +1029,11 @@ public struct MCPClientConfigScanner {
                 childEnvironmentCount: (value["env"] as? [String: Any])?
                     .keys
                     .filter { $0 != MCPProxyClientLaunch.environmentKey && $0 != MCPProxyClientLaunch.recoveryEnvironmentKey }
+                    .filter {
+                        $0 != MCPProxyClientLaunch.workspaceEnvironmentKey
+                            || URL(fileURLWithPath: command).lastPathComponent.lowercased() != "authsia"
+                            || !MCPProxyClientLaunch.isProxyLaunch(arguments: arguments)
+                    }
                     .count ?? 0,
                 endpoint: value["url"] as? String
             )

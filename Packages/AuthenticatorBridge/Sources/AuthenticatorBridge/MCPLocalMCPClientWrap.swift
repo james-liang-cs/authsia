@@ -268,7 +268,7 @@ public enum MCPLocalMCPClientWrap {
             fileManager: fileManager
         )
         let workspaceLabel = location.workspacePathLabel
-            ?? (source.hasWorkspaceOfItsOwn
+            ?? (source.hasWorkspaceOfItsOwn && ![.cursor, .devin].contains(source)
                 ? nil
                 : workspacePath)
         let finding = MCPClientServerFinding(
@@ -317,14 +317,14 @@ public enum MCPLocalMCPClientWrap {
         }
     }
 
-    /// The workspace a wrapped launch binds to, for a client that has no
-    /// repository of its own. Named in the entry's environment rather than its
-    /// argv, so a company allowlist matching command plus argv still matches.
+    /// The workspace a wrapped launch binds to when the client does not launch
+    /// in its repository (Cursor and Devin desktop launches). Named in the
+    /// environment rather than argv, preserving company command allowlists.
     public static func wrapWorkspacePath(
         for finding: MCPClientServerFinding,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> String? {
-        guard !finding.source.hasWorkspaceOfItsOwn,
+        guard (!finding.source.hasWorkspaceOfItsOwn || [.cursor, .devin].contains(finding.source)),
               let label = finding.workspacePathLabel,
               !label.isEmpty else {
             return nil

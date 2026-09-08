@@ -2,6 +2,21 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPDiscoveryProjectionTests: XCTestCase {
+    func testDirectServerWorkspaceEnvironmentStillCountsAsChildEnvironment() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("mcp.json")
+        try JSONSerialization.data(withJSONObject: ["mcpServers": ["example": [
+            "command": "fixture-server", "args": ["--stdio"],
+            "env": [MCPProxyClientLaunch.workspaceEnvironmentKey: root.path],
+        ]]]).write(to: file)
+        let location = MCPClientConfigLocation(source: .cursor, fileURL: file,
+            displayPath: file.path, scope: .project, workspaceRoot: root)
+        let finding = try XCTUnwrap(MCPClientConfigScanner().scan(declaredServers: [], locations: [location]).first)
+        XCTAssertEqual(finding.childEnvironmentCount, 1)
+    }
+
     func testWrappedLaunchRetainsRecoveryWithoutAnyWorkspaceDeclaration() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
