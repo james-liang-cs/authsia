@@ -79,6 +79,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
     let principal: MCPHTTPPrincipal
     let server: MCPServerSnapshot
     let version: String
+    var upstreamVersion: String
     let connection = MCPHTTPUpstreamConnection()
     var upstreamID: String?
     var initialization: Task<Void, Error>?
@@ -93,7 +94,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
     var streams: [UUID: URLSessionTask] = [:]
     var lifetime: Task<Void, Never>?
     init(principal: MCPHTTPPrincipal, server: MCPServerSnapshot, version: String) {
-        self.principal = principal; self.server = server; self.version = version
+        self.principal = principal; self.server = server; self.version = version; self.upstreamVersion = version
     }
 }
 
@@ -102,7 +103,6 @@ actor MCPHTTPRouter {
     private let dependencies: MCPManagerRuntimeDependencies
     private var sessions: [String: MCPHTTPSession] = [:]
     private var stopped = false
-    private static let versions = ["2025-11-25", "2025-06-18", "2025-03-26"]
     init(dependencies: MCPManagerRuntimeDependencies) { self.dependencies = dependencies }
 
     func handle(_ request: MCPHTTPRequest) async -> MCPHTTPResponse {
@@ -131,13 +131,13 @@ actor MCPHTTPRouter {
         if request.method == "POST", method == "initialize" {
             guard request.headers["MCP-Session-Id"].isEmpty, object?["jsonrpc"] as? String == "2.0", id != nil,
                   sessions.count < 32, sessions.values.filter({ $0.principal.id == principal.id }).count < 4,
-                  let parameters = object?["params"] as? [String: Any], let version = parameters["protocolVersion"] as? String,
-                  Self.versions.contains(version),
+                  let parameters = object?["params"] as? [String: Any], let offeredVersion = parameters["protocolVersion"] as? String, !offeredVersion.isEmpty,
                   let server = try? dependencies.registrySnapshot().servers.first(where: { $0.id == serverID }),
                   server.identity == principal.binding.identity, [.http, .streamableHTTP].contains(server.transport),
                   let endpoint = server.endpointLabel, (try? MCPLocalHTTPEndpointValidator.validate(endpoint)) != nil else {
                 return .error(-32602, id: id)
             }
+            let version = MCPHTTPProtocol.versions.contains(offeredVersion) ? offeredVersion : MCPHTTPProtocol.versions[0]
             let session = MCPHTTPSession(principal: principal, server: server, version: version)
             sessions[session.id] = session
             var response = MCPHTTPResponse.json(["jsonrpc":"2.0", "id":id!, "result":[
@@ -149,7 +149,10 @@ actor MCPHTTPRouter {
         guard request.headers["MCP-Session-Id"].count == 1,
               let sessionID = request.headers.first(name: "MCP-Session-Id"), let session = sessions[sessionID],
               session.principal == principal else { return .error(-32004, id: id, status: 404) }
-        guard request.headers.first(name: "MCP-Protocol-Version") == session.version else { return .error(-32600, id: id) }
+        // Older HTTP clients can omit this header; the authenticated session
+        // still identifies its negotiated version. Conflicting headers fail closed.
+        let versions = request.headers["MCP-Protocol-Version"]
+        guard versions.isEmpty || (versions.count == 1 && versions.first == session.version) else { return .error(-32600, id: id) }
         guard let live = try? dependencies.registrySnapshot().servers.first(where: { $0.id == serverID }),
               live.authorizationRevision == session.server.authorizationRevision else {
             retire(session); return .error(-32004, id: id, status: 404)
@@ -261,8 +264,11 @@ actor MCPHTTPRouter {
         let data = try await MCPHTTPUpstreamConnection.collect(bytes, response: response)
         guard response.statusCode == 200,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let result = object["result"] as? [String: Any], result["protocolVersion"] as? String == session.version,
+              object["jsonrpc"] as? String == "2.0", object["id"] as? String == "authsia-initialize", object["error"] == nil,
+              let result = object["result"] as? [String: Any], let version = result["protocolVersion"] as? String,
+              MCPHTTPProtocol.versions.contains(version),
               sessions[session.id] === session else { throw MCPManagementError.unavailable }
+        session.upstreamVersion = version
         if let id = response.value(forHTTPHeaderField: "MCP-Session-Id") {
             guard !id.isEmpty, id.utf8.count <= 256, id.utf8.allSatisfy({ (0x21...0x7e).contains($0) }) else { throw MCPManagementError.invalidRequest }
             session.upstreamID = id
@@ -270,7 +276,7 @@ actor MCPHTTPRouter {
         let initialized = Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)
         guard try await valid(session, lease: lease) else { throw MCPManagementError.denied }
         let (notification, status) = try await session.connection.request(endpoint: endpoint, method: "POST", body: initialized,
-            version: session.version, sessionID: session.upstreamID, headers: lease.headers)
+            version: session.upstreamVersion, sessionID: session.upstreamID, headers: lease.headers)
         notification.task.cancel()
         guard (200...299).contains(status.statusCode) else { throw MCPManagementError.unavailable }
     }
@@ -279,10 +285,14 @@ actor MCPHTTPRouter {
         guard try await valid(session, lease: lease), let endpoint = session.server.endpointLabel.flatMap(URL.init(string:)) else { throw MCPManagementError.denied }
         if let requestKey, session.cancelled.contains(requestKey) { throw CancellationError() }
         let task = Task { try await session.connection.request(endpoint: endpoint, method: method, body: body,
-            version: session.version, sessionID: session.upstreamID, headers: lease.headers) }
+            version: session.upstreamVersion, sessionID: session.upstreamID, headers: lease.headers) }
         if let requestKey { session.pendingRequests[requestKey] = task }
         let (bytes,response) = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
         if let requestKey { session.pendingRequests.removeValue(forKey: requestKey) }
+        if method == "GET", response.statusCode == 405 {
+            bytes.task.cancel()
+            return .init(status: 405)
+        }
         guard (200...299).contains(response.statusCode) else { bytes.task.cancel(); throw MCPManagementError.unavailable }
         let streamID = UUID(); session.streams[streamID] = bytes.task
         if let requestKey {

@@ -29,16 +29,31 @@ struct MCPHTTPMessageMasker: Sendable {
     }
 }
 
+enum MCPHTTPProtocol {
+    static let versions = ["2025-11-25", "2025-06-18", "2025-03-26"]
+}
+
 struct MCPHTTPSSEDecoder {
     var line = Data()
     var lines: [String] = []
     var eventBytes = 0
+    private var previousWasCR = false
+    private var firstLine = true
     mutating func append(_ byte: UInt8) throws -> Data? {
         eventBytes += 1
         guard eventBytes <= 4 * 1_024 * 1_024 else { throw MCPManagementError.busy }
-        if byte != 10 { line.append(byte); return nil }
-        if line.last == 13 { line.removeLast() }
-        guard let text = String(data: line, encoding: .utf8) else { throw MCPManagementError.invalidRequest }
+        if previousWasCR {
+            previousWasCR = false
+            if byte == 10 { return nil }
+        }
+        guard byte == 10 || byte == 13 else { line.append(byte); return nil }
+        previousWasCR = byte == 13
+        if firstLine {
+            firstLine = false
+            if line.starts(with: [0xef, 0xbb, 0xbf]) { line.removeFirst(3) }
+        }
+        guard String(data: line, encoding: .utf8) != nil else { throw MCPManagementError.invalidRequest }
+        let text = String(decoding: line, as: UTF8.self)
         line.removeAll(keepingCapacity: true)
         if !text.isEmpty { lines.append(text); return nil }
         defer { lines.removeAll(keepingCapacity: true); eventBytes = 0 }

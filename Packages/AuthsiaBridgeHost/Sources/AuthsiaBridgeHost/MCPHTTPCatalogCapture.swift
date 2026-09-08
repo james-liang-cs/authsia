@@ -17,7 +17,7 @@ public enum MCPHTTPCatalogCapture {
         let url = try MCPLocalHTTPEndpointValidator.validate(endpoint)
         let connection = MCPHTTPUpstreamConnection()
         defer { connection.close() }
-        let version = "2025-06-18"
+        var version = MCPHTTPProtocol.versions[0]
         let initialize = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0", "id": "authsia-catalog-init", "method": "initialize",
             "params": ["protocolVersion": version, "capabilities": [:], "clientInfo": ["name": "authsia-catalog", "version": "1.0"]],
@@ -27,7 +27,12 @@ public enum MCPHTTPCatalogCapture {
         let initData = try await MCPHTTPUpstreamConnection.collect(initBytes, response: initResponse)
         guard initResponse.statusCode == 200,
               let initObject = try JSONSerialization.jsonObject(with: initData) as? [String: Any],
-              initObject["error"] == nil else { throw MCPManagementError.catalogStartupFailed }
+              initObject["jsonrpc"] as? String == "2.0", initObject["id"] as? String == "authsia-catalog-init",
+              initObject["error"] == nil,
+              let result = initObject["result"] as? [String: Any],
+              let negotiatedVersion = result["protocolVersion"] as? String,
+              MCPHTTPProtocol.versions.contains(negotiatedVersion) else { throw MCPManagementError.catalogStartupFailed }
+        version = negotiatedVersion
         let sessionID = initResponse.value(forHTTPHeaderField: "MCP-Session-Id")
         let initialized = Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)
         let (note, noteStatus) = try await connection.request(

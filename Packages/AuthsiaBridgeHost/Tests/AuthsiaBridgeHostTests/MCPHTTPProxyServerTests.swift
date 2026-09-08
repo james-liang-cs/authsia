@@ -6,6 +6,118 @@ import NIOPosix
 @testable import AuthsiaBridgeHost
 
 final class MCPHTTPProxyServerTests: XCTestCase {
+    func testHTTPVersionNegotiatesSupportedFallbackAndBindsLaterRequests() async throws {
+        let router = HTTPRouterHarness(port: 19001).router()
+        addTeardownBlock { await router.shutdown() }
+        for offered in ["2025-03-26", "2025-06-18", "2025-11-25", "2099-01-01"] {
+            let response = await router.handle(request(method: "initialize", version: offered))
+            XCTAssertEqual(response.status, 200)
+            let object = try JSONSerialization.jsonObject(with: response.body) as? [String: Any]
+            let selected = offered == "2099-01-01" ? "2025-11-25" : offered
+            XCTAssertEqual((object?["result"] as? [String: Any])?["protocolVersion"] as? String, selected)
+            let sid = try XCTUnwrap(response.headers.first(name: "MCP-Session-Id"))
+            let call = request(method: "tools/list", session: sid, version: selected)
+            var headers = call.headers
+            headers.remove(name: "MCP-Protocol-Version")
+            let legacy = await router.handle(.init(method: "POST", uri: call.uri, headers: headers, body: call.body))
+            XCTAssertEqual(legacy.status, 200, "The session identifies the negotiated version for older clients")
+            headers.add(name: "MCP-Protocol-Version", value: selected)
+            headers.add(name: "MCP-Protocol-Version", value: "unsupported")
+            let duplicate = await router.handle(.init(method: "POST", uri: call.uri, headers: headers, body: call.body))
+            XCTAssertEqual(duplicate.status, 400)
+            let mismatch = await router.handle(request(method: "tools/list", session: sid, version: "unsupported"))
+            XCTAssertEqual(mismatch.status, 400)
+        }
+    }
+
+    func testOptionalGETRejectionPreservesToolsAndSession() async throws {
+        let fixture = try await HTTPMCPFixture.start(rejectGET: true)
+        addTeardownBlock { try await fixture.stop() }
+        let router = HTTPRouterHarness(port: fixture.port).router()
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let call = request(method: "tools/call", session: sid, tool: "read")
+        let get = await router.handle(.init(method: "GET", uri: call.uri, headers: call.headers, body: Data()))
+        XCTAssertEqual(get.status, 405)
+        let result = await router.handle(call)
+        XCTAssertEqual(result.status, 200)
+        let output = try await collect(result)
+        XCTAssertTrue(String(decoding: output, as: UTF8.self).contains("fixture-ok"))
+        XCTAssertFalse(String(decoding: output, as: UTF8.self).contains("synthetic-upstream"))
+    }
+
+    func testSSEInitializationAndCatalogWithBOMAndCRLineEndings() async throws {
+        let fixture = try await HTTPMCPFixture.start(sseInitialization: true)
+        addTeardownBlock { try await fixture.stop() }
+        let catalog = try await MCPHTTPCatalogCapture.run(endpoint: "http://127.0.0.1:\(fixture.port)/mcp", headers: [:])
+        XCTAssertFalse(catalog.isEmpty)
+        let router = HTTPRouterHarness(port: fixture.port).router()
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let result = await router.handle(request(method: "tools/call", session: sid, tool: "read"))
+        XCTAssertEqual(result.status, 200)
+        let output = try await collect(result)
+        XCTAssertTrue(String(decoding: output, as: UTF8.self).contains("fixture-ok"))
+    }
+
+    func testUpstreamNegotiationUsesSelectedVersionForCatalogAndCalls() async throws {
+        for version in ["2025-03-26", "2025-06-18", "2025-11-25"] {
+            let fixture = try await HTTPMCPFixture.start(negotiatedVersion: version)
+            addTeardownBlock { try await fixture.stop() }
+            let catalog = try await MCPHTTPCatalogCapture.run(endpoint: "http://127.0.0.1:\(fixture.port)/mcp", headers: [:])
+            XCTAssertEqual(catalog.map(\.name), ["read"])
+            let router = HTTPRouterHarness(port: fixture.port).router()
+            addTeardownBlock { await router.shutdown() }
+            let sid = try await initialize(router)
+            let result = await router.handle(request(method: "tools/call", session: sid, tool: "read"))
+            XCTAssertEqual(result.status, 200)
+            let output = try await collect(result)
+            XCTAssertTrue(String(decoding: output, as: UTF8.self).contains("fixture-ok"))
+            let listed = await router.handle(request(method: "tools/list", session: sid))
+            XCTAssertEqual(listed.status, 200, "Upstream negotiation must not change the client-facing session version")
+        }
+    }
+
+    func testUnsupportedUpstreamVersionStopsBeforeCatalogOrToolDispatch() async throws {
+        let fixture = try await HTTPMCPFixture.start(negotiatedVersion: "unsupported")
+        addTeardownBlock { try await fixture.stop() }
+        do {
+            _ = try await MCPHTTPCatalogCapture.run(endpoint: "http://127.0.0.1:\(fixture.port)/mcp", headers: [:])
+            XCTFail("Must reject unsupported negotiation")
+        } catch { XCTAssertEqual(error as? MCPManagementError, .catalogStartupFailed) }
+        XCTAssertEqual(fixture.requestCount, 1)
+        let router = HTTPRouterHarness(port: fixture.port).router()
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let result = await router.handle(request(method: "tools/call", session: sid, tool: "read"))
+        let error = try JSONSerialization.jsonObject(with: result.body) as? [String: Any]
+        XCTAssertEqual((error?["error"] as? [String: Any])?["code"] as? Int, -32020)
+        XCTAssertEqual(fixture.requestCount, 2, "Only the two initialization requests may reach the upstream")
+    }
+
+    func testSSEDecoderKeepsSizeAndCompleteEventBoundaries() throws {
+        var parser = MCPHTTPSSEDecoder()
+        for byte in Data("data: {\"result\":{}}\r".utf8) { XCTAssertNil(try parser.append(byte)) }
+        XCTAssertNotNil(try parser.append(13))
+        var oversized = MCPHTTPSSEDecoder()
+        for _ in 0..<(4 * 1_024 * 1_024) { _ = try oversized.append(65) }
+        XCTAssertThrowsError(try oversized.append(65)) { XCTAssertEqual($0 as? MCPManagementError, .busy) }
+    }
+
+    func testSSEFramingAcceptsAllLineEndingsAndOnlyStripsLeadingBOM() throws {
+        for separator in ["\n", "\r\n", "\r"] {
+            var parser = MCPHTTPSSEDecoder()
+            let raw = "\u{FEFF}data: {" + separator + "data: \"text\":\"\u{FEFF}synthetic-upstream\"}" + separator + separator
+            var messages: [Data] = []
+            for byte in raw.utf8 { if let value = try parser.append(byte), !value.isEmpty { messages.append(value) } }
+            XCTAssertEqual(messages.count, 1)
+            let json = try XCTUnwrap(messages.first)
+            XCTAssertNotNil(json.range(of: Data("\u{FEFF}synthetic-upstream".utf8)))
+            let masked = try MCPHTTPMessageMasker(secrets: ["synthetic-upstream"]).mask(json)
+            XCTAssertFalse(String(decoding: masked, as: UTF8.self).contains("synthetic-upstream"))
+        }
+    }
+
     func testCancellationBeforeResponseHeadersPreservesSession() async throws {
         let received = expectation(description: "upstream received call")
         let fixture = try await HTTPMCPFixture.start(holdCallHeaders: true, callReceived: { received.fulfill() })
@@ -285,10 +397,10 @@ final class MCPHTTPProxyServerTests: XCTestCase {
         XCTAssertEqual(response.status,200)
         return try XCTUnwrap(response.headers.first(name:"MCP-Session-Id"))
     }
-    private func request(method:String,session:String?=nil,tool:String?=nil,token:String="primary") -> MCPHTTPRequest {
-        var headers = HTTPHeaders([("Host","127.0.0.1:8788"),("Authorization","Bearer "+token),("MCP-Protocol-Version","2025-11-25")])
+    private func request(method:String,session:String?=nil,tool:String?=nil,token:String="primary",version:String="2025-11-25") -> MCPHTTPRequest {
+        var headers = HTTPHeaders([("Host","127.0.0.1:8788"),("Authorization","Bearer "+token),("MCP-Protocol-Version",version)])
         if let session { headers.add(name:"MCP-Session-Id",value:session) }
-        let params:[String:Any] = method == "initialize" ? ["protocolVersion":"2025-11-25","capabilities":[:],"clientInfo":["name":"test","version":"1"]] : ["name":tool ?? "","arguments":[:]]
+        let params:[String:Any] = method == "initialize" ? ["protocolVersion":version,"capabilities":[:],"clientInfo":["name":"test","version":"1"]] : ["name":tool ?? "","arguments":[:]]
         let body = try! JSONSerialization.data(withJSONObject:["jsonrpc":"2.0","id":1,"method":method,"params":params])
         return MCPHTTPRequest(method:"POST",uri:"/mcp/fixture-server",headers:headers,body:body)
     }
@@ -378,11 +490,15 @@ private final class HTTPMCPFixture: @unchecked Sendable {
     }
 
     static func start(streaming: Bool = false, holdCallHeaders: Bool = false,
+                      rejectGET: Bool = false, sseInitialization: Bool = false, negotiatedVersion: String? = nil,
                       paginatedList: Bool = false, endlessList: Bool = false,
                       callReceived: @escaping @Sendable () -> Void = {}) async throws -> HTTPMCPFixture {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let box = FixtureBox()
         box.streaming = streaming
+        box.rejectGET = rejectGET
+        box.sseInitialization = sseInitialization
+        box.negotiatedVersion = negotiatedVersion
         box.holdCallHeaders = holdCallHeaders
         box.paginatedList = paginatedList
         box.endlessList = endlessList
@@ -417,6 +533,9 @@ private final class HTTPMCPFixture: @unchecked Sendable {
 private final class FixtureBox: @unchecked Sendable {
     let lock = NSLock()
     var streaming = false
+    var rejectGET = false
+    var sseInitialization = false
+    var negotiatedVersion: String?
     var holdCallHeaders = false
     var paginatedList = false
     var endlessList = false
@@ -433,6 +552,7 @@ private final class HTTPMCPFixtureHandler: ChannelInboundHandler, @unchecked Sen
     private let box: FixtureBox
     private var body = ByteBuffer()
     private var headers = HTTPHeaders()
+    private var method = HTTPMethod.POST
 
     init(box: FixtureBox) { self.box = box }
 
@@ -441,20 +561,34 @@ private final class HTTPMCPFixtureHandler: ChannelInboundHandler, @unchecked Sen
         case .head(let head):
             body.clear()
             headers = head.headers
+            method = head.method
         case .body(var value):
             body.writeBuffer(&value)
         case .end:
             box.observe(headers)
+            if method == .GET, box.rejectGET {
+                context.write(wrapOutboundOut(.head(.init(version: .http1_1, status: .methodNotAllowed,
+                    headers: HTTPHeaders([("Content-Length", "0")])))), promise: nil)
+                context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+                return
+            }
             let request = (try? JSONSerialization.jsonObject(
                 with: Data(body.readBytes(length: body.readableBytes) ?? [])
             ) as? [String: Any]) ?? [:]
+            if let version = box.negotiatedVersion, request["method"] as? String != "initialize",
+               headers.first(name: "MCP-Protocol-Version") != version {
+                context.write(wrapOutboundOut(.head(.init(version: .http1_1, status: .badRequest,
+                    headers: HTTPHeaders([("Content-Length", "0")])))), promise: nil)
+                context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+                return
+            }
             var response: [String: Any] = [
                 "jsonrpc": "2.0",
                 "id": request["id"] ?? NSNull(),
                 "result": ["content": [["type": "text", "text": "fixture-ok"]]],
             ]
             if request["method"] as? String == "initialize" {
-                response["result"] = ["protocolVersion":"2025-11-25", "capabilities":["tools":[:]], "serverInfo":["name":"fixture","version":"1"]]
+                response["result"] = ["protocolVersion":box.negotiatedVersion ?? "2025-11-25", "capabilities":["tools":[:]], "serverInfo":["name":"fixture","version":"1"]]
             }
             if request["method"] as? String == "tools/list" {
                 let params = request["params"] as? [String: Any]
@@ -482,7 +616,9 @@ private final class HTTPMCPFixtureHandler: ChannelInboundHandler, @unchecked Sen
                 if box.holdCallHeaders { return }
                 response["result"] = ["content":[["type":"text","text":"fixture-ok synthetic-upstream"]]]
             }
-            let data = try! JSONSerialization.data(withJSONObject: response)
+            var data = try! JSONSerialization.data(withJSONObject: response)
+            let sseInit = box.sseInitialization && request["method"] as? String == "initialize"
+            if sseInit { data = Data("\u{FEFF}data: ".utf8) + data + Data("\r\r".utf8) }
             if box.streaming, request["method"] as? String == "tools/call" {
                 let channel = context.channel
                 let finalData = Data("data: ".utf8) + data + Data("\n\n".utf8)
@@ -502,7 +638,7 @@ private final class HTTPMCPFixtureHandler: ChannelInboundHandler, @unchecked Sen
                 return
             }
             var headers = HTTPHeaders()
-            headers.add(name: "Content-Type", value: "application/json")
+            headers.add(name: "Content-Type", value: sseInit ? "text/event-stream; charset=utf-8" : "application/json")
             headers.add(name: "Content-Length", value: String(data.count))
             context.write(wrapOutboundOut(.head(HTTPResponseHead(
                 version: .http1_1,

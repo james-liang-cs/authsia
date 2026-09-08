@@ -1022,7 +1022,27 @@ the staged token. Commit is idempotent and queryable after a lost IPC reply.
 
 HTTP protection is tools-focused. It supports initialization, ping, the initialized
 notification, cancellation/progress notifications, `tools/list`, `tools/call`,
-POST, GET/SSE, and DELETE. Resources, prompts, sampling, elicitation, and other
+POST, GET/SSE, and DELETE. The supported protocol versions are `2025-11-25`,
+`2025-06-18`, and `2025-03-26`. Initialization echoes a supported offer or returns
+`2025-11-25` as the supported fallback; the client must accept that version before
+continuing. An authenticated session supplies the negotiated version when an
+older client omits `MCP-Protocol-Version`; duplicate or mismatched headers are
+rejected. The tools-only proxy and catalog reader honor a supported version
+selected by the upstream independently of the client-facing session. Unknown
+upstream versions fail before catalog or tool dispatch.
+
+An upstream returning 405 for its optional GET stream leaves the downstream
+session usable for POST tool calls. JSON and SSE initialization are accepted;
+SSE decoding handles LF, CRLF, CR, and one leading UTF-8 byte-order mark while
+retaining complete-event masking and byte caps. These behaviors follow the
+[MCP lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
+[HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports),
+and [SSE framing](https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream)
+contracts. Loopback fixture tests cover all three negotiated versions, fallback,
+header rejection, optional GET, catalog capture, framing, and masking. This is
+protocol regression evidence, not certification of installed client versions.
+
+Resources, prompts, sampling, elicitation, and other
 methods fail explicitly. Complete SSE messages are decoded, masked, and delivered
 incrementally with backpressure. JSON bodies and individual SSE events are capped
 at 4 MiB. Event replay is not implemented: Last-Event-ID is rejected. Upstream and
