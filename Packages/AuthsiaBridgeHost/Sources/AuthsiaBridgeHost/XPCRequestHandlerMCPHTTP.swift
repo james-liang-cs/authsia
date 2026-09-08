@@ -11,7 +11,11 @@ extension XPCRequestHandler {
         }
         Task { @MainActor in
             do { reply(try JSONEncoder().encode(await self.httpAuthority.execute(command)), nil) }
-            catch { reply(nil, self.makeNSError(code: .policyDenied, message: (error as? MCPManagementError ?? .denied).localizedDescription)) }
+            catch {
+                // Keep domain reasons intact across XPC; NSError policyDenied erased
+                // the distinction between human denial, stale policy and availability.
+                reply(try? JSONEncoder().encode(MCPHTTPAuthorityReply(valid: false, failure: error as? MCPManagementError ?? .unavailable)), nil)
+            }
         }
     }
 

@@ -235,6 +235,7 @@ public enum MCPHTTPActivityOutcome: String, Codable, Equatable, Sendable {
     case childStarted
     case childExited
     case incomplete
+    case failed
 }
 
 public struct MCPHTTPActivityEvent: Codable, Equatable, Identifiable, Sendable {

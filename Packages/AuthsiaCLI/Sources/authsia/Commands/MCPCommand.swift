@@ -12,6 +12,8 @@ struct MCPCommand: AsyncParsableCommand {
             Most users should configure a supported client, which launches the server
             automatically and supplies its active workspace when supported.
             Enable MCP Integrations in Authsia Settings > Developer Access first.
+            Setup and launch commands fail with settings guidance while disabled.
+            Help, status, doctor, activity export, and stop remain available.
             `mcp proxy` wraps one named workspace upstream as a separate stdio
             process; it does not add tools to `mcp serve`. Clients launch a stable
             `mcp proxy` argv and set AUTHSIA_MCP_UPSTREAM; `--upstream` is optional
@@ -37,6 +39,8 @@ struct MCPCommand: AsyncParsableCommand {
     )
 
     struct Start: ParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Start the local MCP Manager and open its portal"
         )
@@ -52,6 +56,7 @@ struct MCPCommand: AsyncParsableCommand {
             controller: any MCPManagerControlling,
             output: (String) -> Void
         ) throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             output("Starting Authsia MCP Manager...")
             let status = try controller.start(openPortal: !noOpen)
             Self.render(status, output: output)
@@ -133,6 +138,8 @@ struct MCPCommand: AsyncParsableCommand {
     }
 
     struct Restart: ParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Restart the local MCP Manager and open its portal"
         )
@@ -148,9 +155,14 @@ struct MCPCommand: AsyncParsableCommand {
             controller: any MCPManagerControlling,
             output: (String) -> Void
         ) throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             let status = try controller.restart(openPortal: !noOpen)
             Start.render(status, output: output)
         }
+    }
+
+    static func accessCheck(_ enabledOverride: Bool?) -> @Sendable () -> Bool {
+        { enabledOverride ?? MCPAccessSettings.isEnabled() }
     }
 
     static func startingDirectory(
@@ -175,6 +187,8 @@ struct MCPCommand: AsyncParsableCommand {
     }
 
     struct Configure: ParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Print a user-global MCP fallback and a table of current launches"
         )
@@ -192,6 +206,7 @@ struct MCPCommand: AsyncParsableCommand {
         }
 
         func run(output: (String) -> Void) throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             let upstreams = Self.upstreams(
                 environment: environment,
                 currentDirectoryPath: currentDirectoryPath
@@ -288,6 +303,8 @@ struct MCPCommand: AsyncParsableCommand {
     }
 
     struct Catalog: AsyncParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Record what a declared local MCP server advertises into workspace policy",
             discussion: """
@@ -316,6 +333,7 @@ struct MCPCommand: AsyncParsableCommand {
         }
 
         func run(output: (String) -> Void) async throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             guard WorkspaceConfigStore.isValidMCPUpstreamName(server) else {
                 throw ValidationError("Upstream name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
             }
@@ -333,7 +351,7 @@ struct MCPCommand: AsyncParsableCommand {
                 version: Authsia.version(),
                 upstreamName: server,
                 runtimeContext: runtimeContext,
-                mcpAccessEnabled: { MCPAccessSettings.isEnabled() },
+                mcpAccessEnabled: MCPCommand.accessCheck(mcpAccessEnabledOverride),
                 toolCallRecorder: LiveMCPProxyToolCallRecorder()
             )
             let tools: [Tool]
@@ -379,6 +397,8 @@ struct MCPCommand: AsyncParsableCommand {
     }
 
     struct Serve: AsyncParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Serve Authsia tools over local stdio"
         )
@@ -387,6 +407,7 @@ struct MCPCommand: AsyncParsableCommand {
         var workspace: String?
 
         mutating func run() async throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             let startingDirectory = MCPCommand.startingDirectory(
                 workspace: workspace,
                 environment: ProcessInfo.processInfo.environment,
@@ -396,7 +417,7 @@ struct MCPCommand: AsyncParsableCommand {
                 version: Authsia.version(),
                 runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
                 acceptsToolWorkspace: workspace == nil,
-                mcpAccessEnabled: { MCPAccessSettings.isEnabled() }
+                mcpAccessEnabled: MCPCommand.accessCheck(mcpAccessEnabledOverride)
             )
             try await server.runStdio()
         }
@@ -415,6 +436,8 @@ struct MCPCommand: AsyncParsableCommand {
     }
 
     struct Proxy: AsyncParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Proxy a named workspace upstream over local stdio"
         )
@@ -433,6 +456,7 @@ struct MCPCommand: AsyncParsableCommand {
         }
 
         mutating func run() async throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             let environment = ProcessInfo.processInfo.environment
             let upstreamName = try Self.resolveUpstreamName(
                 flag: upstream,
@@ -447,7 +471,7 @@ struct MCPCommand: AsyncParsableCommand {
                 version: Authsia.version(),
                 upstreamName: upstreamName,
                 runtimeContext: MCPRuntimeContext(startingDirectory: startingDirectory),
-                mcpAccessEnabled: { MCPAccessSettings.isEnabled() },
+                mcpAccessEnabled: MCPCommand.accessCheck(mcpAccessEnabledOverride),
                 toolCallRecorder: LiveMCPProxyToolCallRecorder()
             )
             try await proxy.runStdio()
@@ -640,6 +664,8 @@ struct MCPCommand: AsyncParsableCommand {
     }
 
     struct Wrap: ParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Replace a scanned client MCP launch with Authsia mcp proxy after confirmation",
             discussion: """
@@ -677,6 +703,7 @@ struct MCPCommand: AsyncParsableCommand {
         }
 
         func run(output: (String) -> Void) throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             guard write else {
                 throw ValidationError("Pass --write to replace a scanned client launch.")
             }
@@ -779,6 +806,8 @@ struct MCPCommand: AsyncParsableCommand {
     }
 
     struct Unwrap: ParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Restore a wrapped client MCP launch to the child workspace policy declares",
             discussion: """
@@ -817,6 +846,7 @@ struct MCPCommand: AsyncParsableCommand {
         }
 
         func run(output: (String) -> Void) throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             guard write else {
                 throw ValidationError("Pass --write to restore a wrapped client launch.")
             }
@@ -897,6 +927,8 @@ struct MCPCommand: AsyncParsableCommand {
     }
 
     struct Declare: ParsableCommand {
+        var mcpAccessEnabledOverride: Bool?
+
         static let configuration = CommandConfiguration(
             abstract: "Declare a child command for a proxy launch that has no workspace policy",
             discussion: """
@@ -954,6 +986,7 @@ struct MCPCommand: AsyncParsableCommand {
         }
 
         func run(output: (String) -> Void) throws {
+            try MCPAccessSettings.requireEnabled(mcpAccessEnabledOverride ?? MCPAccessSettings.isEnabled())
             guard MCPProxyClientLaunch.validUpstreamName(server) != nil else {
                 throw ValidationError("Server name must match [A-Za-z][A-Za-z0-9_-]{0,31}.")
             }

@@ -139,6 +139,80 @@ final class MCPHTTPProxyServerTests: XCTestCase {
         pending.cancel()
     }
 
+    func testNativeDenialIsRecordedAsDeniedWithoutDispatch() async throws {
+        let fixture = try await HTTPMCPFixture.start()
+        addTeardownBlock { try await fixture.stop() }
+        let events = HTTPActivityCollector()
+        let router = HTTPRouterHarness(port: fixture.port).router(events: events, denyAdmission: true)
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let response = await router.handle(request(method: "tools/call", session: sid, tool: "read"))
+        XCTAssertTrue(String(decoding: response.body, as: UTF8.self).contains("-32010"))
+        XCTAssertEqual(fixture.requestCount, 0)
+        let recorded = await events.events
+        XCTAssertEqual(recorded.map(\.outcome), [.denied])
+    }
+
+    func testTerminalAuditRetryPreservesDeliveredSuccess() async throws {
+        let fixture = try await HTTPMCPFixture.start()
+        addTeardownBlock { try await fixture.stop() }
+        let events = HTTPActivityCollector()
+        let router = HTTPRouterHarness(port: fixture.port).router(events: events, failFirstTerminal: true)
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let response = await router.handle(request(method: "tools/call", session: sid, tool: "read"))
+        let body = try await collect(response)
+        XCTAssertTrue(String(decoding: body, as: UTF8.self).contains("fixture-ok"))
+        let recorded = await events.events
+        XCTAssertEqual(recorded.map(\.outcome), [.started, .succeeded])
+    }
+
+    func testHTTPResponseCompletesWhileTerminalEvidenceWriterIsSuspended() async throws {
+        let fixture = try await HTTPMCPFixture.start()
+        addTeardownBlock { try await fixture.stop() }
+        let gate = HTTPTerminalGate()
+        let router = HTTPRouterHarness(port: fixture.port).router(terminalGate: gate)
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let server = try await ServerBootstrap(group: group).childChannelInitializer { channel in
+            channel.pipeline.configureHTTPServerPipeline().flatMap {
+                channel.pipeline.addHandlers(MCPHTTPRequestDeadline(), MCPHTTPHandler(router: router))
+            }
+        }.bind(host: "127.0.0.1", port: 0).get()
+        addTeardownBlock {
+            await gate.release()
+            await router.shutdown()
+            try await server.close().get()
+            try await group.shutdownGracefully()
+        }
+        let sid = try await initialize(router)
+        let call = request(method: "tools/call", session: sid, tool: "read")
+        let port = try XCTUnwrap(server.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/mcp/fixture-server")!, timeoutInterval: 3)
+        request.httpMethod = "POST"; request.httpBody = call.body
+        for (name, value) in call.headers { request.setValue(value, forHTTPHeaderField: name) }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("fixture-ok"))
+        // The HTTP body, including its terminating chunk, arrived before release.
+        await gate.release()
+    }
+
+    func testPersistentTerminalAuditFailureDoesNotFailAnAlreadyDeliveredCall() async throws {
+        let fixture = try await HTTPMCPFixture.start()
+        addTeardownBlock { try await fixture.stop() }
+        let events = HTTPActivityCollector()
+        let router = HTTPRouterHarness(port: fixture.port).router(events: events, failEveryTerminal: true)
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let response = await router.handle(request(method: "tools/call", session: sid, tool: "read"))
+        let body = try await collect(response)
+        XCTAssertTrue(String(decoding: body, as: UTF8.self).contains("fixture-ok"))
+        let attempts = await events.attempts
+        XCTAssertEqual(attempts, [.started, .succeeded, .succeeded])
+    }
+
     func testHTTPCatalogCaptureListsToolsWithoutCallingThem() async throws {
         let fixture = try await HTTPMCPFixture.start()
         addTeardownBlock { try await fixture.stop() }
@@ -220,20 +294,43 @@ final class MCPHTTPProxyServerTests: XCTestCase {
     }
     private func collect(_ response:MCPHTTPResponse) async throws -> Data {
         let collector = HTTPDataCollector()
-        if let stream=response.stream { try await stream { await collector.append($0) }; return await collector.data }
+        if let stream=response.stream {
+            let delivered = try await stream { await collector.append($0) }
+            await delivered?()
+            return await collector.data
+        }
         return response.body
     }
+}
+private actor HTTPTerminalGate {
+    private var released = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func release() { released = true; waiter?.resume(); waiter = nil }
 }
 private actor HTTPDataCollector { var data=Data();func append(_ chunk:Data){data.append(chunk)} }
 private actor HTTPActivityCollector {
     var events: [MCPHTTPActivityEvent] = []
-    func append(_ event: MCPHTTPActivityEvent) { events.append(event) }
+    var attempts: [MCPHTTPActivityOutcome] = []
+    private var rejectedTerminal = false
+    func append(_ event: MCPHTTPActivityEvent, failFirstTerminal: Bool = false, failEveryTerminal: Bool = false) throws {
+        attempts.append(event.outcome)
+        if failEveryTerminal, event.outcome != .started { throw MCPManagementError.auditUnavailable }
+        if failFirstTerminal, event.outcome != .started, !rejectedTerminal {
+            rejectedTerminal = true
+            throw MCPManagementError.auditUnavailable
+        }
+        events.append(event)
+    }
 }
 private struct HTTPRouterHarness: Sendable {
     let port:Int
     let identity = MCPServerIdentity(workspacePath:"/tmp/fixture",upstreamName:"internal")
     let primary = UUID(), secondary = UUID(), generation = UUID()
-    func router(failAudit:Bool=false, events: HTTPActivityCollector? = nil) -> MCPHTTPRouter {
+    func router(failAudit:Bool=false, events: HTTPActivityCollector? = nil, denyAdmission: Bool = false, failFirstTerminal: Bool = false, failEveryTerminal: Bool = false, terminalGate: HTTPTerminalGate? = nil) -> MCPHTTPRouter {
         let server=MCPServerSnapshot(id:"fixture-server",identity:identity,displayName:"Internal",transport:.streamableHTTP,
             endpointLabel:"http://127.0.0.1:\(port)/mcp",policy:.init(allow:["read"],deny:["delete"]),catalog:[.init(name:"read")],authorizationRevision:"revision")
         return MCPHTTPRouter(dependencies:.init(registrySnapshot:{.init(revision:"revision",servers:[server])},portalDocument:{"<html/>"},mcpAccessEnabled:{true},
@@ -242,6 +339,7 @@ private struct HTTPRouterHarness: Sendable {
                 case .authenticate(_,let token):
                     return .init(principal:.init(id:token == "primary" ? primary : secondary,binding:.init(serverID:"fixture-server",identity:identity,client:.codex),generation:generation))
                 case .authorize(let principal,let session,let revision,_):
+                    if denyAdmission { throw MCPManagementError.denied }
                     return .init(lease:.init(grant:.init(id:UUID(),principal:principal,sessionID:session,revision:revision,expiresAt:Date().addingTimeInterval(60),credentialLabels:[]),
                         headers:["X-API-Key":"synthetic-upstream"],secrets:["synthetic-upstream"]))
                 case .validate:return .init(valid:true)
@@ -249,7 +347,8 @@ private struct HTTPRouterHarness: Sendable {
                 }
             },recordHTTPActivity:{ event in
                 if failAudit { throw MCPManagementError.auditUnavailable }
-                await events?.append(event)
+                if event.outcome == .succeeded { await terminalGate?.wait() }
+                try await events?.append(event, failFirstTerminal: failFirstTerminal, failEveryTerminal: failEveryTerminal)
             }))
     }
 }

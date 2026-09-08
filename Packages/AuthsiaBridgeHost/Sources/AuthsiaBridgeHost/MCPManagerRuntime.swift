@@ -77,6 +77,7 @@ public actor MCPManagerRuntime {
     }
 
     private func startListeners() async throws -> URL {
+        try MCPAccessSettings.requireEnabled(dependencies.mcpAccessEnabled())
         if state == .running, let server {
             return try server.makeBootstrapURL()
         }
@@ -186,7 +187,7 @@ private final class MCPManagerPortalServer: @unchecked Sendable {
                 .childChannelInitializer { channel in
                     guard children.insert(channel) else { return channel.close() }
                     return channel.pipeline.configureHTTPServerPipeline().flatMap {
-                        channel.pipeline.addHandler(MCPPortalHTTPHandler(router: router))
+                        channel.pipeline.addHandlers(MCPHTTPRequestDeadline(), MCPPortalHTTPHandler(router: router))
                     }
                 }
                 .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -418,8 +419,10 @@ private final class MCPPortalRouter: @unchecked Sendable {
             do {
                 guard let owner = sessionID else { throw MCPManagementError.denied }
                 let command = try JSONDecoder().decode(MCPManagementOperationRequest.self, from: request.body)
+                if command.kind != .revoke { try MCPAccessSettings.requireEnabled(dependencies.mcpAccessEnabled()) }
+                let context = try await activityContext(for: command)
                 let change = try await dependencies.prepareOperation(command)
-                return encodedResponse(try await operations.prepare(owner: owner, kind: command.kind, change: change))
+                return encodedResponse(try await operations.prepare(owner: owner, kind: command.kind, change: change, context: context))
             } catch {
                 let failure = error as? MCPManagementError ?? .invalidRequest
                 return .json(.badRequest, ["code": failure.rawValue, "message": failure.localizedDescription])
@@ -443,15 +446,42 @@ private final class MCPPortalRouter: @unchecked Sendable {
                 if parts.count >= 4, parts[2] == "operations", let id = UUID(uuidString: String(parts[3])), let owner = sessionID {
                     if request.method == .GET, parts.count == 4 { return encodedResponse(try await operations.get(id, owner: owner)) }
                     if request.method == .POST, parts.count == 5, parts[4] == "request-confirmation" {
-                        let sessions = sessions
-                        let view = try await operations.confirm(id, owner: owner, present: dependencies.confirmOperation,
-                            sessionValid: { sessions.authenticate(sessionID: owner, proof: proof) })
+                        let prepared = try await operations.get(id, owner: owner)
+                        if prepared.kind != .revoke { try MCPAccessSettings.requireEnabled(dependencies.mcpAccessEnabled()) }
+                        let sessions = sessions, dependencies = dependencies
+                        var view = try await operations.confirm(id, owner: owner, present: dependencies.confirmOperation,
+                            sessionValid: { sessions.authenticate(sessionID: owner, proof: proof) && (prepared.kind == .revoke || dependencies.mcpAccessEnabled()) })
+                        if view.state == .denied, prepared.kind != .revoke, !dependencies.mcpAccessEnabled() {
+                            view.message = MCPAccessSettings.disabledMessage
+                        }
                         return encodedResponse(view)
                     }
                 }
                 return .json(.notFound, ["code": "notFound"])
-            } catch { return .json(.badRequest, ["code": (error as? MCPManagementError ?? .invalidRequest).rawValue]) }
+            } catch {
+                let failure = error as? MCPManagementError ?? .invalidRequest
+                return .json(.badRequest, ["code": failure.rawValue, "message": failure.localizedDescription])
+            }
         }
+    }
+
+    private func activityContext(for command: MCPManagementOperationRequest) async throws -> MCPManagementActivityContext? {
+        if command.kind == .revoke {
+            guard let grant = try await dependencies.listGrants().first(where: { $0.id == command.grantID }),
+                  let path = grant.workspacePath else { return nil }
+            return .init(identity: .init(workspacePath: path, upstreamName: grant.serverName),
+                         client: grant.clientLabel, transport: grant.transport)
+        }
+        let snapshot = try dependencies.registrySnapshot()
+        if let server = snapshot.servers.first(where: { $0.id == command.serverID }) {
+            return .init(identity: server.identity, client: command.client?.rawValue, transport: server.transport)
+        }
+        guard command.kind == .declare,
+              let workspace = snapshot.workspaces.first(where: { $0.id == command.workspaceID }) else { return nil }
+        let discovered = snapshot.discoveredServers?.first { $0.findingID == command.findingID }
+        guard let name = discovered?.displayName ?? command.name else { return nil }
+        return .init(identity: .init(workspacePath: workspace.label, upstreamName: name),
+                     client: discovered?.client.rawValue ?? command.client?.rawValue, transport: command.transport)
     }
 
     private func exchange(_ request: MCPPortalRequest) -> MCPPortalResponse {

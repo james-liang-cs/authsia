@@ -19,7 +19,7 @@ final class MCPHTTPProxyServer: @unchecked Sendable {
                 .childChannelInitializer { channel in
                     guard children.insert(channel) else { return channel.close() }
                     return channel.pipeline.configureHTTPServerPipeline().flatMap {
-                        channel.pipeline.addHandler(MCPHTTPHandler(router: router))
+                        channel.pipeline.addHandlers(MCPHTTPRequestDeadline(), MCPHTTPHandler(router: router))
                     }
                 }.bind(host: host, port: port).get()
             self.group = group
@@ -57,11 +57,13 @@ final class MCPHTTPChannels: @unchecked Sendable {
 }
 
 struct MCPHTTPRequest: Sendable { let method: String; let uri: String; let headers: HTTPHeaders; let body: Data }
+typealias MCPHTTPDelivery = @Sendable () async -> Void
+
 struct MCPHTTPResponse: Sendable {
     let status: Int
     var headers = HTTPHeaders()
     var body = Data()
-    var stream: (@Sendable (@escaping @Sendable (Data) async throws -> Void) async throws -> Void)?
+    var stream: (@Sendable (@escaping @Sendable (Data) async throws -> Void) async throws -> MCPHTTPDelivery?)?
     var disconnect: (@Sendable () async -> Void)?
     static func json(_ object: [String: Any], status: Int = 200) -> Self {
         .init(status: status, headers: HTTPHeaders([("Content-Type", "application/json")]),
@@ -214,9 +216,13 @@ actor MCPHTTPRouter {
             session.inFlight.remove(requestKey); session.cancelled.remove(requestKey)
             session.pendingRequests.removeValue(forKey: requestKey)
             let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
-            try? await record(session, tool: name, id: invocation, outcome: cancelled ? .cancelled : .upstreamUnavailable)
-            if !cancelled { retire(session) }
-            return .error(error as? MCPManagementError == .auditUnavailable ? -32030 : -32020, id: id, status: 200)
+            let failure = error as? MCPManagementError
+            let denied = failure == .denied || failure == .stale
+            let outcome: MCPHTTPActivityOutcome = cancelled ? .cancelled : denied ? .denied
+                : failure == .auditUnavailable ? .incomplete : .upstreamUnavailable
+            try? await record(session, tool: name, id: invocation, outcome: outcome, reason: failure?.rawValue)
+            if !cancelled && !denied { retire(session) }
+            return .error(denied ? -32010 : failure == .auditUnavailable ? -32030 : -32020, id: id, status: 200)
         }
     }
 
@@ -306,8 +312,16 @@ actor MCPHTTPRouter {
                     if !sse { terminal = try await self.emit(json, session: session, lease: lease, sse: false, rpcID: rpcID, send: send) }
                     if tool != nil, terminal == nil { throw MCPManagementError.unavailable }
                     bytes.task.cancel()
-                    if let invocation, let tool { try await self.record(session, tool: tool, id: invocation, outcome: terminal ?? .upstreamUnavailable) }
-                    await self.finished(session, streamID: streamID, requestKey: requestKey)
+                    let outcome = terminal ?? .upstreamUnavailable
+                    // The handler sends the terminating HTTP chunk before awaiting
+                    // evidence. Keep recording in the connection task rather
+                    // than spawning another task for every completed call.
+                    return {
+                        if let invocation, let tool {
+                            await self.recordTerminal(session, tool: tool, id: invocation, outcome: outcome)
+                        }
+                        await self.finished(session, streamID: streamID, requestKey: requestKey)
+                    }
                 } catch {
                     bytes.task.cancel()
                     let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
@@ -336,6 +350,13 @@ actor MCPHTTPRouter {
         try await send(sse ? Data("data: ".utf8) + masked + Data("\n\n".utf8) : masked)
         if object["error"] != nil || (object["result"] as? [String: Any])?["isError"] as? Bool == true { return .mcpError }
         return object["result"] != nil ? .succeeded : nil
+    }
+    private func recordTerminal(_ session: MCPHTTPSession, tool: String, id: UUID, outcome: MCPHTTPActivityOutcome) async {
+        do { try await record(session, tool: tool, id: id, outcome: outcome) }
+        catch {
+            // Retry the same outcome. The app retains failed evidence for its activity projection.
+            try? await record(session, tool: tool, id: id, outcome: outcome)
+        }
     }
     private func record(_ session: MCPHTTPSession, tool: String, id: UUID, outcome: MCPHTTPActivityOutcome, reason: String? = nil) async throws {
         do { try await dependencies.recordHTTPActivity(MCPHTTPActivityEvent(id: id, serverID: session.server.id,
@@ -374,7 +395,7 @@ actor MCPHTTPRouter {
     }
 }
 
-private final class MCPHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
+final class MCPHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
     private let router: MCPHTTPRouter
@@ -413,8 +434,10 @@ private final class MCPHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                         var buffer = channel.allocator.buffer(capacity: data.count); buffer.writeBytes(data)
                         try await channel.writeAndFlush(HTTPServerResponsePart.body(.byteBuffer(buffer))).get()
                     }
-                    if let stream = response.stream { try await stream(send) } else { try await send(response.body) }
+                    var delivered: MCPHTTPDelivery?
+                    if let stream = response.stream { delivered = try await stream(send) } else { try await send(response.body) }
                     try await channel.writeAndFlush(HTTPServerResponsePart.end(nil)).get()
+                    await delivered?()
                 } catch { await disconnect?() }
                 try? await channel.close().get()
             }

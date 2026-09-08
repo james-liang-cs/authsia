@@ -127,6 +127,70 @@ final class MCPActivityProjectionTests: XCTestCase {
         XCTAssertEqual(grant.serverName, "codegraph")
     }
 
+    func testManagementJournalMergesByOperationAndFiltersBeforePaging() throws {
+        let operation = UUID()
+        let context = MCPManagementActivityContext(identity: .init(workspacePath: "/tmp/quiet", upstreamName: "fixture"), client: "codex", transport: .stdio)
+        let entries = [
+            MCPManagementAuditEvent(operationID: operation, kind: "policy", phase: "intent", summary: "Policy", result: "pending", context: context),
+            MCPManagementAuditEvent(operationID: operation, kind: "policy", phase: "outcome", summary: "Policy", result: "applied", context: context)
+        ]
+        let page = MCPActivityProjection.page(events: [], managementEvents: entries,
+            query: .init(workspacePath: "/tmp/quiet", kind: "managementChange", limit: 1))
+        XCTAssertEqual(page.records.count, 1)
+        XCTAssertEqual(page.records.first?.id, operation)
+        XCTAssertEqual(page.records.first?.outcome, .succeeded)
+        XCTAssertEqual(page.records.first?.serverName, "fixture")
+        XCTAssertEqual(page.records.first?.clientLabel, "codex")
+        XCTAssertEqual(page.sourceHealth, .ok)
+        let missing = MCPActivityProjection.page(events: [], managementEvents: [entries[0]])
+        XCTAssertEqual(missing.records.first?.evidenceStatus, "incomplete")
+        XCTAssertEqual(missing.sourceHealth, .incomplete)
+    }
+
+    func testOneUnreadableSourceDoesNotHideTheOtherOrClaimCompleteEvidence() {
+        let call = event(id: UUID(), workspace: "/tmp/a", tool: "read", outcome: .succeeded)
+        let page = MCPActivityProjection.page(loading: { [MCPHTTPActivityRecording.commandEvent(from: call)] },
+            loadingManagement: { throw MCPManagementError.unavailable })
+        XCTAssertEqual(page.records.count, 1)
+        XCTAssertEqual(page.sourceHealth, .incomplete)
+        XCTAssertEqual(page.sources?["managementJournal"], .unavailable)
+        XCTAssertEqual(page.sources?["commandHistory"], .ok)
+    }
+
+    func testFailedEvidenceKeepsActualOutcomeAndSuccessfulRetryClearsFallback() {
+        let id = UUID()
+        let started = event(id: id, workspace: "/tmp/a", tool: "write", outcome: .started)
+        let terminal = event(id: id, workspace: "/tmp/a", tool: "write", outcome: .succeeded)
+        let buffer = MCPActivityEvidenceBuffer(limit: 1)
+        buffer.retain(terminal)
+        let page = MCPActivityProjection.page(events: [MCPHTTPActivityRecording.commandEvent(from: started)], pendingEvidence: buffer.snapshot().events)
+        XCTAssertEqual(page.records.count, 1)
+        XCTAssertEqual(page.records.first?.outcome, .succeeded)
+        XCTAssertEqual(page.records.first?.evidenceStatus, "incomplete")
+        XCTAssertEqual(page.sourceHealth, .incomplete)
+        buffer.recorded(terminal)
+        XCTAssertTrue(buffer.snapshot().events.isEmpty)
+        XCTAssertFalse(buffer.snapshot().overflow)
+        buffer.retain(terminal)
+        buffer.retain(event(id: UUID(), workspace: "/tmp/a", tool: "write", outcome: .succeeded))
+        XCTAssertEqual(buffer.snapshot().events.count, 1)
+        XCTAssertTrue(buffer.snapshot().overflow)
+    }
+
+    func testUnfinishedCallDoesNotClaimCompleteEvidenceAfterRestart() {
+        let started = event(id: UUID(), workspace: "/tmp/a", tool: "write", outcome: .started)
+        let page = MCPActivityProjection.page(events: [MCPHTTPActivityRecording.commandEvent(from: started)])
+        XCTAssertEqual(page.records.first?.outcome, .started)
+        XCTAssertEqual(page.records.first?.evidenceStatus, "pending")
+        XCTAssertEqual(page.sourceHealth, .incomplete)
+    }
+
+    func testAuthorityFailureSurvivesWireEncodingAndOlderRepliesStillDecode() throws {
+        let reply = MCPHTTPAuthorityReply(valid: false, failure: .denied)
+        XCTAssertEqual(try JSONDecoder().decode(MCPHTTPAuthorityReply.self, from: JSONEncoder().encode(reply)).failure, .denied)
+        XCTAssertNil(try JSONDecoder().decode(MCPHTTPAuthorityReply.self, from: Data(#"{"valid":true}"#.utf8)).failure)
+    }
+
     private func event(
         id: UUID,
         workspace: String,

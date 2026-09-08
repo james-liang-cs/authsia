@@ -145,12 +145,50 @@ struct MCPProxyCommandTests {
         #expect(try workspace.filteredEvents(historyFile: fileURL.path).map(\.executable) == ["jira"])
     }
 
+    @Test("disabled MCP integrations block commands before output, files, IPC or stdio")
+    func disabledMCPCommands() async throws {
+        let output: (String) -> Void = { _ in Issue.record("disabled command produced output") }
+        let controller = MCPManagerControllerFixture()
+        var start = try MCPCommand.Start.parse([])
+        start.mcpAccessEnabledOverride = false
+        #expect(throws: MCPManagementError.mcpAccessDisabled) { try start.run(controller: controller, output: output) }
+        #expect(controller.startOpenPortal == nil)
+        var restart = try MCPCommand.Restart.parse([])
+        restart.mcpAccessEnabledOverride = false
+        #expect(throws: MCPManagementError.mcpAccessDisabled) { try restart.run(controller: controller, output: output) }
+        #expect(controller.restartOpenPortal == nil)
+        var configure = try MCPCommand.Configure.parse(["--client", "codex"])
+        configure.mcpAccessEnabledOverride = false
+        #expect(throws: MCPManagementError.mcpAccessDisabled) { try configure.run(output: output) }
+        var wrap = try MCPCommand.Wrap.parse(["--server", "fixture", "--write", "--yes"])
+        wrap.mcpAccessEnabledOverride = false
+        #expect(throws: MCPManagementError.mcpAccessDisabled) { try wrap.run(output: output) }
+        var unwrap = try MCPCommand.Unwrap.parse(["--server", "fixture", "--write", "--yes"])
+        unwrap.mcpAccessEnabledOverride = false
+        #expect(throws: MCPManagementError.mcpAccessDisabled) { try unwrap.run(output: output) }
+        var declare = try MCPCommand.Declare.parse(["--server", "fixture", "--command", "fixture", "--yes"])
+        declare.mcpAccessEnabledOverride = false
+        #expect(throws: MCPManagementError.mcpAccessDisabled) { try declare.run(output: output) }
+        var catalog = try MCPCommand.Catalog.parse(["--server", "fixture", "--write"])
+        catalog.mcpAccessEnabledOverride = false
+        await #expect(throws: MCPManagementError.mcpAccessDisabled) { try await catalog.run(output: output) }
+        var serve = try MCPCommand.Serve.parse([])
+        serve.mcpAccessEnabledOverride = false
+        await #expect(throws: MCPManagementError.mcpAccessDisabled) { try await serve.run() }
+        var proxy = try MCPCommand.Proxy.parse(["--upstream", "fixture"])
+        proxy.mcpAccessEnabledOverride = false
+        await #expect(throws: MCPManagementError.mcpAccessDisabled) { try await proxy.run() }
+        #expect(MCPManagementError.mcpAccessDisabled.localizedDescription.contains("Settings > Developer Access"))
+        #expect(MCPManagementError.mcpAccessDisabled.localizedDescription.contains("then retry"))
+    }
+
     @Test("manager lifecycle commands parse and render controller state")
     func managerLifecycleCommands() throws {
         let controller = MCPManagerControllerFixture()
         var output: [String] = []
 
-        let start = try MCPCommand.Start.parse(["--no-open"])
+        var start = try MCPCommand.Start.parse(["--no-open"])
+        start.mcpAccessEnabledOverride = true
         try start.run(controller: controller, output: { output.append($0) })
         #expect(controller.startOpenPortal == false)
         #expect(output.contains("✓ Authsia MCP Manager running"))
@@ -168,7 +206,8 @@ struct MCPProxyCommandTests {
         #expect(output == ["Authsia MCP Manager stopped."])
 
         output.removeAll()
-        let restart = try MCPCommand.Restart.parse(["--no-open"])
+        var restart = try MCPCommand.Restart.parse(["--no-open"])
+        restart.mcpAccessEnabledOverride = true
         try restart.run(controller: controller, output: { output.append($0) })
         #expect(controller.restartOpenPortal == false)
         #expect(output.contains("✓ Authsia MCP Manager running"))
@@ -199,6 +238,7 @@ struct MCPProxyCommandTests {
             "--workspace", root.path,
             "--yes",
         ])
+        command.mcpAccessEnabledOverride = true
         command.homeDirectory = home
         try command.run(output: { _ in })
 

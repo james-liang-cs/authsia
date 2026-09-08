@@ -136,6 +136,7 @@ public struct MCPActivityPage: Codable, Equatable, Sendable {
     public let lastUpdate: Date
     public let message: String?
     public let auditStatus: MCPAuditStatusView?
+    public let sources: [String: MCPActivitySourceHealth]?
 
     public init(
         records: [MCPActivityRecord],
@@ -148,7 +149,8 @@ public struct MCPActivityPage: Codable, Equatable, Sendable {
         sourceHealth: MCPActivitySourceHealth = .ok,
         lastUpdate: Date = Date(),
         message: String? = nil,
-        auditStatus: MCPAuditStatusView? = nil
+        auditStatus: MCPAuditStatusView? = nil,
+        sources: [String: MCPActivitySourceHealth]? = nil
     ) {
         self.records = records
         self.cursor = cursor
@@ -161,6 +163,7 @@ public struct MCPActivityPage: Codable, Equatable, Sendable {
         self.lastUpdate = lastUpdate
         self.message = message
         self.auditStatus = auditStatus
+        self.sources = sources
     }
 
     public static func unavailable(_ message: String, now: Date = Date()) -> MCPActivityPage {
@@ -211,51 +214,89 @@ public enum MCPHTTPActivityRecording {
     }
 }
 
-public enum MCPActivityProjection {
-    public static func page(loading: () throws -> [AgentCommandEvent], query: MCPActivityQuery = .init(), now: Date = Date()) -> MCPActivityPage {
-        do {
-            return page(events: try loading(), query: query, now: now)
-        } catch {
-            return .unavailable("Activity history could not be read.", now: now)
+/// Bounded metadata for pending or failed Bridge writes. A
+/// successful retry removes it. Overflow remains visible until this runtime ends.
+public final class MCPActivityEvidenceBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [UUID: MCPHTTPActivityEvent] = [:]
+    private var overflow = false
+    private let limit: Int
+    public init(limit: Int = 200) { self.limit = max(1, limit) }
+    public func retain(_ event: MCPHTTPActivityEvent) {
+        lock.withLock {
+            if pending[event.id] == nil, pending.count >= limit {
+                if let oldest = pending.values.min(by: { $0.recordedAt < $1.recordedAt }) { pending.removeValue(forKey: oldest.id) }
+                overflow = true
+            }
+            pending[event.id] = event
         }
     }
+    public func recorded(_ event: MCPHTTPActivityEvent) {
+        lock.withLock { _ = pending.removeValue(forKey: event.id) }
+    }
+    public func snapshot() -> (events: [MCPHTTPActivityEvent], overflow: Bool) {
+        lock.withLock { (Array(pending.values), overflow) }
+    }
+}
 
-    public static func page(events: [AgentCommandEvent], query: MCPActivityQuery = .init(), now: Date = Date()) -> MCPActivityPage {
-        let mcpEvents = events.filter { $0.captureSource == .mcpProxy }
-        let retainedFrom = mcpEvents.map(\.recordedAt).min()
-        let retainedTo = mcpEvents.map(\.recordedAt).max()
-        let records = Dictionary(grouping: mcpEvents.compactMap(record(from:)), by: { $0.callID ?? $0.id.uuidString })
-            .values.map { rows in rows.first { $0.outcome != .started } ?? rows[0] }
-            .filter { matches($0, query: query) }
-            .sorted(by: newerThan)
-        let cursor = query.cursor.flatMap(decodeCursor)
-        let paged = records.filter { cursor == nil || afterCursor($0, cursor: cursor!) }
-        let limit = query.limit
-        let pageRecords = Array(paged.prefix(limit))
-        let truncated = paged.count > limit
-        return MCPActivityPage(
-            records: pageRecords,
-            cursor: truncated ? encodeCursor(pageRecords.last) : nil,
-            asOf: now,
-            retainedFrom: retainedFrom,
-            retainedTo: retainedTo,
-            truncated: truncated,
-            completeness: truncated ? "truncated" : "complete",
-            sourceHealth: truncated ? .truncated : .ok,
-            lastUpdate: now,
-            message: pageRecords.isEmpty && !records.isEmpty
-                ? "No activity matches the current filters in the retained range."
-                : nil,
-            auditStatus: MCPAuditStatusView(
-                verificationState: "unverified",
-                completeness: truncated ? "truncated" : "complete",
-                checkedAt: now,
-                message: "This summary reports command-history completeness. It does not claim HMAC verification of another audit log."
-            )
-        )
+public enum MCPActivityProjection {
+    public static func page(loading: () throws -> [AgentCommandEvent],
+                            loadingManagement: () throws -> [MCPManagementAuditEvent] = { [] },
+                            pendingEvidence: [MCPHTTPActivityEvent] = [], evidenceOverflow: Bool = false,
+                            query: MCPActivityQuery = .init(), now: Date = Date()) -> MCPActivityPage {
+        var events: [AgentCommandEvent] = [], management: [MCPManagementAuditEvent] = [], failures: [String] = []
+        do { events = try loading() } catch { failures.append("commandHistory") }
+        do { management = try loadingManagement() } catch { failures.append("managementJournal") }
+        return page(events: events, managementEvents: management, pendingEvidence: pendingEvidence,
+                    evidenceOverflow: evidenceOverflow, unavailableSources: failures, query: query, now: now)
     }
 
-    private static func record(from event: AgentCommandEvent) -> MCPActivityRecord? {
+    public static func page(events: [AgentCommandEvent], managementEvents: [MCPManagementAuditEvent] = [],
+                            pendingEvidence: [MCPHTTPActivityEvent] = [], evidenceOverflow: Bool = false,
+                            unavailableSources: [String] = [], query: MCPActivityQuery = .init(), now: Date = Date()) -> MCPActivityPage {
+        let pendingIDs = Set(pendingEvidence.map(\.id))
+        let mcpEvents = events.filter { $0.captureSource == .mcpProxy && !pendingIDs.contains($0.id) }
+        let calls = Dictionary(grouping: mcpEvents.compactMap { record(from: $0) }, by: { $0.callID ?? $0.id.uuidString })
+            .values.map { rows in rows.filter { $0.outcome != .started }.max(by: { newerThan($1, $0) }) ?? rows[0] }
+        let pending = pendingEvidence.compactMap { record(from: MCPHTTPActivityRecording.commandEvent(from: $0), evidenceStatus: "incomplete") }
+        let management = Dictionary(grouping: managementEvents, by: \.operationID).values.compactMap { rows -> MCPActivityRecord? in
+            guard let event = rows.filter({ $0.phase == "outcome" }).max(by: { $0.recordedAt < $1.recordedAt })
+                ?? rows.max(by: { $0.recordedAt < $1.recordedAt }) else { return nil }
+            let identity = event.context?.identity
+            let terminal = event.phase == "outcome"
+            let outcome: MCPHTTPActivityOutcome = !terminal ? .incomplete : event.result == "applied" ? .succeeded : .failed
+            return .init(id: event.operationID, callID: "mcp-operation:" + event.operationID.uuidString,
+                kind: .managementChange, recordedAt: event.recordedAt, workspacePath: identity?.workspacePath ?? "",
+                serverID: identity.map(MCPWorkspaceStore.serverID) ?? "", serverName: identity?.upstreamName ?? "Unknown server",
+                transport: event.context?.transport, toolName: event.kind, clientLabel: event.context?.client ?? "native",
+                attributionConfidence: event.context == nil ? "unknown" : "native-management",
+                outcome: outcome, reasonCode: terminal ? event.result : "outcomeMissing",
+                evidenceStatus: terminal && event.context != nil ? "recorded" : "incomplete")
+        }
+        let all = calls + pending + management
+        let records = all.filter { matches($0, query: query) }.sorted(by: newerThan)
+        let cursor = query.cursor.flatMap(decodeCursor)
+        let paged = records.filter { cursor == nil || afterCursor($0, cursor: cursor!) }
+        let pageRecords = Array(paged.prefix(query.limit))
+        let truncated = paged.count > query.limit
+        let incomplete = evidenceOverflow || !unavailableSources.isEmpty || all.contains { $0.evidenceStatus != "recorded" }
+        let health: MCPActivitySourceHealth = !unavailableSources.isEmpty && all.isEmpty ? .unavailable
+            : incomplete ? .incomplete : truncated ? .truncated : .ok
+        let completeness = health.rawValue == "ok" ? "complete" : health.rawValue
+        let message: String? = !unavailableSources.isEmpty
+            ? "Some activity sources could not be read: " + unavailableSources.joined(separator: ", ") + "."
+            : incomplete ? "Evidence is incomplete or a call has no recorded terminal outcome yet." : nil
+        return MCPActivityPage(records: pageRecords, cursor: truncated ? encodeCursor(pageRecords.last) : nil,
+            asOf: now, retainedFrom: all.map(\.recordedAt).min(), retainedTo: all.map(\.recordedAt).max(),
+            truncated: truncated, completeness: completeness, sourceHealth: health, lastUpdate: now, message: message,
+            auditStatus: MCPAuditStatusView(verificationState: health == .unavailable ? "unavailable" : "unverified",
+                completeness: completeness, checkedAt: now,
+                message: "This summary covers command history and the management journal. It does not claim HMAC verification."),
+            sources: ["commandHistory": unavailableSources.contains("commandHistory") ? .unavailable : .ok,
+                      "managementJournal": unavailableSources.contains("managementJournal") ? .unavailable : .ok])
+    }
+
+    private static func record(from event: AgentCommandEvent, evidenceStatus: String? = nil) -> MCPActivityRecord? {
         guard let agentID = event.agentID, let workspace = event.workingDirectory else { return nil }
         let http = agentID.hasPrefix("http:")
         let name = http ? String(agentID.dropFirst(5))
@@ -316,7 +357,7 @@ public enum MCPActivityProjection {
             outcome: outcome,
             reasonCode: event.mcpProxyErrorCode,
             grantIDs: event.mcpProxyGrantIDs ?? event.agentJITGrantID.map { [$0] } ?? [],
-            evidenceStatus: event.mcpProxyOutcome == nil ? "incomplete" : "recorded"
+            evidenceStatus: evidenceStatus ?? (event.mcpProxyOutcome == nil ? "incomplete" : event.mcpProxyOutcome == .started ? "pending" : "recorded")
         )
     }
 

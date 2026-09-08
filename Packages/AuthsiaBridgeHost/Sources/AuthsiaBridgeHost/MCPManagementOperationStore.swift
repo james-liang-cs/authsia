@@ -15,7 +15,7 @@ public struct MCPPreparedManagementChange: Sendable {
 /// The browser can request a prompt; only the injected native presenter decides.
 /// Neither a second browser payload nor a replay can replace an approved change.
 actor MCPManagementOperationStore {
-    private struct Entry { let owner: String; let change: MCPPreparedManagementChange; var view: MCPManagementOperationView }
+    private struct Entry { let owner: String; let change: MCPPreparedManagementChange; let context: MCPManagementActivityContext?; var view: MCPManagementOperationView }
     private var entries: [UUID: Entry] = [:]
     private var applying = false
     private let clock: @Sendable () -> Date
@@ -24,11 +24,11 @@ actor MCPManagementOperationStore {
         self.clock = clock
         self.audit = audit
     }
-    func prepare(owner: String, kind: MCPManagementOperationKind, change: MCPPreparedManagementChange) throws -> MCPManagementOperationView {
+    func prepare(owner: String, kind: MCPManagementOperationKind, change: MCPPreparedManagementChange, context: MCPManagementActivityContext? = nil) throws -> MCPManagementOperationView {
         entries = entries.filter { $0.value.view.expiresAt > clock() || [.applying, .awaitingNativeConfirmation].contains($0.value.view.state) }
         guard entries.count < 128 else { throw MCPManagementError.busy }
         let view = MCPManagementOperationView(id: UUID(), kind: kind, preview: change.preview, expiresAt: clock().addingTimeInterval(300))
-        entries[view.id] = Entry(owner: owner, change: change, view: view)
+        entries[view.id] = Entry(owner: owner, change: change, context: context, view: view)
         return view
     }
     func get(_ id: UUID, owner: String) throws -> MCPManagementOperationView {
@@ -50,7 +50,7 @@ actor MCPManagementOperationStore {
         defer { applying = false }
         do {
             try audit?.record(MCPManagementAuditEvent(operationID: id, kind: entry.view.kind.rawValue, phase: "intent",
-                summary: entry.view.preview, result: "pending"))
+                summary: entry.view.preview, result: "pending", context: entry.context))
         } catch {
             return finish(id, state: .failed, message: "The change was not applied because its intent could not be recorded.")
         }
@@ -61,14 +61,14 @@ actor MCPManagementOperationStore {
             let message = try await entry.change.apply()
             do {
                 try audit?.record(MCPManagementAuditEvent(operationID: id, kind: entry.view.kind.rawValue, phase: "outcome",
-                    summary: entry.view.preview, result: "applied"))
+                    summary: entry.view.preview, result: "applied", context: entry.context))
                 return finish(id, state: .succeeded, message: message)
             } catch {
                 return finish(id, state: .succeeded, message: message + " The change applied, but evidence recording was incomplete.")
             }
         } catch {
             try? audit?.record(MCPManagementAuditEvent(operationID: id, kind: entry.view.kind.rawValue, phase: "outcome",
-                summary: entry.view.preview, result: "notApplied"))
+                summary: entry.view.preview, result: "notApplied", context: entry.context))
             let error = error as? MCPManagementError ?? .unavailable
             return finish(id, state: error == .stale ? .stale : .failed, message: error.localizedDescription)
         }

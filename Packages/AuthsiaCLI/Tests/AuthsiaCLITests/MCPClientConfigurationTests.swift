@@ -264,6 +264,7 @@ struct MCPClientConfigurationTests {
         defer { fixture.tearDown() }
 
         var configure = try MCPCommand.Configure.parse(["--client", "cursor"])
+        configure.mcpAccessEnabledOverride = true
         configure.homeDirectory = fixture.home
         configure.currentDirectoryPath = fixture.unrelated.path
         configure.environment = [:]
@@ -581,6 +582,7 @@ struct MCPClientConfigurationTests {
             "--client",
             "cursor",
         ])
+        preview.mcpAccessEnabledOverride = true
         preview.homeDirectory = fixture.home
         preview.currentDirectoryPath = fixture.workspace.path
         var previewOutput = ""
@@ -602,6 +604,7 @@ struct MCPClientConfigurationTests {
             "cursor",
             "--yes",
         ])
+        apply.mcpAccessEnabledOverride = true
         apply.homeDirectory = fixture.home
         apply.currentDirectoryPath = fixture.workspace.path
         var applyOutput = ""
@@ -639,6 +642,7 @@ struct MCPClientConfigurationTests {
             "cursor",
             "--yes",
         ])
+        apply.mcpAccessEnabledOverride = true
         apply.homeDirectory = fixture.home
         apply.currentDirectoryPath = fixture.workspace.path
         var output = ""
@@ -679,6 +683,7 @@ struct MCPClientConfigurationTests {
             "--arg", "serve",
             "--workspace", fixture.workspace.path,
         ])
+        preview.mcpAccessEnabledOverride = true
         preview.homeDirectory = fixture.home
         preview.currentDirectoryPath = fixture.workspace.path
         var previewOutput = ""
@@ -697,6 +702,7 @@ struct MCPClientConfigurationTests {
             "--workspace", fixture.workspace.path,
             "--yes",
         ])
+        apply.mcpAccessEnabledOverride = true
         apply.homeDirectory = fixture.home
         apply.currentDirectoryPath = fixture.workspace.path
         var applyOutput = ""
@@ -732,6 +738,7 @@ struct MCPClientConfigurationTests {
             "--client", "cursor",
             "--workspace", fixture.workspace.path,
         ])
+        preview.mcpAccessEnabledOverride = true
         preview.homeDirectory = fixture.home
         preview.currentDirectoryPath = fixture.unrelated.path
         preview.environment = [:]
@@ -756,6 +763,7 @@ struct MCPClientConfigurationTests {
             "--workspace", fixture.workspace.path,
             "--yes",
         ])
+        apply.mcpAccessEnabledOverride = true
         apply.homeDirectory = fixture.home
         apply.currentDirectoryPath = fixture.unrelated.path
         apply.environment = [:]
@@ -889,6 +897,7 @@ struct MCPClientConfigurationTests {
         var credentialed = try MCPCommand.Catalog.parse([
             "--server", "jira", "--workspace", fixture.workspace.path,
         ])
+        credentialed.mcpAccessEnabledOverride = true
         var message = ""
         do {
             try await credentialed.run { _ in }
@@ -902,6 +911,7 @@ struct MCPClientConfigurationTests {
         var undeclared = try MCPCommand.Catalog.parse([
             "--server", "absent", "--workspace", fixture.workspace.path,
         ])
+        undeclared.mcpAccessEnabledOverride = true
         message = ""
         do {
             try await undeclared.run { _ in }
@@ -930,6 +940,7 @@ struct MCPClientConfigurationTests {
         var catalog = try MCPCommand.Catalog.parse([
             "--server", "jira", "--workspace", fixture.workspace.path,
         ])
+        catalog.mcpAccessEnabledOverride = true
         var message = ""
         do {
             try await catalog.run { _ in }

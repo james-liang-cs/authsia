@@ -55,6 +55,24 @@ final class MCPManagementOperationStoreTests: XCTestCase {
         XCTAssertEqual(result.state, .stale)
         XCTAssertEqual(try Data(contentsOf: file), external)
     }
+    func testAppliedChangeJournalCarriesActivityIdentityAndProjectsOneRow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let audit = MCPManagementAuditStore(fileURL: root.appendingPathComponent("journal.jsonl"))
+        let store = MCPManagementOperationStore(audit: audit)
+        let context = MCPManagementActivityContext(identity: .init(workspacePath: "/tmp/fixture", upstreamName: "fixture"), client: "codex", transport: .stdio)
+        let prepared = try await store.prepare(owner: "owner", kind: .wrap,
+            change: .init(preview: "Protect fixture", validate: {}, apply: { "Applied" }), context: context)
+        let result = try await store.confirm(prepared.id, owner: "owner", present: { _ in true }, sessionValid: { true })
+        XCTAssertEqual(result.state, .succeeded)
+        let journal = try audit.load()
+        XCTAssertEqual(journal.map(\.context), [context, context])
+        let page = MCPActivityProjection.page(events: [], managementEvents: journal, query: .init(kind: "managementChange"))
+        XCTAssertEqual(page.records.count, 1)
+        XCTAssertEqual(page.records.first?.outcome, .succeeded)
+        XCTAssertEqual(page.records.first?.id, prepared.id)
+    }
+
     func testMissingIntentRecordFailsClosedBeforeApply() async throws {
         let store = MCPManagementOperationStore(audit: FailingAuditStore())
         let applied = OperationCounter()

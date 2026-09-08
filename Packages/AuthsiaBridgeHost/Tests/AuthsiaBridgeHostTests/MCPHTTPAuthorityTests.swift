@@ -13,7 +13,7 @@ final class MemoryHTTPAuthorityBlob: AuthorityBlobStoring, @unchecked Sendable {
 final class MCPHTTPAuthorityTests: XCTestCase {
     private func definition(_ name: String = "secret") throws -> MCPServerDefinition {
         let upstream = MCPUpstreamConfig(name: "internal", transport: .streamableHTTP, url: "http://127.0.0.1:9000/mcp",
-            tools: .init(allow: ["read"]), credentialHeaders: [.init(headerName: "X-Key", reference: "authsia://api-key/\(name)/key", format: .raw)])
+            tools: .init(allow: ["read"], approve: ["write"]), credentialHeaders: [.init(headerName: "X-Key", reference: "authsia://api-key/\(name)/key", format: .raw)])
         let object: [String: Any] = ["schemaVersion":3, "workspace":["name":"test","authsiaFolder":"Workspaces/test"],
                                    "mcpUpstreams":[try JSONSerialization.jsonObject(with: JSONEncoder().encode(upstream))]]
         return try MCPWorkspaceStore.decode(JSONSerialization.data(withJSONObject: object), root: URL(fileURLWithPath: "/tmp/mcp-fixture"))[0]
@@ -50,6 +50,29 @@ final class MCPHTTPAuthorityTests: XCTestCase {
         let validation = try await authority.execute(.validate(grantID: first.grant.id, principal: claude, sessionID: session, revision: server.revision))
         XCTAssertFalse(validation.valid)
     }
+    func testApproveToolsPromptForEachInvocationEvenWithAnAdmittedSession() async throws {
+        let server = try definition()
+        var prompts: [String] = [], permitWrite = true
+        let authority = MCPHTTPAuthority(storage: MemoryHTTPAuthorityBlob(), definition: { _ in server },
+            items: { _ in [] }, secret: { _ in XCTFail("no credential needed"); return "" },
+            approve: { _, _, tool, _ in prompts.append(tool); return tool != "write" || permitWrite },
+            recordAdmission: { _ in }, enabled: { true })
+        let (principal, _) = try await enroll(authority, definition: server)
+        let session = UUID().uuidString
+        let allowed = try await authority.execute(.authorize(principal: principal, sessionID: session, revision: server.revision, tool: "read"))
+        for _ in 0..<2 {
+            let approved = try await authority.execute(.authorize(principal: principal, sessionID: session, revision: server.revision, tool: "write"))
+            XCTAssertEqual(approved.lease?.grant.id, allowed.lease?.grant.id)
+        }
+        permitWrite = false
+        do {
+            _ = try await authority.execute(.authorize(principal: principal, sessionID: session, revision: server.revision, tool: "write"))
+            XCTFail("declined invocation must not receive a lease")
+        } catch { XCTAssertEqual(error as? MCPManagementError, .denied) }
+        _ = try await authority.execute(.authorize(principal: principal, sessionID: session, revision: server.revision, tool: "read"))
+        XCTAssertEqual(prompts, ["read", "write", "write", "write"])
+    }
+
     func testDiscardedReplacementDoesNotRevokeWorkingToken() async throws {
         let server = try definition()
         let authority = MCPHTTPAuthority(storage: MemoryHTTPAuthorityBlob(), definition: { _ in server }, items: { _ in [] }, secret: { _ in "" }, approve: { _,_,_,_ in true }, recordAdmission: { _ in }, enabled: { true })

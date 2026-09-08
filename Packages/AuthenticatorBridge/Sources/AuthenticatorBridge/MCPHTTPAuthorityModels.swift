@@ -72,18 +72,20 @@ public struct MCPHTTPAuthorityReply: Codable, Sendable {
     public var lease: MCPHTTPLease?
     public var grants: [MCPHTTPGrantSummary]?
     public var valid: Bool
+    public var failure: MCPManagementError?
     public init(principal: MCPHTTPPrincipal? = nil, enrollment: MCPHTTPEnrollmentTicket? = nil,
-                lease: MCPHTTPLease? = nil, grants: [MCPHTTPGrantSummary]? = nil, valid: Bool = true) {
+                lease: MCPHTTPLease? = nil, grants: [MCPHTTPGrantSummary]? = nil, valid: Bool = true, failure: MCPManagementError? = nil) {
         self.principal = principal; self.enrollment = enrollment; self.lease = lease
-        self.grants = grants; self.valid = valid
+        self.grants = grants; self.valid = valid; self.failure = failure
     }
 }
 
 public enum MCPManagementError: String, Error, LocalizedError, Codable, Sendable {
-    case unavailable, invalidRequest, denied, stale, notFound, unsupported, auditUnavailable, busy
+    case unavailable, invalidRequest, denied, stale, notFound, unsupported, auditUnavailable, busy, mcpAccessDisabled
     case catalogExecutableMissing, catalogEnvironmentRequired, catalogEmpty, catalogIncomplete, catalogStartupFailed, catalogHelperUnavailable, catalogTimedOut, catalogAccessDisabled
     public var errorDescription: String? {
         switch self {
+        case .mcpAccessDisabled: return MCPAccessSettings.disabledMessage
         case .unavailable: return "Authsia management is unavailable."
         case .invalidRequest: return "Invalid MCP configuration or request."
         case .denied: return "MCP access was not authorized."

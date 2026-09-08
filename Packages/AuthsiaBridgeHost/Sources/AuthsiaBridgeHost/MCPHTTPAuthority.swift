@@ -140,7 +140,8 @@ final class MCPHTTPAuthority {
             let originalEpoch = epoch
             var state = try load()
             var existing = matchingGrant(state, principal: principal, sessionID: sessionID, revision: revision, items: resolved)
-            if existing == nil {
+            if existing == nil || decision == .approve {
+                // Session admission never substitutes for this invocation's tool approval.
                 guard await approve(server, principal, tool, resolved), epoch == originalEpoch, enabled() else { throw MCPManagementError.denied }
                 _ = try checkedDefinition(principal, revision: revision)
                 guard try items(server.upstream.credentialHeaders) == resolved else { throw MCPManagementError.stale }

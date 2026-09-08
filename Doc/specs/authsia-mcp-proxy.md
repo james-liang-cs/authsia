@@ -171,6 +171,8 @@ from operator visibility. It grants no authority.
   The Settings toggle opens Coverage; Coverage can turn it on. Enabling it
   creates no grant and bypasses no Bridge or JIT check.
 
+MCP setup and launch commands (`configure`, `wrap`, `unwrap`, `declare`, `catalog`, `serve`, `proxy`, `start`, and `restart`) fail while MCP Integrations is off, before starting listeners or changing configuration. The error directs you to enable **MCP Integrations** in **Authsia Settings > Developer Access**, then retry. The CLI never changes the toggle. Help, `status`, `doctor`, `activity export`, `stop`, and portal revocation remain available for inspection and cleanup. Portal changes also recheck the toggle when prepared and confirmed.
+
 ### Find The Server
 
 1. Initialize and validate the managed Authsia workspace.
@@ -881,6 +883,29 @@ grants vault access. Confirmed mutations write a redacted intent record before
 apply and an outcome afterwards. If intent cannot be recorded, the change is not
 applied. An outcome-write failure after an applied change is reported as applied
 with incomplete evidence.
+
+The Activity view merges command history with the management journal using the
+operation ID and captured server/workspace metadata. It filters the merged data
+before pagination. Older journal entries without identity remain visible under
+All workspaces as unknown scope. Each source reports its own read health; a
+missing outcome or unreadable source is incomplete evidence, not an empty healthy
+history.
+
+Both loopback listeners impose a 15-second absolute deadline to finish each
+incoming HTTP request, including silent sockets, partial headers and trickled
+bodies. Completed requests can await native approval or stream responses without
+that ingress deadline. Keep-alive connections get a fresh deadline after the
+response ends; HTTP pipelining during an outstanding response is not supported.
+
+HTTP tools in `tools.approve` require fresh native approval on every invocation,
+even when session admission already exists. Allowed tools retain admission reuse.
+Native rejection is recorded as denied and does not dispatch upstream. Terminal
+activity writes occur after the terminating HTTP chunk is sent and retry once
+with the same execution outcome; evidence failures do
+not turn a delivered success into an upstream failure. The app retains a bounded
+metadata-only fallback for failed writes until a successful retry or app exit,
+and reports overflow as incomplete evidence. After restart, an unmatched started
+row remains explicitly pending rather than claiming a complete terminal record.
 
 Server details show independent readiness facts (declaration, launch, catalog,
 policy, client route, observed use, and evidence), including catalog quality,

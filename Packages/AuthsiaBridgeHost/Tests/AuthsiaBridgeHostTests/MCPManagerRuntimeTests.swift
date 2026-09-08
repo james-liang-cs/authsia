@@ -3,6 +3,60 @@ import AuthenticatorBridge
 @testable import AuthsiaBridgeHost
 
 final class MCPManagerRuntimeTests: XCTestCase {
+    func testDisabledIntegrationsDoNotStartListeners() async throws {
+        let runtime = MCPManagerRuntime(dependencies: .init(registrySnapshot: { .init(revision: "fixture", servers: []) },
+            portalDocument: { "<html/>" }, mcpAccessEnabled: { false }))
+        addTeardownBlock { await runtime.stop() }
+        do {
+            _ = try await runtime.start()
+            XCTFail("disabled integrations must not start the manager")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("MCP Integrations"))
+            XCTAssertTrue(error.localizedDescription.contains("Settings"))
+        }
+        let status = await runtime.status()
+        XCTAssertEqual(status.state, .stopped)
+    }
+
+    func testDisablingIntegrationsBlocksNewAndPreparedChangesButKeepsStatusAndStop() async throws {
+        let enabled = MCPEnabledFixture()
+        let runtime = MCPManagerRuntime(dependencies: .init(registrySnapshot: { .init(revision: "fixture", servers: []) },
+            portalDocument: { "<html/>" }, mcpAccessEnabled: { enabled.value },
+            prepareOperation: { _ in .init(preview: "Policy", validate: {}, apply: { XCTFail("disabled change applied"); return "Unexpected" }) },
+            confirmOperation: { _ in XCTFail("disabled change prompted for approval"); return true }))
+        let session = URLSession(configuration: .ephemeral)
+        addTeardownBlock { await runtime.stop(); session.invalidateAndCancel() }
+        let bootstrap = try await runtime.start()
+        let capability = try XCTUnwrap(URLComponents(url: bootstrap, resolvingAgainstBaseURL: false)?.fragment?.split(separator: "=").last.map(String.init))
+        let exchange = try await exchangeCapability(capability, session: session)
+        func post(_ path: String, body: String) async throws -> (HTTPURLResponse, [String: Any]) {
+            var request = URLRequest(url: URL(string: MCPManagerRuntime.portalURL + path)!)
+            request.httpMethod = "POST"; request.httpBody = Data(body.utf8)
+            request.setValue(exchange.cookie, forHTTPHeaderField: "Cookie")
+            request.setValue(exchange.proof, forHTTPHeaderField: "X-Authsia-Proof")
+            request.setValue(MCPManagerRuntime.portalURL, forHTTPHeaderField: "Origin")
+            let (data, response) = try await session.data(for: request)
+            return (try XCTUnwrap(response as? HTTPURLResponse), try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]))
+        }
+        let (_, operation) = try await post("/api/v1/operations", body: #"{"kind":"policy","serverID":"fixture"}"#)
+        let id = try XCTUnwrap(operation["id"] as? String)
+        enabled.value = false
+        for path in ["/api/v1/operations", "/api/v1/operations/\(id)/request-confirmation"] {
+            let (response, body) = try await post(path, body: #"{"kind":"policy","serverID":"fixture"}"#)
+            XCTAssertEqual(response.statusCode, 400)
+            XCTAssertEqual(body["code"] as? String, "mcpAccessDisabled")
+            XCTAssertTrue((body["message"] as? String)?.contains("Settings > Developer Access") == true)
+        }
+        let status = try await authenticatedGET("/api/v1/status", cookie: exchange.cookie, proof: exchange.proof, session: session)
+        XCTAssertEqual(status.status, 200)
+        XCTAssertEqual(status.json["mcpAccessEnabled"] as? Bool, false)
+        do { _ = try await runtime.start(); XCTFail("disabled start issued a bootstrap") }
+        catch { XCTAssertEqual(error as? MCPManagementError, .mcpAccessDisabled) }
+        await runtime.stop()
+        let stopped = await runtime.status()
+        XCTAssertEqual(stopped.state, .stopped)
+    }
+
     func testConcurrentStartsJoinOneListenerAndOrderedStopWins() async throws {
         let runtime = MCPManagerRuntime(dependencies: .init(registrySnapshot: { .init(revision: "fixture", servers: []) },
                                                            portalDocument: { "<html/>" }, mcpAccessEnabled: { true }))
@@ -158,5 +212,14 @@ final class MCPManagerRuntimeTests: XCTestCase {
         let http = try XCTUnwrap(response as? HTTPURLResponse)
         let object = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         return (http.statusCode, object)
+    }
+}
+
+private final class MCPEnabledFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var enabled = true
+    var value: Bool {
+        get { lock.withLock { enabled } }
+        set { lock.withLock { enabled = newValue } }
     }
 }

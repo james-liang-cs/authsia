@@ -1,6 +1,16 @@
 #if os(macOS)
 import Foundation
 
+/// Metadata captured from the selected registry/grant, never from the preview text.
+public struct MCPManagementActivityContext: Codable, Equatable, Sendable {
+    public let identity: MCPServerIdentity
+    public let client: String?
+    public let transport: MCPUpstreamTransport?
+    public init(identity: MCPServerIdentity, client: String? = nil, transport: MCPUpstreamTransport? = nil) {
+        self.identity = identity; self.client = client; self.transport = transport
+    }
+}
+
 public struct MCPManagementAuditEvent: Codable, Equatable, Sendable, Identifiable {
     public let schemaVersion: Int
     public let id: UUID
@@ -11,6 +21,7 @@ public struct MCPManagementAuditEvent: Codable, Equatable, Sendable, Identifiabl
     public let recordedAt: Date
     public let summary: String
     public let result: String
+    public let context: MCPManagementActivityContext?
 
     public init(
         schemaVersion: Int = 1,
@@ -21,7 +32,8 @@ public struct MCPManagementAuditEvent: Codable, Equatable, Sendable, Identifiabl
         actorClass: String = "native",
         recordedAt: Date = Date(),
         summary: String,
-        result: String
+        result: String,
+        context: MCPManagementActivityContext? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -32,6 +44,7 @@ public struct MCPManagementAuditEvent: Codable, Equatable, Sendable, Identifiabl
         self.recordedAt = recordedAt
         self.summary = AgentCommandRedactor.sanitized(summary, maxLength: 4_000) ?? ""
         self.result = result
+        self.context = context
     }
 }
 
