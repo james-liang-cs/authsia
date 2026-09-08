@@ -786,6 +786,8 @@ public struct MCPClientConfigScanner {
         let isAuthsiaProxyLaunch = executableName == "authsia"
             && MCPProxyClientLaunch.isProxyLaunch(arguments: entry.arguments)
             && wrappedUpstream != nil
+        let recovered = isAuthsiaProxyLaunch && entry.unsupportedKeys.isEmpty
+            ? wrappedUpstream.flatMap { MCPProxyClientLaunch.recoveredLaunch(entry.recoveryValue, name: $0) } : nil
         let applicableDeclarations = declaredServers.filter { declared in
             declared.workspaceRoot?.path == workspaceRoot?.path
         }
@@ -833,8 +835,8 @@ public struct MCPClientConfigScanner {
                 Self.safeLabel($0, maximumLength: 512)
             },
             isAuthsiaProxyLaunch: isAuthsiaProxyLaunch,
-            wrapCommand: wrap?.command,
-            wrapArguments: wrap?.arguments ?? [],
+            wrapCommand: wrap?.command ?? recovered?.command,
+            wrapArguments: wrap?.arguments ?? recovered?.args ?? [],
             isWrapEligible: wrap != nil && entry.unsupportedKeys.isEmpty && !isDisabled,
             wrapBlockReason: entry.unsupportedKeys.isEmpty
                 ? (wrap == nil
@@ -849,7 +851,8 @@ public struct MCPClientConfigScanner {
                 : true,
             canRecordCatalog: status == .admittedWrapped
                 && (declaredMatch?.canRecordCatalog ?? false),
-            unsupportedLaunchKeys: entry.unsupportedKeys,
+            unsupportedLaunchKeys: entry.unsupportedKeys + (isAuthsiaProxyLaunch && entry.recoveryValue != nil && recovered == nil
+                ? [MCPProxyClientLaunch.recoveryEnvironmentKey] : []),
             childEnvironmentCount: entry.childEnvironmentCount,
             configFilePath: Self.safeExactPath(entry.location.fileURL.path),
             projectKey: entry.location.projectKey
@@ -1014,6 +1017,7 @@ public struct MCPClientConfigScanner {
                 command: command,
                 arguments: arguments,
                 upstreamEnvironmentName: upstreamEnvironmentName,
+                recoveryValue: ((value["env"] as? [String: Any])?[MCPProxyClientLaunch.recoveryEnvironmentKey]).map { $0 as? String ?? "" },
                 location: location,
                 isDisabled: value["enabled"] as? Bool == false
                     || value["disabled"] as? Bool == true,
@@ -1022,7 +1026,7 @@ public struct MCPClientConfigScanner {
                     .sorted(),
                 childEnvironmentCount: (value["env"] as? [String: Any])?
                     .keys
-                    .filter { $0 != MCPProxyClientLaunch.environmentKey }
+                    .filter { $0 != MCPProxyClientLaunch.environmentKey && $0 != MCPProxyClientLaunch.recoveryEnvironmentKey }
                     .count ?? 0,
                 endpoint: value["url"] as? String
             )
@@ -1040,6 +1044,7 @@ public struct MCPClientConfigScanner {
         var endpoint: String?
         var arguments: [String] = []
         var upstreamEnvironmentName: String?
+        var recoveryValue: String?
         var isDisabled = false
         var unsupportedKeys: [String] = []
         var childEnvironmentCount = 0
@@ -1052,6 +1057,7 @@ public struct MCPClientConfigScanner {
                     command: command,
                     arguments: arguments,
                     upstreamEnvironmentName: upstreamEnvironmentName,
+                    recoveryValue: recoveryValue,
                     location: location,
                     isDisabled: isDisabled,
                     unsupportedKeys: unsupportedKeys.sorted(),
@@ -1076,6 +1082,7 @@ public struct MCPClientConfigScanner {
                     endpoint = nil
                     arguments = []
                     upstreamEnvironmentName = nil
+                    recoveryValue = nil
                     isDisabled = false
                     unsupportedKeys = []
                     childEnvironmentCount = 0
@@ -1091,6 +1098,8 @@ public struct MCPClientConfigScanner {
                         key: MCPProxyClientLaunch.environmentKey
                       ) {
                 upstreamEnvironmentName = parseTOMLString(value)
+            } else if readingEnvTable, let value = assignmentValue(in: line, key: MCPProxyClientLaunch.recoveryEnvironmentKey) {
+                recoveryValue = parseTOMLString(value) ?? ""
             } else if readingEnvTable, line.contains("=") {
                 childEnvironmentCount += 1
             } else if !readingEnvTable, name != nil,
@@ -1208,6 +1217,7 @@ public struct MCPClientConfigScanner {
         let command: String
         let arguments: [String]
         let upstreamEnvironmentName: String?
+        var recoveryValue: String? = nil
         let location: MCPClientConfigLocation
         /// The client file marks this launch off. A disabled entry cannot run,
         /// so it is neither a bypass nor protection debt.

@@ -89,10 +89,12 @@ public enum MCPLocalMCPWrapRecipe {
             return nil
         }
         let name = finding.serverName
-        let env = MCPProxyClientLaunch.environment(
+        var env = MCPProxyClientLaunch.environment(
             upstreamName: name,
             workspacePath: MCPLocalMCPClientWrap.wrapWorkspacePath(for: finding)
         )
+        env[MCPProxyClientLaunch.recoveryEnvironmentKey] = MCPProxyClientLaunch.recoveryValue(
+            name: name, command: finding.wrapCommand, arguments: finding.wrapArguments)
         switch finding.source {
         case .codex:
             return """

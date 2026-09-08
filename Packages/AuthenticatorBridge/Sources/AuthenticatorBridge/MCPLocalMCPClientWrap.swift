@@ -184,7 +184,8 @@ public enum MCPLocalMCPClientWrap {
                 serverName: plan.finding.serverName,
                 authsiaCommand: authsiaCommand,
                 workspacePath: plan.workspacePath,
-                projectKey: plan.finding.projectKey
+                projectKey: plan.finding.projectKey,
+                recoveryValue: recoveryValue(for: plan.finding)
             )
         case .authsiaCatalog:
             throw WrapError.notWrapEligible
@@ -253,6 +254,7 @@ public enum MCPLocalMCPClientWrap {
         serverName: String,
         workspacePath: String,
         authsiaCommand: String,
+        upstream: MCPUpstreamConfig? = nil,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default
     ) throws -> Plan {
@@ -279,8 +281,8 @@ public enum MCPLocalMCPClientWrap {
             configScope: location.scope,
             precedence: .effective,
             workspacePathLabel: workspaceLabel,
-            wrapCommand: "authsia",
-            wrapArguments: MCPProxyClientLaunch.arguments,
+            wrapCommand: upstream?.command ?? "authsia",
+            wrapArguments: upstream?.args ?? MCPProxyClientLaunch.arguments,
             isWrapEligible: true,
             configFilePath: location.fileURL.path,
             projectKey: location.projectKey
@@ -348,6 +350,17 @@ public enum MCPLocalMCPClientWrap {
         return data
     }
 
+    private static func recoveryValue(for finding: MCPClientServerFinding) -> String? {
+        MCPProxyClientLaunch.recoveryValue(name: finding.serverName, command: finding.wrapCommand,
+                                          arguments: finding.wrapArguments)
+    }
+
+    private static func recoveryEnvironment(for finding: MCPClientServerFinding) -> [String: String] {
+        var environment = MCPProxyClientLaunch.environment(upstreamName: finding.serverName)
+        environment[MCPProxyClientLaunch.recoveryEnvironmentKey] = recoveryValue(for: finding)
+        return environment
+    }
+
     private static func replacementSnippet(
         for finding: MCPClientServerFinding,
         authsiaCommand: String,
@@ -362,7 +375,7 @@ public enum MCPLocalMCPClientWrap {
             return MCPLocalMCPWrapRecipe.codexTable(
                 name: finding.serverName,
                 authsiaCommand: authsia,
-                environment: MCPProxyClientLaunch.environment(upstreamName: finding.serverName),
+                environment: recoveryEnvironment(for: finding),
                 preservedLines: preservedCodexLines(data: data, serverName: finding.serverName)
             )
         case .claude, .cursor, .devin, .vscode, .claudeDesktop:
@@ -371,6 +384,7 @@ public enum MCPLocalMCPClientWrap {
                 upstreamName: finding.serverName,
                 includeType: finding.source == .vscode,
                 workspacePath: workspacePath,
+                recoveryValue: recoveryValue(for: finding),
                 preserving: preservedJSONKeys(
                     data: data,
                     source: finding.source,
@@ -498,7 +512,8 @@ public enum MCPLocalMCPClientWrap {
         serverName: String,
         authsiaCommand: String,
         workspacePath: String?,
-        projectKey: String?
+        projectKey: String?,
+        recoveryValue: String?
     ) throws -> Data {
         guard let authsia = MCPLocalMCPWrapRecipe.sanitizedCommand(authsiaCommand) else {
             throw WrapError.notWrapEligible
@@ -512,6 +527,7 @@ public enum MCPLocalMCPClientWrap {
             upstreamName: serverName,
             includeType: source == .vscode,
             workspacePath: workspacePath,
+            recoveryValue: recoveryValue,
             preserving: preservedJSONKeys(
                 data: data,
                 source: source,
@@ -539,6 +555,7 @@ public enum MCPLocalMCPClientWrap {
         upstreamName: String,
         includeType: Bool,
         workspacePath: String? = nil,
+        recoveryValue: String? = nil,
         preserving preserved: [String: Any] = [:]
     ) -> [String: Any] {
         var object = preserved
@@ -546,10 +563,12 @@ public enum MCPLocalMCPClientWrap {
         object["args"] = MCPProxyClientLaunch.arguments
         // The child's credentials never survive the wrap: the proxy resolves
         // them from workspace policy instead of the client file.
-        object["env"] = MCPProxyClientLaunch.environment(
+        var environment = MCPProxyClientLaunch.environment(
             upstreamName: upstreamName,
             workspacePath: workspacePath
         )
+        environment[MCPProxyClientLaunch.recoveryEnvironmentKey] = recoveryValue
+        object["env"] = environment
         if includeType {
             object["type"] = "stdio"
         }

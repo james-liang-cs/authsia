@@ -100,6 +100,21 @@ file. **Protect server** exists only on those rows. A local tool that is not
 scanned, or that Coverage hides, has no Protect button. Follow [Find The
 Server](#find-the-server), then the matching branch.
 
+Managed wrap writes retain validated, credential-free launch metadata in
+`AUTHSIA_MCP_LAUNCH`. Manager can use it to prepare a missing workspace
+declaration without asking for the original executable. This value is a setup
+hint only: the proxy still resolves its launch exclusively from workspace policy.
+Recovery copies no credentials, tool permissions, catalog, or grants and requires
+the existing declaration preview and native confirmation. Malformed metadata is
+not imported. An older Context7 wrapper without saved metadata offers the labeled
+[official Context7 preset](https://context7.com/docs/resources/all-clients),
+`npx -y @upstash/context7-mcp`, for review. Other unknown launches still require
+a matching workspace setup or an explicit command.
+
+The Servers table shows each effective client's protection badge alongside its
+client name, so mixed protected, bypassing, and unconfigured clients are visible
+without opening details. Compact layouts retain the client labels with the badges.
+
 ```text
  scanned client entry
           |

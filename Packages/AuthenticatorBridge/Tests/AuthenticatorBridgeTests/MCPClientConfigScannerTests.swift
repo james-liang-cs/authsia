@@ -249,7 +249,9 @@ final class MCPClientConfigScannerTests: XCTestCase {
 
         XCTAssertTrue(text?.contains("Replace the Codex playwright entry in ~/.codex/config.toml.") == true)
         XCTAssertTrue(text?.contains("Open ~/.codex/config.toml") == true)
-        XCTAssertTrue(text?.contains("codex mcp add playwright --env AUTHSIA_MCP_UPSTREAM=playwright --") == true)
+        XCTAssertTrue(text?.contains("codex mcp add playwright --env ") == true)
+        XCTAssertTrue(text?.contains("--env AUTHSIA_MCP_UPSTREAM=playwright --") == true)
+        XCTAssertTrue(text?.contains("AUTHSIA_MCP_LAUNCH") == true)
         // `-e, --env <env...>` is variadic in both CLIs, so a recipe that puts
         // the server name after the env flags makes the client read the name as
         // another KEY=value and reject the command.
@@ -290,9 +292,12 @@ final class MCPClientConfigScannerTests: XCTestCase {
         XCTAssertTrue(
             claudeText?.contains(
                 "claude mcp remove --scope user codegraph\n"
-                    + "claude mcp add --scope user codegraph --env AUTHSIA_MCP_UPSTREAM=codegraph -- "
+                    + "claude mcp add --scope user codegraph --env "
             ) == true
         )
+
+        XCTAssertTrue(claudeText?.contains("--env AUTHSIA_MCP_UPSTREAM=codegraph -- ") == true)
+        XCTAssertTrue(claudeText?.contains("AUTHSIA_MCP_LAUNCH") == true)
 
         let afterDeclare = MCPLocalMCPWrapRecipe.clipboardText(
             for: finding,

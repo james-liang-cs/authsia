@@ -35,6 +35,28 @@ public enum MCPProxyClientLaunch: Sendable {
         return environment
     }
 
+    /// Review-only recovery metadata. The proxy never executes this environment value.
+    /// Keep credentials, policy, catalogs, and grants out of the client entry.
+    public static let recoveryEnvironmentKey = "AUTHSIA_MCP_LAUNCH"
+
+    public static func recoveryValue(name: String, command: String?, arguments: [String]) -> String? {
+        guard let command,
+              URL(fileURLWithPath: command).lastPathComponent.lowercased() != "authsia",
+              AgentCommandRedactor.redactedArguments(arguments) == arguments else { return nil }
+        let upstream = MCPUpstreamConfig(name: name, command: command, args: arguments)
+        guard (try? MCPUpstreamValidator.validate(upstream)) != nil,
+              let data = try? JSONEncoder().encode([name, command] + arguments) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    public static func recoveredLaunch(_ value: String?, name: String) -> MCPUpstreamConfig? {
+        guard let value, value.utf8.count <= 65_536,
+              let parts = try? JSONDecoder().decode([String].self, from: Data(value.utf8)),
+              parts.count >= 2, parts[0] == name,
+              recoveryValue(name: name, command: parts[1], arguments: Array(parts.dropFirst(2))) != nil else { return nil }
+        return MCPUpstreamConfig(name: name, command: parts[1], args: Array(parts.dropFirst(2)))
+    }
+
     public static func wrappedUpstreamName(
         arguments: [String],
         environmentName: String?
