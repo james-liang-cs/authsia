@@ -558,6 +558,45 @@ process working directory.
 
 ## Runtime Contract
 
+### Global client entries and workspace declarations
+
+Client configuration and Authsia workspace policy are separate layers:
+
+| Layer | Responsibility |
+| --- | --- |
+| User-global client configuration | Makes an MCP launch available across projects in that client. A wrapped STDIO entry launches `authsia mcp proxy` and names the upstream with `AUTHSIA_MCP_UPSTREAM`. |
+| Project client configuration | Supplies project-specific launches. Matching project entries can override global entries according to the client's precedence rules; review the effective, overridden, or conditional label in Manager. |
+| Authsia workspace declaration | Defines the actual upstream command and arguments, tool policy, and secret references in that workspace's `.authsia/workspace.json`. |
+
+Global availability does not grant access in every workspace. For STDIO, an
+explicit `--workspace` determines the binding; otherwise the proxy uses a safe
+`WORKSPACE_FOLDER_PATHS` hint, then its process working directory. Selecting a
+workspace in Manager only changes the management view and the target of setup
+actions; it does not retarget a running client or proxy.
+
+For example, a global `playwright` proxy entry can be used from both `project-a`
+and `project-b`. Each workspace needs its own `playwright` declaration. A
+declaration in `project-a` is never implicitly used to authorize `project-b`.
+If the second declaration is missing, Manager shows the client entry as
+unconfigured there and workspace-dependent calls fail closed.
+
+In Manager, choose **Use existing setup** on that discovered entry, select the
+source workspace, and review the launch and tool policy before confirming. This
+creates an independent declaration in the target workspace. It is a one-time
+copy, not inheritance or synchronization: later changes to either declaration
+do not change the other. Secret bindings, runtime grants, and recorded catalogs
+are not copied. Add any required secret bindings in the target workspace and
+reload the client before making a permitted call. Relative launch paths resolve
+in the target workspace. If no matching setup exists, supply the original launch
+through Manual setup.
+
+Protected HTTP connections differ: the Manager endpoint and enrolled association
+identify a particular server and workspace. They do not select another
+workspace's policy from the client's working directory. Configure and enroll
+the target workspace's HTTP server separately.
+
+### Upstream selection
+
 The name comes from `--upstream` or from `AUTHSIA_MCP_UPSTREAM`. If both are
 set they must name the same upstream. Names match
 `[A-Za-z][A-Za-z0-9_-]{0,31}`. The named upstream is resolved after workspace
@@ -966,6 +1005,23 @@ not need to return to the row menu or declare the server again in Access Center.
 Edit server updates the existing executable or HTTP endpoint; arguments remain
 unchanged unless explicitly replaced. Policy and credential references are
 preserved. Each subsequent mutation still requires its own native confirmation.
+
+When a discovered entry already launches `authsia mcp proxy` but the selected
+workspace has no matching upstream declaration, Manager offers **Use an existing
+setup** if another managed workspace has a reusable declaration. The user selects
+the source workspace and reviews the launch arguments and tool policy in the
+native confirmation. This adds the declaration to the target workspace; it does
+not rewrite the already-wrapped client entry or start a server. Credential
+bindings, grants, and recorded catalogs are not copied. Relative paths resolve
+in the target workspace. Associate any required credentials there, then reload
+the client and make a permitted call to request admission.
+
+Reuse requires the same upstream name, a non-disabled/non-overridden proxy
+finding, and a valid STDIO command with arguments that pass redaction checks.
+The source declaration, target workspace file, and discovered client file are
+checked again before applying; a changed file invalidates the prepared operation.
+If no reusable setup exists, Manual setup remains available for entering the
+original server launch. Authsia does not guess a launch from the server name.
 
 Catalog availability is checked before prompting and again before execution.
 Non-empty declared environments or active direct-client environment values disable

@@ -6,6 +6,8 @@ public enum MCPManagementOperationKind: String, Codable, Sendable {
 public struct MCPManagementOperationRequest: Codable, Sendable {
     public var kind: MCPManagementOperationKind
     public var serverID: String?
+    /// Existing declaration selected for a confirmed cross-workspace setup.
+    public var sourceServerID: String?
     public var workspaceID: String?
     public var name: String?
     public var transport: MCPUpstreamTransport?

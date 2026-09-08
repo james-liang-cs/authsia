@@ -483,9 +483,10 @@ private final class MCPPortalRouter: @unchecked Sendable {
         guard command.kind == .declare,
               let workspace = snapshot.workspaces.first(where: { $0.id == command.workspaceID }) else { return nil }
         let discovered = snapshot.discoveredServers?.first { $0.findingID == command.findingID }
-        guard let name = discovered?.displayName ?? command.name else { return nil }
+        let source = snapshot.servers.first { $0.id == command.sourceServerID }
+        guard let name = source?.identity.upstreamName ?? discovered?.displayName ?? command.name else { return nil }
         return .init(identity: .init(workspacePath: workspace.label, upstreamName: name),
-                     client: discovered?.client.rawValue ?? command.client?.rawValue, transport: command.transport)
+                     client: discovered?.client.rawValue ?? command.client?.rawValue, transport: source?.transport ?? command.transport)
     }
 
     private func exchange(_ request: MCPPortalRequest) -> MCPPortalResponse {

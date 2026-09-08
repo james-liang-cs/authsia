@@ -2,6 +2,65 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPDiscoveryProjectionTests: XCTestCase {
+    private let reuseTarget = URL(fileURLWithPath: "/tmp/authsia-reuse-target")
+    private let reuseHome = URL(fileURLWithPath: "/tmp/authsia-reuse-home")
+
+    private func wrappedFinding(status: MCPClientServerAdmissionStatus = .unadmitted,
+                                precedence: MCPClientConfigPrecedence = .effective) -> MCPClientServerFinding {
+        .init(source: .codex, serverName: "client-alias", commandLabel: "authsia", status: status,
+              declaredUpstreamName: "example", configPathLabel: "~/.codex/config.toml",
+              precedence: precedence, workspacePathLabel: reuseTarget.path, isAuthsiaProxyLaunch: true)
+    }
+
+    private func reuseSource(name: String = "example", command: String = "fixture-server",
+                             args: [String] = []) -> MCPServerDefinition {
+        .init(identity: .init(workspacePath: "/tmp/authsia-reuse-source", upstreamName: name),
+              upstream: .init(name: name, command: command, args: args,
+                              env: ["EXAMPLE_KEY": "authsia://api-key/fixture-reference/key"],
+                              tools: .init(allow: ["read"], deny: ["delete"]),
+                              catalog: [.init(name: "read")]), revision: "fixture")
+    }
+
+    func testWrappedLaunchOffersMatchingSetupInAnotherWorkspace() throws {
+        let source = reuseSource()
+        let rows = MCPDiscoveryProjection.servers(findings: [wrappedFinding()], declared: [source.identity],
+            workspaceRoots: [reuseTarget], homeDirectory: reuseHome, definitions: [source, reuseSource(name: "unrelated")])
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertFalse(row.canConfigure)
+        XCTAssertEqual(row.reusableSourceServerIDs, [source.serverID])
+        XCTAssertTrue(row.configurationHint.contains("Choose an existing setup"))
+        XCTAssertFalse(row.configurationHint.contains("manual setup"))
+    }
+
+    func testReuseCopiesLaunchAndPolicyWithoutCredentialsOrCatalog() throws {
+        let source = reuseSource(args: ["--stdio"])
+        let copy = try MCPDiscoveryProjection.reusableDeclaration(from: source, for: wrappedFinding(), targetRoot: reuseTarget, homeDirectory: reuseHome)
+        XCTAssertEqual(copy.name, "example")
+        XCTAssertEqual(copy.command, source.upstream.command)
+        XCTAssertEqual(copy.args, source.upstream.args)
+        XCTAssertEqual(copy.tools, source.upstream.tools)
+        XCTAssertTrue(copy.env.isEmpty)
+        XCTAssertTrue(copy.credentialHeaders.isEmpty)
+        XCTAssertTrue(copy.catalog.isEmpty)
+        XCTAssertNil(copy.catalogCapturedAt)
+    }
+
+    func testReuseRejectsDisabledOverriddenUnrelatedAndRecursiveLaunches() throws {
+        for finding in [wrappedFinding(status: .disabled), wrappedFinding(precedence: .overridden)] {
+            XCTAssertThrowsError(try MCPDiscoveryProjection.reusableDeclaration(from: reuseSource(), for: finding, targetRoot: reuseTarget, homeDirectory: reuseHome))
+        }
+        for source in [reuseSource(name: "unrelated"), reuseSource(command: "authsia", args: ["mcp", "proxy"])] {
+            XCTAssertThrowsError(try MCPDiscoveryProjection.reusableDeclaration(from: source, for: wrappedFinding(), targetRoot: reuseTarget, homeDirectory: reuseHome))
+        }
+        XCTAssertThrowsError(try MCPDiscoveryProjection.reusableDeclaration(from: reuseSource(), for: wrappedFinding(), targetRoot: URL(fileURLWithPath: "/tmp/other-target"), homeDirectory: reuseHome))
+    }
+
+    func testReuseRejectsArgumentsFlaggedByRedaction() {
+        // The synthetic argument is deliberately recognizable to the redactor.
+        let source = reuseSource(args: ["--password", "REDACTED_FIXTURE"])
+        XCTAssertThrowsError(try MCPDiscoveryProjection.reusableDeclaration(from: source, for: wrappedFinding(), targetRoot: reuseTarget, homeDirectory: reuseHome))
+    }
+
     func testDeclarationInAnotherWorkspaceDoesNotHideDiscovery() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

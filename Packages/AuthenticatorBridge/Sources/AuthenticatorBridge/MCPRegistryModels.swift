@@ -182,6 +182,7 @@ public struct MCPDiscoveredServer: Codable, Equatable, Sendable, Identifiable {
     public let configPathLabel: String
     public let canConfigure: Bool
     public let configurationHint: String
+    public let reusableSourceServerIDs: [String]?
     public let isDisabled: Bool
     public let canEnrollHTTP: Bool
     public let unsupportedActionReason: String?
@@ -202,7 +203,8 @@ public struct MCPDiscoveredServer: Codable, Equatable, Sendable, Identifiable {
         configurationHint: String,
         isDisabled: Bool = false,
         canEnrollHTTP: Bool = false,
-        unsupportedActionReason: String? = nil
+        unsupportedActionReason: String? = nil,
+        reusableSourceServerIDs: [String]? = nil
     ) {
         self.id = id
         self.findingID = findingID
@@ -217,6 +219,7 @@ public struct MCPDiscoveredServer: Codable, Equatable, Sendable, Identifiable {
         self.configPathLabel = configPathLabel
         self.canConfigure = canConfigure
         self.configurationHint = configurationHint
+        self.reusableSourceServerIDs = reusableSourceServerIDs
         self.isDisabled = isDisabled
         self.canEnrollHTTP = canEnrollHTTP
         self.unsupportedActionReason = unsupportedActionReason
