@@ -160,13 +160,14 @@ public enum MCPLocalMCPWorkspaceDeclaration {
         workspaceRoot: URL,
         fileManager: FileManager = .default
     ) throws -> Outcome {
-        guard let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: command) else {
+        guard let launch = MCPUpstreamCommandRules.launch(command: command, arguments: arguments),
+              let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: launch.command) else {
             throw DeclarationError.notWrapEligible
         }
         return try writeDeclaration(
             name: name,
             command: policyCommand,
-            arguments: arguments,
+            arguments: launch.arguments,
             workspaceRoot: workspaceRoot,
             fileManager: fileManager
         )
@@ -223,7 +224,7 @@ public enum MCPLocalMCPWorkspaceDeclaration {
             upstreams = []
         }
 
-        if let match = upstreams.first(where: { ($0["name"] as? String) == name }) {
+        if let match = upstreams.first(where: { ($0["name"] as? String)?.lowercased() == name.lowercased() }) {
             let existingCommand = match["command"] as? String
             let existingArgs = stringArray(match["args"]) ?? []
             if existingCommand == command, existingArgs == arguments {
@@ -298,7 +299,7 @@ public enum MCPLocalMCPWorkspaceDeclaration {
               let object = try? JSONSerialization.jsonObject(with: data),
               let config = object as? [String: Any],
               let upstreams = config["mcpUpstreams"] as? [[String: Any]],
-              let entry = upstreams.first(where: { ($0["name"] as? String) == name }),
+              let entry = upstreams.first(where: { ($0["name"] as? String)?.lowercased() == name.lowercased() }),
               (entry["transport"] as? String ?? "stdio") == "stdio",
               entry["url"] == nil,
               let command = entry["command"] as? String else {

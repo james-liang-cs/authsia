@@ -29,6 +29,8 @@ actor AuthsiaMCPProxy {
     private var childSession: ChildSession?
     private var spawnTask: Task<ChildSession, Error>?
     private var inFlight: InFlightSpawn?
+    private var catalogWatchTask: Task<Void, Never>?
+    private var lastNotifiedTools: [Tool]?
     private var grantWatchTask: Task<Void, Never>?
     private var isStopped = false
     private var inFlightCallCount = 0
@@ -63,7 +65,7 @@ actor AuthsiaMCPProxy {
             version: version,
             title: "Authsia MCP Proxy",
             instructions: "Proxies the '\(upstreamName)' MCP upstream. Tools are filtered by workspace policy.",
-            capabilities: .init(tools: .init(listChanged: false)),
+            capabilities: .init(tools: .init(listChanged: true)),
             configuration: .strict
         )
         self.proxyVersion = version
@@ -89,6 +91,13 @@ actor AuthsiaMCPProxy {
         await registerHandlersIfNeeded()
         try await server.start(transport: transport) { [runtimeContext] client, _ in
             await runtimeContext.updateClientInfo(name: client.name, version: client.version)
+        }
+        catalogWatchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self else { return }
+                await self.notifyCatalogChange()
+            }
         }
     }
 
@@ -126,6 +135,8 @@ actor AuthsiaMCPProxy {
 
     private func shutdownChild() async {
         isStopped = true
+        catalogWatchTask?.cancel()
+        catalogWatchTask = nil
         grantWatchTask?.cancel()
         grantWatchTask = nil
         let task = spawnTask
@@ -1059,9 +1070,22 @@ actor AuthsiaMCPProxy {
         Darwin.close(stdoutRead)
     }
 
+    private func notifyCatalogChange() async {
+        guard !isStopped, let previous = lastNotifiedTools else { return }
+        let tools = MCPProxyCatalog.listedTools(for: stdioUpstream())
+        guard tools != previous else { return }
+        do {
+            try await server.notify(ToolListChangedNotification.message())
+            lastNotifiedTools = tools
+        } catch {
+            // A failed send must not mark this catalog as delivered.
+        }
+    }
+
     private func listedTools() -> [Tool] {
         let upstream = stdioUpstream()
         let policyTools = MCPProxyCatalog.listedTools(for: upstream)
+        if lastNotifiedTools == nil { lastNotifiedTools = policyTools }
         if !policyTools.isEmpty {
             return policyTools
         }
@@ -1293,7 +1317,7 @@ actor AuthsiaMCPProxy {
                 "workspace.json failed validation. \(error.localizedDescription)"
             )
         }
-        guard let upstream = config.mcpUpstreams.first(where: { $0.name == upstreamName }) else {
+        guard let upstream = config.mcpUpstreams.first(where: { $0.name.lowercased() == upstreamName.lowercased() }) else {
             return .missingUpstream
         }
         guard upstream.requiresStdioPolicy else {

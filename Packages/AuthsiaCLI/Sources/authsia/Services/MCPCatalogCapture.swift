@@ -35,7 +35,7 @@ enum MCPCatalogCapture {
         workspaceRoot: URL
     ) throws -> Outcome {
         let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: workspaceRoot)
-        guard let index = config.mcpUpstreams.firstIndex(where: { $0.name == upstreamName }) else {
+        guard let index = config.mcpUpstreams.firstIndex(where: { $0.name.lowercased() == upstreamName.lowercased() }) else {
             throw MCPCatalogCaptureError.unknownUpstream(upstreamName)
         }
         var upstream = config.mcpUpstreams[index]

@@ -41,20 +41,22 @@ public enum MCPProxyClientLaunch: Sendable {
 
     public static func recoveryValue(name: String, command: String?, arguments: [String]) -> String? {
         guard let command,
+              let launch = MCPUpstreamCommandRules.launch(command: command, arguments: arguments),
               URL(fileURLWithPath: command).lastPathComponent.lowercased() != "authsia",
-              AgentCommandRedactor.redactedArguments(arguments) == arguments else { return nil }
-        let upstream = MCPUpstreamConfig(name: name, command: command, args: arguments)
+              AgentCommandRedactor.redactedArguments(launch.arguments) == launch.arguments else { return nil }
+        let upstream = MCPUpstreamConfig(name: name, command: launch.command, args: launch.arguments)
         guard (try? MCPUpstreamValidator.validate(upstream)) != nil,
-              let data = try? JSONEncoder().encode([name, command] + arguments) else { return nil }
+              let data = try? JSONEncoder().encode([name, launch.command] + launch.arguments) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     public static func recoveredLaunch(_ value: String?, name: String) -> MCPUpstreamConfig? {
         guard let value, value.utf8.count <= 65_536,
               let parts = try? JSONDecoder().decode([String].self, from: Data(value.utf8)),
-              parts.count >= 2, parts[0] == name,
+              parts.count >= 2, parts[0].lowercased() == name.lowercased(),
               recoveryValue(name: name, command: parts[1], arguments: Array(parts.dropFirst(2))) != nil else { return nil }
-        return MCPUpstreamConfig(name: name, command: parts[1], args: Array(parts.dropFirst(2)))
+        guard let launch = MCPUpstreamCommandRules.launch(command: parts[1], arguments: Array(parts.dropFirst(2))) else { return nil }
+        return MCPUpstreamConfig(name: name, command: launch.command, args: launch.arguments)
     }
 
     public static func wrappedUpstreamName(

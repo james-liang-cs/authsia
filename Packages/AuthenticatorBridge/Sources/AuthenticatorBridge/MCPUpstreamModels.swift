@@ -211,6 +211,11 @@ public struct MCPUpstreamConfig: Codable, Equatable, Sendable {
         url = try container.decodeIfPresent(String.self, forKey: .url)
         command = try container.decodeIfPresent(String.self, forKey: .command)
         args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
+        if transport == .stdio, url == nil, let command,
+           let launch = MCPUpstreamCommandRules.launch(command: command, arguments: args) {
+            self.command = launch.command
+            args = launch.arguments
+        }
         env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
         tools = try container.decodeIfPresent(MCPUpstreamToolPolicy.self, forKey: .tools)
             ?? MCPUpstreamToolPolicy()

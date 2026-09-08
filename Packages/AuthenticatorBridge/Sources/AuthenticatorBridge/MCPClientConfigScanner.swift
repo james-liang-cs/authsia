@@ -757,7 +757,7 @@ public struct MCPClientConfigScanner {
             guard let url = URLComponents(string: endpoint), url.scheme == "http",
                   ["localhost", "127.0.0.1", "::1", "[::1]"].contains(url.host ?? "") else { return nil }
             guard let name = Self.safeLabel(entry.name, maximumLength: 128) else { return nil }
-            let declaration = declaredServers.first { $0.name == name && $0.workspaceRoot?.path == workspaceRoot?.path }
+            let declaration = declaredServers.first { $0.name.lowercased() == name.lowercased() && $0.workspaceRoot?.path == workspaceRoot?.path }
             let protected = declaration?.protectedEndpoint == endpoint
             return MCPClientServerFinding(source: entry.location.source, serverName: name, commandLabel: "HTTP",
                 status: isDisabled ? .disabled : protected ? .admittedWrapped : declaration?.endpoint == endpoint ? .directBypass : .unadmitted,
@@ -791,9 +791,9 @@ public struct MCPClientConfigScanner {
         let applicableDeclarations = declaredServers.filter { declared in
             declared.workspaceRoot?.path == workspaceRoot?.path
         }
-        let declaredNames = Set(applicableDeclarations.map(\.name))
+        let declaredNames = Set(applicableDeclarations.map { $0.name.lowercased() })
         let directMatch = applicableDeclarations.first { declared in
-            declared.name == entry.name
+            declared.name.lowercased() == entry.name.lowercased()
                 && URL(fileURLWithPath: declared.command).lastPathComponent == executableName
                 && declared.arguments == entry.arguments
         }
@@ -802,9 +802,9 @@ public struct MCPClientConfigScanner {
         if isDisabled {
             status = .disabled
             declaredUpstreamName = wrappedUpstream ?? directMatch?.name
-        } else if let wrappedUpstream, declaredNames.contains(wrappedUpstream) {
+        } else if let wrappedUpstream, declaredNames.contains(wrappedUpstream.lowercased()) {
             status = .admittedWrapped
-            declaredUpstreamName = wrappedUpstream
+            declaredUpstreamName = applicableDeclarations.first { $0.name.lowercased() == wrappedUpstream.lowercased() }?.name
         } else if let directMatch {
             status = .directBypass
             declaredUpstreamName = directMatch.name
@@ -871,12 +871,14 @@ public struct MCPClientConfigScanner {
               validUpstreamName(name) != nil else {
             return nil
         }
-        guard let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: command) else {
+        guard let launch = MCPUpstreamCommandRules.launch(command: command, arguments: arguments),
+              let policyCommand = MCPUpstreamCommandRules.policyCommand(fromScanned: launch.command) else {
             return nil
         }
         guard URL(fileURLWithPath: policyCommand).lastPathComponent.lowercased() != "authsia" else {
             return nil
         }
+        let arguments = launch.arguments
         guard arguments.count <= 64 else { return nil }
         for argument in arguments {
             guard argument.utf8.count <= 32 * 1_024,

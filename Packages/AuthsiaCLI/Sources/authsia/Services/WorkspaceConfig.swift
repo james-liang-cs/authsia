@@ -186,9 +186,9 @@ enum WorkspaceConfigError: LocalizedError, Equatable {
         case .missingMCPUpstreamCommand(let name):
             return "Workspace MCP upstream \(name) requires a PATH basename or workspace-relative command." +
                 Self.repairConfigGuidance
-        case .invalidMCPUpstreamCommand(let command):
+        case .invalidMCPUpstreamCommand:
             return "Workspace MCP upstream command must be a PATH basename or commit-safe relative path, " +
-                "without a shell: \(command)." + Self.repairConfigGuidance
+                "without a shell or joined command line. Put the executable in command and its arguments in args." + Self.repairConfigGuidance
         case .invalidMCPUpstreamArgs(let detail):
             return "Workspace MCP upstream args are invalid: \(detail)." + Self.repairConfigGuidance
         case .invalidMCPUpstreamEnv(let detail):
@@ -356,7 +356,7 @@ enum WorkspaceConfigStore {
             guard isValidMCPUpstreamName(upstream.name) else {
                 throw WorkspaceConfigError.invalidMCPUpstreamName(upstream.name)
             }
-            guard upstreamNames.insert(upstream.name).inserted else {
+            guard upstreamNames.insert(upstream.name.lowercased()).inserted else {
                 throw WorkspaceConfigError.duplicateMCPUpstreamName(upstream.name)
             }
             try validateMCPUpstream(upstream)

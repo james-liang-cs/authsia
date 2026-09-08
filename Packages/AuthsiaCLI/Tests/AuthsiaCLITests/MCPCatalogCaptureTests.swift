@@ -6,6 +6,30 @@ import Testing
 
 @Suite("MCP catalog capture")
 struct MCPCatalogCaptureTests {
+    @Test("catalog repairs legacy joined launch and aliases case without adding policy")
+    func legacyCursorLaunchIsRepaired() throws {
+        let root = try makeMCPProxyWorkspace(upstreams: [.init(name: "Playwright", command: "npx")])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent(".authsia/workspace.json")
+        var object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        object["mcpUpstreams"] = [["name": "Playwright", "command": "npx @playwright/mcp@latest"]]
+        try JSONSerialization.data(withJSONObject: object).write(to: file, options: .atomic)
+        let before = try #require(WorkspaceConfigStore.read(fromWorkspaceRoot: root).mcpUpstreams.first)
+        #expect(before.command == "npx")
+        #expect(before.args == ["@playwright/mcp@latest"])
+        _ = try MCPCatalogCapture.apply(tools: [], upstreamName: "playwright", workspaceRoot: root)
+        let written = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let upstreams = try #require(written["mcpUpstreams"] as? [[String: Any]])
+        #expect(upstreams.count == 1)
+        #expect(upstreams[0]["command"] as? String == "npx")
+        #expect(upstreams[0]["args"] as? [String] == ["@playwright/mcp@latest"])
+        object["mcpUpstreams"] = [["name": "Playwright", "command": "npx"], ["name": "playwright", "command": "different"]]
+        try JSONSerialization.data(withJSONObject: object).write(to: file, options: .atomic)
+        #expect(throws: WorkspaceConfigError.duplicateMCPUpstreamName("playwright")) {
+            try WorkspaceConfigStore.read(fromWorkspaceRoot: root)
+        }
+    }
+
     @Test("oversized metadata retains names and default allow policy")
     func oversizedMetadataKeepsNamesOnly() throws {
         let root = try makeMCPProxyWorkspace(upstreams: [.init(name: "fixture", command: "fixture")])

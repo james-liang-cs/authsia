@@ -81,7 +81,7 @@ public enum MCPWorkspaceStore {
         let upstreams = envelope.mcpUpstreams ?? []
         try MCPUpstreamValidator.validateCatalogBounds(upstreams)
         return try upstreams.map { upstream in
-            guard MCPUpstreamValidator.isValidName(upstream.name), names.insert(upstream.name).inserted else {
+            guard MCPUpstreamValidator.isValidName(upstream.name), names.insert(upstream.name.lowercased()).inserted else {
                 throw MCPManagementError.invalidRequest
             }
             try MCPUpstreamValidator.validate(upstream) { raw in

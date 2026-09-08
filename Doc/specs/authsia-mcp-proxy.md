@@ -632,6 +632,22 @@ deadline documented under Errors.
 
 ## Catalog Listing And Discovery
 
+Wrap parses launcher command lines such as `npx @playwright/mcp@latest`,
+`npm exec`, `pnpm dlx`, and `bunx` into an executable and separate arguments,
+preserving quoted arguments without shell execution. Legacy joined launcher
+commands are split when policy is read and persisted on the next catalog write.
+Malformed command lines require repair of `command` and `args`, rather than a
+PATH change. Upstream policy lookup is case-insensitive; `Playwright` and
+`playwright` share a declaration while client display names remain unchanged.
+Existing case-colliding policy entries must be reconciled explicitly; Authsia
+rejects them rather than combining permissions.
+
+Connected stdio proxies advertise `tools.listChanged` and check their visible
+policy catalog once per second after the first `tools/list`. Catalog or policy
+changes send `notifications/tools/list_changed`, including when tools disappear.
+Listing and notification never start the child or request admission. A proxy
+started with an older Authsia binary needs one client restart to use this behavior.
+
 ```text
   tools/list                            authsia mcp catalog --server <name>
        |                                     |

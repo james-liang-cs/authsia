@@ -7,9 +7,57 @@ import Testing
 
 @Suite("MCP proxy lifecycle")
 struct MCPProxyLifecycleTests {
+    @Test("connected proxy notifies after catalog capture and policy removal")
+    func catalogChangesNotifyConnectedClient() async throws {
+        let fixture = try makeProxy(upstreamName: "Playwright", upstreams: [
+            MCPUpstreamConfig(name: "playwright", command: "npx", args: ["@playwright/mcp@latest"]),
+        ])
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let transports = await InMemoryTransport.createConnectedPair()
+        let client = Client(name: "Cursor fixture", version: "1")
+        actor Notifications {
+            var count = 0
+            func record() { count += 1 }
+        }
+        let notifications = Notifications()
+        await client.onNotification(ToolListChangedNotification.self) { _ in
+            await notifications.record()
+        }
+        try await fixture.proxy.start(transport: transports.server)
+        _ = try await client.connect(transport: transports.client)
+        #expect(try await client.listTools().tools.isEmpty)
+        _ = try MCPCatalogCapture.apply(tools: [
+            Tool(name: "browser_snapshot", description: "", inputSchema: .object(["type": "object"])),
+        ], upstreamName: "PLAYWRIGHT", workspaceRoot: fixture.root)
+        for _ in 0..<40 {
+            if await notifications.count >= 1 { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(await notifications.count == 1)
+        #expect(try await client.listTools().tools.map(\.name) == ["browser_snapshot"])
+        let config = try WorkspaceConfigStore.read(fromWorkspaceRoot: fixture.root)
+        var upstream = try #require(config.mcpUpstreams.first)
+        upstream.tools = MCPUpstreamToolPolicy(deny: ["browser_snapshot"])
+        try WorkspaceConfigStore.write(WorkspaceConfig(
+            schemaVersion: config.schemaVersion, workspace: config.workspace,
+            managedEnvFiles: config.managedEnvFiles, agents: config.agents,
+            mcpUpstreams: [upstream]
+        ), toWorkspaceRoot: fixture.root)
+        for _ in 0..<40 {
+            if await notifications.count >= 2 { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(await notifications.count == 2)
+        #expect(try await client.listTools().tools.isEmpty)
+        try await Task.sleep(for: .milliseconds(1100))
+        #expect(await notifications.count == 2)
+        await client.disconnect()
+        await fixture.proxy.waitUntilCompleted()
+    }
+
     @Test("initialize advertises filtered tools only and supports ping")
     func initializationAndDiscovery() async throws {
-        let fixture = try makeProxy()
+        let fixture = try makeProxy(upstreamName: "Jira")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let transports = await InMemoryTransport.createConnectedPair()
         let client = Client(name: "MCP proxy lifecycle test", version: "1")
@@ -19,12 +67,12 @@ struct MCPProxyLifecycleTests {
 
         #expect(initialized.serverInfo.name == "authsia-mcp-proxy")
         #expect(initialized.capabilities.tools != nil)
-        #expect(initialized.capabilities.tools?.listChanged == false)
+        #expect(initialized.capabilities.tools?.listChanged == true)
         #expect(initialized.capabilities.resources == nil)
         #expect(initialized.capabilities.prompts == nil)
         #expect(initialized.capabilities.logging == nil)
         #expect(initialized.capabilities.completions == nil)
-        #expect(initialized.instructions?.contains("jira") == true)
+        #expect(initialized.instructions?.contains("Jira") == true)
         #expect(
             initialized.instructions?.localizedCaseInsensitiveContains(
                 "tools are filtered by workspace policy"
@@ -36,6 +84,7 @@ struct MCPProxyLifecycleTests {
         #expect(!listed.tools.map(\.name).contains("jira_delete_issue"))
         #expect(!listed.tools.map(\.name).contains("authsia_status"))
         #expect(!listed.tools.map(\.name).contains("authsia_workspace_inspect"))
+        try #require(listed.tools.count >= 2)
         #expect(listed.tools[0].description == "Get one Jira issue by key")
         #expect(
             listed.tools[0].inputSchema.objectValue?["properties"]?.objectValue?["issueKey"] != nil

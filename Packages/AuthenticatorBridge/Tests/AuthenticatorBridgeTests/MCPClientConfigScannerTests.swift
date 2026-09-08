@@ -2,6 +2,47 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPClientConfigScannerTests: XCTestCase {
+    func testJoinedLaunchRejectsShellSyntaxAndPreservesExistingArgv() {
+        for command in ["npx pkg; echo bad", "npx $(echo bad)", "npx 'unterminated", "npm install pkg", "pnpm add pkg"] {
+            XCTAssertNil(MCPUpstreamCommandRules.launch(command: command, arguments: []))
+            XCTAssertNil(MCPProxyClientLaunch.recoveryValue(name: "fixture", command: command, arguments: []))
+        }
+        let launch = MCPUpstreamCommandRules.launch(command: "npx", arguments: ["two words", "", "quoted \"value\""])
+        XCTAssertEqual(launch?.arguments, ["two words", "", "quoted \"value\""])
+    }
+
+    func testCursorJoinedLauncherRoundTripsThroughWrapAndRecovery() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("mcp.json")
+        for (command, expected) in [
+            ("npx @playwright/mcp@latest", ["npx", "@playwright/mcp@latest"]),
+            ("npm exec -- @playwright/mcp@latest", ["npm", "exec", "--", "@playwright/mcp@latest"]),
+            ("pnpm dlx @playwright/mcp@latest", ["pnpm", "dlx", "@playwright/mcp@latest"]),
+            ("bunx @playwright/mcp@latest --label 'two words'", ["bunx", "@playwright/mcp@latest", "--label", "two words"]),
+        ] {
+            try writeJSON(["mcpServers": ["Playwright": ["command": command, "args": ["--headless"]]]], to: file)
+            let finding = try XCTUnwrap(MCPClientConfigScanner().scan(declaredServers: [], locations: [
+                MCPClientConfigLocation(source: .cursor, fileURL: file, displayPath: file.path),
+            ]).first)
+            XCTAssertTrue(finding.isWrapEligible)
+            XCTAssertEqual(finding.wrapCommand, expected[0])
+            XCTAssertEqual(finding.wrapArguments, Array(expected.dropFirst()) + ["--headless"])
+            let plan = try MCPLocalMCPClientWrap.plan(finding: finding, authsiaCommand: "/usr/local/bin/authsia", fileURL: file)
+            try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: "/usr/local/bin/authsia")
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+            let server = try XCTUnwrap((object["mcpServers"] as? [String: [String: Any]])?["Playwright"])
+            let env = try XCTUnwrap(server["env"] as? [String: String])
+            let recovered = try XCTUnwrap(MCPProxyClientLaunch.recoveredLaunch(env[MCPProxyClientLaunch.recoveryEnvironmentKey], name: "Playwright"))
+            XCTAssertEqual(recovered.command, expected[0])
+            XCTAssertEqual(recovered.args, Array(expected.dropFirst()) + ["--headless"])
+        }
+        let legacy = MCPProxyClientLaunch.recoveredLaunch(#"["Playwright","npx @playwright/mcp@latest"]"#, name: "playwright")
+        XCTAssertEqual(legacy?.command, "npx")
+        XCTAssertEqual(legacy?.args, ["@playwright/mcp@latest"])
+    }
+
     func testScansKnownJSONAndCodexConfigurationsAgainstDeclaredAllowlist() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -82,6 +82,10 @@ public enum MCPUpstreamValidator {
     }
 
     private static func validateStdioCommand(_ command: String, arguments: [String]) throws {
+        guard let launch = MCPUpstreamCommandRules.launch(command: command, arguments: arguments),
+              launch.command == command, launch.arguments == arguments else {
+            throw MCPUpstreamValidationError.invalidCommand("joined command line; put the executable in command and arguments in args")
+        }
         if command.hasPrefix("/") {
             throw MCPUpstreamValidationError.invalidCommand(command)
         }
@@ -89,7 +93,8 @@ public enum MCPUpstreamValidator {
             guard isCommitSafeRelativePath(command) else {
                 throw MCPUpstreamValidationError.invalidCommand(command)
             }
-        } else if command.contains("\0")
+        } else if command.contains(where: \.isWhitespace)
+            || command.contains("\0")
             || command == "."
             || command == ".."
             || !command.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {

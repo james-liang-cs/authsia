@@ -2,6 +2,24 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPLocalMCPWorkspaceDeclarationTests: XCTestCase {
+    func testCaseVariantDeclarationSharesPolicyAndRejectsDifferentLaunch() throws {
+        let root = try makeWorkspace(name: "case-alias")
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertEqual(try MCPLocalMCPWorkspaceDeclaration.declare(
+            name: "Playwright", command: "npx @playwright/mcp@latest", arguments: [], workspaceRoot: root
+        ), .declared)
+        let file = root.appendingPathComponent(".authsia/workspace.json")
+        let before = try Data(contentsOf: file)
+        XCTAssertEqual(try MCPLocalMCPWorkspaceDeclaration.declare(
+            name: "playwright", command: "npx", arguments: ["@playwright/mcp@latest"], workspaceRoot: root
+        ), .alreadyDeclared)
+        XCTAssertEqual(try Data(contentsOf: file), before)
+        XCTAssertThrowsError(try MCPLocalMCPWorkspaceDeclaration.declare(
+            name: "PLAYWRIGHT", command: "different", arguments: [], workspaceRoot: root
+        ))
+        XCTAssertEqual(try Data(contentsOf: file), before)
+    }
+
     func testDeclareAppendsCredentialLessUpstreamAndLeavesClientFilesUntouched() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

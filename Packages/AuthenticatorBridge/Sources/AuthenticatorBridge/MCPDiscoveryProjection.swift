@@ -10,7 +10,7 @@ public enum MCPDiscoveryProjection {
         guard finding.isAuthsiaProxyLaunch, finding.status != .disabled, finding.status != .skipped,
               finding.precedence != .overridden,
               finding.workspacePathLabel.map({ workspacePath($0, homeDirectory: homeDirectory) }) == targetRoot.path,
-              source.identity.workspacePath != targetRoot.path, source.identity.upstreamName == name,
+              source.identity.workspacePath != targetRoot.path, source.identity.upstreamName.lowercased() == name.lowercased(),
               source.upstream.requiresStdioPolicy, let command = source.upstream.command,
               URL(fileURLWithPath: command).lastPathComponent.lowercased() != "authsia",
               AgentCommandRedactor.redactedArguments(source.upstream.args) == source.upstream.args else {
@@ -64,7 +64,7 @@ public enum MCPDiscoveryProjection {
         return findings.filter { $0.status != .skipped }.compactMap { finding in
             let workspace = finding.workspacePathLabel.map { workspacePath($0, homeDirectory: homeDirectory) }
             let name = finding.declaredUpstreamName ?? finding.serverName
-            if let workspace, declared.contains(MCPServerIdentity(workspacePath: workspace, upstreamName: name)) { return nil }
+            if let workspace, declared.contains(where: { $0.workspacePath == workspace && $0.upstreamName.lowercased() == name.lowercased() }) { return nil }
             let knownWorkspace = workspace.flatMap { roots.contains($0) ? $0 : nil }
             let disabled = finding.status == .disabled
             let reusableIDs = knownWorkspace.map { path in

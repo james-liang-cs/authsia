@@ -486,7 +486,7 @@ struct MCPCommand: AsyncParsableCommand {
         ) throws -> String {
             let fromFlag = trimmed(flag)
             let fromEnv = trimmed(environment[MCPProxyClientLaunch.environmentKey])
-            if let fromFlag, let fromEnv, fromFlag != fromEnv {
+            if let fromFlag, let fromEnv, fromFlag.lowercased() != fromEnv.lowercased() {
                 throw ValidationError(
                     "--upstream and AUTHSIA_MCP_UPSTREAM must name the same upstream."
                 )
@@ -1096,8 +1096,10 @@ struct MCPCommand: AsyncParsableCommand {
             workspaceRoot: URL
         ) throws -> MCPLocalMCPWorkspaceDeclaration.Outcome {
             let existing = try WorkspaceConfigStore.read(fromWorkspaceRoot: workspaceRoot)
-            if let current = existing.mcpUpstreams.first(where: { $0.name == declaration.name }) {
-                guard current == declaration else {
+            if let current = existing.mcpUpstreams.first(where: { $0.name.lowercased() == declaration.name.lowercased() }) {
+                var comparable = declaration
+                comparable.name = current.name
+                guard current == comparable else {
                     throw ValidationError("An MCP upstream named \(declaration.name) already exists with different settings.")
                 }
                 return .alreadyDeclared
