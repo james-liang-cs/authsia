@@ -68,6 +68,35 @@ public enum MCPWorkspaceStore {
         }
         return result
     }
+    /// Prepare a lossless authority repair, never a write or a merge of conflicting policy.
+    /// Keep the first declaration unchanged; only casing and observation time may differ.
+    public static func repairingEquivalentDuplicates(_ data: Data, root: URL) throws -> (data: Data, removedNames: [String])? {
+        do { _ = try decode(data, root: root); return nil }
+        catch MCPManagementError.duplicateServerNames { }
+        guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = object["mcpUpstreams"] as? [[String: Any]] else { throw MCPManagementError.invalidRequest }
+        var kept: [[String: Any]] = [], indices: [String: Int] = [:], removed: [String] = []
+        for entry in entries {
+            guard let name = entry["name"] as? String else { throw MCPManagementError.invalidRequest }
+            if let index = indices[name.lowercased()] {
+                var existing = kept[index], candidate = entry
+                for key in ["name", "catalogCapturedAt"] {
+                    existing.removeValue(forKey: key); candidate.removeValue(forKey: key)
+                }
+                guard NSDictionary(dictionary: existing).isEqual(NSDictionary(dictionary: candidate)) else {
+                    throw MCPManagementError.duplicateServerNames
+                }
+                removed.append(name)
+            } else {
+                indices[name.lowercased()] = kept.count
+                kept.append(entry)
+            }
+        }
+        object["mcpUpstreams"] = kept
+        let repaired = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        _ = try decode(repaired, root: root)
+        return (repaired, removed)
+    }
     public static func decode(_ data: Data, root: URL) throws -> [MCPServerDefinition] {
         struct Envelope: Decodable {
             struct Workspace: Decodable { let name: String; let authsiaFolder: String }
@@ -81,9 +110,10 @@ public enum MCPWorkspaceStore {
         let upstreams = envelope.mcpUpstreams ?? []
         try MCPUpstreamValidator.validateCatalogBounds(upstreams)
         return try upstreams.map { upstream in
-            guard MCPUpstreamValidator.isValidName(upstream.name), names.insert(upstream.name.lowercased()).inserted else {
+            guard MCPUpstreamValidator.isValidName(upstream.name) else {
                 throw MCPManagementError.invalidRequest
             }
+            guard names.insert(upstream.name.lowercased()).inserted else { throw MCPManagementError.duplicateServerNames }
             try MCPUpstreamValidator.validate(upstream) { raw in
                 guard raw.lowercased().hasPrefix("authsia://") else { return .notReference }
                 return (try? MCPHeaderReference(raw)) != nil ? .permitted : .invalidOrUnsupported

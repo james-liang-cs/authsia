@@ -108,10 +108,28 @@ declaration without asking for the original executable. This value is a setup
 hint only: the proxy still resolves its launch exclusively from workspace policy.
 Recovery copies no credentials, tool permissions, catalog, or grants and requires
 the existing declaration preview and native confirmation. Malformed metadata is
-not imported. An older Context7 wrapper without saved metadata offers the labeled
+not imported. If a legacy wrapper has no saved launch, Manager can prepare its
+declaration from an effective, wrap-safe entry for the same upstream in another
+client in the same workspace. All eligible matches must agree on the command and
+arguments. Disabled, overridden, unsupported, sensitive, and conflicting launches
+are not imported. The native preview names the source client and file; both that
+file and the target client entry are checked before applying. Environment values,
+credentials, tool decisions, catalogs, and grants are not copied. Recoverable
+entries offer **Configure** without requiring manual executable entry. An older
+Context7 wrapper without saved metadata offers the labeled
 [official Context7 preset](https://context7.com/docs/resources/all-clients),
 `npx -y @upstash/context7-mcp`, for review. Other unknown launches still require
 a matching workspace setup or an explicit command.
+
+Case-insensitive duplicate declarations make a workspace unreadable; they do not
+mean its existing servers need new declarations. When duplicate entries differ
+only in name casing or `catalogCapturedAt`, Configure on an existing server
+prepares a workspace repair instead of importing a preset. Native confirmation
+names the redundant entries and retains the first declaration unchanged.
+Commands, credentials, policy, catalogs, unknown fields, and unrelated workspace
+settings are preserved. The write checks the original file snapshot. Any other
+difference remains a `duplicateServerNames` error; Authsia does not merge
+conflicting authority or choose a new upstream configuration.
 
 The Servers table shows each effective client's protection badge alongside its
 client name, so mixed protected, bypassing, and unconfigured clients are visible

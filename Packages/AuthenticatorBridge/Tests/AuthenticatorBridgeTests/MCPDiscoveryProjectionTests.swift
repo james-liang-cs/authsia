@@ -2,6 +2,74 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPDiscoveryProjectionTests: XCTestCase {
+    func testLegacyWrappedLaunchRecoversMatchingClientSetupInSameWorkspace() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let codex = root.appendingPathComponent("config.toml")
+        let claude = root.appendingPathComponent("claude.json")
+        try Data("[mcp_servers.example]\ncommand = \"authsia\"\nargs = [\"mcp\", \"proxy\"]\n[mcp_servers.example.env]\nAUTHSIA_MCP_UPSTREAM = \"example\"\n".utf8).write(to: codex)
+        try Data(#"{"mcpServers":{"example":{"command":"fixture-server","args":["--stdio"]}}}"#.utf8).write(to: claude)
+        let findings = MCPClientConfigScanner().scan(declaredServers: [], locations: [
+            .init(source: .codex, fileURL: codex, displayPath: codex.path, scope: .project, workspaceRoot: root),
+            .init(source: .claude, fileURL: claude, displayPath: claude.path, scope: .project, workspaceRoot: root),
+        ])
+        let rows = MCPDiscoveryProjection.servers(findings: findings, declared: [], workspaceRoots: [root], homeDirectory: root)
+        let row = try XCTUnwrap(rows.first { $0.client == .codex })
+        XCTAssertTrue(row.canConfigure, "A matching client launch should prepare setup without manual executable entry")
+        XCTAssertFalse(row.configurationHint.contains("manual setup"))
+        let wrapped = try XCTUnwrap(findings.first { $0.source == .codex })
+        let recovered = try XCTUnwrap(MCPDiscoveryProjection.recoveredDeclaration(for: wrapped, findings: findings))
+        XCTAssertEqual(recovered.command, "fixture-server")
+        XCTAssertEqual(recovered.args, ["--stdio"])
+        XCTAssertTrue(recovered.env.isEmpty)
+        XCTAssertTrue(recovered.tools.allow.isEmpty)
+        XCTAssertTrue(recovered.tools.approve.isEmpty)
+        XCTAssertTrue(recovered.catalog.isEmpty)
+        XCTAssertTrue(row.configurationHint.contains("matching Claude launch"))
+    }
+
+    func testClientRecoveryRejectsConflictingUnsafeAndOutOfScopeSources() {
+        let target = wrappedFinding()
+        let valid = recoveryFinding()
+        for source in [recoveryFinding(status: .disabled), recoveryFinding(precedence: .overridden),
+                       recoveryFinding(precedence: .conditional), recoveryFinding(workspace: "/tmp/other-workspace"),
+                       recoveryFinding(name: "unrelated"), recoveryFinding(command: "authsia"),
+                       recoveryFinding(command: "sh", arguments: ["-c", "fixture"]),
+                       recoveryFinding(arguments: ["--password", "REDACTED_FIXTURE"]),
+                       recoveryFinding(unsupportedKeys: ["cwd"])] {
+            XCTAssertNil(MCPDiscoveryProjection.recoveredDeclaration(for: target, findings: [source]))
+        }
+        let conflict = recoveryFinding(source: .cursor, command: "different-server")
+        XCTAssertNil(MCPDiscoveryProjection.recoveredDeclaration(for: target, findings: [valid, conflict]))
+        XCTAssertNil(MCPDiscoveryProjection.recoveredDeclaration(for: wrappedFinding(status: .disabled), findings: [valid]))
+        XCTAssertNil(MCPDiscoveryProjection.recoveredDeclaration(for: wrappedFinding(precedence: .overridden), findings: [valid]))
+    }
+
+    func testMatchingClientCopiesOnlyLaunchAndAcceptsIdenticalSources() throws {
+        let target = wrappedFinding()
+        let findings = [recoveryFinding(), recoveryFinding(source: .cursor)]
+        let recovered = try XCTUnwrap(MCPDiscoveryProjection.recoveredDeclaration(for: target, findings: findings))
+        XCTAssertEqual(recovered, MCPUpstreamConfig(name: "example", command: "fixture-server", args: ["--stdio"]))
+        let invalidSaved = MCPClientServerFinding(source: .codex, serverName: "example", commandLabel: "authsia",
+            status: .unadmitted, declaredUpstreamName: "example", configPathLabel: "fixture",
+            precedence: .effective, workspacePathLabel: reuseTarget.path, isAuthsiaProxyLaunch: true,
+            unsupportedLaunchKeys: [MCPProxyClientLaunch.recoveryEnvironmentKey])
+        XCTAssertNil(MCPDiscoveryProjection.recoveredDeclaration(for: invalidSaved, findings: findings))
+    }
+
+    private func recoveryFinding(source: MCPClientConfigSource = .claude,
+                                 status: MCPClientServerAdmissionStatus = .unadmitted,
+                                 precedence: MCPClientConfigPrecedence = .effective,
+                                 workspace: String = "/tmp/authsia-reuse-target", name: String = "example",
+                                 command: String = "fixture-server", arguments: [String] = ["--stdio"],
+                                 unsupportedKeys: [String] = []) -> MCPClientServerFinding {
+        .init(source: source, serverName: name, commandLabel: command, status: status, declaredUpstreamName: nil,
+              configPathLabel: "/tmp/fixture-\(source.rawValue)", precedence: precedence, workspacePathLabel: workspace,
+              wrapCommand: command, wrapArguments: arguments, isWrapEligible: true,
+              unsupportedLaunchKeys: unsupportedKeys, childEnvironmentCount: 2)
+    }
+
     func testDirectServerWorkspaceEnvironmentStillCountsAsChildEnvironment() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -54,6 +122,20 @@ final class MCPDiscoveryProjectionTests: XCTestCase {
             workspaceRoots: [reuseTarget], homeDirectory: reuseHome).first)
         XCTAssertTrue(row.canConfigure)
         XCTAssertTrue(row.configurationHint.contains("Context7 preset"))
+    }
+
+    func testAlreadyDeclaredContext7OffersWorkspaceRepairInsteadOfPreset() throws {
+        let finding = MCPClientServerFinding(source: .codex, serverName: "context7", commandLabel: "authsia",
+            status: .unadmitted, declaredUpstreamName: "context7", configPathLabel: "~/.codex/config.toml",
+            precedence: .effective, workspacePathLabel: reuseTarget.path, isAuthsiaProxyLaunch: true)
+        let identity = MCPServerIdentity(workspaceRoot: reuseTarget, upstreamName: "context7")
+        let row = try XCTUnwrap(MCPDiscoveryProjection.servers(findings: [finding], declared: [],
+            workspaceRoots: [reuseTarget], homeDirectory: reuseHome, repairableDeclarations: [identity]).first)
+        XCTAssertTrue(row.canConfigure)
+        XCTAssertTrue(row.configurationHint.contains("already declared"))
+        XCTAssertTrue(row.configurationHint.contains("repair"))
+        XCTAssertFalse(row.configurationHint.contains("preset"))
+        XCTAssertEqual(row.reusableSourceServerIDs, [])
     }
 
     func testNewClientEnrollmentRetainsDeclaredLaunchOnly() throws {

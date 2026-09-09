@@ -82,12 +82,14 @@ public struct MCPHTTPAuthorityReply: Codable, Sendable {
 
 public enum MCPManagementError: String, Error, LocalizedError, Codable, Sendable {
     case unavailable, invalidRequest, denied, stale, notFound, unsupported, auditUnavailable, busy, mcpAccessDisabled
+    case duplicateServerNames
     case catalogExecutableMissing, catalogEnvironmentRequired, catalogEmpty, catalogIncomplete, catalogStartupFailed, catalogHelperUnavailable, catalogTimedOut, catalogAccessDisabled
     public var errorDescription: String? {
         switch self {
         case .mcpAccessDisabled: return MCPAccessSettings.disabledMessage
         case .unavailable: return "Authsia management is unavailable."
         case .invalidRequest: return "Invalid MCP configuration or request."
+        case .duplicateServerNames: return "This workspace contains duplicate MCP server names; names are case-insensitive. Authsia can prepare a repair for equivalent declarations. Conflicting launch settings, credentials, or tool permissions must be resolved before configuration can continue."
         case .denied: return "MCP access was not authorized."
         case .stale: return "The configuration or authorization changed. Prepare the operation again."
         case .notFound: return "The MCP server, session, or operation was not found."
