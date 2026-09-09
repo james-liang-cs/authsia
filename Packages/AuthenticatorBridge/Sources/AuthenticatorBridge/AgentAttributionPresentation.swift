@@ -12,7 +12,7 @@ public enum AgentAttributionPresentation {
         switch platform?.lowercased() {
         case "claude", "claude-code":
             return "Claude Code"
-        case "codex":
+        case "codex", "codex-mcp-client":
             return "Codex"
         case "vscode", "vs-code", "visual-studio-code":
             return "Visual Studio Code"
@@ -131,7 +131,7 @@ public enum AgentAttributionPresentation {
         switch platform?.lowercased() {
         case "claude", "claude-code":
             return "text.bubble.fill"
-        case "codex":
+        case "codex", "codex-mcp-client":
             return "terminal.fill"
         case "vscode", "vs-code", "visual-studio-code":
             return "chevron.left.forwardslash.chevron.right"

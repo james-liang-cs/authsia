@@ -100,6 +100,7 @@ struct AgentRuleRemovalResult: Equatable {
 }
 
 enum AgentRuleInstaller {
+    static let mcpAttributionMatcher = "mcp__.*__authsia_(list|exec|access_revoke)$"
     private static let cliOnlyWorkspaceExecFallbackLine =
         "- If `authsia workspace run` fails, fall back to `authsia exec <type> <query> [options] -- <command> <args>` outside the sandbox."
     private static let workspaceEnvironmentSelectionLine =
@@ -459,7 +460,19 @@ enum AgentRuleInstaller {
                config.contains("authsia agent record-command --platform codex")
                 || config.contains("authsia agent record-lineage --platform codex") {
                 if codexInlineHooksAreInstalled(config) {
-                    result.unchanged.append(configPath)
+                    if config.contains(mcpAttributionMatcher) {
+                        result.unchanged.append(configPath)
+                    } else {
+                        try writeFile(
+                            config + "\n\n" + codexMCPHooksTOML + "\n",
+                            existing: config,
+                            relativePath: configPath,
+                            projectRoot: projectRoot,
+                            dryRun: dryRun,
+                            fileManager: fileManager,
+                            result: &result
+                        )
+                    }
                     return
                 }
                 result.manualSteps.append(AgentRuleManualStep(
@@ -535,7 +548,7 @@ enum AgentRuleInstaller {
               let config = try? String(contentsOf: configURL, encoding: .utf8) else {
             return false
         }
-        return codexInlineHooksAreInstalled(config)
+        return codexInlineHooksAreInstalled(config) && config.contains(mcpAttributionMatcher)
     }
 
     private static func codexInlineHooksAreInstalled(_ config: String) -> Bool {
@@ -731,12 +744,23 @@ enum AgentRuleInstaller {
         let path = ".github/copilot/settings.local.json"
         let url = projectRoot.appendingPathComponent(path)
         if fileManager.fileExists(atPath: url.path) {
-            result.manualSteps.append(
-                AgentRuleManualStep(
+            let existing = try String(contentsOf: url, encoding: .utf8)
+            guard let merged = mergedCopilotSettingsJSON(existing) else {
+                result.manualSteps.append(AgentRuleManualStep(
                     path: path,
-                    reason: "already exists. Add this command-history hook block manually.",
+                    reason: "has an unsupported version or a structure that cannot be safely merged. Repair the settings and rerun setup, or add these hooks manually.",
                     block: copilotSettingsManualBlock
-                )
+                ))
+                return
+            }
+            try writeFile(
+                merged,
+                existing: existing,
+                relativePath: path,
+                projectRoot: projectRoot,
+                dryRun: dryRun,
+                fileManager: fileManager,
+                result: &result
             )
             return
         }
@@ -749,6 +773,31 @@ enum AgentRuleInstaller {
             fileManager: fileManager,
             result: &result
         )
+    }
+
+    private static func mergedCopilotSettingsJSON(_ existing: String) -> String? {
+        guard var settings = jsonObject(from: existing),
+              let generated = jsonObject(from: copilotSettingsJSON),
+              let generatedEvents = generated["hooks"] as? [String: Any],
+              var events = existingObject(settings["hooks"]) else { return nil }
+        if let version = settings["version"], !(version is NSNull),
+           !jsonObjectsAreEqual(["version": version], ["version": 1]) { return nil }
+        settings["version"] = 1
+        for (event, value) in generatedEvents {
+            guard let generatedHooks = value as? [[String: Any]],
+                  var hooks = existingArray(events[event]) else { return nil }
+            for hook in generatedHooks where !hooks.contains(where: { jsonObjectsAreEqual($0, hook) }) {
+                hooks.append(hook)
+            }
+            events[event] = hooks
+        }
+        settings["hooks"] = events
+        if let original = jsonObject(from: existing), jsonObjectsAreEqual(original, settings) {
+            return existing
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]),
+              let output = String(data: data, encoding: .utf8) else { return nil }
+        return output + "\n"
     }
 
     private static func upsertMarkdownFile(
@@ -1852,6 +1901,16 @@ enum AgentRuleInstaller {
                 "timeout": 5
               }
             ]
+          },
+          {
+            "matcher": "\(mcpAttributionMatcher)",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-command --platform codex --source hook",
+                "timeout": 5
+              }
+            ]
           }
         ],
         "SubagentStart": [
@@ -1889,6 +1948,8 @@ enum AgentRuleInstaller {
     command = "authsia agent record-command --platform codex --source hook"
     timeout = 5
 
+    \(codexMCPHooksTOML)
+
     [[hooks.SubagentStart]]
 
     [[hooks.SubagentStart.hooks]]
@@ -1901,6 +1962,16 @@ enum AgentRuleInstaller {
     [[hooks.SubagentStop.hooks]]
     type = "command"
     command = "authsia agent record-lineage --platform codex"
+    timeout = 5
+    """
+
+    private static let codexMCPHooksTOML = """
+    [[hooks.PreToolUse]]
+    matcher = "\(mcpAttributionMatcher)"
+
+    [[hooks.PreToolUse.hooks]]
+    type = "command"
+    command = "authsia agent record-command --platform codex --source hook"
     timeout = 5
     """
 

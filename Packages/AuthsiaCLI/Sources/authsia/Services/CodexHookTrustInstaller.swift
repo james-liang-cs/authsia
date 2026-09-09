@@ -51,7 +51,10 @@ enum CodexHookTrustInstaller {
                     $0["async"] == nil
             }) { throw Failure.unsupportedAPI }
             let matching = all.filter { isAuthsiaHook($0, root: root) }
-            guard matching.count == 3,
+            let preMatchers = matching.filter { $0["eventName"] as? String == "preToolUse" }
+                .compactMap { $0["matcher"] as? String }
+            guard matching.count == 4,
+                  Set(preMatchers) == Set(["^Bash$", AgentRuleInstaller.mcpAttributionMatcher]),
                   Set(matching.compactMap { $0["eventName"] as? String }) ==
                     Set(["preToolUse", "subagentStart", "subagentStop"]) else { throw Failure.incompleteHooks }
             return matching
@@ -94,7 +97,7 @@ enum CodexHookTrustInstaller {
         switch hook["eventName"] as? String {
         case "preToolUse":
             return hook["command"] as? String == "authsia agent record-command --platform codex --source hook" &&
-                hook["matcher"] as? String == "^Bash$"
+                ["^Bash$", AgentRuleInstaller.mcpAttributionMatcher].contains(hook["matcher"] as? String ?? "")
         case "subagentStart", "subagentStop":
             return hook["command"] as? String == "authsia agent record-lineage --platform codex" &&
                 (hook["matcher"] == nil || hook["matcher"] is NSNull)

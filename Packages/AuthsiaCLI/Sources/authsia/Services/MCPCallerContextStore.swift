@@ -57,7 +57,11 @@ struct MCPCallerContextStore: Sendable {
 
     private func normalized(_ platform: String?) -> String? {
         let value = platform?.lowercased()
-        return value == "claude" || value == "claude code" ? "claude-code" : value
+        switch value {
+        case "claude", "claude code": return "claude-code"
+        case "codex-mcp-client": return "codex"
+        default: return value
+        }
     }
 
     private func transaction<T>(now: Date, _ body: (inout [Record]) throws -> T) throws -> T {

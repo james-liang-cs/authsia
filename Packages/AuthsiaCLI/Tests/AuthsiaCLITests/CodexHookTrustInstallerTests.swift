@@ -26,7 +26,7 @@ struct CodexHookTrustInstallerTests {
     }
 
     private func hooks(trusted: Bool = false) -> [[String: Any]] {
-        ["preToolUse", "subagentStart", "subagentStop"].map { event in
+        var values = ["preToolUse", "subagentStart", "subagentStop"].map { event in
             var hook: [String: Any] = [
                 "key": root.path + "/.codex/hooks.json:" + event + ":0:0",
                 "sourcePath": root.path + "/.codex/hooks.json", "source": "project",
@@ -41,6 +41,11 @@ struct CodexHookTrustInstallerTests {
             if event == "preToolUse" { hook["matcher"] = "^Bash$" }
             return hook
         }
+        var mcp = values[0]
+        mcp["matcher"] = "mcp__.*__authsia_(list|exec|access_revoke)$"
+        mcp["key"] = root.path + "/.codex/hooks.json:preToolUse:1:0"
+        values.append(mcp)
+        return values
     }
 
     private func response(_ hooks: [[String: Any]]) -> [String: Any] {
@@ -57,7 +62,7 @@ struct CodexHookTrustInstallerTests {
             methods.append(method)
             if method == "config/batchWrite" {
                 let edits = try #require(params["edits"] as? [[String: Any]])
-                #expect(edits.count == 3)
+                #expect(edits.count == 4)
                 for edit in edits {
                     let key = try #require(edit["keyPath"] as? String)
                     #expect(key.hasPrefix("hooks.state.\"/tmp/authsia-synthetic-project/.codex/hooks.json:"))

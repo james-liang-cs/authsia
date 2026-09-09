@@ -1166,6 +1166,27 @@ struct AgentCommandTests {
         #expect(try read(".codex/hooks.json", in: root) == installed)
     }
 
+    @Test("Codex setup upgrades Bash-only attribution hooks with MCP capture")
+    func codexUpgradesExistingCLIOnlyHooks() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        var object = try expectJSONObject(read(".codex/hooks.json", in: root))
+        var hooks = try #require(object["hooks"] as? [String: Any])
+        let pre = try #require(hooks["PreToolUse"] as? [[String: Any]])
+        hooks["PreToolUse"] = pre.filter { $0["matcher"] as? String == "^Bash$" }
+        object["hooks"] = hooks
+        let data = try JSONSerialization.data(withJSONObject: object)
+        try write(String(decoding: data, as: UTF8.self), to: ".codex/hooks.json", in: root)
+        #expect(!AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+        let upgraded = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        #expect(upgraded.updated.contains(".codex/hooks.json"))
+        #expect(upgraded.manualSteps.isEmpty)
+        try expectCodexHooks(read(".codex/hooks.json", in: root))
+        let again = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        #expect(again.unchanged.contains(".codex/hooks.json"))
+    }
+
     @Test("Codex init installs hooks alongside unrelated inline config hooks")
     func codexInitInstallsAlongsideInlineConfigHooks() throws {
         let root = try makeProjectRoot()
@@ -1217,7 +1238,7 @@ struct AgentCommandTests {
         #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
     }
 
-    @Test("Codex integration accepts manually installed inline attribution hooks")
+    @Test("Codex integration upgrades inline attribution hooks to include MCP")
     func codexIntegrationAcceptsInlineAttributionHooks() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1242,10 +1263,13 @@ struct AgentCommandTests {
         command = "authsia agent record-lineage --platform codex"
         """, to: ".codex/config.toml", in: root)
 
-        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+        #expect(!AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
         let repair = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
         #expect(repair.manualSteps.isEmpty)
-        #expect(repair.unchanged.contains(".codex/config.toml"))
+        #expect(repair.updated.contains(".codex/config.toml"))
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+        let again = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        #expect(again.unchanged.contains(".codex/config.toml"))
         #expect(!fileExists(".codex/hooks.json", in: root))
         #expect(AgentRuleInstaller.renderResult(repair).contains("/hooks"))
     }
@@ -1556,25 +1580,79 @@ struct AgentCommandTests {
         #expect(result.manualSteps.isEmpty)
     }
 
-    @Test("existing Copilot local settings are not mutated and print a manual merge block")
-    func existingCopilotSettingsRequireManualMerge() throws {
+    @Test("existing Copilot settings receive missing hooks without manual steps or duplicates")
+    func existingCopilotSettingsMergeAutomatically() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        try write("{}", to: ".github/copilot/settings.local.json", in: root)
+        let existing = #"{"version":1,"customSetting":true,"hooks":{"PreToolUse":[{"type":"command","matcher":"Bash","command":"echo synthetic-custom"}]}}"#
+        try write(existing, to: ".github/copilot/settings.local.json", in: root)
 
         let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
 
-        #expect(try read(".github/copilot/settings.local.json", in: root) == "{}")
-        let step = try #require(result.manualSteps.first)
-        #expect(step.path == ".github/copilot/settings.local.json")
-        try expectCopilotSettings(step.block)
-        #expect(step.block.contains("\"PreToolUse\""))
-        #expect(step.block.contains("\"matcher\": \"Bash\""))
-        #expect(step.block.contains("authsia agent record-command --platform copilot --source hook"))
+        let merged = try read(".github/copilot/settings.local.json", in: root)
+        #expect(result.manualSteps.isEmpty)
+        #expect(merged.contains("synthetic-custom"))
+        #expect(merged.contains("customSetting"))
+        let settings = try #require(JSONSerialization.jsonObject(with: Data(merged.utf8)) as? [String: Any])
+        let hooks = try #require(settings["hooks"] as? [String: Any])
+        #expect((hooks["PreToolUse"] as? [[String: Any]])?.count == 9)
+        let again = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
+        #expect(again.manualSteps.isEmpty)
+        #expect(again.unchanged.contains(".github/copilot/settings.local.json"))
+        #expect(try read(".github/copilot/settings.local.json", in: root) == merged)
+    }
 
-        let rendered = AgentRuleInstaller.renderResult(result)
-        #expect(rendered.contains("Manual steps:"))
-        #expect(rendered.contains(".github/copilot/settings.local.json already exists"))
+    @Test("Copilot generated hooks are recognized on repeated setup")
+    func copilotRepeatedSetup() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
+        let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
+        #expect(result.manualSteps.isEmpty)
+        #expect(result.unchanged.contains(".github/copilot/settings.local.json"))
+    }
+
+    @Test("Copilot setup repairs a partial set of existing Authsia hooks")
+    func copilotPartialHookRepair() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
+        var settings = try expectJSONObject(read(".github/copilot/settings.local.json", in: root))
+        let events = try #require(settings["hooks"] as? [String: Any])
+        let hooks = try #require(events["PreToolUse"] as? [[String: Any]])
+        settings["hooks"] = ["PreToolUse": Array(hooks.prefix(1))]
+        let partial = try JSONSerialization.data(withJSONObject: settings)
+        try write(String(decoding: partial, as: UTF8.self), to: ".github/copilot/settings.local.json", in: root)
+        let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
+        #expect(result.manualSteps.isEmpty)
+        let merged = try read(".github/copilot/settings.local.json", in: root)
+        try expectCopilotSettings(merged)
+        let mergedEvents = try #require(expectJSONObject(merged)["hooks"] as? [String: Any])
+        #expect((mergedEvents["PreToolUse"] as? [[String: Any]])?.count == 8)
+    }
+
+    @Test("Copilot empty and null containers are repaired", arguments: ["{}", #"{"version":null,"hooks":null}"#, #"{"hooks":{"PreToolUse":null}}"#])
+    func copilotEmptyContainers(existing: String) throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(existing, to: ".github/copilot/settings.local.json", in: root)
+        let dryRun = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot], dryRun: true)
+        #expect(dryRun.manualSteps.isEmpty)
+        #expect(dryRun.updated.contains(".github/copilot/settings.local.json"))
+        #expect(try read(".github/copilot/settings.local.json", in: root) == existing)
+        let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
+        #expect(result.manualSteps.isEmpty)
+        try expectCopilotSettings(read(".github/copilot/settings.local.json", in: root))
+    }
+
+    @Test("Copilot incompatible settings remain unchanged", arguments: ["{", #"{"version":2}"#, #"{"version":true}"#, #"{"hooks":[]}"#, #"{"hooks":{"PreToolUse":"invalid"}}"#])
+    func copilotIncompatibleSettings(existing: String) throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(existing, to: ".github/copilot/settings.local.json", in: root)
+        let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.copilot])
+        #expect(result.manualSteps.count == 1)
+        #expect(try read(".github/copilot/settings.local.json", in: root) == existing)
     }
 
     @Test("legacy Copilot shared rules without hook guidance are still recognized")
@@ -1789,6 +1867,7 @@ struct AgentCommandTests {
         let object = try expectJSONObject(settings)
         let hooks = try #require(object["hooks"] as? [String: Any])
         let preToolUse = try #require(hooks["PreToolUse"] as? [[String: Any]])
+        #expect(preToolUse.contains { $0["matcher"] as? String == "mcp__.*__authsia_(list|exec|access_revoke)$" })
         let bash = try #require(preToolUse.first { $0["matcher"] as? String == "^Bash$" })
         let bashHooks = try #require(bash["hooks"] as? [[String: Any]])
         #expect(bashHooks.contains {
