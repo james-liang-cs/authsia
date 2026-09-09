@@ -236,6 +236,10 @@ enum WorkspaceConfigStore {
             throw WorkspaceConfigError.missingConfig
         }
         let data = try Data(contentsOf: url)
+        return try decode(data, validatePolicy: validatePolicy)
+    }
+
+    private static func decode(_ data: Data, validatePolicy: Bool) throws -> WorkspaceConfig {
         let envelope: WorkspaceConfigSchemaEnvelope
         do {
             envelope = try JSONDecoder().decode(WorkspaceConfigSchemaEnvelope.self, from: data)
@@ -259,6 +263,47 @@ enum WorkspaceConfigStore {
             try validate(normalized)
         }
         return normalized
+    }
+
+    enum EnvBindingRemovalResult {
+        case removed, nameNotFound, referenceNotFound, referenceRequired
+    }
+
+    /// Removal is a metadata-only cleanup operation. Preserve unrelated JSON,
+    /// including invalid MCP policy, which normal reads and writes still reject.
+    static func removeEnvBinding(
+        named name: String,
+        reference: String?,
+        fromWorkspaceRoot root: URL,
+        fileManager: FileManager = .default
+    ) throws -> EnvBindingRemovalResult {
+        let url = root.appendingPathComponent(relativeConfigPath)
+        guard fileManager.fileExists(atPath: url.path) else { throw WorkspaceConfigError.missingConfig }
+        let data = try Data(contentsOf: url)
+        let config = try decode(data, validatePolicy: false)
+        guard (1...currentSchemaVersion).contains(config.schemaVersion) else {
+            throw WorkspaceConfigError.unsupportedSchema(config.schemaVersion)
+        }
+        let matching = config.envBindings.filter { $0.name == name }
+        guard !matching.isEmpty else { return .nameNotFound }
+        if config.schemaVersion >= 2, matching.count > 1, reference == nil {
+            return .referenceRequired
+        }
+        if let reference, !matching.contains(where: { $0.reference == reference }) {
+            return .referenceNotFound
+        }
+        guard var document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let bindings = document["envBindings"] as? [[String: Any]] else {
+            throw WorkspaceConfigError.invalidConfigFile
+        }
+        document["envBindings"] = bindings.filter {
+            !($0["name"] as? String == name && (reference == nil || $0["reference"] as? String == reference))
+        }
+        let updated = try JSONSerialization.data(
+            withJSONObject: document, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        )
+        try updated.write(to: url, options: .atomic)
+        return .removed
     }
 
     static func write(

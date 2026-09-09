@@ -1880,43 +1880,28 @@ struct Workspace: AsyncParsableCommand {
             knownRootsStore: WorkspaceKnownRootsStore
         ) throws -> String {
             let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            var config = try WorkspaceConfigStore.read(fromWorkspaceRoot: workspaceRoot, fileManager: fileManager)
-            let matchingBindings = config.envBindings.filter { $0.name == normalizedName }
-            guard !matchingBindings.isEmpty else {
+            let result = try WorkspaceConfigStore.removeEnvBinding(
+                named: normalizedName,
+                reference: reference?.trimmingCharacters(in: .whitespacesAndNewlines),
+                fromWorkspaceRoot: workspaceRoot,
+                fileManager: fileManager
+            )
+            switch result {
+            case .nameNotFound:
                 return "No workspace env binding \(normalizedName). Run `authsia workspace env list` to see " +
                     "configured bindings, or bind one with authsia workspace env add <NAME> <authsia://...>."
-            }
-            let normalizedReference = reference?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if config.schemaVersion >= 2, matchingBindings.count > 1, normalizedReference == nil {
+            case .referenceRequired:
                 throw ValidationError(
                     "Workspace env variable \(normalizedName) has multiple bindings. Re-run with its exact " +
                     "Authsia reference from `authsia workspace env list`."
                 )
+            case .referenceNotFound:
+                return "No workspace env binding \(normalizedName) matches that reference. Run " +
+                    "`authsia workspace env list` to see configured bindings."
+            case .removed:
+                Workspace.recordKnownWorkspaceRoot(workspaceRoot, store: knownRootsStore)
+                return "Removed workspace env binding \(normalizedName)."
             }
-            let bindings: [WorkspaceConfig.EnvBinding]
-            if let normalizedReference {
-                bindings = config.envBindings.filter {
-                    !($0.name == normalizedName && $0.reference == normalizedReference)
-                }
-                guard bindings.count != config.envBindings.count else {
-                    return "No workspace env binding \(normalizedName) matches that reference. Run " +
-                        "`authsia workspace env list` to see configured bindings."
-                }
-            } else {
-                bindings = config.envBindings.filter { $0.name != normalizedName }
-            }
-            config = WorkspaceConfig(
-                schemaVersion: config.schemaVersion,
-                workspace: config.workspace,
-                managedEnvFiles: config.managedEnvFiles,
-                agents: config.agents,
-                guardSettings: config.guardSettings,
-                envBindings: bindings,
-                mcpUpstreams: config.mcpUpstreams
-            )
-            try WorkspaceConfigStore.write(config, toWorkspaceRoot: workspaceRoot, fileManager: fileManager)
-            Workspace.recordKnownWorkspaceRoot(workspaceRoot, store: knownRootsStore)
-            return "Removed workspace env binding \(normalizedName)."
         }
 
         static func renderList(_ config: WorkspaceConfig) -> String {

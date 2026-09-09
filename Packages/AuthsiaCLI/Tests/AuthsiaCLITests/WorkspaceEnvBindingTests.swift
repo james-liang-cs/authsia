@@ -8,6 +8,51 @@ import AuthenticatorData
 
 @Suite("Workspace env bindings")
 struct WorkspaceEnvBindingTests {
+    @Test("env remove preserves unrelated invalid MCP configuration and other bindings")
+    func envRemoveWithDuplicateMCPUpstreams() throws {
+        let root = try makeWorkspaceRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent(WorkspaceConfigStore.relativeConfigPath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let reference = "authsia://api-key/MISSING_FIXTURE/key"
+        let original: [String: Any] = [
+            "schemaVersion": 2,
+            "workspace": ["name": "fixture", "authsiaFolder": "Workspaces/fixture"],
+            "managedEnvFiles": [],
+            "envBindings": [
+                ["name": "EXAMPLE_KEY", "reference": reference],
+                ["name": "EXAMPLE_KEY", "reference": "authsia://api-key/OTHER_FIXTURE/key"],
+            ],
+            "mcpUpstreams": [
+                ["name": "fixture", "command": "tools/fixture-mcp"],
+                ["name": "fixture", "command": "tools/other-fixture-mcp"],
+            ],
+            "futureMetadata": ["preserve": true],
+        ]
+        let bytes = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+        try bytes.write(to: url)
+        let store = makeIsolatedKnownRootsStore(in: root)
+        #expect(throws: WorkspaceConfigError.self) { try WorkspaceConfigStore.read(fromWorkspaceRoot: root) }
+        #expect(throws: ValidationError.self) {
+            try Workspace.Env.removeBinding(name: "EXAMPLE_KEY", workspaceRoot: root, knownRootsStore: store)
+        }
+        #expect(try Data(contentsOf: url) == bytes)
+        let result = try Workspace.Env.removeBinding(
+            name: "EXAMPLE_KEY", reference: reference, workspaceRoot: root, knownRootsStore: store
+        )
+        #expect(result == "Removed workspace env binding EXAMPLE_KEY.")
+        var expected = original
+        expected["envBindings"] = [["name": "EXAMPLE_KEY", "reference": "authsia://api-key/OTHER_FIXTURE/key"]]
+        let updated = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? NSDictionary)
+        #expect(updated == expected as NSDictionary)
+        #expect(throws: WorkspaceConfigError.self) { try WorkspaceConfigStore.read(fromWorkspaceRoot: root) }
+        #expect(throws: WorkspaceConfigError.self) {
+            try Workspace.Env.addBinding(
+                name: "ANOTHER_KEY", reference: reference, workspaceRoot: root, knownRootsStore: store
+            )
+        }
+    }
+
     @Test("env add scopes unscoped names while preserving explicit folders and UUIDs")
     func envAddCanonicalizesOnlyUnscopedNamedReferences() throws {
         let root = try makeWorkspaceRoot()
