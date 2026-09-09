@@ -194,6 +194,10 @@ and its workspace declaration is usable. Per-client status separately shows
 **Repair needed**, **Awaiting client connection**, or the latest **Call succeeded** /
 **Call failed** result with its time. A configured route does not
 mean a child is currently running or that access is already approved. Manager
+matches known MCP client names (`codex-mcp-client`, `cursor-vscode`, and
+`claude-code`) to their respective Codex, Cursor, and Claude Code rows. A Codex
+call hosted in VS Code belongs to the Codex row; it does not verify VS Code's
+separate MCP configuration. Manager
 **Active access** and Access Center list matching grants when runtime use has
 been verified. A user-global client entry may represent several workspaces.
 Choose the workspace in Manager’s sidebar, or Access Center’s Workspace menu

@@ -33,7 +33,15 @@ public struct MCPClientReadiness: Codable, Equatable, Sendable {
         if needsRepair {
             return .init(state: .repairRequired, detail: "Authsia found an unresolved Cursor workspace setting. Repair removes the generated override so Cursor can supply the project path.")
         }
-        let labels = [finding.source.rawValue.lowercased(), finding.source.displayName.lowercased()]
+        var labels = [finding.source.rawValue.lowercased(), finding.source.displayName.lowercased()]
+        // MCP initialize names can differ from the configuration source name.
+        // Keep aliases exact so another client's calls cannot satisfy this row.
+        switch finding.source {
+        case .codex: labels.append("codex-mcp-client")
+        case .cursor: labels.append("cursor-vscode")
+        case .claude: labels.append("claude-code")
+        default: break
+        }
         let latest = activity.filter {
             $0.serverID == serverID && $0.kind == .toolCall && labels.contains($0.clientLabel.lowercased())
         }.max { $0.recordedAt < $1.recordedAt }

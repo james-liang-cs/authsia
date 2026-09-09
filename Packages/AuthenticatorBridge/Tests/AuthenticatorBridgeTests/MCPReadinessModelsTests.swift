@@ -3,6 +3,29 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPReadinessModelsTests: XCTestCase {
+    func testClientReadinessRecognizesMCPClientNamesWithoutBorrowingOtherClientsCalls() {
+        let clients: [(MCPClientConfigSource, String)] = [
+            (.codex, "codex-mcp-client"),
+            (.cursor, "cursor-vscode"),
+            (.claude, "claude-code"),
+        ]
+        for (source, label) in clients {
+            let call = MCPActivityRecord(id: UUID(), kind: .toolCall,
+                recordedAt: Date(timeIntervalSince1970: 100), workspacePath: "/tmp/fixture",
+                serverID: "example", serverName: "example", toolName: "read",
+                clientLabel: label, outcome: .succeeded)
+            for candidate in [MCPClientConfigSource.codex, .cursor, .claude, .vscode] {
+                let finding = MCPClientServerFinding(source: candidate, serverName: "example",
+                    commandLabel: "authsia", status: .admittedWrapped,
+                    declaredUpstreamName: "example", configPathLabel: "fixture/mcp.json")
+                let readiness = MCPClientReadiness.evaluate(finding: finding, serverID: "example",
+                    activity: [call], needsRepair: false)
+                XCTAssertEqual(readiness.state, candidate == source ? .callSucceeded : .awaitingClient,
+                    "MCP client \(label) belongs only to \(source)")
+            }
+        }
+    }
+
     func testClientReadinessDoesNotBorrowAnotherClientsSuccessAndUsesLatestOutcome() {
         let finding = MCPClientServerFinding(source: .cursor, serverName: "example", commandLabel: "authsia",
             status: .admittedWrapped, declaredUpstreamName: "example", configPathLabel: "fixture/mcp.json")
