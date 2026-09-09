@@ -7,6 +7,7 @@ enum AgentRuntimeContextResolver {
     static let environmentInvokesAuthsiaKey = "AUTHSIA_AGENT_INVOKES_AUTHSIA"
     static let environmentSessionIDKey = "AUTHSIA_AGENT_SESSION_ID"
     static let environmentTurnIDKey = "AUTHSIA_AGENT_TURN_ID"
+    static let environmentCallerKey = "AUTHSIA_AGENT_CALLER_CONTEXT"
     static let environmentAgentIDKey = "AUTHSIA_AGENT_ID"
     static let environmentAgentTypeKey = "AUTHSIA_AGENT_TYPE"
     static let environmentToolUseIDKey = "AUTHSIA_AGENT_TOOL_USE_ID"
@@ -55,12 +56,17 @@ enum AgentRuntimeContextResolver {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         claimOwner: pid_t = getpid()
     ) -> AgentRuntimeContext? {
-        if let explicitContext = explicitAgentRuntimeContext(environment: environment) {
+        let explicitContext = explicitAgentRuntimeContext(environment: environment)
+        // A platform-only CLI marker is a fallback, not a replacement for hook identity.
+        if let explicitContext,
+           explicitContext.sessionID != nil || explicitContext.turnID != nil
+            || explicitContext.agentID != nil || explicitContext.agentType != nil
+            || explicitContext.toolUseID != nil || explicitContext.caller != nil {
             return explicitContext
         }
 
         let detectedPlatforms = detectedAgentPlatforms(in: processAncestry)
-        guard !detectedPlatforms.isEmpty else { return nil }
+        guard !detectedPlatforms.isEmpty else { return explicitContext }
 
         let sources = attributionEventURLs(eventsURL: eventsURL, environment: environment)
             .map { url -> AttributionSource in
@@ -73,11 +79,12 @@ enum AgentRuntimeContextResolver {
                         .filter { workingDirectoryMatches($0.workingDirectory, currentDirectoryPath: currentDirectoryPath) }
                         .filter { recordInvokesAuthsia($0) }
                         .filter { platformMatches($0.platform, detectedPlatforms: detectedPlatforms) }
+                        .filter { explicitContext == nil || normalizedPlatform($0.platform) == explicitContext?.platform }
                 )
             }
-        guard sources.contains(where: { !$0.candidates.isEmpty }) else { return nil }
+        guard sources.contains(where: { !$0.candidates.isEmpty }) else { return explicitContext }
 
-        return selectContext(from: sources, now: now, claimOwner: claimOwner)
+        return selectContext(from: sources, now: now, claimOwner: claimOwner) ?? explicitContext
     }
 
     static func hasExplicitAgentInvocationMarker(environment: [String: String]) -> Bool {
@@ -109,7 +116,10 @@ enum AgentRuntimeContextResolver {
             turnID: environment[environmentTurnIDKey],
             agentID: environment[environmentAgentIDKey],
             agentType: environment[environmentAgentTypeKey],
-            toolUseID: environment[environmentToolUseIDKey]
+            toolUseID: environment[environmentToolUseIDKey],
+            caller: environment[environmentCallerKey].flatMap { value in
+                try? JSONDecoder().decode(AgentCallerIdentity.self, from: Data(value.utf8))
+            }
         )
         return context.isEmpty ? nil : context
     }
@@ -211,7 +221,9 @@ enum AgentRuntimeContextResolver {
                 if let record = try? decoder.decode(AgentRuntimeContextRecord.self, from: lineData) {
                     return record
                 }
-                guard let event = try? decoder.decode(AgentCommandEvent.self, from: lineData) else {
+                guard let event = try? decoder.decode(AgentCommandEvent.self, from: lineData),
+                      event.captureSource == .hook,
+                      event.hookEventName == nil || event.hookEventName == "PreToolUse" else {
                     return nil
                 }
                 return AgentRuntimeContextRecord(event: event)

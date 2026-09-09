@@ -60,13 +60,16 @@ actor MCPRuntimeContext {
         (workspaceBindingFailure ?? .noWorkspaceFound).message
     }
 
+    private let callerStore: MCPCallerContextStore
     private var clientPlatform = "mcp-client"
 
     init(
         startingDirectory: URL,
         instanceID: UUID = UUID(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        callerStore: MCPCallerContextStore = .live
     ) {
+        self.callerStore = callerStore
         self.instanceID = instanceID
         let resolution = Self.resolveWorkspace(
             startingAt: startingDirectory,
@@ -113,25 +116,33 @@ actor MCPRuntimeContext {
         )
     }
 
-    func makeInvocation(id: UUID = UUID()) -> MCPInvocationContext {
+    func makeInvocation(id: UUID = UUID(), toolName: String? = nil) -> MCPInvocationContext {
         let invocation = "mcp-call:\(id.uuidString)"
+        let caller = toolName.flatMap { tool in
+            workspaceRoot.map { callerStore.consume(tool: tool, cwd: $0.path, platform: clientPlatform) }
+        }
         let agentRuntimeContext = AgentRuntimeContext(
             platform: clientPlatform,
             sessionID: "mcp:\(instanceID.uuidString)",
             turnID: invocation,
             agentType: "authsia-mcp",
-            toolUseID: invocation
+            toolUseID: invocation,
+            caller: caller
         )
+        var environment = [
+            AgentRuntimeContextResolver.environmentInvokesAuthsiaKey: "1",
+            AgentRuntimeContextResolver.environmentPlatformKey: clientPlatform,
+            AgentRuntimeContextResolver.environmentSessionIDKey: "mcp:\(instanceID.uuidString)",
+            AgentRuntimeContextResolver.environmentTurnIDKey: invocation,
+            AgentRuntimeContextResolver.environmentAgentTypeKey: "authsia-mcp",
+            AgentRuntimeContextResolver.environmentToolUseIDKey: invocation,
+        ]
+        if let caller, let encoded = try? JSONEncoder().encode(caller) {
+            environment[AgentRuntimeContextResolver.environmentCallerKey] = String(decoding: encoded, as: UTF8.self)
+        }
         return MCPInvocationContext(
             id: id,
-            environment: [
-                AgentRuntimeContextResolver.environmentInvokesAuthsiaKey: "1",
-                AgentRuntimeContextResolver.environmentPlatformKey: clientPlatform,
-                AgentRuntimeContextResolver.environmentSessionIDKey: "mcp:\(instanceID.uuidString)",
-                AgentRuntimeContextResolver.environmentTurnIDKey: invocation,
-                AgentRuntimeContextResolver.environmentAgentTypeKey: "authsia-mcp",
-                AgentRuntimeContextResolver.environmentToolUseIDKey: invocation,
-            ],
+            environment: environment,
             agentRuntimeContext: agentRuntimeContext
         )
     }

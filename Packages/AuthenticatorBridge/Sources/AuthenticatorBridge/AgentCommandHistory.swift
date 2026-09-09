@@ -95,6 +95,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
     public let agentType: String?
     public let toolUseID: String?
     public let agentJITGrantID: UUID?
+    public let hookEventName: String?
     public let captureSource: AgentCommandCaptureSource
     public let contextExpiresAt: Date?
     public let workingDirectory: String?
@@ -124,6 +125,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         toolUseID: String? = nil,
         agentJITGrantID: UUID? = nil,
         captureSource: AgentCommandCaptureSource,
+        hookEventName: String? = nil,
         contextExpiresAt: Date? = nil,
         workingDirectory: String? = nil,
         terminalSessionScope: String? = nil,
@@ -150,6 +152,7 @@ public struct AgentCommandEvent: Codable, Equatable, Identifiable, Sendable {
         self.agentType = AgentCommandRedactor.sanitized(agentType)
         self.toolUseID = AgentCommandRedactor.sanitized(toolUseID)
         self.agentJITGrantID = agentJITGrantID
+        self.hookEventName = AgentCommandRedactor.sanitized(hookEventName)
         self.captureSource = captureSource
         self.contextExpiresAt = contextExpiresAt
         self.workingDirectory = AgentCommandRedactor.sanitized(workingDirectory, maxLength: 2048)

@@ -12,6 +12,7 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
     public let agentID: String?
     public let agentType: String?
     public let toolUseID: String?
+    public let caller: AgentCallerIdentity?
     public let attributionConfidence: AgentAttributionConfidence
 
     public init(
@@ -21,8 +22,10 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
         agentID: String? = nil,
         agentType: String? = nil,
         toolUseID: String? = nil,
-        attributionConfidence: AgentAttributionConfidence = .high
+        attributionConfidence: AgentAttributionConfidence = .high,
+        caller: AgentCallerIdentity? = nil
     ) {
+        self.caller = caller.map { AgentCallerIdentity(context: $0.runtimeContext(platform: nil)) }
         self.platform = Self.sanitize(platform)
         self.sessionID = Self.sanitize(sessionID)
         self.turnID = Self.sanitize(turnID)
@@ -33,6 +36,7 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case caller
         case platform
         case sessionID
         case turnID
@@ -54,12 +58,14 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
             attributionConfidence: try container.decodeIfPresent(
                 AgentAttributionConfidence.self,
                 forKey: .attributionConfidence
-            ) ?? .high
+            ) ?? .high,
+            caller: try container.decodeIfPresent(AgentCallerIdentity.self, forKey: .caller)
         )
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(caller, forKey: .caller)
         try container.encodeIfPresent(platform, forKey: .platform)
         try container.encodeIfPresent(sessionID, forKey: .sessionID)
         try container.encodeIfPresent(turnID, forKey: .turnID)
@@ -92,6 +98,7 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
             && agentID == nil
             && agentType == nil
             && toolUseID == nil
+            && caller == nil
     }
 
     public static func sanitize(_ value: String?) -> String? {
@@ -103,5 +110,31 @@ public struct AgentRuntimeContext: Codable, Equatable, Sendable {
             return nil
         }
         return String(trimmed.prefix(128))
+    }
+}
+
+/// Hook-reported caller identity, separate from MCP server and invocation correlation.
+/// This metadata never grants authority.
+public struct AgentCallerIdentity: Codable, Equatable, Sendable {
+    public let sessionID: String?
+    public let agentID: String?
+    public let agentType: String?
+    public let toolUseID: String?
+    public let attributionConfidence: AgentAttributionConfidence
+
+    public init(context: AgentRuntimeContext) {
+        sessionID = context.sessionID
+        agentID = context.agentID
+        agentType = context.agentType
+        toolUseID = context.toolUseID
+        attributionConfidence = context.attributionConfidence
+    }
+
+    public func runtimeContext(platform: String?) -> AgentRuntimeContext {
+        AgentRuntimeContext(
+            platform: platform, sessionID: sessionID, agentID: agentID,
+            agentType: agentType, toolUseID: toolUseID,
+            attributionConfidence: attributionConfidence
+        )
     }
 }

@@ -5,6 +5,77 @@ import Testing
 
 @Suite("AgentRuntimeContextResolver")
 struct AgentRuntimeContextResolverTests {
+    @Test("platform-only markers preserve a matching hook sub-agent")
+    func platformMarkerPreservesSubagent() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([record(
+            id: "11111111-1111-1111-1111-111111111111", platform: "codex",
+            agentType: "reviewer", workingDirectory: "/repo", invokesAuthsia: true,
+            recordedAt: now.addingTimeInterval(-1), expiresAt: now.addingTimeInterval(20)
+        )])
+        defer { try? FileManager.default.removeItem(at: eventsURL.deletingLastPathComponent()) }
+        let context = AgentRuntimeContextResolver.resolve(
+            now: now, currentDirectoryPath: "/repo", processAncestry: codexAncestry,
+            eventsURL: eventsURL,
+            environment: ["AUTHSIA_AGENT_PLATFORM": "codex", "AUTHSIA_AGENT_INVOKES_AUTHSIA": "1"]
+        )
+        #expect(context?.agentID == "agent-1")
+        #expect(context?.agentType == "reviewer")
+    }
+
+    @Test("explicit identity and mismatched platform markers do not claim another hook",
+          arguments: [false, true])
+    func explicitIdentityAndPlatformIsolation(hasIdentity: Bool) throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let eventsURL = try writeEvents([record(
+            id: "11111111-1111-1111-1111-111111111111", platform: "codex",
+            agentType: "reviewer", workingDirectory: "/repo", invokesAuthsia: true,
+            recordedAt: now.addingTimeInterval(-1), expiresAt: now.addingTimeInterval(20)
+        )])
+        defer { try? FileManager.default.removeItem(at: eventsURL.deletingLastPathComponent()) }
+        var environment = ["AUTHSIA_AGENT_PLATFORM": hasIdentity ? "codex" : "claude-code",
+                           "AUTHSIA_AGENT_INVOKES_AUTHSIA": "1"]
+        if hasIdentity { environment["AUTHSIA_AGENT_ID"] = "explicit-agent" }
+        let context = AgentRuntimeContextResolver.resolve(
+            now: now, currentDirectoryPath: "/repo", processAncestry: codexAncestry,
+            eventsURL: eventsURL, environment: environment
+        )
+        #expect(context?.agentID == (hasIdentity ? "explicit-agent" : nil))
+        #expect(context?.agentType == nil)
+        #expect(context?.platform == environment["AUTHSIA_AGENT_PLATFORM"])
+    }
+
+    @Test("process observations and post hooks do not compete with the calling pre hook")
+    func onlyPreHookAttributesCaller() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.jsonl")
+        let store = AgentCommandHistoryStore(fileURL: url)
+        let now = Date()
+        try store.record(AgentCommandEvent(
+            recordedAt: now, agentPlatform: "codex", captureSource: .process,
+            workingDirectory: "/repo", command: "authsia list"
+        ))
+        let command = try Agent.RecordCommand.parse(["--platform", "codex", "--source", "hook"])
+        for phase in ["PreToolUse", "PostToolUse"] {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "hook_event_name": phase, "tool_name": "Bash", "cwd": "/repo",
+                "session_id": "session-1", "agent_id": "agent-1", "agent_type": "reviewer",
+                "tool_use_id": "tool-1", "tool_input": ["command": "authsia list"],
+            ])
+            try command.run(store: store, stdinData: data)
+        }
+        let records = AgentRuntimeContextResolver.loadRecords(from: url)
+        #expect(records.count == 1)
+        let context = AgentRuntimeContextResolver.resolve(
+            now: Date(), currentDirectoryPath: "/repo", processAncestry: codexAncestry,
+            eventsURL: url,
+            environment: ["AUTHSIA_AGENT_PLATFORM": "codex", "AUTHSIA_AGENT_INVOKES_AUTHSIA": "1"]
+        )
+        #expect(context?.agentID == "agent-1")
+        #expect(context?.attributionConfidence == .high)
+    }
+
     @Test("loadRecords reuses cached records while file attributes are unchanged")
     func loadRecordsReusesCachedRecordsWhileAttributesUnchanged() throws {
         let now = Date(timeIntervalSince1970: 1_000)

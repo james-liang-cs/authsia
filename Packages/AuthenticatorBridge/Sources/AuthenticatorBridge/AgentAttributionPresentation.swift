@@ -155,11 +155,14 @@ public enum AgentAttributionPresentation {
 
     private static func identityText(for context: AgentRuntimeContext?, separator: String) -> String? {
         guard let context else { return nil }
+        if let caller = context.caller {
+            return identityText(for: caller.runtimeContext(platform: context.platform), separator: separator)
+        }
         let platform = platformDisplayName(context.platform)
-        if context.attributionConfidence == .ambiguous {
+        if context.attributionConfidence == .ambiguous || context.agentType == "authsia-mcp" {
             return platform.map { "\($0) · sub-agent unknown" } ?? "sub-agent unknown"
         }
-        let label = context.agentType ?? shortAgentID(context.agentID)
+        let label = namedAgentLabel(context)
         if let platform, let label {
             return "\(platform)\(separator)\(label)"
         }
@@ -192,11 +195,22 @@ public enum AgentAttributionPresentation {
 
     private static let timeFormatters = TimeFormatterCache()
 
+    private static func namedAgentLabel(_ context: AgentRuntimeContext) -> String? {
+        if let type = context.agentType, let id = shortAgentID(context.agentID) {
+            return "\(type) (\(id))"
+        }
+        return context.agentType ?? shortAgentID(context.agentID)
+    }
+
     private static func subAgentLabel(_ context: AgentRuntimeContext?) -> String {
-        guard let context else { return "main thread" }
+        guard let context else { return "sub-agent unknown" }
+        if let caller = context.caller {
+            return subAgentLabel(caller.runtimeContext(platform: context.platform))
+        }
+        if context.agentType == "authsia-mcp" { return "sub-agent unknown" }
         if context.attributionConfidence == .ambiguous {
             return "sub-agent unknown"
         }
-        return context.agentType ?? "main thread"
+        return namedAgentLabel(context) ?? "sub-agent unknown"
     }
 }

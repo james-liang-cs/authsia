@@ -2,6 +2,21 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class AgentAttributionPresentationTests: XCTestCase {
+    func testUnknownMCPAndIDOnlyCallerDoNotClaimMainThread() {
+        let context = AgentRuntimeContext(platform: "claude-code", agentType: "authsia-mcp")
+        XCTAssertEqual(AgentAttributionPresentation.caption(for: context),
+                       "Claude Code · sub-agent unknown (reported by hook)")
+        let caller = AgentRuntimeContext(platform: "claude-code", agentID: "agent-1")
+        XCTAssertEqual(AgentAttributionPresentation.usedByLabels(creator: context, contexts: [caller]), ["agent-1"])
+    }
+
+    func testSameTypeSubagentsRemainDistinct() {
+        let first = AgentRuntimeContext(platform: "claude-code", agentID: "agent-1", agentType: "general-purpose")
+        let second = AgentRuntimeContext(platform: "claude-code", agentID: "agent-2", agentType: "general-purpose")
+        XCTAssertEqual(AgentAttributionPresentation.usedByLabels(creator: first, contexts: [first, second]),
+                       ["general-purpose (agent-1)", "general-purpose (agent-2)"])
+    }
+
     func testCaptionMarksHookTrustAndPromptUsesMiddleDot() {
         let context = AgentRuntimeContext(platform: "claude-code", agentType: "Explore")
 
@@ -85,10 +100,10 @@ final class AgentAttributionPresentationTests: XCTestCase {
                 creator,
             ]
         )
-        XCTAssertEqual(labels, ["Explore", "Plan", "main thread"])
+        XCTAssertEqual(labels, ["Explore", "Plan", "sub-agent unknown"])
         XCTAssertEqual(
             AgentAttributionPresentation.usedByCaption(labels: labels),
-            "Used by: Explore, Plan, main thread"
+            "Used by: Explore, Plan, sub-agent unknown"
         )
     }
 

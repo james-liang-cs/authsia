@@ -163,7 +163,7 @@ actor AuthsiaMCPServer {
                         MCPAccessRevokeInput.self,
                         arguments: parameters.arguments
                     )
-                    let invocation = await self.runtimeContext.makeInvocation()
+                    let invocation = await self.runtimeContext.makeInvocation(toolName: "authsia_access_revoke")
                     invocationID = invocation.id
                     guard let agentRuntimeContext = invocation.agentRuntimeContext else {
                         return try Self.errorResult(
@@ -370,7 +370,7 @@ actor AuthsiaMCPServer {
         mediatedOperationInProgress = true
         defer { mediatedOperationInProgress = false }
         didUseMediatedTool = true
-        let invocation = await runtimeContext.makeInvocation()
+        let invocation = await runtimeContext.makeInvocation(toolName: "authsia_list")
         let task = Task {
             try await listService.list(input, invocation: invocation)
         }
@@ -462,7 +462,7 @@ actor AuthsiaMCPServer {
         mediatedOperationInProgress = true
         defer { mediatedOperationInProgress = false }
         didUseMediatedTool = true
-        let invocation = await runtimeContext.makeInvocation()
+        let invocation = await runtimeContext.makeInvocation(toolName: "authsia_exec")
         guard !isStopping else {
             return try Self.errorResult(
                 code: .cancelled,

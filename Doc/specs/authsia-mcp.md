@@ -542,7 +542,13 @@ Correlation uses existing fields:
 Authorization-sensitive records must preserve the same runtime context from
 MCP call through preflight, grant, final secret read, command event, and
 available file/network/Process Tree evidence. Correlation IDs are metadata, not
-credentials.
+credentials. Optional `agentRuntimeContext.caller` carries hook-reported coding
+session, sub-agent ID/type, and tool-use ID separately from MCP server and call
+IDs. It survives child CLI projection and audit encoding. Claude PreToolUse
+records contain no tool inputs or responses, expire after 60 seconds, and are
+consumed once by matching tool, canonical workspace, and client platform.
+Competing or missing records produce unknown attribution. This best-effort
+local hook correlation is not client attestation and never changes grant scope.
 
 An MCP access-revocation call receives its own fresh invocation ID. The Bridge
 revocation audit record preserves that invocation context, grant ID, workspace,

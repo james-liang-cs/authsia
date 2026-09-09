@@ -165,6 +165,7 @@ struct Agent: ParsableCommand {
         func run(
             store: AgentCommandHistoryStore,
             stdinData: Data? = nil,
+            mcpCallerStore: MCPCallerContextStore = .live,
             responseMode: AgentLeakResponseMode? = nil,
             decisionOutput: (Data) -> Void = { FileHandle.standardOutput.write($0) }
         ) throws -> AgentLeakResponseDecision {
@@ -172,6 +173,7 @@ struct Agent: ParsableCommand {
                 store: store,
                 fileActivityStore: nil,
                 stdinData: stdinData,
+                mcpCallerStore: mcpCallerStore,
                 responseMode: responseMode,
                 decisionOutput: decisionOutput
             )
@@ -182,6 +184,7 @@ struct Agent: ParsableCommand {
             store: AgentCommandHistoryStore,
             fileActivityStore: AgentFileActivityStore?,
             stdinData: Data? = nil,
+            mcpCallerStore: MCPCallerContextStore = .live,
             responseMode: AgentLeakResponseMode? = nil,
             decisionOutput: (Data) -> Void = { FileHandle.standardOutput.write($0) }
         ) throws -> AgentLeakResponseDecision {
@@ -223,6 +226,19 @@ struct Agent: ParsableCommand {
                 mode: resolvedResponseMode
             )
 
+            if captureSource == .hook, hookPayload.hookEventName == "PreToolUse",
+               let tool = MCPCallerContextStore.toolName(hookPayload.toolName) {
+                try mcpCallerStore.record(
+                    tool: tool, cwd: resolvedWorkingDirectory,
+                    context: AgentRuntimeContext(
+                        platform: resolvedPlatform, sessionID: resolvedSessionID,
+                        turnID: resolvedTurnID, agentID: resolvedAgentID,
+                        agentType: resolvedAgentType, toolUseID: resolvedToolUseID
+                    ), now: now
+                )
+                return responseDecision
+            }
+
             if commandText != nil || !arguments.isEmpty || responseDecision.evidence != nil {
                 let recordedCommand = commandText ?? hookPayload.policyCommand
                 let event = AgentCommandEvent(
@@ -234,6 +250,7 @@ struct Agent: ParsableCommand {
                     agentType: resolvedAgentType,
                     toolUseID: resolvedToolUseID,
                     captureSource: captureSource,
+                    hookEventName: hookPayload.hookEventName,
                     contextExpiresAt: now.addingTimeInterval(60 * 60),
                     workingDirectory: resolvedWorkingDirectory,
                     terminalSessionScope: resolvedTerminalSessionScope,

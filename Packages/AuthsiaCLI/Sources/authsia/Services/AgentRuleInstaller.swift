@@ -1444,6 +1444,15 @@ enum AgentRuleInstaller {
       "hooks": {
         "PreToolUse": [
           {
+            "matcher": "mcp__.*__authsia_(list|exec|access_revoke)$",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "authsia agent record-command --platform claude-code --source hook"
+              }
+            ]
+          },
+          {
             "matcher": "Bash",
             "hooks": [
               {

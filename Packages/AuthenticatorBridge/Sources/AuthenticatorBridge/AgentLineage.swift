@@ -71,6 +71,10 @@ public enum AgentSessionGrouping {
     }
 
     public static func codingSessionID(from context: AgentRuntimeContext?) -> String? {
+        if let caller = context?.caller {
+            guard caller.attributionConfidence == .high else { return nil }
+            return AgentRuntimeContext.sanitize(caller.sessionID)
+        }
         guard let sessionID = AgentRuntimeContext.sanitize(context?.sessionID) else { return nil }
         guard !isMCPSession(context) else { return nil }
         return sessionID
@@ -181,8 +185,8 @@ public enum AgentSessionGrouping {
         matching context: AgentRuntimeContext?,
         from lineage: [AgentLineageRecord]
     ) -> [AgentLineageRecord] {
-        guard let sessionID = AgentRuntimeContext.sanitize(context?.sessionID) else { return [] }
-        let agentID = AgentRuntimeContext.sanitize(context?.agentID)
+        guard let sessionID = codingSessionID(from: context) else { return [] }
+        let agentID = AgentRuntimeContext.sanitize(context?.caller?.agentID ?? context?.agentID)
         return lineage.filter { record in
             record.sessionID == sessionID && (agentID == nil || record.agentID == agentID)
         }
@@ -196,7 +200,7 @@ public enum AgentSessionGrouping {
     ) -> [String] {
         var types = Set<String>()
         for grant in grants {
-            if let type = AgentRuntimeContext.sanitize(grant.agentRuntimeContext?.agentType) {
+            if let type = AgentRuntimeContext.sanitize(grant.agentRuntimeContext?.caller?.agentType ?? grant.agentRuntimeContext?.agentType) {
                 types.insert(type)
             }
         }
