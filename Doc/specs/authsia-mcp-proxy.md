@@ -1282,10 +1282,13 @@ and `timeout`. These rows use a `mcp-child:` turn and never merge with
 `mcp-call:` tool rows. They are not HMAC-chained `bridge_audit.log` activity;
 that channel remains for `tools/call`. Catalog probes never assign a live
 session and therefore write no child rows. On an admission grant, Access
-Center hides `lastUsedAt` (the proxy does not refresh it) and shows
-**Revoke pending** until a `childExited` row with reason `revoked` arrives,
-then **Killed**. Timeline titles those rows **MCP child started** and
-**MCP child exited**.
+Center hides `lastUsedAt` (the proxy does not refresh it). The grant badge
+shows **Revoked** as soon as authority is revoked. A recorded `childExited`
+row adds **Killed** for reason `revoked`, or **Child exited** for other exit
+reasons. Missing child-exit evidence does not make completed revocation
+pending. Closing a client's proxy connection ends that session and revokes
+its owned grants, even when their maximum admission lifetime has not elapsed.
+Timeline titles those rows **MCP child started** and **MCP child exited**.
 
 `authsia mcp activity export --json` copies `.mcpProxy` command-history rows
 with `--since`, `--upstream`, `--workspace`, and `--unowned` filters.
