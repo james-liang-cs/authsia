@@ -1,5 +1,60 @@
 import Foundation
 
+public struct MCPClientReadiness: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case repairRequired, awaitingClient, callSucceeded, callFailed, callPending, disabled, overridden
+    }
+    public let state: State
+    public let detail: String
+    public let lastObservedAt: Date?
+
+    public init(state: State, detail: String, lastObservedAt: Date? = nil) {
+        self.state = state
+        self.detail = detail
+        self.lastObservedAt = lastObservedAt
+    }
+
+    public static func clientSteps(_ source: MCPClientConfigSource) -> String {
+        if source == .cursor {
+            return "In Cursor, open Customize > MCPs > Configure this server. Enable the source for this workspace, then Reload. Ask Cursor to call an allowed tool through that project source, then refresh Authsia."
+        }
+        return "Enable this server in \(source.displayName), reload the client, and call an allowed tool through Authsia. Refresh here to check the result."
+    }
+
+    #if os(macOS)
+    public static func evaluate(finding: MCPClientServerFinding, serverID: String,
+                                activity: [MCPActivityRecord], needsRepair: Bool) -> Self {
+        if finding.precedence == .overridden {
+            return .init(state: .overridden, detail: "Another configuration overrides this entry. Open the effective entry for this client.")
+        }
+        if finding.status == .disabled {
+            return .init(state: .disabled, detail: clientSteps(finding.source))
+        }
+        if needsRepair {
+            return .init(state: .repairRequired, detail: "Authsia found an unresolved Cursor workspace setting. Repair removes the generated override so Cursor can supply the project path.")
+        }
+        let labels = [finding.source.rawValue.lowercased(), finding.source.displayName.lowercased()]
+        let latest = activity.filter {
+            $0.serverID == serverID && $0.kind == .toolCall && labels.contains($0.clientLabel.lowercased())
+        }.max { $0.recordedAt < $1.recordedAt }
+        if let latest {
+            if [.started, .incomplete].contains(latest.outcome) || latest.evidenceStatus != "recorded" {
+                return .init(state: .callPending,
+                    detail: "No completed result is recorded for the latest call from this client. Check Activity and any pending approval before retrying.",
+                    lastObservedAt: latest.recordedAt)
+            }
+            let succeeded = latest.outcome == .succeeded
+            return .init(state: succeeded ? .callSucceeded : .callFailed,
+                detail: succeeded
+                    ? "The last observed call from this client succeeded. This is historical evidence, not a live connection check."
+                    : "The last observed call from this client did not succeed. Open Activity for the failure details. " + clientSteps(finding.source),
+                lastObservedAt: latest.recordedAt)
+        }
+        return .init(state: .awaitingClient, detail: "No successful call from this client is recorded. " + clientSteps(finding.source))
+    }
+    #endif
+}
+
 public struct MCPReadinessFact: Codable, Equatable, Sendable {
     public let id: String
     public let state: String
@@ -76,7 +131,8 @@ public enum MCPServerReadinessProjection {
         let failed = relevant.contains { $0.kind == .toolCall && [.denied, .mcpError, .upstreamUnavailable, .timedOut].contains($0.outcome) }
         let grant = grants.contains { $0.serverID == server.id || ($0.serverID == nil && $0.serverName == server.displayName && $0.workspacePath == server.identity.workspacePath) }
         let effective = server.clientAssociations.filter { $0.precedence != .overridden && $0.status != .disabled }
-        let protectedConfig = !effective.isEmpty && effective.allSatisfy { $0.status == .admittedWrapped }
+        let repair = effective.first { $0.readiness?.state == .repairRequired }
+        let protectedConfig = repair == nil && !effective.isEmpty && effective.allSatisfy { $0.status == .admittedWrapped }
         let bypass = effective.contains { $0.status == .directBypass }
         let unclassified = Set(server.catalog.map(\.name)).subtracting(server.policy.allow + server.policy.approve + server.policy.deny)
         let executableMissing = server.catalogBlockReason == MCPManagementError.catalogExecutableMissing.localizedDescription
@@ -127,7 +183,9 @@ public enum MCPServerReadinessProjection {
             ),
         ]
         let next: MCPReadinessAction?
-        if !launchComplete {
+        if let repair {
+            next = .init(kind: "wrap", label: "Repair \(repair.source.displayName)", reason: repair.readiness?.detail ?? "Repair client setup.")
+        } else if !launchComplete {
             next = .init(
                 kind: "configure",
                 label: "Edit server",

@@ -27,6 +27,7 @@ public struct MCPClientAssociation: Codable, Equatable, Identifiable, Sendable {
     public let configPathLabel: String
     public let canEnrollHTTP: Bool?
     public let managementReason: String?
+    public let readiness: MCPClientReadiness?
 
     public init(
         id: String,
@@ -36,7 +37,8 @@ public struct MCPClientAssociation: Codable, Equatable, Identifiable, Sendable {
         status: MCPClientServerAdmissionStatus,
         configPathLabel: String,
         canEnrollHTTP: Bool? = nil,
-        managementReason: String? = nil
+        managementReason: String? = nil,
+        readiness: MCPClientReadiness? = nil
     ) {
         self.id = id
         self.source = source
@@ -46,6 +48,7 @@ public struct MCPClientAssociation: Codable, Equatable, Identifiable, Sendable {
         self.configPathLabel = configPathLabel
         self.canEnrollHTTP = canEnrollHTTP
         self.managementReason = managementReason
+        self.readiness = readiness
     }
 }
 

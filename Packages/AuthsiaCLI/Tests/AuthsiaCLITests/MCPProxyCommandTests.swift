@@ -5,6 +5,37 @@ import Testing
 
 @Suite("MCP proxy command")
 struct MCPProxyCommandTests {
+    @Test("Cursor project enrollment preserves the native workspace launch hint")
+    func cursorProjectLaunchContext() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let project = home.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let plan = try MCPLocalMCPClientWrap.planInsert(source: .cursor, serverName: "example",
+            workspacePath: project.path, authsiaCommand: "authsia", homeDirectory: home)
+        try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: "authsia")
+        let object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: plan.fileURL)) as? [String: Any])
+        let servers = try #require(object["mcpServers"] as? [String: Any])
+        let entry = try #require(servers["example"] as? [String: Any])
+        let configuredEnvironment = try #require(entry["env"] as? [String: String])
+        // Cursor merges the entry's env over its native workspace paths without
+        // expanding a workspace placeholder in that env value.
+        let environment = ["WORKSPACE_FOLDER_PATHS": project.path].merging(configuredEnvironment) { _, configured in configured }
+        let resolved = try MCPCommand.Proxy.startingDirectory(workspace: nil,
+            environment: environment, currentDirectoryPath: home.path)
+        #expect(resolved == project.standardizedFileURL.resolvingSymlinksInPath())
+        #expect(configuredEnvironment[MCPProxyClientLaunch.workspaceEnvironmentKey] == nil)
+        #expect(entry["args"] as? [String] == ["mcp", "proxy"])
+
+        for hint in ["", "${workspaceFolder}", project.path + "," + home.path] {
+            let invalidEnvironment = ["WORKSPACE_FOLDER_PATHS": hint].merging(configuredEnvironment) { _, configured in configured }
+            #expect(throws: (any Error).self) {
+                try MCPCommand.Proxy.startingDirectory(workspace: nil,
+                    environment: invalidEnvironment, currentDirectoryPath: project.path)
+            }
+        }
+    }
+
     @Test("proxy requires --upstream")
     func requiresUpstream() {
         #expect(throws: (any Error).self) {

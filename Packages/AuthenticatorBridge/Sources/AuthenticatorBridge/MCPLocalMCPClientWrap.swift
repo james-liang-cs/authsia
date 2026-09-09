@@ -21,8 +21,8 @@ public enum MCPLocalMCPClientWrap {
         public let checksum: String
         public let existingSnippet: String
         public let replacementSnippet: String
-        /// Launch hint captured in the reviewed plan. Cursor expands its
-        /// project variable when starting that project's server.
+        /// Optional workspace binding captured in the reviewed plan for clients
+        /// without their own launch context.
         public let workspacePath: String?
         public let globalChange: GlobalChange?
 
@@ -100,6 +100,37 @@ public enum MCPLocalMCPClientWrap {
     public static func checksum(of data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+
+    #if os(macOS)
+    /// Repair only the generated Cursor placeholder, preserving all other client
+    /// settings. The existing management confirmation applies the checked change.
+    public static func workspaceRepair(
+        for finding: MCPClientServerFinding,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) throws -> MCPPreparedFileChange? {
+        guard finding.source == .cursor, finding.configScope == .project,
+              finding.precedence == .effective, finding.status == .admittedWrapped,
+              finding.isAuthsiaProxyLaunch else { return nil }
+        let file = fileURL(for: finding, homeDirectory: homeDirectory)
+        let before = try readConfig(at: file, fileManager: .default)
+        guard var object = try JSONSerialization.jsonObject(with: before) as? [String: Any],
+              var servers = object["mcpServers"] as? [String: Any],
+              var entry = servers[finding.serverName] as? [String: Any],
+              let command = entry["command"] as? String,
+              URL(fileURLWithPath: command).lastPathComponent == "authsia",
+              let args = entry["args"] as? [String],
+              var env = entry["env"] as? [String: Any],
+              entry["disabled"] as? Bool != true,
+              let upstream = MCPProxyClientLaunch.wrappedUpstreamName(arguments: args,
+                  environmentName: env[MCPProxyClientLaunch.environmentKey] as? String),
+              upstream.lowercased() == finding.declaredUpstreamName?.lowercased(),
+              env[MCPProxyClientLaunch.workspaceEnvironmentKey] as? String == "${workspaceFolder}" else { return nil }
+        env.removeValue(forKey: MCPProxyClientLaunch.workspaceEnvironmentKey)
+        entry["env"] = env; servers[finding.serverName] = entry; object["mcpServers"] = servers
+        let after = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        return MCPPreparedFileChange(fileURL: file, original: before, replacement: after)
+    }
+    #endif
 
     public static func plan(
         finding: MCPClientServerFinding,
@@ -416,16 +447,15 @@ public enum MCPLocalMCPClientWrap {
         }
     }
 
-    /// The workspace a wrapped launch binds to when the client does not launch
-    /// in its repository (Cursor project launches). Named in the
+    /// The workspace a wrapped launch binds to when the client has no repository
+    /// context of its own. Named in the
     /// environment rather than argv, preserving company command allowlists.
     public static func wrapWorkspacePath(
         for finding: MCPClientServerFinding,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> String? {
-        if finding.source == .cursor {
-            return finding.configScope == .project ? "${workspaceFolder}" : nil
-        }
+        // Cursor supplies WORKSPACE_FOLDER_PATHS itself. A configured placeholder
+        // overrides that native value without being expanded by its stdio launcher.
         guard !finding.source.hasWorkspaceOfItsOwn,
               let label = finding.workspacePathLabel,
               !label.isEmpty else {

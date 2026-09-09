@@ -189,8 +189,10 @@ are managed in MCP Manager, and that Access Center shows runtime grants and
 approvals. That strip appears only on **MCP proxy**, not All, Authsia MCP, or
 Direct agents.
 
-**Protected configuration** on a Servers row means the scanned client launch
-points through Authsia and its workspace declaration is usable. It does not
+**Route configured** means the scanned client launch points through Authsia
+and its workspace declaration is usable. Per-client status separately shows
+**Repair needed**, **Awaiting client connection**, or the latest **Call succeeded** /
+**Call failed** result with its time. A configured route does not
 mean a child is currently running or that access is already approved. Manager
 **Active access** and Access Center list matching grants when runtime use has
 been verified. A user-global client entry may represent several workspaces.
@@ -223,8 +225,8 @@ MCP setup and launch commands (`configure`, `wrap`, `unwrap`, `declare`, `catalo
    **Open MCP Manager**). The Local MCP status strip lives only on that Access
    Center filter (not All, Authsia MCP, or Direct agents).
 4. Choose the workspace that owns the tool in Manager’s sidebar.
-5. Review **Servers**. Filter by protection status (**Bypassing Authsia**,
-   **Protected configuration**, **Needs setup**) or client. **Discover
+5. Review **Servers**. Filter by routing status (**Bypassing Authsia**,
+   **Route configured**, **Needs setup or repair**) or client. **Discover
    servers** rescans supported client files; it does not start servers or
    request runtime authority.
 
@@ -270,10 +272,17 @@ rather than in argv keeps the two-entry allowlist intact. A Desktop row with no
 managed workspace selected cannot be protected.
 
 Cursor protection and enrollment write `.cursor/mcp.json` in the selected
-project, creating the file when necessary. Its `WORKSPACE_FOLDER_PATHS` value is
-`${workspaceFolder}`, expanded by Cursor for that project, never a saved absolute
-path. A missing or unresolved project hint cannot fall back to another project's
-policy. The proxy rejects unresolved or ambiguous hints before startup.
+project, creating the file when necessary. Generated entries omit
+`WORKSPACE_FOLDER_PATHS`: Cursor supplies the actual workspace paths at launch.
+An entry-level `${workspaceFolder}` value can overwrite that native hint without
+being expanded. No absolute project path is saved in the entry. The proxy still
+rejects empty, unresolved, conflicting, or ambiguous supplied hints before startup.
+For older entries, Manager detects that exact generated placeholder and offers
+**Repair Cursor**. The existing native-confirmation flow removes only the override,
+preserves all other settings, and rejects stale file bytes. After applying, Manager
+shows **Customize > MCPs > Configure this server**, enable the workspace source,
+then Reload and make a permitted call. Manager does not read or change Cursor's
+private enablement database or infer a plugin-name collision.
 
 Protecting a user-global Cursor entry prepares two reviewed changes: an unbound
 Authsia proxy fallback in the global file and a project override. Both file
@@ -945,8 +954,13 @@ connection ends. The manager binds its protected MCP listener at
 The portal aggregates `mcpUpstreams` from pinned and known managed workspaces,
 then overlays the existing client-configuration scan. **Servers** is the
 protection-coverage surface: declared servers, discovered client entries, and
-per-client **Protected configuration** / **Bypassing Authsia** / **Needs
-setup** badges. **Activity** is the call-history surface, including decisions
+per-client routing, repair actions, and connection guidance. Configured routes
+without call evidence have a neutral **Awaiting client connection** badge and
+**View steps**. A green **Call succeeded** badge requires a successful latest
+retained tool-call record matching both server identity and client label;
+another client's activity cannot satisfy it. A newer failure replaces an older
+success. Call timestamps describe history, not a live connection probe.
+**Activity** is the call-history surface, including decisions
 that never received a grant (inspector **Grants: None recorded**). **Active
 access** lists live grants for the selected workspace. The portal exposes only
 sanitized launch labels, tool policy/catalog, credential labels, associations,
@@ -959,7 +973,7 @@ policy; cross-site Fetch Metadata is rejected. Scripts are bundled and
 authorized by a content hash.
 
 The registry also retains undeclared scan findings as **discovered** entries.
-The Clients column lists scanned associations for that server, not a directory of
+The Client status column lists scanned associations for that server, not a directory of
 installed apps. Codex, Claude Code, Cursor, Visual Studio Code, Devin, and Claude
 Desktop appear on a row as associations only when that client's configuration names the server.
 The client filter and **Protect a client** offer Codex, Claude Code, Cursor, and
@@ -1035,7 +1049,9 @@ row remains explicitly pending rather than claiming a complete terminal record.
 Server details show independent readiness facts (declaration, launch, catalog,
 policy, client route, observed use, and evidence), including catalog quality,
 capture time when recorded, and launch revision. One recommended next action is
-offered after a change. Protected configuration is not proof of a successful call.
+offered after a change. A detected Cursor repair takes priority. After a client
+wrap or repair, the completion view gives client enablement, reload, and call
+verification steps instead of ending at a protection-success message.
 
 Disabled client entries remain in the discovery inventory and are excluded from
 active coverage denominators. HTTP enrollment remains limited to Claude Code,

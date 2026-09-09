@@ -3,6 +3,43 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPReadinessModelsTests: XCTestCase {
+    func testClientReadinessDoesNotBorrowAnotherClientsSuccessAndUsesLatestOutcome() {
+        let finding = MCPClientServerFinding(source: .cursor, serverName: "example", commandLabel: "authsia",
+            status: .admittedWrapped, declaredUpstreamName: "example", configPathLabel: "fixture/mcp.json")
+        func call(_ client: String, _ time: Double, _ outcome: MCPHTTPActivityOutcome) -> MCPActivityRecord {
+            .init(id: UUID(), kind: .toolCall, recordedAt: Date(timeIntervalSince1970: time),
+                workspacePath: "/tmp/fixture", serverID: "example", serverName: "example", toolName: "read",
+                clientLabel: client, outcome: outcome)
+        }
+        let unrelated = call("codex", 20, .succeeded)
+        let waiting = MCPClientReadiness.evaluate(finding: finding, serverID: "example", activity: [unrelated], needsRepair: false)
+        XCTAssertEqual(waiting.state, .awaitingClient)
+        XCTAssertTrue(waiting.detail.contains("Customize > MCPs"))
+        let success = call("cursor", 10, .succeeded), failure = call("cursor", 30, .upstreamUnavailable)
+        let failed = MCPClientReadiness.evaluate(finding: finding, serverID: "example", activity: [failure, unrelated, success], needsRepair: false)
+        XCTAssertEqual(failed.state, .callFailed)
+        XCTAssertEqual(failed.lastObservedAt, failure.recordedAt)
+        XCTAssertTrue(failed.detail.contains("Activity"))
+        XCTAssertEqual(MCPClientReadiness.evaluate(finding: finding, serverID: "example", activity: [success], needsRepair: false).state, .callSucceeded)
+        XCTAssertEqual(MCPClientReadiness.evaluate(finding: finding, serverID: "different-workspace", activity: [success], needsRepair: false).state, .awaitingClient)
+        XCTAssertEqual(MCPClientReadiness.evaluate(finding: finding, serverID: "example", activity: [success], needsRepair: true).state, .repairRequired)
+        for outcome in [MCPHTTPActivityOutcome.started, .incomplete] {
+            XCTAssertEqual(MCPClientReadiness.evaluate(finding: finding, serverID: "example",
+                activity: [success, call("cursor", 40, outcome)], needsRepair: false).state, .callPending)
+        }
+    }
+
+    func testRepairTakesPriorityOverRecordedRoutingAndServerSetup() {
+        let association = MCPClientAssociation(id: "fixture-cursor", source: .cursor, scope: .project,
+            precedence: .effective, status: .admittedWrapped, configPathLabel: "fixture/mcp.json",
+            readiness: .init(state: .repairRequired, detail: "Repair the workspace override."))
+        let server = MCPServerSnapshot(id: "example", identity: .init(workspacePath: "/tmp/fixture", upstreamName: "example"),
+            displayName: "example", transport: .stdio, policy: .init(), catalog: [], clientAssociations: [association])
+        let readiness = MCPServerReadinessProjection.readiness(for: server)
+        XCTAssertEqual(readiness.next?.label, "Repair Cursor")
+        XCTAssertEqual(readiness.facts.first { $0.id == "clientRoute" }?.complete, false)
+    }
+
     func testHTTPWithoutClientRecommendsEnrollment() {
         let server = MCPServerSnapshot(
             id: "fixture-http",
