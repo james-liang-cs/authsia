@@ -2474,11 +2474,7 @@ struct InjectedSecretFileScrubberTests {
         #expect(watcherStartCount.value == 1)
         #expect(result.exitCode == 0)
         #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file cleanup was incomplete; review Access Center. "
-                    + "The child exit status was preserved.\n"
-        )
+        #expect(warning.isEmpty)
         #expect(try String(contentsOfFile: path, encoding: .utf8) == original)
         #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
@@ -2814,11 +2810,7 @@ struct InjectedSecretFileScrubberTests {
         )
 
         #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file cleanup was incomplete; review Access Center. "
-                    + "The child exit status was preserved.\n"
-        )
+        #expect(warning.isEmpty)
         #expect(
             try String(contentsOfFile: replacementPath, encoding: .utf8)
                 == "TOKEN=\(secret)\n"
@@ -2873,7 +2865,7 @@ struct InjectedSecretFileScrubberTests {
         )
     }
 
-    @Test("default missing observation root reports incomplete inspection")
+    @Test("default missing observation root without file findings is quiet")
     func defaultMissingObservationRootReportsIncompleteInspection() throws {
         let parent = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: parent) }
@@ -2915,11 +2907,7 @@ struct InjectedSecretFileScrubberTests {
         )
 
         #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file inspection was incomplete; review Access "
-                    + "Center. No secret presence was confirmed. Child exit preserved.\n"
-        )
+        #expect(warning.isEmpty)
         #expect(FileManager.default.fileExists(atPath: relocated.path))
         #expect(!FileManager.default.fileExists(atPath: root.path))
     }
@@ -3026,7 +3014,7 @@ struct InjectedSecretFileScrubberTests {
         #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
-    @Test("default watcher start failure reports incomplete inspection")
+    @Test("default watcher start failure without file findings is quiet")
     func defaultWatcherStartFailurePreservesChildExitAndWarns() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -3056,16 +3044,12 @@ struct InjectedSecretFileScrubberTests {
         #expect(result.terminationStatus == 7)
         #expect(result.exitCode == 7)
         #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file inspection was incomplete; review Access "
-                    + "Center. No secret presence was confirmed. Child exit preserved.\n"
-        )
+        #expect(warning.isEmpty)
         #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
-    @Test("explicit cleanup keeps watcher start cleanup failure semantics")
-    func explicitCleanupWatcherStartFailureWarns() throws {
+    @Test("agent cleanup with no file findings is quiet even if monitoring cannot start")
+    func agentCleanupWithoutFileFindingsIsQuiet() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -3095,11 +3079,7 @@ struct InjectedSecretFileScrubberTests {
         #expect(result.terminationStatus == 7)
         #expect(result.exitCode == 7)
         #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file cleanup was incomplete; review Access Center. "
-                    + "The child exit status was preserved.\n"
-        )
+        #expect(warning.isEmpty)
         #expect(try AgentFileActivityStore(fileURL: activityURL).loadAll().isEmpty)
     }
 
@@ -3225,7 +3205,7 @@ struct InjectedSecretFileScrubberTests {
         )
     }
 
-    @Test("default FSEvents loss reports incomplete inspection")
+    @Test("default FSEvents loss without file findings is quiet")
     func defaultFSEventLossReportsIncompleteInspection() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -3258,11 +3238,7 @@ struct InjectedSecretFileScrubberTests {
 
         #expect(result.exitCode == 0)
         #expect(result.fileCleanupStatus == .incomplete)
-        #expect(
-            warning
-                == "Warning: Authsia secret-file inspection was incomplete; review Access "
-                    + "Center. No secret presence was confirmed. Child exit preserved.\n"
-        )
+        #expect(warning.isEmpty)
     }
 
     @Test("signal defaults are restored once before file cleanup")

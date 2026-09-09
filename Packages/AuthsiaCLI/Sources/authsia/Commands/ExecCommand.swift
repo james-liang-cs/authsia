@@ -2440,6 +2440,7 @@ struct Exec: ParsableCommand {
         let fileCleanupStatus: InjectedSecretFileCleanupStatus
         var detectedSecret = false
         var concealedSecret = false
+        var fileCleanupFailed = false
         var inspectionIncomplete = false
         if let fileScrubContext, let cleanupRootSelection, let touchWatcher {
             let observation = touchWatcher.stop()
@@ -2460,6 +2461,10 @@ struct Exec: ParsableCommand {
             InjectedSecretFileScrubber.record(results: results, store: fileActivityStore)
             detectedSecret = results.contains { $0.outcome == .detected }
             concealedSecret = results.contains { $0.outcome == .scrubbed }
+            fileCleanupFailed = results.contains {
+                !$0.events.isEmpty
+                    && ($0.outcome == .verificationFailed || $0.outcome == .remediationFailed)
+            }
             let observationIncomplete = fileCleanupMasker == nil
                 || (cleanupSecretFiles && fileCleanupSelectionIncomplete)
                 || cleanupRootSelection.isIncomplete
@@ -2480,7 +2485,8 @@ struct Exec: ParsableCommand {
             fileCleanupStatus = .notRequested
         }
 
-        if fileCleanupStatus == .incomplete {
+        if fileCleanupStatus == .incomplete,
+           detectedSecret || concealedSecret || fileCleanupFailed {
             let warning: String
             if concealedSecret {
                 warning = "Warning: Authsia concealed detected secret values, but file observation "
@@ -2495,7 +2501,7 @@ struct Exec: ParsableCommand {
                 warning = "Warning: Authsia detected an injected secret in an observed file and "
                     + "left it unchanged; review Access Center. Automatic replacement was "
                     + "unavailable. The child exit status was preserved.\n"
-            } else if cleanupSecretFiles {
+            } else if cleanupSecretFiles && fileCleanupFailed {
                 warning = "Warning: Authsia secret-file cleanup was incomplete; review Access "
                     + "Center. The child exit status was preserved.\n"
             } else {
