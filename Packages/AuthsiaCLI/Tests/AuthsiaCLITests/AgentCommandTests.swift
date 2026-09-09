@@ -1166,8 +1166,8 @@ struct AgentCommandTests {
         #expect(try read(".codex/hooks.json", in: root) == installed)
     }
 
-    @Test("Codex init leaves inline config hooks unchanged and prints manual guidance")
-    func codexInitRequiresManualMergeForInlineConfigHooks() throws {
+    @Test("Codex init installs hooks alongside unrelated inline config hooks")
+    func codexInitInstallsAlongsideInlineConfigHooks() throws {
         let root = try makeProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let config = """
@@ -1181,11 +1181,12 @@ struct AgentCommandTests {
         let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
 
         #expect(try read(".codex/config.toml", in: root) == config)
-        #expect(!fileExists(".codex/hooks.json", in: root))
-        let step = try #require(result.manualSteps.first { $0.path == ".codex/config.toml" })
-        #expect(step.reason.contains("inline hooks"))
-        #expect(step.block.contains("[[hooks.SubagentStart]]"))
-        #expect(step.block.contains("authsia agent record-lineage --platform codex"))
+        #expect(fileExists(".codex/hooks.json", in: root))
+        #expect(result.manualSteps.isEmpty)
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+        let second = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        #expect(second.unchanged.contains(".codex/hooks.json"))
+        #expect(second.manualSteps.isEmpty)
     }
 
     @Test("Codex init leaves invalid hooks unchanged and prints manual guidance")
@@ -1211,6 +1212,9 @@ struct AgentCommandTests {
         try FileManager.default.removeItem(at: root.appendingPathComponent(".codex/hooks.json"))
 
         #expect(!AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+        let repair = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        #expect(repair.created.contains(".codex/hooks.json"))
+        #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
     }
 
     @Test("Codex integration accepts manually installed inline attribution hooks")
@@ -1239,6 +1243,30 @@ struct AgentCommandTests {
         """, to: ".codex/config.toml", in: root)
 
         #expect(AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+        let repair = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        #expect(repair.manualSteps.isEmpty)
+        #expect(repair.unchanged.contains(".codex/config.toml"))
+        #expect(!fileExists(".codex/hooks.json", in: root))
+        #expect(AgentRuleInstaller.renderResult(repair).contains("/hooks"))
+    }
+
+    @Test("Codex partial inline Authsia hooks are not duplicated")
+    func codexPartialInlineHooksNeedRepair() throws {
+        let root = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = """
+        [[hooks.PreToolUse]]
+        matcher = "^Bash$"
+        [[hooks.PreToolUse.hooks]]
+        type = "command"
+        command = "authsia agent record-command --platform codex --source hook"
+        """
+        try write(config, to: ".codex/config.toml", in: root)
+        let result = try AgentRuleInstaller.install(projectRoot: root, agents: [.codex])
+        #expect(!result.manualSteps.isEmpty)
+        #expect(!AgentRuleInstaller.isInstalled(projectRoot: root, agent: .codex))
+        #expect(!fileExists(".codex/hooks.json", in: root))
+        #expect(try read(".codex/config.toml", in: root) == config)
     }
 
     @Test("Codex uninstall removes Authsia hooks and preserves custom hooks")

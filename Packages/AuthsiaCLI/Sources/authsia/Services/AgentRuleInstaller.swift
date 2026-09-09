@@ -88,6 +88,7 @@ struct AgentRuleInstallResult: Equatable {
     var updated: [String] = []
     var unchanged: [String] = []
     var manualSteps: [AgentRuleManualStep] = []
+    var codexHookTrustMessage: String?
 }
 
 struct AgentRuleRemovalResult: Equatable {
@@ -151,7 +152,8 @@ enum AgentRuleInstaller {
         agents: [AgentTool],
         dryRun: Bool = false,
         fileManager: FileManager = .default,
-        includeMCPGuidance: Bool = true
+        includeMCPGuidance: Bool = true,
+        trustCodexHooks: ((URL) throws -> Void)? = nil
     ) throws -> AgentRuleInstallResult {
         var result = AgentRuleInstallResult(dryRun: dryRun)
         let selectedAgents = unique(agents)
@@ -217,6 +219,18 @@ enum AgentRuleInstaller {
             }
         }
 
+        if selectedAgents.contains(.codex), let trustCodexHooks {
+            if dryRun {
+                result.codexHookTrustMessage = "Would trust only the installed Authsia hooks in Codex."
+            } else if codexHooksAreInstalled(projectRoot: projectRoot, fileManager: fileManager) {
+                do {
+                    try trustCodexHooks(projectRoot)
+                    result.codexHookTrustMessage = "Authsia hooks are installed and trusted in Codex."
+                } catch {
+                    result.codexHookTrustMessage = "Authsia hooks are installed, but automatic Codex trust could not be verified. Open /hooks in Codex to review them, or rerun setup with a supported Codex CLI and a trusted project."
+                }
+            }
+        }
         return result
     }
 
@@ -241,7 +255,11 @@ enum AgentRuleInstaller {
         if !lines.isEmpty { lines.append("") }
         lines.append("Authsia agent rules are ready.")
         lines.append("Restart or reload your agent so it picks up the new project rules.")
-        if (result.created + result.updated + result.unchanged).contains(".codex/hooks.json") {
+        if let message = result.codexHookTrustMessage {
+            lines.append(message)
+        } else if (result.created + result.updated + result.unchanged).contains(where: {
+            $0 == ".codex/hooks.json" || $0 == ".codex/config.toml"
+        }) {
             lines.append("In Codex, open /hooks and trust the Authsia hooks before they can run.")
         }
         return lines.joined(separator: "\n")
@@ -437,10 +455,16 @@ enum AgentRuleInstaller {
         let configURL = projectRoot.appendingPathComponent(configPath)
         if fileManager.fileExists(atPath: configURL.path) {
             let config = try String(contentsOf: configURL, encoding: .utf8)
-            if codexConfigHasInlineHooks(config) {
+            if codexConfigHasInlineHooks(config),
+               config.contains("authsia agent record-command --platform codex")
+                || config.contains("authsia agent record-lineage --platform codex") {
+                if codexInlineHooksAreInstalled(config) {
+                    result.unchanged.append(configPath)
+                    return
+                }
                 result.manualSteps.append(AgentRuleManualStep(
                     path: configPath,
-                    reason: "already defines inline hooks. Add these Authsia hooks there manually, " +
+                    reason: "defines partial inline Authsia hooks. Complete these hooks there to avoid duplicates, " +
                         "then open /hooks in Codex to review and trust them.",
                     block: codexHooksTOML
                 ))
@@ -511,6 +535,10 @@ enum AgentRuleInstaller {
               let config = try? String(contentsOf: configURL, encoding: .utf8) else {
             return false
         }
+        return codexInlineHooksAreInstalled(config)
+    }
+
+    private static func codexInlineHooksAreInstalled(_ config: String) -> Bool {
         let lineageCommand = "authsia agent record-lineage --platform codex"
         return config.contains("[[hooks.PreToolUse]]") &&
             config.contains("[[hooks.SubagentStart]]") &&

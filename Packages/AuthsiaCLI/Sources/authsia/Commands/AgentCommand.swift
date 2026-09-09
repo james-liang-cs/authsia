@@ -16,7 +16,8 @@ struct Agent: ParsableCommand {
             abstract: "Create local AI-agent rules and observability hooks for Authsia",
             discussion: """
                 Creates local project integration files that teach AI agents to use Authsia safely.
-                This command writes rules and supported observability hooks only; it does not create
+                This command writes rules, installs supported observability hooks, and trusts only
+                Authsia's generated Codex hooks using the local Codex CLI. It does not create
                 automation credentials, JIT grants, or new secret access.
 
                 Examples:
@@ -42,7 +43,8 @@ struct Agent: ParsableCommand {
                 projectRoot: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true),
                 agents: agents,
                 dryRun: dryRun,
-                includeMCPGuidance: MCPAccessSettings.isEnabled()
+                includeMCPGuidance: MCPAccessSettings.isEnabled(),
+                trustCodexHooks: CodexHookTrustInstaller.install(projectRoot:)
             )
             print(AgentRuleInstaller.renderResult(result))
         }

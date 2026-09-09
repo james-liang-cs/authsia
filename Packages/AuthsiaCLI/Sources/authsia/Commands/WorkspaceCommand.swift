@@ -585,7 +585,8 @@ struct Workspace: AsyncParsableCommand {
                 let result = try AgentRuleInstaller.install(
                     projectRoot: plan.workspaceRoot,
                     agents: plan.agents,
-                    includeMCPGuidance: MCPAccessSettings.isEnabled()
+                    includeMCPGuidance: MCPAccessSettings.isEnabled(),
+                    trustCodexHooks: CodexHookTrustInstaller.install(projectRoot:)
                 )
                 print(AgentRuleInstaller.renderResult(result))
             }
