@@ -301,16 +301,17 @@ pin. Selecting a workspace in Manager never changes another running session.
 When Servers shows the server and **Protect connection** / **Protect a
 client** is available, use it on the winning (usually project) file. Authsia declares command and argv in
 `mcpUpstreams` when needed and, after showing the current entry, protected
-entry, and a SHA256 checksum, writes the scanned client file. For a
-credential-less stdio entry with empty `allow` and `approve`, Protect then
+entry, and a SHA256 checksum, writes the scanned client file. For an eligible
+environment-free STDIO entry with no recorded catalog, Protect then automatically
 records the tool catalog: local MCP admission, a short-lived child probe, and
 names plus sanitized schemas written into `mcpUpstreams`. Absolute Homebrew or
 system paths store a PATH basename; committed `workspace.json` still forbids
 absolute paths. Keep live credentials and private endpoints out of committed
 policy.
 
-Before it writes, Protect names what the diff cannot show: catalog recording
-puts every advertised tool in `tools.allow`, which runs under the admission
+Before it writes, Protect names what the diff cannot show: when all three policy
+lists are empty, catalog recording puts advertised tools in `tools.allow`;
+otherwise it preserves existing decisions. Allowed tools run under the admission
 grant with no per-call prompt, so a tool that should prompt belongs in
 `tools.approve`; the wrap does not copy the environment values the client file
 set for the child, and states how many there were; and a bare `npx` / `uvx`
@@ -1004,6 +1005,21 @@ provides policy, credential association, catalog, Protect, Protect a client
 (insert when the client has no scanned association), and Remove protection
 actions. Disabled client entries must first be enabled in their owning client;
 Remove protection is not a generic server disable or uninstall command.
+
+**Protect connection** includes recording a missing catalog when capture is
+eligible, for both STDIO wrapping and localhost HTTP enrollment. The same native
+management preview describes the route change and capture before either is
+applied. Capture still requires its existing runtime admission or credential
+approval and sends initialization and `tools/list` only. STDIO declarations or
+observed client launches with environment values are not automatically probed.
+Existing catalogs are reused. A completely empty tool policy defaults recorded
+names to Allow; existing Allow, Approval, and Block decisions are preserved.
+The capture admission does not authorize the client's subsequent tool call.
+If capture fails after routing is written, the route remains protected and the
+result explicitly reports incomplete setup with recovery guidance. Readiness
+prerequisites take precedence over generic reconnect instructions. **Record
+catalog** remains available for refresh and retry, not a required second click
+after successful Protect.
 
 The portal prepares immutable changes for declarations, policy, credential
 references, client protection, STDIO and localhost HTTP catalog capture, and grant
