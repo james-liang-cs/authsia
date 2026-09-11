@@ -225,7 +225,7 @@ public struct AgentJITApprovalDescriptor: Equatable, Sendable {
     public let requestIssuedAtMilliseconds: Int64
     public let grantExpiresAtMilliseconds: Int64
     public let mcpUpstreamName: String?
-    /// Display-only argv of the declared child this admission would start.
+    /// Readable argv prefix plus the signed proxy's exact-argv binding digest.
     public let mcpUpstreamCommand: String?
     public let mcpToolName: String?
     public let mcpToolPolicy: AgentJITMCPToolPolicy?
@@ -466,7 +466,8 @@ public struct AgentJITGrant: Codable, Equatable, Identifiable, Sendable {
     public let agentRuntimeContext: AgentRuntimeContext?
     public let approvedBy: String
     public let environmentScope: EnvironmentAccessScope?
-    /// The argv this admission approved. Reuse requires the same child command.
+    /// The readable argv and binding digest this admission approved. Reuse
+    /// requires the same exact child command and arguments.
     public let mcpUpstreamCommand: String?
 
     private enum CodingKeys: String, CodingKey {

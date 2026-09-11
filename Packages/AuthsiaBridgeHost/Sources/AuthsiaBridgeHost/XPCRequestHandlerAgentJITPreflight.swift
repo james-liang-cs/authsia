@@ -90,6 +90,30 @@ extension XPCRequestHandler {
         )
     }
 
+    static func validatedMCPProxyUpstreamCommand(_ value: String?) -> String? {
+        guard let command = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !command.isEmpty,
+              command.count <= 256,
+              command.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0)
+              }) else {
+            return nil
+        }
+        let marker = " [argv-sha256:"
+        guard let markerRange = command.range(of: marker, options: .backwards),
+              markerRange.lowerBound != command.startIndex,
+              command.last == "]" else {
+            return nil
+        }
+        let digestEnd = command.index(before: command.endIndex)
+        let digest = command[markerRange.upperBound..<digestEnd]
+        guard digest.utf8.count == 64,
+              digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            return nil
+        }
+        return command
+    }
+
     @MainActor
     func handleAgentJITPreflight(
         _ bridgeRequest: BridgeRequest,
@@ -130,6 +154,23 @@ extension XPCRequestHandler {
                 reply: reply
             )
             return
+        }
+
+        let mcpProxyUpstreamCommand: String?
+        if bridgeRequest.context.agentRuntimeContext?.agentType == "authsia-mcp",
+           bridgeRequest.context.agentRuntimeContext?.agentID?.hasPrefix("proxy:") == true {
+            guard let command = Self.validatedMCPProxyUpstreamCommand(payload.mcpUpstreamCommand) else {
+                replyError(
+                    id: bridgeRequest.id,
+                    code: .invalidRequest,
+                    message: "Authsia MCP proxy preflight requires a valid upstream command binding",
+                    reply: reply
+                )
+                return
+            }
+            mcpProxyUpstreamCommand = command
+        } else {
+            mcpProxyUpstreamCommand = nil
         }
 
         // Pairing is host-authoritative. An installed CLI that still preflights
@@ -286,6 +327,8 @@ extension XPCRequestHandler {
             $0.status(asOf: timing.issuedAt) == .active
                 && $0.callerFingerprint.matches(caller)
                 && $0.matchesAgentRuntimeContext(bridgeRequest.context.agentRuntimeContext)
+                && (mcpProxyUpstreamCommand == nil
+                    || $0.admits(mcpUpstreamCommand: mcpProxyUpstreamCommand))
         }
         let duration = durationDescription(for: ttl)
         var grantIDs: [UUID] = []
@@ -303,6 +346,7 @@ extension XPCRequestHandler {
                         : resolution.itemEnvironments,
                     caller: caller,
                     agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                    mcpUpstreamCommand: mcpProxyUpstreamCommand,
                     now: timing.issuedAt
                 ) {
                     let merged = grant(existing, adding: resolution.requestedItems)
@@ -551,6 +595,7 @@ extension XPCRequestHandler {
                             : resolution.itemEnvironments,
                         caller: caller,
                         agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
+                        mcpUpstreamCommand: mcpProxyUpstreamCommand,
                         now: revalidationDate
                     )
                     if activeGrant?.resourceScope.covers(
@@ -624,7 +669,8 @@ extension XPCRequestHandler {
                         requestedItems: approvedResolutions.flatMap(\.resolution.requestedItems),
                         agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                         environmentScope: payload.environmentScope,
-                        approvedBy: approved.attribution
+                        approvedBy: approved.attribution,
+                        mcpUpstreamCommand: mcpProxyUpstreamCommand
                     ),
                 ]
             } else {
@@ -638,7 +684,8 @@ extension XPCRequestHandler {
                         requestedItems: approved.resolution.requestedItems,
                         agentRuntimeContext: bridgeRequest.context.agentRuntimeContext,
                         environmentScope: payload.environmentScope,
-                        approvedBy: approved.attribution
+                        approvedBy: approved.attribution,
+                        mcpUpstreamCommand: mcpProxyUpstreamCommand
                     )
                 }
             }

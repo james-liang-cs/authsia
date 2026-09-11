@@ -56,6 +56,16 @@ public nonisolated protocol AgentJITGrantStoring {
         agentRuntimeContext: AgentRuntimeContext?,
         now: Date
     ) throws -> AgentJITGrant?
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentities: Set<AgentJITItemIdentity>,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        mcpUpstreamCommand: String?,
+        now: Date
+    ) throws -> AgentJITGrant?
     func markUsedScopesForRuntime(
         capability: AgentJITCapability,
         caller: AgentJITCallerFingerprint,
@@ -74,6 +84,30 @@ public nonisolated protocol AgentJITGrantStoring {
 }
 
 public extension AgentJITGrantStoring {
+    /// Custom stores must opt in to command-constrained selection. Falling back
+    /// to an unconstrained lookup would let a legacy store widen MCP authority.
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentities: Set<AgentJITItemIdentity>,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        mcpUpstreamCommand: String?,
+        now: Date
+    ) throws -> AgentJITGrant? {
+        guard mcpUpstreamCommand == nil else { return nil }
+        return try markUsedIfAllowedForRuntime(
+            capability: capability,
+            itemIdentities: itemIdentities,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            agentRuntimeContext: agentRuntimeContext,
+            now: now
+        )
+    }
+
     func renew(id: UUID, expiresAt date: Date) throws -> AgentJITGrant {
         guard let grant = try loadAll().first(where: { $0.id == id }) else {
             throw AgentJITGrantStoreError.notFound(id)
@@ -310,6 +344,28 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
         agentRuntimeContext: AgentRuntimeContext?,
         now: Date
     ) throws -> AgentJITGrant? {
+        try markUsedIfAllowedForRuntime(
+            capability: capability,
+            itemIdentities: itemIdentities,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            agentRuntimeContext: agentRuntimeContext,
+            mcpUpstreamCommand: nil,
+            now: now
+        )
+    }
+
+    public func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentities: Set<AgentJITItemIdentity>,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        mcpUpstreamCommand: String?,
+        now: Date
+    ) throws -> AgentJITGrant? {
         try locked {
             var grants = try loadAllUnlocked()
             let revoked = try revokeClosedTerminalGrantsUnlocked(&grants, now: now)
@@ -325,6 +381,8 @@ public nonisolated final class AgentJITGrantStore: AgentJITGrantStoring {
                     now: now
                 )
                     && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+                    && (mcpUpstreamCommand == nil
+                        || $0.admits(mcpUpstreamCommand: mcpUpstreamCommand))
                     && $0.resourceScope.covers(
                         itemIdentities: itemIdentities,
                         itemFolderPath: itemFolderPath

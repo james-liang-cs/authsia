@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Dispatch
 import Foundation
@@ -1281,14 +1282,20 @@ actor AuthsiaMCPProxy {
         }
     }
 
-    /// The argv the admission prompt shows. Policy names the child, but the
-    /// name is repo-supplied, so the human needs the binary it resolves to.
-    private static func commandLabel(for upstream: MCPUpstreamConfig) -> String? {
+    /// A readable argv prefix plus a collision-resistant identity of the exact
+    /// argument array. The digest prevents space-join and 256-character display
+    /// truncation from turning two different declarations into one grant key.
+    nonisolated static func commandLabel(for upstream: MCPUpstreamConfig) -> String? {
         guard let command = upstream.command?.trimmingCharacters(in: .whitespacesAndNewlines),
               !command.isEmpty else {
             return nil
         }
-        return ([command] + upstream.args).joined(separator: " ")
+        let argv = [command] + upstream.args
+        guard let encoded = try? JSONEncoder().encode(argv) else { return nil }
+        let digest = SHA256.hash(data: encoded).map { String(format: "%02x", $0) }.joined()
+        let bindingSuffix = " [argv-sha256:\(digest)]"
+        let displayLimit = 256 - bindingSuffix.count
+        return String(argv.joined(separator: " ").prefix(displayLimit)) + bindingSuffix
     }
 
     private func stdioUpstream() -> MCPUpstreamConfig? {

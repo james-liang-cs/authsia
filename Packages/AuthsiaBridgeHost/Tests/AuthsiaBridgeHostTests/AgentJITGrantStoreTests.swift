@@ -153,6 +153,87 @@ final class AgentJITGrantStoreTests: XCTestCase {
         ))
     }
 
+    func testCommandConstrainedLookupSelectsOnlyExactBoundGrantAtomically() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AgentJITGrantStore(
+            authorityStore: KeychainAuthorityStore(blobStore: JITTestAuthorityBlobStore()),
+            legacyFileURL: directory.appendingPathComponent("agent-jit-grants.json"),
+            terminalSessionLiveness: { _ in .active }
+        )
+        let caller = grant(
+            id: "00000000-0000-0000-0000-000000000001",
+            folder: "Team/API"
+        ).callerFingerprint
+        let runtime = AgentRuntimeContext(
+            sessionID: "mcp:command-bound-store",
+            agentID: "proxy:fixture",
+            agentType: "authsia-mcp"
+        )
+        func boundGrant(id: String, command: String?) -> AgentJITGrant {
+            AgentJITGrant(
+                id: UUID(uuidString: id)!,
+                agentName: "Codex",
+                callerFingerprint: caller,
+                folderScope: .folder("Team/API"),
+                capabilities: [.exec],
+                createdAt: now.addingTimeInterval(-60),
+                expiresAt: now.addingTimeInterval(300),
+                revokedAt: nil,
+                lastUsedAt: nil,
+                agentRuntimeContext: runtime,
+                approvedBy: "macBiometric",
+                mcpUpstreamCommand: command
+            )
+        }
+        let mismatched = boundGrant(
+            id: "00000000-0000-0000-0000-000000000001",
+            command: "tools/fixture-mcp-changed"
+        )
+        let matching = boundGrant(
+            id: "00000000-0000-0000-0000-000000000002",
+            command: "tools/fixture-mcp"
+        )
+        let legacy = boundGrant(
+            id: "00000000-0000-0000-0000-000000000003",
+            command: nil
+        )
+        try store.saveAll([mismatched, matching, legacy])
+        let authorizer = AgentJITGrantAuthorizer(store: store)
+
+        let reused = try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: runtime,
+            mcpUpstreamCommand: "tools/fixture-mcp",
+            now: now
+        )
+
+        XCTAssertEqual(reused?.id, matching.id)
+        XCTAssertNil(try store.loadAll().first(where: { $0.id == mismatched.id })?.lastUsedAt)
+        XCTAssertNil(try store.loadAll().first(where: { $0.id == legacy.id })?.lastUsedAt)
+        let beforeDenied = try store.loadAll()
+        XCTAssertNil(try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: runtime,
+            mcpUpstreamCommand: "tools/fixture-mcp-other",
+            now: now
+        ))
+        XCTAssertEqual(try store.loadAll(), beforeDenied)
+
+        let unconstrained = try authorizer.activeGrant(
+            capability: .exec,
+            itemFolderPath: "Team/API",
+            caller: caller,
+            agentRuntimeContext: runtime,
+            now: now
+        )
+        XCTAssertEqual(unconstrained?.id, mismatched.id)
+    }
+
     func testMissingPayloadFailsClosed() throws {
         let authority = KeychainAuthorityStore(blobStore: JITTestAuthorityBlobStore())
         try authority.insert(

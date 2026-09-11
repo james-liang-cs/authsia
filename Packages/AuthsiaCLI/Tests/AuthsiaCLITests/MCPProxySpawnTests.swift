@@ -414,7 +414,8 @@ struct MCPProxySpawnTests {
         )
         #expect(try await firstCall.value.isError != true)
         let firstChild = try #require(launcher.lastSpawned)
-        #expect(sessionClient.mcpUpstreamCommands == ["mcp-atlassian"])
+        let firstCommand = try #require(sessionClient.mcpUpstreamCommands.first ?? nil)
+        #expect(firstCommand.hasPrefix("mcp-atlassian [argv-sha256:"))
 
         try WorkspaceConfigStore.write(
             WorkspaceConfig(
@@ -432,12 +433,44 @@ struct MCPProxySpawnTests {
         )
         #expect(try await secondCall.value.isError != true)
         #expect(sessionClient.prepareCount == 2)
-        #expect(sessionClient.mcpUpstreamCommands == ["mcp-atlassian", "mcp-other"])
+        let commands = sessionClient.mcpUpstreamCommands.compactMap { $0 }
+        #expect(commands.count == 2)
+        #expect(commands[0].hasPrefix("mcp-atlassian [argv-sha256:"))
+        #expect(commands[1].hasPrefix("mcp-other [argv-sha256:"))
+        #expect(commands[0] != commands[1])
         #expect(launcher.spawnCount == 2)
         #expect(launcher.lastSpawned?.processID != firstChild.processID)
 
         await connection.client.disconnect()
         await proxy.waitUntilCompleted()
+    }
+
+    @Test("command labels bind the exact argv despite ambiguous or long display text")
+    func commandLabelsBindExactArgv() throws {
+        let oneArgument = try #require(AuthsiaMCPProxy.commandLabel(for: stdioJiraUpstream(
+            command: "tool",
+            args: ["a b"]
+        )))
+        let twoArguments = try #require(AuthsiaMCPProxy.commandLabel(for: stdioJiraUpstream(
+            command: "tool",
+            args: ["a", "b"]
+        )))
+        let commonPrefix = String(repeating: "a", count: 300)
+        let longA = try #require(AuthsiaMCPProxy.commandLabel(for: stdioJiraUpstream(
+            command: "tool",
+            args: [commonPrefix + "x"]
+        )))
+        let longB = try #require(AuthsiaMCPProxy.commandLabel(for: stdioJiraUpstream(
+            command: "tool",
+            args: [commonPrefix + "y"]
+        )))
+
+        #expect(oneArgument.hasPrefix("tool a b"))
+        #expect(twoArguments.hasPrefix("tool a b"))
+        #expect(oneArgument != twoArguments)
+        #expect(longA.count == 256)
+        #expect(longB.count == 256)
+        #expect(longA != longB)
     }
 
     @Test("relative workspace command is spawned from the workspace root")

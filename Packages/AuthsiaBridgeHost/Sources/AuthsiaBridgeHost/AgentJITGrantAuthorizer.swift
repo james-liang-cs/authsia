@@ -28,6 +28,7 @@ public final class AgentJITGrantAuthorizer {
         itemEnvironments: [String] = [],
         caller: AgentJITCallerFingerprint,
         agentRuntimeContext: AgentRuntimeContext? = nil,
+        mcpUpstreamCommand: String? = nil,
         now: Date = Date()
     ) throws -> AgentJITGrant? {
         try activeGrant(
@@ -37,6 +38,7 @@ public final class AgentJITGrantAuthorizer {
             itemEnvironments: itemEnvironments,
             caller: caller,
             agentRuntimeContext: agentRuntimeContext,
+            mcpUpstreamCommand: mcpUpstreamCommand,
             now: now
         )
     }
@@ -48,9 +50,22 @@ public final class AgentJITGrantAuthorizer {
         itemEnvironments: [String] = [],
         caller: AgentJITCallerFingerprint,
         agentRuntimeContext: AgentRuntimeContext? = nil,
+        mcpUpstreamCommand: String? = nil,
         now: Date = Date()
     ) throws -> AgentJITGrant? {
-        try store.markUsedIfAllowedForRuntime(
+        if mcpUpstreamCommand != nil {
+            return try store.markUsedIfAllowedForRuntime(
+                capability: capability,
+                itemIdentities: itemIdentities,
+                itemFolderPath: itemFolderPath,
+                itemEnvironments: itemEnvironments,
+                caller: caller,
+                agentRuntimeContext: agentRuntimeContext,
+                mcpUpstreamCommand: mcpUpstreamCommand,
+                now: now
+            )
+        }
+        return try store.markUsedIfAllowedForRuntime(
             capability: capability,
             itemIdentities: itemIdentities,
             itemFolderPath: itemFolderPath,

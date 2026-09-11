@@ -513,6 +513,127 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertFalse(propertyNames.contains("mcpToolPolicy"))
     }
 
+    func testMCPSecretPreflightBindsGrantToCommandAndRejectsChangedDeclaration() async throws {
+        let approver = JITApprovalTracker(results: [true, false])
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            clock: { self.now }
+        )
+        let runtime = AgentRuntimeContext(
+            sessionID: "mcp:secret-command-binding",
+            agentID: "proxy:fixture",
+            agentType: "authsia-mcp"
+        )
+        let context = execContext(agentRuntimeContext: runtime)
+        let originalCommand = "tools/fixture-mcp [argv-sha256:\(String(repeating: "1", count: 64))]"
+        let changedCommand = "tools/fixture-mcp-changed [argv-sha256:\(String(repeating: "2", count: 64))]"
+        let originalPayload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(
+                    type: "api-key",
+                    query: "API Key",
+                    folderPath: "Team/API"
+                ),
+            ],
+            mcpUpstreamName: "fixture",
+            mcpUpstreamCommand: originalCommand,
+            mcpToolName: "secret_proof",
+            mcpToolPolicy: .approve
+        )
+        let changedPayload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: originalPayload.references,
+            mcpUpstreamName: "fixture",
+            mcpUpstreamCommand: changedCommand,
+            mcpToolName: "secret_proof",
+            mcpToolPolicy: .approve
+        )
+
+        let first: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: originalPayload,
+            context: context
+        )
+        let sameCommand: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: originalPayload,
+            context: context
+        )
+        let changedResponse: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: changedPayload,
+            context: context
+        )
+
+        XCTAssertNil(first.error)
+        XCTAssertNil(sameCommand.error)
+        XCTAssertEqual(sameCommand.payload?.grantIDs, first.payload?.grantIDs)
+        XCTAssertEqual(store.grants.first?.mcpUpstreamCommand, originalCommand)
+        XCTAssertEqual(changedResponse.error?.code, .notAuthorized)
+        XCTAssertNil(changedResponse.payload)
+        XCTAssertEqual(approver.requests.count, 2)
+        XCTAssertEqual(store.grants.count, 1)
+    }
+
+    func testMCPSecretPreflightRevalidationIgnoresGrantForDifferentCommand() async throws {
+        let approver = JITApprovalTracker(result: true)
+        let store = MemoryAgentJITGrantStore()
+        let runtime = AgentRuntimeContext(
+            sessionID: "mcp:secret-command-revalidation",
+            agentID: "proxy:fixture",
+            agentType: "authsia-mcp"
+        )
+        let originalCommand = "tools/fixture-mcp [argv-sha256:\(String(repeating: "1", count: 64))]"
+        let changedCommand = "tools/fixture-mcp-changed [argv-sha256:\(String(repeating: "2", count: 64))]"
+        let mismatched = AgentJITGrant.fixture(
+            callerFingerprint: callerFingerprint(requestedCommand: "exec"),
+            folderScope: .folder("Team/API"),
+            capabilities: [.exec, .list],
+            expiresAt: now.addingTimeInterval(300),
+            agentRuntimeContext: runtime,
+            mcpUpstreamCommand: changedCommand
+        )
+        approver.onRequest = {
+            try? store.save(mismatched)
+        }
+        let handler = makeHandler(
+            store: store,
+            approver: approver,
+            clock: { self.now }
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(
+                    type: "api-key",
+                    query: "API Key",
+                    folderPath: "Team/API"
+                ),
+            ],
+            mcpUpstreamName: "fixture",
+            mcpUpstreamCommand: originalCommand,
+            mcpToolName: "secret_proof",
+            mcpToolPolicy: .approve
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: execContext(agentRuntimeContext: runtime)
+        )
+
+        XCTAssertNil(response.error)
+        XCTAssertEqual(approver.requests.count, 1)
+        XCTAssertEqual(store.grants.count, 2)
+        XCTAssertNil(store.grants.first(where: { $0.id == mismatched.id })?.lastUsedAt)
+        let issued = try XCTUnwrap(store.grants.first(where: { $0.id != mismatched.id }))
+        XCTAssertEqual(response.payload?.grantIDs, [issued.id])
+        XCTAssertEqual(issued.mcpUpstreamCommand, originalCommand)
+    }
+
     func testMCPAdmissionCreatesDedicatedLocalGrantWithoutVaultAuthority() async throws {
         let restoreCLITTL = setCLIApprovalTTL(15)
         let restoreMCPAdmissionTTL = setMCPAdmissionApprovalTTL(7200, maximum: 1800)
@@ -541,6 +662,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             requestedCommand: "exec",
             references: [],
             mcpUpstreamName: "jira",
+            mcpUpstreamCommand: "jira-mcp [argv-sha256:\(String(repeating: "0", count: 64))]",
             mcpToolName: "jira_get_issue",
             mcpToolPolicy: .allow,
             mcpAdmissionRequested: true
@@ -586,6 +708,58 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
         XCTAssertEqual(descriptor.reuseDescription, "MCP server admission")
         XCTAssertEqual(descriptor.mcpUpstreamName, "jira")
         XCTAssertTrue(descriptor.requestedItems.isEmpty)
+    }
+
+    func testMCPProxyPreflightRejectsMissingCommandBinding() async throws {
+        let approver = JITApprovalTracker(result: true)
+        let store = MemoryAgentJITGrantStore()
+        let handler = makeHandler(store: store, approver: approver)
+        let runtime = AgentRuntimeContext(
+            sessionID: "mcp:missing-command-binding",
+            agentID: "proxy:jira",
+            agentType: "authsia-mcp"
+        )
+        let payload = AgentJITPreflightPayload(
+            requestedCommand: "exec",
+            references: [
+                AgentJITPreflightReference(
+                    type: "api-key",
+                    query: "API Key",
+                    folderPath: "Team/API"
+                ),
+            ],
+            mcpUpstreamName: "jira",
+            mcpToolName: "jira_get_issue",
+            mcpToolPolicy: .approve
+        )
+
+        let response: BridgeResponse<AgentJITPreflightResultPayload> = try await addItem(
+            handler,
+            body: payload,
+            context: execContext(agentRuntimeContext: runtime)
+        )
+
+        XCTAssertEqual(response.error?.code, .invalidRequest)
+        XCTAssertTrue(store.grants.isEmpty)
+        XCTAssertTrue(approver.requests.isEmpty)
+    }
+
+    func testMCPProxyCommandBindingRequiresReadablePrefixAndSHA256Digest() {
+        let digest = String(repeating: "a", count: 64)
+
+        XCTAssertEqual(
+            XPCRequestHandler.validatedMCPProxyUpstreamCommand(
+                "tools/fixture-mcp [argv-sha256:\(digest)]"
+            ),
+            "tools/fixture-mcp [argv-sha256:\(digest)]"
+        )
+        XCTAssertNil(XPCRequestHandler.validatedMCPProxyUpstreamCommand("tools/fixture-mcp"))
+        XCTAssertNil(XPCRequestHandler.validatedMCPProxyUpstreamCommand(
+            "tools/fixture-mcp [argv-sha256:\(String(repeating: "g", count: 64))]"
+        ))
+        XCTAssertNil(XPCRequestHandler.validatedMCPProxyUpstreamCommand(
+            "tools/fixture-mcp [argv-sha256:\(String(repeating: "a", count: 63))]"
+        ))
     }
 
     func testMCPPreflightReusesCoveringGrantAfterOlderPartialGrants() async throws {
@@ -650,7 +824,7 @@ final class XPCRequestHandlerJITGrantTests: XCTestCase {
             requestedCommand: "exec",
             references: [],
             mcpUpstreamName: "jira",
-            mcpUpstreamCommand: "jira-mcp",
+            mcpUpstreamCommand: "jira-mcp [argv-sha256:\(String(repeating: "0", count: 64))]",
             mcpAdmissionRequested: true
         )
         let context = execContext(agentRuntimeContext: runtime)
@@ -4951,6 +5125,28 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
         agentRuntimeContext: AgentRuntimeContext?,
         now: Date
     ) throws -> AgentJITGrant? {
+        try markUsedIfAllowedForRuntime(
+            capability: capability,
+            itemIdentities: itemIdentities,
+            itemFolderPath: itemFolderPath,
+            itemEnvironments: itemEnvironments,
+            caller: caller,
+            agentRuntimeContext: agentRuntimeContext,
+            mcpUpstreamCommand: nil,
+            now: now
+        )
+    }
+
+    func markUsedIfAllowedForRuntime(
+        capability: AgentJITCapability,
+        itemIdentities: Set<AgentJITItemIdentity>,
+        itemFolderPath: String?,
+        itemEnvironments: [String],
+        caller: AgentJITCallerFingerprint,
+        agentRuntimeContext: AgentRuntimeContext?,
+        mcpUpstreamCommand: String?,
+        now: Date
+    ) throws -> AgentJITGrant? {
         guard let grant = grants.first(where: {
             $0.allows(
                 capability: capability,
@@ -4960,6 +5156,8 @@ private final class MemoryAgentJITGrantStore: AgentJITGrantStoring {
                 caller: caller,
                 now: now
             ) && $0.matchesAgentRuntimeContext(agentRuntimeContext)
+                    && (mcpUpstreamCommand == nil
+                        || $0.admits(mcpUpstreamCommand: mcpUpstreamCommand))
                     && $0.resourceScope.covers(
                         itemIdentities: itemIdentities,
                         itemFolderPath: itemFolderPath
@@ -5168,7 +5366,8 @@ private extension AgentJITGrant {
         revokedAt: Date? = nil,
         lastUsedAt: Date? = nil,
         environmentScope: EnvironmentAccessScope? = nil,
-        agentRuntimeContext: AgentRuntimeContext? = nil
+        agentRuntimeContext: AgentRuntimeContext? = nil,
+        mcpUpstreamCommand: String? = nil
     ) -> AgentJITGrant {
         AgentJITGrant(
             id: id,
@@ -5183,7 +5382,8 @@ private extension AgentJITGrant {
             requestedItems: [],
             agentRuntimeContext: agentRuntimeContext,
             approvedBy: "biometric",
-            environmentScope: environmentScope
+            environmentScope: environmentScope,
+            mcpUpstreamCommand: mcpUpstreamCommand
         )
     }
 
@@ -5201,7 +5401,8 @@ private extension AgentJITGrant {
             requestedItems: requestedItems,
             agentRuntimeContext: agentRuntimeContext,
             approvedBy: approvedBy,
-            environmentScope: environmentScope
+            environmentScope: environmentScope,
+            mcpUpstreamCommand: mcpUpstreamCommand
         )
     }
 }

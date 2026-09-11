@@ -442,8 +442,8 @@ public struct AgentJITPreflightPayload: Codable, Equatable, Sendable {
     public let references: [AgentJITPreflightReference]
     public let environmentScope: EnvironmentAccessScope?
     public let mcpUpstreamName: String?
-    /// Display-only argv of the declared child, so the human approving an
-    /// admission sees which binary is about to start, not only its policy name.
+    /// Readable argv prefix plus the signed proxy's digest of the exact argv.
+    /// The host uses it to bind reusable MCP grants and displays it for approval.
     public let mcpUpstreamCommand: String?
     public let mcpToolName: String?
     public let mcpToolPolicy: AgentJITMCPToolPolicy?
