@@ -5,7 +5,7 @@ import Testing
 
 @Suite("MCP proxy command")
 struct MCPProxyCommandTests {
-    @Test("Cursor project enrollment preserves the native workspace launch hint")
+    @Test("Cursor project enrollment resolves its selected workspace despite unresolved native hints")
     func cursorProjectLaunchContext() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }
@@ -24,15 +24,26 @@ struct MCPProxyCommandTests {
         let resolved = try MCPCommand.Proxy.startingDirectory(workspace: nil,
             environment: environment, currentDirectoryPath: home.path)
         #expect(resolved == project.standardizedFileURL.resolvingSymlinksInPath())
-        #expect(configuredEnvironment[MCPProxyClientLaunch.workspaceEnvironmentKey] == nil)
+        #expect(configuredEnvironment[MCPProxyClientLaunch.workspaceEnvironmentKey] == project.path)
         #expect(entry["args"] as? [String] == ["mcp", "proxy"])
 
         for hint in ["", "${workspaceFolder}", project.path + "," + home.path] {
-            let invalidEnvironment = ["WORKSPACE_FOLDER_PATHS": hint].merging(configuredEnvironment) { _, configured in configured }
+            let boundEnvironment = ["WORKSPACE_FOLDER_PATHS": hint].merging(configuredEnvironment) { _, configured in configured }
+            #expect(try MCPCommand.Proxy.startingDirectory(workspace: nil,
+                environment: boundEnvironment, currentDirectoryPath: home.path)
+                == project.standardizedFileURL.resolvingSymlinksInPath())
+            // Unbound/global launches must still reject ambiguous input, never
+            // silently use cwd and accidentally select another workspace policy.
             #expect(throws: (any Error).self) {
                 try MCPCommand.Proxy.startingDirectory(workspace: nil,
-                    environment: invalidEnvironment, currentDirectoryPath: project.path)
+                    environment: ["WORKSPACE_FOLDER_PATHS": hint], currentDirectoryPath: project.path)
             }
+        }
+        var conflictingEnvironment = configuredEnvironment
+        conflictingEnvironment["CLAUDE_PROJECT_DIR"] = home.path
+        #expect(throws: (any Error).self) {
+            try MCPCommand.Proxy.startingDirectory(workspace: nil,
+                environment: conflictingEnvironment, currentDirectoryPath: project.path)
         }
     }
 

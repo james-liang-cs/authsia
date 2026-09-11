@@ -102,15 +102,17 @@ public enum MCPLocalMCPClientWrap {
     }
 
     #if os(macOS)
-    /// Repair only the generated Cursor placeholder, preserving all other client
-    /// settings. The existing management confirmation applies the checked change.
+    /// Bind older generated Cursor project entries to the selected workspace.
+    /// Never rewrite an explicit user binding or a global entry. The existing
+    /// management confirmation applies the checked change.
     public static func workspaceRepair(
         for finding: MCPClientServerFinding,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) throws -> MCPPreparedFileChange? {
         guard finding.source == .cursor, finding.configScope == .project,
               finding.precedence == .effective, finding.status == .admittedWrapped,
-              finding.isAuthsiaProxyLaunch else { return nil }
+              finding.isAuthsiaProxyLaunch,
+              let workspace = wrapWorkspacePath(for: finding, homeDirectory: homeDirectory) else { return nil }
         let file = fileURL(for: finding, homeDirectory: homeDirectory)
         let before = try readConfig(at: file, fileManager: .default)
         guard var object = try JSONSerialization.jsonObject(with: before) as? [String: Any],
@@ -118,14 +120,15 @@ public enum MCPLocalMCPClientWrap {
               var entry = servers[finding.serverName] as? [String: Any],
               let command = entry["command"] as? String,
               URL(fileURLWithPath: command).lastPathComponent == "authsia",
-              let args = entry["args"] as? [String],
+              let args = entry["args"] as? [String], args == MCPProxyClientLaunch.arguments,
               var env = entry["env"] as? [String: Any],
               entry["disabled"] as? Bool != true,
               let upstream = MCPProxyClientLaunch.wrappedUpstreamName(arguments: args,
                   environmentName: env[MCPProxyClientLaunch.environmentKey] as? String),
-              upstream.lowercased() == finding.declaredUpstreamName?.lowercased(),
-              env[MCPProxyClientLaunch.workspaceEnvironmentKey] as? String == "${workspaceFolder}" else { return nil }
-        env.removeValue(forKey: MCPProxyClientLaunch.workspaceEnvironmentKey)
+              upstream.lowercased() == finding.declaredUpstreamName?.lowercased() else { return nil }
+        let hint = env[MCPProxyClientLaunch.workspaceEnvironmentKey]
+        guard hint == nil || hint as? String == "${workspaceFolder}" else { return nil }
+        env[MCPProxyClientLaunch.workspaceEnvironmentKey] = workspace
         entry["env"] = env; servers[finding.serverName] = entry; object["mcpServers"] = servers
         let after = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         return MCPPreparedFileChange(fileURL: file, original: before, replacement: after)
@@ -447,16 +450,18 @@ public enum MCPLocalMCPClientWrap {
         }
     }
 
-    /// The workspace a wrapped launch binds to when the client has no repository
-    /// context of its own. Named in the
+    /// The workspace a wrapped launch binds to for a Cursor project entry or a
+    /// client with no repository context of its own. Named in the
     /// environment rather than argv, preserving company command allowlists.
     public static func wrapWorkspacePath(
         for finding: MCPClientServerFinding,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> String? {
-        // Cursor supplies WORKSPACE_FOLDER_PATHS itself. A configured placeholder
-        // overrides that native value without being expanded by its stdio launcher.
-        guard !finding.source.hasWorkspaceOfItsOwn,
+        // Cursor Agents can supply an unresolved native workspace hint. Only its
+        // project entry is safe to bind to a literal path; a global fallback must
+        // remain unbound so it cannot select this project's policy elsewhere.
+        let cursorProject = finding.source == .cursor && finding.configScope == .project
+        guard cursorProject || !finding.source.hasWorkspaceOfItsOwn,
               let label = finding.workspacePathLabel,
               !label.isEmpty else {
             return nil

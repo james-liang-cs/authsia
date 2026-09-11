@@ -191,7 +191,7 @@ Direct agents.
 
 **Route configured** means the scanned client launch points through Authsia
 and its workspace declaration is usable. Per-client status separately shows
-**Repair needed**, **Awaiting client connection**, or the latest **Call succeeded** /
+**Repair needed**, **Finish setup in Cursor**, **Awaiting client connection**, or the latest **Call succeeded** /
 **Call failed** result with its time. A configured route does not
 mean a child is currently running or that access is already approved. Manager
 matches known MCP client names (`codex-mcp-client`, `cursor-vscode`, and
@@ -276,17 +276,23 @@ rather than in argv keeps the two-entry allowlist intact. A Desktop row with no
 managed workspace selected cannot be protected.
 
 Cursor protection and enrollment write `.cursor/mcp.json` in the selected
-project, creating the file when necessary. Generated entries omit
-`WORKSPACE_FOLDER_PATHS`: Cursor supplies the actual workspace paths at launch.
-An entry-level `${workspaceFolder}` value can overwrite that native hint without
-being expanded. No absolute project path is saved in the entry. The proxy still
+project, creating the file when necessary. Generated STDIO entries set
+`WORKSPACE_FOLDER_PATHS` to that project's absolute path. Cursor Agents can supply
+an unresolved native hint; a literal project binding avoids relying on placeholder
+expansion or the client's working directory. Only the project entry is pinned,
+never the user-global fallback. The proxy still
 rejects empty, unresolved, conflicting, or ambiguous supplied hints before startup.
-For older entries, Manager detects that exact generated placeholder and offers
-**Repair Cursor**. The existing native-confirmation flow removes only the override,
-preserves all other settings, and rejects stale file bytes. After applying, Manager
-shows **Customize > MCPs > Configure this server**, enable the workspace source,
-then Reload and make a permitted call. Manager does not read or change Cursor's
-private enablement database or infer a plugin-name collision.
+For older generated project entries with a missing hint or the exact
+`${workspaceFolder}` placeholder, Manager offers **Repair Cursor**. Native
+confirmation binds that entry to the selected workspace, preserves all other
+settings, and rejects stale file bytes. An explicit user binding is not silently
+rewritten. After Protect or Repair, **Finish setup in Cursor** shows the workspace
+and server: **Customize > Manage scope > selected workspace (not User) > MCPs**,
+configure the server, enable its **Workspace source**, then **Reload**. Confirm
+tools appear, make a permitted call, and refresh Authsia. If startup fails, open
+Cursor's **Show Output**. Manager cannot enable or verify this source switch; it
+does not read or change Cursor's private enablement database. A project entry and
+a working user-global source with the same name do not prove project readiness.
 
 Protecting a user-global Cursor entry prepares two reviewed changes: an unbound
 Authsia proxy fallback in the global file and a project override. Both file
@@ -960,8 +966,10 @@ The portal aggregates `mcpUpstreams` from pinned and known managed workspaces,
 then overlays the existing client-configuration scan. **Servers** is the
 protection-coverage surface: declared servers, discovered client entries, and
 per-client routing, repair actions, and connection guidance. Configured routes
-without call evidence have a neutral **Awaiting client connection** badge and
-**View steps**. A green **Call succeeded** badge requires a successful latest
+without call evidence have an **Awaiting client connection** badge; Cursor instead
+has an amber **Finish setup in Cursor** badge with **View steps**. Protect saves
+routing and captures a missing eligible catalog, but does not claim to activate
+Cursor's workspace source. A green **Call succeeded** badge requires a successful latest
 retained tool-call record matching both server identity and client label;
 another client's activity cannot satisfy it. A newer failure replaces an older
 success. Call timestamps describe history, not a live connection probe.

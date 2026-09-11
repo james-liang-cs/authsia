@@ -16,7 +16,7 @@ public struct MCPClientReadiness: Codable, Equatable, Sendable {
 
     public static func clientSteps(_ source: MCPClientConfigSource) -> String {
         if source == .cursor {
-            return "In Cursor, open Customize > MCPs > Configure this server. Enable the source for this workspace, then Reload. Ask Cursor to call an allowed tool through that project source, then refresh Authsia."
+            return "Authsia saved the routing configuration but cannot enable or verify Cursor's source switch. In Cursor, open Customize > Manage scope, select this workspace (not User), then MCPs > Configure this server. Enable the Workspace source and click Reload. Confirm its tools appear, call an allowed tool through that project source, then refresh Authsia."
         }
         return "Enable this server in \(source.displayName), reload the client, and call an allowed tool through Authsia. Refresh here to check the result."
     }
@@ -31,7 +31,7 @@ public struct MCPClientReadiness: Codable, Equatable, Sendable {
             return .init(state: .disabled, detail: clientSteps(finding.source))
         }
         if needsRepair {
-            return .init(state: .repairRequired, detail: "Authsia found an unresolved Cursor workspace setting. Repair removes the generated override so Cursor can supply the project path.")
+            return .init(state: .repairRequired, detail: "This Cursor project route has no concrete workspace binding. Repair binds only this project entry to the selected workspace; global settings and tool policy stay unchanged.")
         }
         var labels = [finding.source.rawValue.lowercased(), finding.source.displayName.lowercased()]
         // MCP initialize names can differ from the configuration source name.
