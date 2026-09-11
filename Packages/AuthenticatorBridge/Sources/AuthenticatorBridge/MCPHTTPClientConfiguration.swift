@@ -76,17 +76,19 @@ public enum MCPHTTPClientConfiguration {
     }
     /// Parent table plus dotted subtables such as `[mcp_servers.name.http_headers]`.
     private static func serverSubtree(_ text: String, name: String) -> String {
+        serverSectionRanges(text, name: name).map { String(text[$0]) }.joined(separator: "\n")
+    }
+    private static func serverSectionRanges(_ text: String, name: String) -> [Range<String.Index>] {
         let escaped = NSRegularExpression.escapedPattern(for: name)
-        let pattern = "(?ms)^\\s*\\[\\s*mcp_servers\\s*\\.\\s*(?:" + escaped + "|\"" + escaped + "\"|'" + escaped + "')(?:\\.[^\\]]*)?\\s*\\][^\\n]*\\n(?:(?!^\\[).)*"
-        var collected = ""
+        let pattern = "(?ms)^[\\t ]*\\[[\\t ]*mcp_servers[\\t ]*\\.[\\t ]*(?:" + escaped + "|\"" + escaped + "\"|'" + escaped + "')[\\t ]*(?:\\.[^\\]]*)?\\][^\\n]*(?:\\n|$)(?:(?!^[\\t ]*\\[).)*"
+        var ranges: [Range<String.Index>] = []
         var search = text.startIndex
         while search < text.endIndex,
               let range = text.range(of: pattern, options: .regularExpression, range: search..<text.endIndex) {
-            collected += String(text[range])
-            collected += "\n"
+            ranges.append(range)
             search = range.upperBound
         }
-        return collected
+        return ranges
     }
     public static func prepareRemoval(binding: MCPHTTPAssociationBinding,
                                       home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> MCPPreparedFileChange {
@@ -97,7 +99,11 @@ public enum MCPHTTPClientConfiguration {
         let after: Data
         if binding.client == .codex {
             guard let text = String(data: original, encoding: .utf8), let range = sectionRange(text, name: name), text[range].contains(endpoint) else { throw MCPManagementError.stale }
-            after = Data(text.replacingCharacters(in: range, with: "").utf8)
+            var updated = text
+            for section in serverSectionRanges(text, name: name).reversed() {
+                updated.removeSubrange(section)
+            }
+            after = Data(updated.utf8)
         } else {
             var root = try object(original)
             if binding.client == .claude {

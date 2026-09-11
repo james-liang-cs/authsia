@@ -162,8 +162,13 @@ actor MCPHTTPRouter {
         if request.method == "DELETE" { retire(session); return .init(status: 200) }
         if request.method == "GET" {
             guard request.headers["Last-Event-ID"].isEmpty else { return .error(-32602, status: 400) }
+            // Clients may open this optional stream at startup. Admission belongs
+            // to an actual permitted tools/call, never background discovery.
+            guard session.grant != nil else {
+                return .init(status: 405, headers: HTTPHeaders([("Allow", "POST, DELETE")]))
+            }
             do {
-                let lease = try await lease(for: session, tool: "initialize")
+                let lease = try await lease(for: session, tool: "initialize", background: true)
                 try await initializeUpstream(session, lease: lease)
                 return try await forward(session, method: "GET", body: nil, lease: lease, invocation: nil, tool: nil)
             } catch { retire(session); return .error(-32020, status: 502) }
@@ -229,9 +234,11 @@ actor MCPHTTPRouter {
         }
     }
 
-    private func lease(for session: MCPHTTPSession, tool: String) async throws -> MCPHTTPLease {
-        let reply = try await dependencies.httpAuthority(.authorize(principal: session.principal, sessionID: session.id,
-            revision: session.server.authorizationRevision, tool: tool))
+    private func lease(for session: MCPHTTPSession, tool: String, background: Bool = false) async throws -> MCPHTTPLease {
+        let command: MCPHTTPAuthorityCommand = background
+            ? .authorizeExisting(principal: session.principal, sessionID: session.id, revision: session.server.authorizationRevision, tool: tool)
+            : .authorize(principal: session.principal, sessionID: session.id, revision: session.server.authorizationRevision, tool: tool)
+        let reply = try await dependencies.httpAuthority(command)
         guard let lease = reply.lease, sessions[session.id] === session, !stopped,
               lease.grant.principal == session.principal, lease.grant.sessionID == session.id,
               lease.grant.revision == session.server.authorizationRevision else { throw MCPManagementError.denied }

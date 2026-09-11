@@ -2,6 +2,33 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPHTTPClientConfigurationTests: XCTestCase {
+    func testCodexRemovalDeletesNestedTablesAndPreservesOtherServers() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent(".codex/config.toml")
+        let identity = MCPServerIdentity(workspacePath: root.appendingPathComponent("project").path, upstreamName: "internal")
+        let binding = MCPHTTPAssociationBinding(serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .codex)
+        let unrelated = "[mcp_servers.internal_other]\ncommand = \"fixture\"\n"
+        for name in ["internal", "\"internal\"", "'internal'"] {
+            let before = Data(("""
+            [mcp_servers.\(name)]
+            url = "http://127.0.0.1:8788/mcp/\(binding.serverID)"
+            [mcp_servers.\(name).http_headers]
+            Authorization = "Bearer synthetic-association"
+            \(unrelated)
+            [mcp_servers.\(name).tools.read]
+            approval_mode = "prompt"
+            """ + "\n").utf8)
+            try before.write(to: file)
+            let plan = try MCPHTTPClientConfiguration.prepareRemoval(binding: binding, home: root)
+            XCTAssertEqual(try Data(contentsOf: file), before)
+            XCTAssertEqual(String(decoding: plan.replacement, as: UTF8.self), unrelated + "\n")
+            try plan.apply()
+            XCTAssertEqual(try Data(contentsOf: file), plan.replacement)
+        }
+    }
+
     func testProtectingDirectEntryPreservesClientOptions() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent(".cursor"), withIntermediateDirectories: true)

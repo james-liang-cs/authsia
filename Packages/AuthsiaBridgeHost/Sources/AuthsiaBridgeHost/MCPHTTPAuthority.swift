@@ -131,16 +131,22 @@ final class MCPHTTPAuthority {
                 $0.principal.binding.serverID == serverID && constantTimeEqual($0.digest, digest)
             }) else { throw MCPManagementError.denied }
             return MCPHTTPAuthorityReply(principal: association.principal)
-        case .authorize(let principal, let sessionID, let revision, let tool):
+        case .authorize(let principal, let sessionID, let revision, let tool),
+             .authorizeExisting(let principal, let sessionID, let revision, let tool):
+            let background: Bool
+            if case .authorizeExisting = command { background = true } else { background = false }
             guard enabled(), UUID(uuidString: sessionID) != nil else { throw MCPManagementError.denied }
             let server = try checkedDefinition(principal, revision: revision)
             let decision = MCPToolPolicyEvaluator.decision(for: tool, policy: server.upstream.tools)
-            guard tool == "initialize" || tool == "catalog" || decision == .allow || decision == .approve else { throw MCPManagementError.denied }
+            guard background || tool == "catalog" || decision == .allow || decision == .approve else { throw MCPManagementError.denied }
             let resolved = try items(server.upstream.credentialHeaders)
             let originalEpoch = epoch
             var state = try load()
             var existing = matchingGrant(state, principal: principal, sessionID: sessionID, revision: revision, items: resolved)
-            if existing == nil || decision == .approve {
+            // A background GET may reuse live authority, but cannot create it
+            // or prompt again after expiry/revocation races with the router.
+            if background, existing == nil { throw MCPManagementError.denied }
+            if existing == nil || (decision == .approve && !background) {
                 // Session admission never substitutes for this invocation's tool approval.
                 guard await approve(server, principal, tool, resolved), epoch == originalEpoch, enabled() else { throw MCPManagementError.denied }
                 _ = try checkedDefinition(principal, revision: revision)

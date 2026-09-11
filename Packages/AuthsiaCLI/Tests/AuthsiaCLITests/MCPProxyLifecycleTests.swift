@@ -7,6 +7,16 @@ import Testing
 
 @Suite("MCP proxy lifecycle")
 struct MCPProxyLifecycleTests {
+    @Test("Codex IDE initializes the policy proxy without launching its child")
+    func codexIDEInitialization() async throws {
+        let fixture = try makeProxy(upstreamName: "Jira")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let transports = await InMemoryTransport.createConnectedPair()
+        try await fixture.proxy.start(transport: transports.server)
+        try await assertCodexIDEInitialization(transports.client)
+        await fixture.proxy.waitUntilCompleted()
+    }
+
     @Test("connected proxy notifies after catalog capture and policy removal")
     func catalogChangesNotifyConnectedClient() async throws {
         let fixture = try makeProxy(upstreamName: "Playwright", upstreams: [

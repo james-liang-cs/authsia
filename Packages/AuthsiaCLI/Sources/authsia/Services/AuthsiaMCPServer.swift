@@ -69,7 +69,8 @@ actor AuthsiaMCPServer {
 
     func start(transport: any Transport) async throws {
         await registerHandlersIfNeeded()
-        try await server.start(transport: transport) { [runtimeContext] client, _ in
+        let compatibleTransport = await MCPClientCapabilitiesTransport(transport)
+        try await server.start(transport: compatibleTransport) { [runtimeContext] client, _ in
             await runtimeContext.updateClientInfo(name: client.name, version: client.version)
         }
         diagnostics("Authsia MCP server started")

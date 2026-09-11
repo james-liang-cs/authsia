@@ -6,6 +6,28 @@ import NIOPosix
 @testable import AuthsiaBridgeHost
 
 final class MCPHTTPProxyServerTests: XCTestCase {
+    func testStartupGETDoesNotRequestAdmissionOrContactUpstream() async throws {
+        let fixture = try await HTTPMCPFixture.start()
+        addTeardownBlock { try await fixture.stop() }
+        let authorizations = HTTPAuthorizationCollector()
+        let router = HTTPRouterHarness(port: fixture.port).router(authorizations: authorizations)
+        addTeardownBlock { await router.shutdown() }
+        let sid = try await initialize(router)
+        let call = request(method: "tools/call", session: sid, tool: "read")
+        let get = await router.handle(.init(method: "GET", uri: call.uri, headers: call.headers, body: Data()))
+        XCTAssertEqual(get.status, 405)
+        let startupTools = await authorizations.tools
+        XCTAssertTrue(startupTools.isEmpty, "Opening the optional stream must not request a grant or credentials")
+        XCTAssertEqual(fixture.requestCount, 0)
+        let listed = await router.handle(request(method: "tools/list", session: sid))
+        XCTAssertEqual(listed.status, 200)
+        let result = await router.handle(call)
+        let output = try await collect(result)
+        XCTAssertTrue(String(decoding: output, as: UTF8.self).contains("fixture-ok"))
+        let calledTools = await authorizations.tools
+        XCTAssertEqual(calledTools, ["read"], "The first tool call must name the actual tool at admission")
+    }
+
     func testHTTPVersionNegotiatesSupportedFallbackAndBindsLaterRequests() async throws {
         let router = HTTPRouterHarness(port: 19001).router()
         addTeardownBlock { await router.shutdown() }
@@ -44,6 +66,10 @@ final class MCPHTTPProxyServerTests: XCTestCase {
         let output = try await collect(result)
         XCTAssertTrue(String(decoding: output, as: UTF8.self).contains("fixture-ok"))
         XCTAssertFalse(String(decoding: output, as: UTF8.self).contains("synthetic-upstream"))
+        let admittedGET = await router.handle(.init(method: "GET", uri: call.uri, headers: call.headers, body: Data()))
+        XCTAssertEqual(admittedGET.status, 405)
+        let nextCall = await router.handle(call)
+        XCTAssertEqual(nextCall.status, 200)
     }
 
     func testSSEInitializationAndCatalogWithBOMAndCRLineEndings() async throws {
@@ -424,6 +450,10 @@ private actor HTTPTerminalGate {
     func release() { released = true; waiter?.resume(); waiter = nil }
 }
 private actor HTTPDataCollector { var data=Data();func append(_ chunk:Data){data.append(chunk)} }
+private actor HTTPAuthorizationCollector {
+    var tools: [String] = []
+    func append(_ tool: String) { tools.append(tool) }
+}
 private actor HTTPActivityCollector {
     var events: [MCPHTTPActivityEvent] = []
     var attempts: [MCPHTTPActivityOutcome] = []
@@ -442,7 +472,7 @@ private struct HTTPRouterHarness: Sendable {
     let port:Int
     let identity = MCPServerIdentity(workspacePath:"/tmp/fixture",upstreamName:"internal")
     let primary = UUID(), secondary = UUID(), generation = UUID()
-    func router(failAudit:Bool=false, events: HTTPActivityCollector? = nil, denyAdmission: Bool = false, failFirstTerminal: Bool = false, failEveryTerminal: Bool = false, terminalGate: HTTPTerminalGate? = nil) -> MCPHTTPRouter {
+    func router(failAudit:Bool=false, events: HTTPActivityCollector? = nil, denyAdmission: Bool = false, failFirstTerminal: Bool = false, failEveryTerminal: Bool = false, terminalGate: HTTPTerminalGate? = nil, authorizations: HTTPAuthorizationCollector? = nil) -> MCPHTTPRouter {
         let server=MCPServerSnapshot(id:"fixture-server",identity:identity,displayName:"Internal",transport:.streamableHTTP,
             endpointLabel:"http://127.0.0.1:\(port)/mcp",policy:.init(allow:["read"],deny:["delete"]),catalog:[.init(name:"read")],authorizationRevision:"revision")
         return MCPHTTPRouter(dependencies:.init(registrySnapshot:{.init(revision:"revision",servers:[server])},portalDocument:{"<html/>"},mcpAccessEnabled:{true},
@@ -450,7 +480,9 @@ private struct HTTPRouterHarness: Sendable {
                 switch command {
                 case .authenticate(_,let token):
                     return .init(principal:.init(id:token == "primary" ? primary : secondary,binding:.init(serverID:"fixture-server",identity:identity,client:.codex),generation:generation))
-                case .authorize(let principal,let session,let revision,_):
+                case .authorize(let principal,let session,let revision,let tool),
+                     .authorizeExisting(let principal,let session,let revision,let tool):
+                    await authorizations?.append(tool)
                     if denyAdmission { throw MCPManagementError.denied }
                     return .init(lease:.init(grant:.init(id:UUID(),principal:principal,sessionID:session,revision:revision,expiresAt:Date().addingTimeInterval(60),credentialLabels:[]),
                         headers:["X-API-Key":"synthetic-upstream"],secrets:["synthetic-upstream"]))

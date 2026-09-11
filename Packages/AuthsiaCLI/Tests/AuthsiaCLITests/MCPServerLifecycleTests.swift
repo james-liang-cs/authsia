@@ -7,6 +7,16 @@ import Testing
 
 @Suite("Local MCP server lifecycle")
 struct MCPServerLifecycleTests {
+    @Test("Codex IDE experimental object capabilities do not prevent initialization")
+    func codexIDEInitialization() async throws {
+        let fixture = try makeServer()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let transports = await InMemoryTransport.createConnectedPair()
+        try await fixture.server.start(transport: transports.server)
+        try await assertCodexIDEInitialization(transports.client)
+        await fixture.server.waitUntilCompleted()
+    }
+
     @Test("serve command is visible and registered at the root")
     func commandRegistration() throws {
         #expect(MCPCommand.Serve.configuration.shouldDisplay)

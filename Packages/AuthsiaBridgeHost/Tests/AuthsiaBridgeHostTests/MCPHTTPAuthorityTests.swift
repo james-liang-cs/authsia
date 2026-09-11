@@ -34,6 +34,27 @@ final class MCPHTTPAuthorityTests: XCTestCase {
         catch { XCTAssertEqual(error as? MCPManagementError, .stale) }
         XCTAssertEqual(reads, 0)
     }
+    func testBackgroundStreamCannotCreateOrRenewAdmission() async throws {
+        let server = try definition()
+        var prompts: [String] = []
+        let authority = MCPHTTPAuthority(storage: MemoryHTTPAuthorityBlob(), definition: { _ in server },
+            items: { _ in [] }, secret: { _ in XCTFail("no credential needed"); return "" },
+            approve: { _, _, tool, _ in prompts.append(tool); return true },
+            recordAdmission: { _ in }, enabled: { true })
+        let (principal, _) = try await enroll(authority, definition: server)
+        let session = UUID().uuidString
+        let background = MCPHTTPAuthorityCommand.authorizeExisting(principal: principal, sessionID: session, revision: server.revision, tool: "initialize")
+        do { _ = try await authority.execute(background); XCTFail("startup GET must not admit") }
+        catch { XCTAssertEqual(error as? MCPManagementError, .denied) }
+        XCTAssertTrue(prompts.isEmpty)
+        let call = try await authority.execute(.authorize(principal: principal, sessionID: session, revision: server.revision, tool: "read"))
+        let stream = try await authority.execute(background)
+        XCTAssertEqual(stream.lease?.grant.id, call.lease?.grant.id)
+        _ = try await authority.execute(.revoke(grantID: call.lease?.grant.id))
+        do { _ = try await authority.execute(background); XCTFail("GET must not renew revoked admission") }
+        catch { XCTAssertEqual(error as? MCPManagementError, .denied) }
+        XCTAssertEqual(prompts, ["read"])
+    }
     func testAssociationsAndSessionsCannotBorrowAnotherGrant() async throws {
         let server = try definition(); var approvals = 0
         let authority = MCPHTTPAuthority(storage: MemoryHTTPAuthorityBlob(), definition: { _ in server }, items: { _ in [] },

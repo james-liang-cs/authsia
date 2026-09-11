@@ -58,6 +58,8 @@ public enum MCPHTTPAuthorityCommand: Codable, Sendable {
     case discardEnrollment(UUID)
     case authenticate(serverID: String, token: String)
     case authorize(principal: MCPHTTPPrincipal, sessionID: String, revision: String, tool: String)
+    /// Refresh a background stream only from existing live admission; never prompt.
+    case authorizeExisting(principal: MCPHTTPPrincipal, sessionID: String, revision: String, tool: String)
     case validate(grantID: UUID, principal: MCPHTTPPrincipal, sessionID: String, revision: String)
     case revoke(grantID: UUID?)
     case revokeAssociation(UUID)

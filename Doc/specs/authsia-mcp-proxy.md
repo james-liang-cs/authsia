@@ -1185,6 +1185,12 @@ rejected. The tools-only proxy and catalog reader honor a supported version
 selected by the upstream independently of the client-facing session. Unknown
 upstream versions fail before catalog or tool dispatch.
 
+Before tool admission, the optional GET stream returns local 405 without
+requesting JIT, resolving credentials, or contacting the upstream. After a
+permitted tool call establishes admission, GET may reuse that live grant but
+cannot create or renew admission after expiry or revocation. This keeps client
+startup probes separate from the first-tool-call approval contract.
+
 An upstream returning 405 for its optional GET stream leaves the downstream
 session usable for POST tool calls. JSON and SSE initialization are accepted;
 SSE decoding handles LF, CRLF, CR, and one leading UTF-8 byte-order mark while
@@ -1195,6 +1201,10 @@ and [SSE framing](https://html.spec.whatwg.org/multipage/server-sent-events.html
 contracts. Loopback fixture tests cover all three negotiated versions, fallback,
 header rejection, optional GET, catalog capture, framing, and masking. This is
 protocol regression evidence, not certification of installed client versions.
+
+Codex routing removal deletes the complete selected server TOML subtree,
+including separately serialized `http_headers` tables, while preserving other
+servers. A leftover subtable would create an implicit server without a transport.
 
 Resources, prompts, sampling, elicitation, and other
 methods fail explicitly. Complete SSE messages are decoded, masked, and delivered
