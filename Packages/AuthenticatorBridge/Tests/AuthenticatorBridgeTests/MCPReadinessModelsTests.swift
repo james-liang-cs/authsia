@@ -3,6 +3,46 @@ import XCTest
 @testable import AuthenticatorBridge
 
 final class MCPReadinessModelsTests: XCTestCase {
+    func testHTTPGuidanceUsesUserScopeAndRecognizesDisabledProtectedEndpoint() throws {
+        for status in [MCPClientServerAdmissionStatus.admittedWrapped, .disabled] {
+            let finding = MCPClientServerFinding(source: .cursor, serverName: "http-fixture",
+                commandLabel: "HTTP", status: status, declaredUpstreamName: "http-fixture",
+                configPathLabel: "fixture/mcp.json", configScope: .userGlobal,
+                localHTTPEndpoint: "http://127.0.0.1:8788/mcp/fixture")
+            let readiness = MCPClientReadiness.evaluate(finding: finding, serverID: "fixture", activity: [], needsRepair: false)
+            let instructions = try XCTUnwrap(readiness.setupSteps).joined(separator: " ")
+            XCTAssertTrue(instructions.contains("User source"))
+            XCTAssertFalse(instructions.contains("Workspace source"))
+            XCTAssertFalse(instructions.contains("not User"))
+            XCTAssertEqual(try JSONDecoder().decode(MCPClientReadiness.self, from: JSONEncoder().encode(readiness)), readiness)
+        }
+        let old = try JSONDecoder().decode(MCPClientReadiness.self,
+            from: Data(#"{"state":"awaitingClient","detail":"Refresh to check setup."}"#.utf8))
+        XCTAssertNil(old.setupSteps)
+    }
+
+    func testCursorGuidanceUsesScopeAndDoesNotClaimDisabledDirectRoutesAreProtected() {
+        for scope in [MCPClientConfigScope.project, .userGlobal] {
+            for protected in [false, true] {
+                let finding = MCPClientServerFinding(source: .cursor, serverName: "fixture",
+                    commandLabel: protected ? "authsia" : "fixture-server", status: .disabled,
+                    declaredUpstreamName: "fixture", configPathLabel: "fixture/mcp.json",
+                    configScope: scope, workspacePathLabel: "/tmp/fixture", isAuthsiaProxyLaunch: protected)
+                let result = MCPClientReadiness.evaluate(finding: finding, serverID: "fixture", activity: [], needsRepair: false)
+                XCTAssertFalse(result.detail.contains("Authsia saved"))
+                if protected {
+                    let instructions = result.setupSteps?.joined(separator: " ") ?? ""
+                    XCTAssertTrue(instructions.contains(scope == .project ? "Workspace source" : "User source"))
+                    XCTAssertEqual(instructions.contains("not User"), scope == .project)
+                } else {
+                    XCTAssertTrue(result.detail.contains("not routed through Authsia"))
+                    XCTAssertFalse(result.detail.contains("Enable the"))
+                    XCTAssertNil(result.setupSteps)
+                }
+            }
+        }
+    }
+
     func testClientReadinessRecognizesMCPClientNamesWithoutBorrowingOtherClientsCalls() {
         let clients: [(MCPClientConfigSource, String)] = [
             (.codex, "codex-mcp-client"),
@@ -28,7 +68,7 @@ final class MCPReadinessModelsTests: XCTestCase {
 
     func testClientReadinessDoesNotBorrowAnotherClientsSuccessAndUsesLatestOutcome() {
         let finding = MCPClientServerFinding(source: .cursor, serverName: "example", commandLabel: "authsia",
-            status: .admittedWrapped, declaredUpstreamName: "example", configPathLabel: "fixture/mcp.json")
+            status: .admittedWrapped, declaredUpstreamName: "example", configPathLabel: "fixture/mcp.json", configScope: .project)
         func call(_ client: String, _ time: Double, _ outcome: MCPHTTPActivityOutcome) -> MCPActivityRecord {
             .init(id: UUID(), kind: .toolCall, recordedAt: Date(timeIntervalSince1970: time),
                 workspacePath: "/tmp/fixture", serverID: "example", serverName: "example", toolName: "read",
@@ -37,9 +77,10 @@ final class MCPReadinessModelsTests: XCTestCase {
         let unrelated = call("codex", 20, .succeeded)
         let waiting = MCPClientReadiness.evaluate(finding: finding, serverID: "example", activity: [unrelated], needsRepair: false)
         XCTAssertEqual(waiting.state, .awaitingClient)
-        XCTAssertTrue(waiting.detail.contains("Manage scope"))
-        XCTAssertTrue(waiting.detail.contains("Workspace source"))
-        XCTAssertTrue(waiting.detail.contains("not User"))
+        let instructions = waiting.setupSteps?.joined(separator: " ") ?? ""
+        XCTAssertTrue(instructions.contains("Manage scope"))
+        XCTAssertTrue(instructions.contains("Workspace source"))
+        XCTAssertTrue(instructions.contains("not User"))
         XCTAssertTrue(waiting.detail.contains("cannot enable or verify"))
         let success = call("cursor", 10, .succeeded), failure = call("cursor", 30, .upstreamUnavailable)
         let failed = MCPClientReadiness.evaluate(finding: finding, serverID: "example", activity: [failure, unrelated, success], needsRepair: false)

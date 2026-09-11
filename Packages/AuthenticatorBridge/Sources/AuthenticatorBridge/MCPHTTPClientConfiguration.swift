@@ -71,24 +71,79 @@ public enum MCPHTTPClientConfiguration {
               entry["headers"] == nil, entry["headersHelper"] == nil else { throw MCPManagementError.stale }
     }
     private static func sectionRange(_ text: String, name: String) -> Range<String.Index>? {
-        let name = NSRegularExpression.escapedPattern(for: name)
-        return text.range(of: "(?ms)^\\s*\\[mcp_servers\\.(?:" + name + "|\"" + name + "\"|'" + name + "')\\][^\\n]*\\n(?:(?!^\\[).)*", options: .regularExpression)
+        serverSections(text, name: name, includeChildren: false).first
     }
     /// Parent table plus dotted subtables such as `[mcp_servers.name.http_headers]`.
     private static func serverSubtree(_ text: String, name: String) -> String {
         serverSectionRanges(text, name: name).map { String(text[$0]) }.joined(separator: "\n")
     }
     private static func serverSectionRanges(_ text: String, name: String) -> [Range<String.Index>] {
+        serverSections(text, name: name, includeChildren: true)
+    }
+    private static func serverSections(_ text: String, name: String, includeChildren: Bool) -> [Range<String.Index>] {
         let escaped = NSRegularExpression.escapedPattern(for: name)
-        let pattern = "(?ms)^[\\t ]*\\[[\\t ]*mcp_servers[\\t ]*\\.[\\t ]*(?:" + escaped + "|\"" + escaped + "\"|'" + escaped + "')[\\t ]*(?:\\.[^\\]]*)?\\][^\\n]*(?:\\n|$)(?:(?!^[\\t ]*\\[).)*"
-        var ranges: [Range<String.Index>] = []
-        var search = text.startIndex
-        while search < text.endIndex,
-              let range = text.range(of: pattern, options: .regularExpression, range: search..<text.endIndex) {
-            ranges.append(range)
-            search = range.upperBound
+        let children = includeChildren ? "(?:\\..+)?" : ""
+        let open = includeChildren ? "\\[\\[?" : "\\["
+        let close = includeChildren ? "\\]\\]?" : "\\]"
+        let pattern = "^[\\t ]*" + open + "[\\t ]*(?:mcp_servers|\"mcp_servers\"|'mcp_servers')[\\t ]*\\.[\\t ]*(?:" + escaped + "|\"" + escaped + "\"|'" + escaped + "')[\\t ]*" + children + close + "[\\t ]*(?:#.*)?$"
+        guard let headings = tableHeadings(text) else { return [] }
+        return headings.enumerated().compactMap { index, heading in
+            guard text[heading].range(of: pattern, options: .regularExpression) != nil else { return nil }
+            let end = index + 1 < headings.count ? headings[index + 1].lowerBound : text.endIndex
+            return heading.lowerBound..<end
         }
-        return ranges
+    }
+
+    /// Lexical table boundaries, not a TOML decoder. Never interpret a header
+    /// example inside a string/comment/array as configuration. Incomplete strings
+    /// or collections fail closed; all retained bytes stay exactly as written.
+    private static func tableHeadings(_ text: String) -> [Range<String.Index>]? {
+        let bytes = Array(text.utf8)
+        var headings: [Range<String.Index>] = []
+        var i = 0, depth = 0, lineOffset = 0, lineStart = true, multiline = false
+        var quote: UInt8?
+        func index(_ offset: Int) -> String.Index { String.Index(text.utf8.index(text.utf8.startIndex, offsetBy: offset), within: text)! }
+        while i < bytes.count {
+            let c = bytes[i]
+            if let delimiter = quote {
+                if c == 92 && delimiter == 34 { i += min(2, bytes.count - i); continue }
+                if c == delimiter {
+                    var end = i + 1
+                    while end < bytes.count && bytes[end] == delimiter { end += 1 }
+                    if !multiline { quote = nil; i += 1; continue }
+                    if end - i >= 3 { quote = nil; i = end; continue }
+                }
+                if !multiline && (c == 10 || c == 13) { return nil }
+                i += 1; continue
+            }
+            if c == 10 || c == 13 { lineStart = true; i += 1; lineOffset = i; continue }
+            if lineStart && (c == 32 || c == 9) { i += 1; continue }
+            if c == 35 {
+                while i < bytes.count && bytes[i] != 10 && bytes[i] != 13 { i += 1 }
+                continue
+            }
+            if lineStart && depth == 0 && c == 91 {
+                var end = i
+                while end < bytes.count && bytes[end] != 10 && bytes[end] != 13 { end += 1 }
+                let heading = index(lineOffset)..<index(end)
+                guard !text[heading].contains("\\"),
+                      text[heading].range(of: "^[\\t ]*\\[.+\\][\\t ]*(?:#.*)?$", options: .regularExpression) != nil else { return nil }
+                // Escaped table keys need a full TOML decoder; refuse that form
+                // rather than accidentally leaving part of the selected subtree.
+                headings.append(heading); i = end; continue
+            }
+            lineStart = false
+            if c == 34 || c == 39 {
+                quote = c
+                multiline = i + 2 < bytes.count && bytes[i + 1] == c && bytes[i + 2] == c
+                i += multiline ? 3 : 1
+            } else {
+                if c == 91 || c == 123 { depth += 1 }
+                if c == 93 || c == 125 { depth -= 1; if depth < 0 { return nil } }
+                i += 1
+            }
+        }
+        return quote == nil && depth == 0 ? headings : nil
     }
     public static func prepareRemoval(binding: MCPHTTPAssociationBinding,
                                       home: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> MCPPreparedFileChange {

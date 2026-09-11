@@ -275,7 +275,7 @@ Because company allowlists match command plus argv, naming the workspace there
 rather than in argv keeps the two-entry allowlist intact. A Desktop row with no
 managed workspace selected cannot be protected.
 
-Cursor protection and enrollment write `.cursor/mcp.json` in the selected
+Cursor STDIO protection and enrollment write `.cursor/mcp.json` in the selected
 project, creating the file when necessary. Generated STDIO entries set
 `WORKSPACE_FOLDER_PATHS` to that project's absolute path. Cursor Agents can supply
 an unresolved native hint; a literal project binding avoids relying on placeholder
@@ -293,6 +293,12 @@ tools appear, make a permitted call, and refresh Authsia. If startup fails, open
 Cursor's **Show Output**. Manager cannot enable or verify this source switch; it
 does not read or change Cursor's private enablement database. A project entry and
 a working user-global source with the same name do not prove project readiness.
+
+HTTP enrollment instead uses the user-global configuration: select **User** and
+enable its **User source**. Readiness supplies the same scope-aware steps to the
+connection view and completion screen. Disabled direct entries are not protected;
+they must remain disabled until protection is configured, rather than being told
+to enable a saved route.
 
 Protecting a user-global Cursor entry prepares two reviewed changes: an unbound
 Authsia proxy fallback in the global file and a project override. Both file
@@ -1229,6 +1235,9 @@ protocol regression evidence, not certification of installed client versions.
 Codex routing removal deletes the complete selected server TOML subtree,
 including separately serialized `http_headers` tables, while preserving other
 servers. A leftover subtable would create an implicit server without a transport.
+Table boundaries are recognized outside TOML strings and comments, so header
+examples inside multiline values remain untouched. Incomplete strings or
+collections and escaped table keys are rejected without writing the file.
 
 Resources, prompts, sampling, elicitation, and other
 methods fail explicitly. Complete SSE messages are decoded, masked, and delivered

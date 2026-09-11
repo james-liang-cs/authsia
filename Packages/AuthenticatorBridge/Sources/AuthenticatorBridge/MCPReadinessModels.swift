@@ -7,18 +7,37 @@ public struct MCPClientReadiness: Codable, Equatable, Sendable {
     public let state: State
     public let detail: String
     public let lastObservedAt: Date?
+    public let setupSteps: [String]?
 
-    public init(state: State, detail: String, lastObservedAt: Date? = nil) {
+    public init(state: State, detail: String, lastObservedAt: Date? = nil, setupSteps: [String]? = nil) {
         self.state = state
         self.detail = detail
         self.lastObservedAt = lastObservedAt
+        self.setupSteps = setupSteps
     }
 
-    public static func clientSteps(_ source: MCPClientConfigSource) -> String {
+    public static func clientSetupSteps(_ source: MCPClientConfigSource, scope: MCPClientConfigScope = .project,
+                                        workspace: String? = nil, server: String? = nil) -> [String] {
         if source == .cursor {
-            return "Authsia saved the routing configuration but cannot enable or verify Cursor's source switch. In Cursor, open Customize > Manage scope, select this workspace (not User), then MCPs > Configure this server. Enable the Workspace source and click Reload. Confirm its tools appear, call an allowed tool through that project source, then refresh Authsia."
+            let selection = scope == .project ? "workspace \(workspace ?? "selected in Authsia") (not User)" : "User (not a workspace)"
+            let sourceLabel = scope == .project ? "Workspace source" : "User source"
+            return [
+                "In Cursor, open Customize > Manage scope and select \(selection).",
+                "Open MCPs > \(server ?? "this server") > Configure. Enable the \(sourceLabel).",
+                "Click Reload and confirm its tools appear. For startup errors, open Show Output.",
+                "Call an allowed tool through that source, handle any native JIT request, then refresh Authsia."
+            ]
         }
-        return "Enable this server in \(source.displayName), reload the client, and call an allowed tool through Authsia. Refresh here to check the result."
+        return ["Enable this server in \(source.displayName), reload the client, and call an allowed tool through Authsia. Refresh here to check the result."]
+    }
+
+    public static func clientSteps(_ source: MCPClientConfigSource, scope: MCPClientConfigScope = .project,
+                                   workspace: String? = nil, server: String? = nil) -> String {
+        setupNotice(source) + clientSetupSteps(source, scope: scope, workspace: workspace, server: server).joined(separator: " ")
+    }
+
+    private static func setupNotice(_ source: MCPClientConfigSource) -> String {
+        source == .cursor ? "Authsia cannot enable or verify Cursor's source switch. " : ""
     }
 
     #if os(macOS)
@@ -27,11 +46,21 @@ public struct MCPClientReadiness: Codable, Equatable, Sendable {
         if finding.precedence == .overridden {
             return .init(state: .overridden, detail: "Another configuration overrides this entry. Open the effective entry for this client.")
         }
+        let protectedRoute = finding.status == .admittedWrapped || finding.isAuthsiaProxyLaunch
+            || finding.localHTTPEndpoint == "http://127.0.0.1:8788/mcp/" + serverID
+        let steps = clientSetupSteps(finding.source, scope: finding.configScope,
+            workspace: finding.workspacePathLabel, server: finding.serverName)
+        let guidance = setupNotice(finding.source)
         if finding.status == .disabled {
-            return .init(state: .disabled, detail: clientSteps(finding.source))
+            return protectedRoute
+                ? .init(state: .disabled, detail: "This protected route is disabled. " + guidance, setupSteps: steps)
+                : .init(state: .disabled, detail: "This disabled entry is not routed through Authsia. Keep it disabled and configure protection before enabling or calling tools.")
         }
         if needsRepair {
             return .init(state: .repairRequired, detail: "This Cursor project route has no concrete workspace binding. Repair binds only this project entry to the selected workspace; global settings and tool policy stay unchanged.")
+        }
+        if !protectedRoute {
+            return .init(state: .awaitingClient, detail: "This entry is not routed through Authsia. Configure protection before enabling or calling tools.")
         }
         var labels = [finding.source.rawValue.lowercased(), finding.source.displayName.lowercased()]
         // MCP initialize names can differ from the configuration source name.
@@ -55,10 +84,10 @@ public struct MCPClientReadiness: Codable, Equatable, Sendable {
             return .init(state: succeeded ? .callSucceeded : .callFailed,
                 detail: succeeded
                     ? "The last observed call from this client succeeded. This is historical evidence, not a live connection check."
-                    : "The last observed call from this client did not succeed. Open Activity for the failure details. " + clientSteps(finding.source),
-                lastObservedAt: latest.recordedAt)
+                    : "The last observed call from this client did not succeed. Open Activity for the failure details. " + guidance,
+                lastObservedAt: latest.recordedAt, setupSteps: succeeded ? nil : steps)
         }
-        return .init(state: .awaitingClient, detail: "No successful call from this client is recorded. " + clientSteps(finding.source))
+        return .init(state: .awaitingClient, detail: "No successful call from this client is recorded. " + guidance, setupSteps: steps)
     }
     #endif
 }
