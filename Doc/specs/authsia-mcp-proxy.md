@@ -221,6 +221,63 @@ slice with `authsia mcp activity export --json --unowned`.
 
 MCP setup and launch commands (`configure`, `wrap`, `unwrap`, `declare`, `catalog`, `serve`, `proxy`, `start`, and `restart`) fail while MCP Integrations is off, before starting listeners or changing configuration. The error directs you to enable **MCP Integrations** in **Authsia Settings > Developer Access**, then retry. The CLI never changes the toggle. Help, `status`, `doctor`, `activity export`, `stop`, and portal revocation remain available for inspection and cleanup. Portal changes also recheck the toggle when prepared and confirmed.
 
+### Client Configuration Scope And Workspace Authority
+
+Where a client finds an MCP server is separate from which workspace Authsia
+authorizes that server to use. A user-global proxy entry is not a global grant
+to workspace tools or secrets.
+
+| Layer | Purpose | Example |
+| --- | --- | --- |
+| User-global client configuration | Makes a server available across that client's projects, subject to client enablement and overrides | `~/.cursor/mcp.json` |
+| Project client configuration | Defines or overrides a server for a particular project | `project-a/.cursor/mcp.json` |
+| Authsia workspace declaration | Defines the upstream launch or endpoint, tool policy, and secret references for that workspace | `project-a/.authsia/workspace.json` |
+| Runtime authority | Authorizes use under the applicable admission or secret JIT grant; configuration alone creates no grant | An active, scoped grant shown in Active access |
+
+**File location is not always logical scope.** Claude Code can store a
+workspace-specific entry inside the user-local `~/.claude.json` file under
+`projects[<root>].mcpServers`. Conversely, a global STDIO proxy launch can serve
+several workspaces, but every selected workspace must independently declare the
+upstream and its policy. An explicit workspace binding remains fixed; an
+unpinned launch resolves its workspace from validated launch context. Selecting
+a workspace in Manager does not retarget an already-running client session.
+
+Manager scans supported global and project locations and reports effective,
+overridden, or conditional associations according to its client-specific
+precedence rules. These scans describe configuration, not the client's private
+enablement state or a verified live connection.
+
+| Operation | How Manager chooses the location |
+| --- | --- |
+| Protect an existing STDIO launch | Targets the applicable scanned entry rather than blindly adding a global duplicate; an overridden entry is not treated as the effective launch. Cursor uses the project-specific handling below. |
+| Protect Cursor STDIO | Creates or updates the selected project's `.cursor/mcp.json` and binds that entry to the absolute workspace. Protecting a global entry also prepares an unpinned protected global fallback and a project override, with both changes reviewed. |
+| Add a missing STDIO client entry | For supported enrollment clients other than Cursor, prefers an existing project file, otherwise the supported user-local location. Claude Code can use its workspace-specific entry inside `~/.claude.json`. |
+| Protect Claude Desktop | Uses its user-level configuration and explicitly binds the selected workspace, because Desktop supplies no repository context of its own. |
+| Enroll protected HTTP | Stores the association bearer only in user-local configuration: Cursor/Codex user configuration or Claude Code's workspace-specific entry inside its user-local file. Conflicting project entries can block enrollment. |
+
+HTTP uses user-local storage to keep the association bearer out of repository
+MCP files. That bearer identifies the enrolled connection; it is not the
+upstream API key. The protected endpoint is bound to one workspace and server,
+and upstream credentials remain subject to runtime authorization. A user-level
+HTTP entry therefore does not make the endpoint workspace-independent.
+
+**Shared setup versus per-client setup:** the recorded catalog, tool policy,
+and credential references belong to the Authsia workspace/server declaration.
+Protecting another client for that same declaration can reuse an existing
+catalog. Routing configuration, client-side enablement, HTTP association, and
+observed client readiness remain separate. Reusing a catalog or configuring a
+second client does not itself grant runtime access.
+
+For example, Cursor may have Playwright in its global configuration while
+`filesystem` exists only in `project-a/.cursor/mcp.json`. Cursor's User scope
+can then show Playwright without showing filesystem. Open `project-a` and
+select its workspace scope before enabling the filesystem Workspace source.
+If the workspace or server is missing, check that the correct folder is open
+and reload the client; do not add a global duplicate merely to make it appear
+in the User list. Saving protection does not enable Cursor's separate source
+switch, and a successful global Playwright call does not prove project
+filesystem readiness.
+
 ### Find The Server
 
 1. Initialize and validate the managed Authsia workspace.
