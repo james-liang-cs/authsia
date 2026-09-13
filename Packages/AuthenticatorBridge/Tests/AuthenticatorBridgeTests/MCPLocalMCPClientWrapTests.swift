@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import AuthenticatorBridge
 
@@ -545,7 +546,7 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         XCTAssertEqual((global["keep-global"] as? [String: Any])?["command"] as? String, "npx")
         XCTAssertNil(global["filesystem"])
         let projects = try XCTUnwrap(object["projects"] as? [String: Any])
-        let project = try XCTUnwrap(projects[workspace.path] as? [String: Any])
+        let project = try XCTUnwrap(projects[canonicalPath(workspace.path)] as? [String: Any])
         let servers = try XCTUnwrap(project["mcpServers"] as? [String: Any])
         let filesystem = try XCTUnwrap(servers["filesystem"] as? [String: Any])
         XCTAssertEqual(filesystem["command"] as? String, authsia)
@@ -603,11 +604,131 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         )
         XCTAssertNil((object["mcpServers"] as? [String: Any])?["filesystem"])
         let projects = try XCTUnwrap(object["projects"] as? [String: Any])
-        let project = try XCTUnwrap(projects[workspace.path] as? [String: Any])
+        let project = try XCTUnwrap(projects[canonicalPath(workspace.path)] as? [String: Any])
         let servers = try XCTUnwrap(project["mcpServers"] as? [String: Any])
         let filesystem = try XCTUnwrap(servers["filesystem"] as? [String: Any])
         XCTAssertEqual(filesystem["command"] as? String, authsia)
         XCTAssertEqual(filesystem["args"] as? [String], ["mcp", "proxy"])
+    }
+
+    func testClaudeLocalScopeWrapMigratesEquivalentProjectAlias() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let alias = root.appendingPathComponent("workspace-alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: workspace)
+        let canonical = try canonicalPath(workspace.path)
+        let claude = home.appendingPathComponent(".claude.json")
+        try writeJSON([
+            "projects": [
+                alias.path: [
+                    "mcpServers": [
+                        "filesystem": [
+                            "command": "node",
+                            "args": ["server.js"],
+                            "startup_timeout_sec": 15,
+                        ],
+                        "neighbor": ["command": "neighbor-server"],
+                    ],
+                    "aliasMetadata": true,
+                ],
+                canonical: [
+                    "mcpServers": [:],
+                    "hasTrustDialogAccepted": true,
+                ],
+            ],
+        ], to: claude)
+        let finding = MCPClientServerFinding(
+            source: .claude,
+            serverName: "filesystem",
+            commandLabel: "node",
+            status: .unadmitted,
+            declaredUpstreamName: nil,
+            configPathLabel: "~/.claude.json (local scope)",
+            configScope: .project,
+            precedence: .effective,
+            workspacePathLabel: alias.path,
+            wrapCommand: "node",
+            wrapArguments: ["server.js"],
+            isWrapEligible: true,
+            configFilePath: claude.path,
+            projectKey: canonical
+        )
+
+        let authsia = "/Applications/Authsia.app/Contents/Helpers/authsia"
+        let plan = try MCPLocalMCPClientWrap.plan(
+            finding: finding,
+            authsiaCommand: authsia,
+            homeDirectory: home
+        )
+        try MCPLocalMCPClientWrap.apply(plan, authsiaCommand: authsia)
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: claude)) as? [String: Any]
+        )
+        let projects = try XCTUnwrap(object["projects"] as? [String: Any])
+        let aliasProject = try XCTUnwrap(projects[alias.path] as? [String: Any])
+        let aliasServers = try XCTUnwrap(aliasProject["mcpServers"] as? [String: Any])
+        XCTAssertNil(aliasServers["filesystem"])
+        XCTAssertNotNil(aliasServers["neighbor"])
+        XCTAssertEqual(aliasProject["aliasMetadata"] as? Bool, true)
+        let canonicalProject = try XCTUnwrap(projects[canonical] as? [String: Any])
+        let canonicalServers = try XCTUnwrap(canonicalProject["mcpServers"] as? [String: Any])
+        let filesystem = try XCTUnwrap(canonicalServers["filesystem"] as? [String: Any])
+        XCTAssertEqual(filesystem["command"] as? String, authsia)
+        XCTAssertEqual((filesystem["startup_timeout_sec"] as? NSNumber)?.intValue, 15)
+        XCTAssertEqual(canonicalProject["hasTrustDialogAccepted"] as? Bool, true)
+    }
+
+    func testClaudeLocalScopeWrapRejectsConflictingEquivalentProjectEntries() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let alias = root.appendingPathComponent("workspace-alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: workspace)
+        let canonical = try canonicalPath(workspace.path)
+        let claude = home.appendingPathComponent(".claude.json")
+        try writeJSON([
+            "projects": [
+                alias.path: [
+                    "mcpServers": ["filesystem": ["command": "alias-server"]],
+                ],
+                canonical: [
+                    "mcpServers": ["filesystem": ["command": "canonical-server"]],
+                ],
+            ],
+        ], to: claude)
+        let finding = MCPClientServerFinding(
+            source: .claude,
+            serverName: "filesystem",
+            commandLabel: "canonical-server",
+            status: .unadmitted,
+            declaredUpstreamName: nil,
+            configPathLabel: "~/.claude.json (local scope)",
+            configScope: .project,
+            precedence: .effective,
+            workspacePathLabel: alias.path,
+            wrapCommand: "canonical-server",
+            isWrapEligible: true,
+            configFilePath: claude.path,
+            projectKey: canonical
+        )
+
+        XCTAssertThrowsError(
+            try MCPLocalMCPClientWrap.plan(
+                finding: finding,
+                authsiaCommand: "/Applications/Authsia.app/Contents/Helpers/authsia",
+                homeDirectory: home
+            )
+        ) { error in
+            XCTAssertEqual(error as? MCPLocalMCPClientWrap.WrapError, .malformedConfig)
+        }
     }
 
     func testExistingJSONSnippetRedactsChildEnvValuesAndKeepsKeys() throws {
@@ -766,7 +887,7 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         )
         let projects = try XCTUnwrap(object["projects"] as? [String: Any])
         let servers = try XCTUnwrap(
-            (projects[project.path] as? [String: Any])?["mcpServers"] as? [String: Any]
+            (projects[canonicalPath(project.path)] as? [String: Any])?["mcpServers"] as? [String: Any]
         )
         XCTAssertEqual((servers["playwright"] as? [String: Any])?["args"] as? [String], ["mcp", "proxy"])
     }
@@ -813,6 +934,12 @@ final class MCPLocalMCPClientWrapTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? MCPLocalMCPClientWrap.WrapError, .notWrapEligible)
         }
+    }
+
+    private func canonicalPath(_ path: String) throws -> String {
+        let resolved = try XCTUnwrap(path.withCString { realpath($0, nil) })
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
 }

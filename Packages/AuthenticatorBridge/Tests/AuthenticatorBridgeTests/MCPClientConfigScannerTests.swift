@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import AuthenticatorBridge
 
@@ -737,6 +738,38 @@ final class MCPClientConfigScannerTests: XCTestCase {
         )
     }
 
+    func testClaudeLocalScopeDiscoversEquivalentCanonicalProjectKey() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let workspace = home.appendingPathComponent("workspace", isDirectory: true)
+        let alias = home.appendingPathComponent("workspace-alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: workspace)
+        let canonical = try canonicalPath(workspace.path)
+        try writeJSON([
+            "projects": [
+                canonical: [
+                    "mcpServers": [
+                        "filesystem": ["command": "canonical-local-server"],
+                    ],
+                ],
+            ],
+        ], to: home.appendingPathComponent(".claude.json"))
+
+        let findings = MCPClientConfigScanner().scan(
+            declaredServers: [],
+            locations: MCPClientConfigLocation.projectLocations(
+                workspaceRoots: [alias],
+                homeDirectory: home
+            )
+        )
+
+        let finding = try XCTUnwrap(findings.first { $0.serverName == "filesystem" })
+        XCTAssertEqual(finding.commandLabel, "canonical-local-server")
+        XCTAssertEqual(finding.projectKey, canonical)
+        XCTAssertEqual(finding.workspacePathLabel, "~/workspace-alias")
+    }
+
 
     func testLaunchKeysWorkspacePolicyCannotCarryBlockTheWrap() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -937,5 +970,11 @@ final class MCPClientConfigScannerTests: XCTestCase {
         let enrollment = MCPClientActionSupport.httpEnrollment(for: global, findings: findings)
         XCTAssertFalse(enrollment.canEnroll)
         XCTAssertTrue(enrollment.reason?.contains("project") == true)
+    }
+
+    private func canonicalPath(_ path: String) throws -> String {
+        let resolved = try XCTUnwrap(path.withCString { realpath($0, nil) })
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 }

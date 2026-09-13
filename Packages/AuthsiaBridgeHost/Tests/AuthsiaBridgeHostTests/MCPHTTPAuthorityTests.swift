@@ -55,6 +55,76 @@ final class MCPHTTPAuthorityTests: XCTestCase {
         catch { XCTAssertEqual(error as? MCPManagementError, .denied) }
         XCTAssertEqual(prompts, ["read"])
     }
+
+    func testRevokedHTTPGrantRetainsTimestampedHistoryAcrossReload() async throws {
+        let server = try definition()
+        let storage = MemoryHTTPAuthorityBlob()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func makeAuthority() -> MCPHTTPAuthority {
+            MCPHTTPAuthority(storage: storage, definition: { _ in server }, items: { _ in [] },
+                secret: { _ in "" }, approve: { _, _, _, _ in true }, recordAdmission: { _ in },
+                enabled: { true }, clock: { now })
+        }
+        let authority = makeAuthority()
+        let (principal, _) = try await enroll(authority, definition: server)
+        let session = UUID().uuidString
+        let grant = try await authority.execute(.authorize(principal: principal, sessionID: session,
+            revision: server.revision, tool: "read")).lease!.grant
+        XCTAssertEqual(grant.createdAt, now)
+        _ = try await authority.execute(.revokeBinding(principal.binding))
+        let reloaded = makeAuthority()
+        let snapshot = try await reloaded.execute(.snapshot)
+        XCTAssertEqual(snapshot.grants, [])
+        XCTAssertEqual(snapshot.history?.map(\.id), [grant.id])
+        XCTAssertEqual(snapshot.history?.first?.createdAt, now)
+        XCTAssertEqual(snapshot.history?.first?.revokedAt, now)
+        let validation = try await reloaded.execute(.validate(grantID: grant.id, principal: principal,
+            sessionID: session, revision: server.revision))
+        XCTAssertFalse(validation.valid)
+    }
+
+    func testExpiredHTTPGrantMovesToHistoryAndCannotAuthorizeBackgroundStream() async throws {
+        let server = try definition()
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        let authority = MCPHTTPAuthority(storage: MemoryHTTPAuthorityBlob(), definition: { _ in server },
+            items: { _ in [] }, secret: { _ in "" }, approve: { _, _, _, _ in true },
+            recordAdmission: { _ in }, enabled: { true }, clock: { now }, ttl: { _ in 10 })
+        let (principal, _) = try await enroll(authority, definition: server)
+        let session = UUID().uuidString
+        let grant = try await authority.execute(.authorize(principal: principal, sessionID: session,
+            revision: server.revision, tool: "read")).lease!.grant
+        now = now.addingTimeInterval(11)
+        let snapshot = try await authority.execute(.snapshot)
+        XCTAssertEqual(snapshot.grants, [])
+        XCTAssertEqual(snapshot.history?.map(\.id), [grant.id])
+        XCTAssertEqual(snapshot.history?.first?.status(asOf: now), .expired)
+        XCTAssertNil(snapshot.history?.first?.revokedAt)
+        do {
+            _ = try await authority.execute(.authorizeExisting(principal: principal, sessionID: session,
+                revision: server.revision, tool: "initialize"))
+            XCTFail("history must never grant authority")
+        } catch { XCTAssertEqual(error as? MCPManagementError, .denied) }
+    }
+
+    func testLegacyHTTPAuthorityDecodesAndHistoryIsBoundedMetadataOnly() throws {
+        let legacy = Data(#"{"version":1,"associations":[],"grants":[]}"#.utf8)
+        var state = try JSONDecoder().decode(MCPHTTPAuthorityState.self, from: legacy)
+        XCTAssertNil(state.history)
+        let server = try definition()
+        let principal = MCPHTTPPrincipal(id: UUID(), binding: .init(serverID: server.serverID,
+            identity: server.identity, client: .claude), generation: UUID())
+        for _ in 0..<513 {
+            state.grants.append(.init(summary: .init(id: UUID(), principal: principal,
+                sessionID: UUID().uuidString, revision: server.revision, expiresAt: .distantPast,
+                credentialLabels: []), items: []))
+        }
+        state.archive(at: .now, revoked: false) { _ in true }
+        XCTAssertTrue(state.grants.isEmpty)
+        XCTAssertEqual(state.history?.count, 512)
+        XCTAssertNil(state.history?.first?.createdAt)
+        let restored = try JSONDecoder().decode(MCPHTTPAuthorityState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(restored.history, state.history)
+    }
     func testAssociationsAndSessionsCannotBorrowAnotherGrant() async throws {
         let server = try definition(); var approvals = 0
         let authority = MCPHTTPAuthority(storage: MemoryHTTPAuthorityBlob(), definition: { _ in server }, items: { _ in [] },

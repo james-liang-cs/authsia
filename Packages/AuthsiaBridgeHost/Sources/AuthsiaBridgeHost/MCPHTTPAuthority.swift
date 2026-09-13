@@ -26,6 +26,20 @@ struct MCPHTTPAuthorityState: Codable {
     var version = 1
     var associations: [Association] = []
     var grants: [Grant] = []
+    // Optional for decoding authority records written before history was added.
+    // Metadata only: archived entries are never consulted for authorization.
+    var history: [MCPHTTPGrantSummary]?
+
+    mutating func archive(at now: Date, revoked: Bool, matching: (Grant) -> Bool) {
+        var retained = history ?? []
+        for grant in grants where matching(grant) {
+            var summary = grant.summary
+            if revoked { summary.revokedAt = now }
+            retained.append(summary)
+        }
+        grants.removeAll(where: matching)
+        history = Array(retained.suffix(512))
+    }
 }
 
 /// Separate Keychain record: never add unknown grant cases to the legacy store.
@@ -118,7 +132,7 @@ final class MCPHTTPAuthority {
             var state = try load()
             let oldIDs = state.associations.filter { $0.principal.binding == ticket.binding }.map { $0.principal.id }
             state.associations.removeAll { oldIDs.contains($0.principal.id) }
-            state.grants.removeAll { oldIDs.contains($0.summary.principal.id) }
+            state.archive(at: clock(), revoked: true) { oldIDs.contains($0.summary.principal.id) }
             let principal = MCPHTTPPrincipal(id: UUID(), binding: ticket.binding, generation: UUID())
             state.associations.append(.init(principal: principal, digest: Data(SHA256.hash(data: Data(ticket.token.utf8))), enrollmentID: id))
             try save(state)
@@ -156,8 +170,8 @@ final class MCPHTTPAuthority {
                 if existing == nil {
                     let grant = MCPHTTPAuthorityState.Grant(summary: MCPHTTPGrantSummary(
                         id: UUID(), principal: principal, sessionID: sessionID, revision: revision,
-                        expiresAt: clock().addingTimeInterval(max(1, ttl(!resolved.isEmpty))), credentialLabels: resolved.map(\.label)), items: resolved)
-                    state.grants.removeAll { $0.summary.expiresAt <= clock() }
+                        expiresAt: clock().addingTimeInterval(max(1, ttl(!resolved.isEmpty))), credentialLabels: resolved.map(\.label), createdAt: clock()), items: resolved)
+                    state.archive(at: clock(), revoked: false) { $0.summary.expiresAt <= clock() }
                     guard state.grants.count < 128 else { throw MCPManagementError.busy }
                     try recordAdmission(grant.summary)
                     state.grants.append(grant)
@@ -199,25 +213,30 @@ final class MCPHTTPAuthority {
         case .revoke(let id):
             epoch = UUID()
             var state = try load()
-            state.grants.removeAll { id == nil || $0.summary.id == id }
+            state.archive(at: clock(), revoked: true) { id == nil || $0.summary.id == id }
             try save(state)
             return MCPHTTPAuthorityReply()
         case .revokeAssociation(let id):
             epoch = UUID()
             var state = try load()
             state.associations.removeAll { $0.principal.id == id }
-            state.grants.removeAll { $0.summary.principal.id == id }
+            state.archive(at: clock(), revoked: true) { $0.summary.principal.id == id }
             try save(state)
             return MCPHTTPAuthorityReply()
         case .revokeBinding(let binding):
             epoch = UUID()
             var state = try load()
             state.associations.removeAll { $0.principal.binding == binding }
-            state.grants.removeAll { $0.summary.principal.binding == binding }
+            state.archive(at: clock(), revoked: true) { $0.summary.principal.binding == binding }
             try save(state)
             return MCPHTTPAuthorityReply()
         case .snapshot:
-            return MCPHTTPAuthorityReply(grants: try load().grants.filter { $0.summary.expiresAt > clock() }.map(\.summary))
+            var state = try load()
+            if state.grants.contains(where: { $0.summary.expiresAt <= clock() }) {
+                state.archive(at: clock(), revoked: false) { $0.summary.expiresAt <= clock() }
+                try save(state)
+            }
+            return MCPHTTPAuthorityReply(grants: state.grants.map(\.summary), history: state.history ?? [])
         case .catalogCapture(let identity, let revision):
             guard enabled() else { throw MCPManagementError.denied }
             let server = try definition(identity)
@@ -235,11 +254,11 @@ final class MCPHTTPAuthority {
                 guard try items(server.upstream.credentialHeaders) == resolved else { throw MCPManagementError.stale }
             }
             var state = try load()
-            state.grants.removeAll { $0.summary.expiresAt <= clock() }
+            state.archive(at: clock(), revoked: false) { $0.summary.expiresAt <= clock() }
             guard state.grants.count < 128 else { throw MCPManagementError.busy }
             let grant = MCPHTTPAuthorityState.Grant(summary: MCPHTTPGrantSummary(
                 id: UUID(), principal: principal, sessionID: UUID().uuidString, revision: revision,
-                expiresAt: clock().addingTimeInterval(60), credentialLabels: resolved.map(\.label)), items: resolved)
+                expiresAt: clock().addingTimeInterval(60), credentialLabels: resolved.map(\.label), createdAt: clock()), items: resolved)
             try recordAdmission(grant.summary)
             state.grants.append(grant)
             try save(state)

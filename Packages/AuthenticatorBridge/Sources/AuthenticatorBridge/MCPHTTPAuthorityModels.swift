@@ -26,9 +26,15 @@ public struct MCPHTTPGrantSummary: Codable, Equatable, Identifiable, Sendable {
     public let revision: String
     public let expiresAt: Date
     public let credentialLabels: [String]
-    public init(id: UUID, principal: MCPHTTPPrincipal, sessionID: String, revision: String, expiresAt: Date, credentialLabels: [String]) {
+    public let createdAt: Date?
+    public var revokedAt: Date?
+    public func status(asOf now: Date) -> AgentJITGrantStatus {
+        revokedAt != nil ? .revoked : (expiresAt <= now ? .expired : .active)
+    }
+    public init(id: UUID, principal: MCPHTTPPrincipal, sessionID: String, revision: String, expiresAt: Date, credentialLabels: [String], createdAt: Date? = nil, revokedAt: Date? = nil) {
         self.id = id; self.principal = principal; self.sessionID = sessionID; self.revision = revision
         self.expiresAt = expiresAt; self.credentialLabels = credentialLabels
+        self.createdAt = createdAt; self.revokedAt = revokedAt
     }
 }
 
@@ -73,12 +79,14 @@ public struct MCPHTTPAuthorityReply: Codable, Sendable {
     public var enrollment: MCPHTTPEnrollmentTicket?
     public var lease: MCPHTTPLease?
     public var grants: [MCPHTTPGrantSummary]?
+    public var history: [MCPHTTPGrantSummary]?
     public var valid: Bool
     public var failure: MCPManagementError?
     public init(principal: MCPHTTPPrincipal? = nil, enrollment: MCPHTTPEnrollmentTicket? = nil,
-                lease: MCPHTTPLease? = nil, grants: [MCPHTTPGrantSummary]? = nil, valid: Bool = true, failure: MCPManagementError? = nil) {
+                lease: MCPHTTPLease? = nil, grants: [MCPHTTPGrantSummary]? = nil, history: [MCPHTTPGrantSummary]? = nil, valid: Bool = true, failure: MCPManagementError? = nil) {
         self.principal = principal; self.enrollment = enrollment; self.lease = lease
         self.grants = grants; self.valid = valid; self.failure = failure
+        self.history = history
     }
 }
 

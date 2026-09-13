@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import AuthenticatorBridge
 
 final class MCPHTTPClientConfigurationTests: XCTestCase {
@@ -197,5 +198,135 @@ final class MCPHTTPClientConfigurationTests: XCTestCase {
         let binding = MCPHTTPAssociationBinding(serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .codex)
         let plan = try MCPHTTPClientConfiguration.prepare(binding: binding, token: "synthetic-association", home: root)
         XCTAssertTrue(String(decoding: plan.replacement, as: UTF8.self).contains("synthetic-association"))
+    }
+
+    func testClaudePreparationUsesCanonicalWorkspaceProjectKey() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let alias = root.appendingPathComponent("workspace-alias", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: workspace)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let identity = MCPServerIdentity(workspacePath: alias.path, upstreamName: "internal")
+        let binding = MCPHTTPAssociationBinding(
+            serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .claude
+        )
+        let plan = try MCPHTTPClientConfiguration.prepare(
+            binding: binding, token: "synthetic-association", home: home
+        )
+        let object = try JSONSerialization.jsonObject(with: plan.replacement) as! [String: Any]
+        let projects = object["projects"] as! [String: Any]
+        let canonical = try canonicalPath(workspace.path)
+        let project = projects[canonical] as? [String: Any]
+
+        XCTAssertNil(projects[identity.workspacePath])
+        XCTAssertNotNil((project?["mcpServers"] as? [String: Any])?["internal"])
+    }
+
+    func testClaudeRemovalCleansLegacyEquivalentProjectAlias() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let alias = root.appendingPathComponent("workspace-alias", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: workspace)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let identity = MCPServerIdentity(workspacePath: alias.path, upstreamName: "internal")
+        let binding = MCPHTTPAssociationBinding(
+            serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .claude
+        )
+        let endpoint = "http://127.0.0.1:8788/mcp/" + binding.serverID
+        let before: [String: Any] = [
+            "projects": [
+                alias.path: [
+                    "mcpServers": [
+                        "internal": ["type": "http", "url": endpoint, "headers": ["Authorization": "Bearer synthetic-association"]],
+                        "neighbor": ["command": "fixture"],
+                    ],
+                    "other": true,
+                ],
+                try canonicalPath(workspace.path): [
+                    "mcpServers": [
+                        "internal": ["type": "http", "url": endpoint, "headers": ["Authorization": "Bearer synthetic-association"]],
+                    ],
+                    "hasTrustDialogAccepted": true,
+                ],
+            ],
+        ]
+        let file = home.appendingPathComponent(".claude.json")
+        try JSONSerialization.data(withJSONObject: before).write(to: file)
+
+        let plan = try MCPHTTPClientConfiguration.prepareRemoval(binding: binding, home: home)
+        let object = try JSONSerialization.jsonObject(with: plan.replacement) as! [String: Any]
+        let projects = object["projects"] as! [String: Any]
+        let aliasProject = projects[alias.path] as! [String: Any]
+        let aliasServers = aliasProject["mcpServers"] as! [String: Any]
+        let canonical = try canonicalPath(workspace.path)
+        let canonicalProject = projects[canonical] as! [String: Any]
+        let canonicalServers = canonicalProject["mcpServers"] as! [String: Any]
+
+        XCTAssertNil(aliasServers["internal"])
+        XCTAssertNotNil(aliasServers["neighbor"])
+        XCTAssertEqual(aliasProject["other"] as? Bool, true)
+        XCTAssertNil(canonicalServers["internal"])
+        XCTAssertEqual(canonicalProject["hasTrustDialogAccepted"] as? Bool, true)
+    }
+
+    func testClaudePreparationMigratesDirectAliasEntryWithoutLosingOptions() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        let alias = root.appendingPathComponent("workspace-alias", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: workspace)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let directEndpoint = "http://127.0.0.1:9000/mcp"
+        let canonical = try canonicalPath(workspace.path)
+        let before: [String: Any] = [
+            "projects": [
+                alias.path: [
+                    "mcpServers": [
+                        "internal": ["type": "http", "url": directEndpoint, "disabled": true],
+                        "neighbor": ["command": "fixture"],
+                    ],
+                ],
+                canonical: ["mcpServers": [:], "hasTrustDialogAccepted": true],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: before).write(to: home.appendingPathComponent(".claude.json"))
+        let identity = MCPServerIdentity(workspacePath: alias.path, upstreamName: "internal")
+        let binding = MCPHTTPAssociationBinding(
+            serverID: MCPWorkspaceStore.serverID(identity), identity: identity, client: .claude
+        )
+
+        let plan = try MCPHTTPClientConfiguration.prepare(
+            binding: binding, token: "synthetic-association", home: home, replacingEndpoint: directEndpoint
+        )
+        let object = try JSONSerialization.jsonObject(with: plan.replacement) as! [String: Any]
+        let projects = object["projects"] as! [String: Any]
+        let aliasProject = projects[alias.path] as! [String: Any]
+        let aliasServers = aliasProject["mcpServers"] as! [String: Any]
+        let canonicalProject = projects[canonical] as! [String: Any]
+        let canonicalServers = canonicalProject["mcpServers"] as! [String: Any]
+        let protected = canonicalServers["internal"] as! [String: Any]
+
+        XCTAssertNil(aliasServers["internal"])
+        XCTAssertNotNil(aliasServers["neighbor"])
+        XCTAssertEqual(protected["disabled"] as? Bool, true)
+        XCTAssertEqual(protected["url"] as? String, "http://127.0.0.1:8788/mcp/" + binding.serverID)
+        XCTAssertEqual(canonicalProject["hasTrustDialogAccepted"] as? Bool, true)
+    }
+
+    private func canonicalPath(_ path: String) throws -> String {
+        let resolved = try XCTUnwrap(path.withCString { realpath($0, nil) })
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 }

@@ -155,8 +155,8 @@ public actor MCPManagerRuntime {
         )
     }
     public func revokeHTTPGrant(_ id: UUID) async throws {
-        guard let httpProxy else { throw MCPManagementError.unavailable }
-        try await httpProxy.revoke(id)
+        if let httpProxy { try await httpProxy.revoke(id) }
+        else { _ = try await dependencies.httpAuthority(.revoke(grantID: id)) }
     }
     public func revokeHTTPBinding(_ binding: MCPHTTPAssociationBinding) async throws {
         if let httpProxy { try await httpProxy.revoke(binding) }

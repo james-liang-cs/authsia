@@ -216,7 +216,10 @@ public enum MCPLocalMCPClientUnwrap {
         } else {
             return nil
         }
-        return roots.first { $0.path == path }
+        let canonical = MCPWorkspacePathIdentity.canonicalPath(path)
+        return roots.first {
+            MCPWorkspacePathIdentity.canonicalPath($0.path) == canonical
+        }
     }
 
     private static func configData(at url: URL, fileManager: FileManager) throws -> Data {
@@ -275,15 +278,15 @@ public enum MCPLocalMCPClientUnwrap {
 
     private static func rewriteJSON(_ data: Data, plan: Plan) throws -> Data {
         guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var servers = MCPLocalMCPClientWrap.jsonServers(
+              case .unique = MCPLocalMCPClientWrap.jsonServerLookup(
                 in: root,
                 source: plan.finding.source,
-                projectKey: plan.finding.projectKey
-              ),
-              servers[plan.finding.serverName] != nil else {
+                projectKey: plan.finding.projectKey,
+                serverName: plan.finding.serverName
+              ) else {
             throw UnwrapError.malformedConfig
         }
-        servers[plan.finding.serverName] = jsonObject(
+        let replacement = jsonObject(
             launch: MCPLocalMCPWorkspaceDeclaration.DeclaredLaunch(
                 workspaceRoot: plan.workspaceRoot,
                 command: plan.command,
@@ -299,11 +302,12 @@ public enum MCPLocalMCPClientUnwrap {
             )
         )
         do {
-            root = try MCPLocalMCPClientWrap.replacingJSONServers(
+            root = try MCPLocalMCPClientWrap.replacingJSONServer(
                 in: root,
                 source: plan.finding.source,
                 projectKey: plan.finding.projectKey,
-                servers: servers
+                serverName: plan.finding.serverName,
+                value: replacement
             )
         } catch {
             throw UnwrapError.malformedConfig

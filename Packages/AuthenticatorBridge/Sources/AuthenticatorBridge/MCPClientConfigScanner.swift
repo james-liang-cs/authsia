@@ -177,7 +177,8 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
             // Claude Code's local scope. Reading only the top-level map misses
             // every server added by a plain `claude mcp add`, which defaults
             // there, and those outrank the repository's `.mcp.json`.
-            guard seen.insert("claude-local-scope:" + standardized.path).inserted else {
+            let projectKey = MCPWorkspacePathIdentity.canonicalPath(standardized.path)
+            guard seen.insert("claude-local-scope:" + projectKey).inserted else {
                 continue
             }
             locations.append(Self(
@@ -187,7 +188,7 @@ public struct MCPClientConfigLocation: Equatable, Sendable {
                 scope: .project,
                 workspaceRoot: standardized,
                 workspacePathLabel: workspacePathLabel,
-                projectKey: standardized.path,
+                projectKey: projectKey,
                 rank: .claudeLocalScope
             ))
         }
@@ -558,7 +559,10 @@ public struct MCPClientConfigScanner {
             .filter { entry in
                 let claudeDisabled = entry.location.source == .claude
                     && entry.location.rank == .projectFile
-                    && entry.location.workspaceRoot.map { disabledProjectServers[$0.path]?.contains(entry.name) == true } == true
+                    && entry.location.workspaceRoot.map {
+                        disabledProjectServers[MCPWorkspacePathIdentity.canonicalPath($0.path)]?
+                            .contains(entry.name) == true
+                    } == true
                 let disabled = entry.isDisabled || claudeDisabled
                 if disabled { return includeDisabled }
                 return true
@@ -638,7 +642,10 @@ public struct MCPClientConfigScanner {
         return (contextualServers.compactMap { contextual in
             let claudeDisabled = contextual.entry.location.source == .claude
                 && contextual.entry.location.rank == .projectFile
-                && contextual.workspaceRoot.map { disabledProjectServers[$0.path]?.contains(contextual.entry.name) == true } == true
+                && contextual.workspaceRoot.map {
+                    disabledProjectServers[MCPWorkspacePathIdentity.canonicalPath($0.path)]?
+                        .contains(contextual.entry.name) == true
+                } == true
             return finding(
                 for: contextual.entry,
                 declaredServers: declaredServers,
@@ -686,8 +693,8 @@ public struct MCPClientConfigScanner {
                   !names.isEmpty else {
                 continue
             }
-            disabled[URL(fileURLWithPath: projectPath, isDirectory: true).standardizedFileURL.path]
-                = Set(names)
+            disabled[MCPWorkspacePathIdentity.canonicalPath(projectPath), default: []]
+                .formUnion(names)
         }
         return disabled
     }
@@ -989,11 +996,25 @@ public struct MCPClientConfigScanner {
         }
         let scopeRoot: [String: Any]
         if let projectKey = location.projectKey {
-            guard let projects = root["projects"] as? [String: Any],
-                  let project = projects[projectKey] as? [String: Any] else {
+            guard let projects = root["projects"] as? [String: Any] else {
                 return []
             }
-            scopeRoot = project
+            var servers: [String: Any] = [:]
+            for key in MCPWorkspacePathIdentity.equivalentProjectKeys(
+                in: projects,
+                workspacePath: projectKey
+            ) {
+                guard let project = projects[key] as? [String: Any],
+                      let projectServers = project["mcpServers"] as? [String: Any] else {
+                    continue
+                }
+                // Canonical-key values win for display. A confirmed mutation
+                // independently rejects duplicate selected-server entries.
+                for (name, value) in projectServers where servers[name] == nil {
+                    servers[name] = value
+                }
+            }
+            scopeRoot = ["mcpServers": servers]
         } else {
             scopeRoot = root
         }

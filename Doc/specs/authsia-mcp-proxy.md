@@ -236,7 +236,15 @@ to workspace tools or secrets.
 
 **File location is not always logical scope.** Claude Code can store a
 workspace-specific entry inside the user-local `~/.claude.json` file under
-`projects[<root>].mcpServers`. Conversely, a global STDIO proxy launch can serve
+`projects[<root>].mcpServers`. For both STDIO and HTTP entries in that local
+scope, Authsia reads and writes `<root>` as the canonical absolute path after
+resolving filesystem aliases because Claude selects this map by exact project
+path. A confirmed protect or restore migrates one equivalent legacy alias-key
+server entry without changing neighboring servers or project metadata. Protect
+and restore fail closed when the selected server appears under multiple
+equivalent keys. HTTP teardown may remove multiple copies only when every copy
+matches the exact protected endpoint; any mismatch fails closed.
+Conversely, a global STDIO proxy launch can serve
 several workspaces, but every selected workspace must independently declare the
 upstream and its policy. An explicit workspace binding remains fixed; an
 unpinned launch resolves its workspace from validated launch context. Selecting
@@ -987,6 +995,22 @@ matching is an identity hint, not executable attestation; pin a local binary
 instead of a drifting package launcher when stronger identity matters.
 
 ## Access Center
+
+Streamable HTTP grants appear in a dedicated section under **All** and **MCP
+proxy**, with workspace filtering. Cards show the configured client, server,
+workspace, approval time, expiry, revocation time, and last retained activity.
+Activity is correlated by grant ID and displays timestamped tool outcomes.
+The configured client label does not prove an originating executable identity.
+Revoke closes protected forwarding through MCP Manager; it does not kill the
+independently running HTTP server. Revoke all includes active HTTP grants.
+
+The HTTP authority keeps up to 512 ended grant summaries, separately from live
+grants. Revocation, routing removal, replacement enrollment, and expiry retain
+metadata-only history across restarts. History cannot authorize a request.
+**Show expired/revoked HTTP grants** exposes these cards after validation
+teardown. Old records without approval timestamps show **Not recorded**;
+history already deleted by older versions cannot be reconstructed by this change.
+HTTP card times include the date and seconds in the user's local timezone.
 
 Access Center remains the operator surface for proxy **grants**. It labels them
 as `<client> via Authsia MCP proxy <upstream>`, derives its timeline from

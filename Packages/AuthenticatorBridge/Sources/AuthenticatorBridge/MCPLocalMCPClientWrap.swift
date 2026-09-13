@@ -543,8 +543,13 @@ public enum MCPLocalMCPClientWrap {
         projectKey: String? = nil
     ) -> [String: Any] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let servers = jsonServers(in: root, source: source, projectKey: projectKey),
-              let existing = servers[serverName] as? [String: Any] else {
+              case .unique(let value) = jsonServerLookup(
+                in: root,
+                source: source,
+                projectKey: projectKey,
+                serverName: serverName
+              ),
+              let existing = value as? [String: Any] else {
             return [:]
         }
         return existing.filter { key, _ in !managedJSONKeys.contains(key) }
@@ -597,15 +602,20 @@ public enum MCPLocalMCPClientWrap {
             guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw WrapError.malformedConfig
             }
-            if let servers = jsonServers(
+            switch jsonServerLookup(
                 in: root,
                 source: finding.source,
-                projectKey: finding.projectKey
-            ), let value = servers[finding.serverName] {
+                projectKey: finding.projectKey,
+                serverName: finding.serverName
+            ) {
+            case .unique(let value):
                 return prettyJSON(redactingEnvValues(value))
+            case .ambiguous:
+                throw WrapError.malformedConfig
+            case .missing:
+                guard allowInsert else { throw WrapError.malformedConfig }
+                return "Not present in this client file."
             }
-            guard allowInsert else { throw WrapError.malformedConfig }
-            return "Not present in this client file."
         case .authsiaCatalog:
             throw WrapError.notWrapEligible
         }
@@ -658,25 +668,35 @@ public enum MCPLocalMCPClientWrap {
         guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw WrapError.malformedConfig
         }
-        var servers = jsonServers(in: root, source: source, projectKey: projectKey) ?? [:]
-        servers[serverName] = jsonObject(
+        let lookup = jsonServerLookup(
+            in: root,
+            source: source,
+            projectKey: projectKey,
+            serverName: serverName
+        )
+        if case .ambiguous = lookup {
+            throw WrapError.malformedConfig
+        }
+        let existing: [String: Any]
+        if case .unique(let value) = lookup {
+            existing = value as? [String: Any] ?? [:]
+        } else {
+            existing = [:]
+        }
+        let replacement = jsonObject(
             authsiaCommand: authsia,
             upstreamName: serverName,
             includeType: source == .vscode,
             workspacePath: workspacePath,
             recoveryValue: recoveryValue,
-            preserving: preservedJSONKeys(
-                data: data,
-                source: source,
-                serverName: serverName,
-                projectKey: projectKey
-            )
+            preserving: existing.filter { key, _ in !managedJSONKeys.contains(key) }
         )
-        root = try replacingJSONServers(
+        root = try replacingJSONServer(
             in: root,
             source: source,
             projectKey: projectKey,
-            servers: servers
+            serverName: serverName,
+            value: replacement
         )
         guard let encoded = try? JSONSerialization.data(
             withJSONObject: root,
@@ -714,6 +734,87 @@ public enum MCPLocalMCPClientWrap {
 
     static func jsonServersKey(for source: MCPClientConfigSource) -> String {
         source == .vscode ? "servers" : "mcpServers"
+    }
+
+    enum JSONServerLookup {
+        case missing
+        case unique(Any)
+        case ambiguous
+    }
+
+    static func jsonServerLookup(
+        in root: [String: Any],
+        source: MCPClientConfigSource,
+        projectKey: String?,
+        serverName: String
+    ) -> JSONServerLookup {
+        guard source == .claude, let projectKey else {
+            guard let value = jsonServers(
+                in: root,
+                source: source,
+                projectKey: projectKey
+            )?[serverName] else {
+                return .missing
+            }
+            return .unique(value)
+        }
+        guard let projects = root["projects"] as? [String: Any] else {
+            return .missing
+        }
+        let values = MCPWorkspacePathIdentity.equivalentProjectKeys(
+            in: projects,
+            workspacePath: projectKey
+        ).compactMap { key -> Any? in
+            guard let project = projects[key] as? [String: Any],
+                  let servers = project[jsonServersKey(for: source)] as? [String: Any] else {
+                return nil
+            }
+            return servers[serverName]
+        }
+        switch values.count {
+        case 0: return .missing
+        case 1: return .unique(values[0])
+        default: return .ambiguous
+        }
+    }
+
+    static func replacingJSONServer(
+        in root: [String: Any],
+        source: MCPClientConfigSource,
+        projectKey: String?,
+        serverName: String,
+        value: Any
+    ) throws -> [String: Any] {
+        guard source == .claude, let projectKey else {
+            var servers = jsonServers(in: root, source: source, projectKey: projectKey) ?? [:]
+            servers[serverName] = value
+            return try replacingJSONServers(
+                in: root,
+                source: source,
+                projectKey: projectKey,
+                servers: servers
+            )
+        }
+        var next = root
+        var projects = next["projects"] as? [String: Any] ?? [:]
+        let canonical = MCPWorkspacePathIdentity.canonicalPath(projectKey)
+        for key in MCPWorkspacePathIdentity.equivalentProjectKeys(
+            in: projects,
+            workspacePath: projectKey
+        ) where key != canonical {
+            guard var project = projects[key] as? [String: Any] else { continue }
+            var servers = project[jsonServersKey(for: source)] as? [String: Any] ?? [:]
+            servers.removeValue(forKey: serverName)
+            project[jsonServersKey(for: source)] = servers
+            projects[key] = project
+        }
+        var project = projects[canonical] as? [String: Any] ?? [:]
+        var servers = project[jsonServersKey(for: source)] as? [String: Any] ?? [:]
+        servers[serverName] = value
+        project[jsonServersKey(for: source)] = servers
+        projects[canonical] = project
+        next["projects"] = projects
+        return next
     }
 
     static func jsonServers(

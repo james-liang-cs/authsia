@@ -50,6 +50,12 @@ enum WorkspaceRootResolver {
     ) -> URL? {
         var isDirectory: ObjCBool = false
         let startPath = startURL.standardizedFileURL.path
+        // A deleted working directory can leave even a file URL relative.
+        // Its parents grow from ".." to "../.." indefinitely instead of
+        // converging on "/", so it cannot be used for ancestor discovery.
+        guard startURL.isFileURL, startPath.hasPrefix("/") else {
+            return nil
+        }
         let start: URL
         if fileManager.fileExists(atPath: startPath, isDirectory: &isDirectory), !isDirectory.boolValue {
             start = startURL.deletingLastPathComponent()
@@ -74,4 +80,3 @@ enum WorkspaceRootResolver {
         URL(fileURLWithPath: url.standardizedFileURL.path, isDirectory: true)
     }
 }
-

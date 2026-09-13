@@ -45,12 +45,30 @@ public enum MCPHTTPClientConfiguration {
             let entry: [String: Any] = ["type":"http", "url":endpoint, "headers":["Authorization":"Bearer " + token]]
             if binding.client == .claude {
                 var projects = try map(root["projects"])
-                var project = try map(projects[binding.identity.workspacePath])
+                let projectKey = MCPWorkspacePathIdentity.canonicalPath(binding.identity.workspacePath)
+                let equivalentKeys = MCPWorkspacePathIdentity.equivalentProjectKeys(
+                    in: projects,
+                    workspacePath: binding.identity.workspacePath
+                )
+                let existingEntries = try equivalentKeys.compactMap { key -> Any? in
+                    let project = try map(projects[key])
+                    return try map(project["mcpServers"])[name]
+                }
+                guard existingEntries.count <= 1 else { throw MCPManagementError.stale }
+                let existingEntry = existingEntries.first
+                try validateReplacement(existingEntry, endpoint: replacingEndpoint)
+                for key in equivalentKeys where key != projectKey {
+                    var project = try map(projects[key])
+                    var servers = try map(project["mcpServers"])
+                    servers.removeValue(forKey: name)
+                    project["mcpServers"] = servers
+                    projects[key] = project
+                }
+                var project = try map(projects[projectKey])
                 var servers = try map(project["mcpServers"])
-                try validateReplacement(servers[name], endpoint: replacingEndpoint)
-                servers[name] = (servers[name] as? [String: Any] ?? [:]).merging(entry) { _, new in new }
+                servers[name] = (existingEntry as? [String: Any] ?? [:]).merging(entry) { _, new in new }
                 project["mcpServers"] = servers
-                projects[binding.identity.workspacePath] = project; root["projects"] = projects
+                projects[projectKey] = project; root["projects"] = projects
             } else {
                 var servers = try map(root["mcpServers"])
                 try validateReplacement(servers[name], endpoint: replacingEndpoint)
@@ -162,11 +180,22 @@ public enum MCPHTTPClientConfiguration {
         } else {
             var root = try object(original)
             if binding.client == .claude {
-                var projects = try map(root["projects"]), project = try map((root["projects"] as? [String: Any])?[binding.identity.workspacePath])
-                var servers = try map(project["mcpServers"])
-                guard (servers[name] as? [String: Any])?["url"] as? String == endpoint else { throw MCPManagementError.stale }
-                servers.removeValue(forKey: name); project["mcpServers"] = servers
-                projects[binding.identity.workspacePath] = project; root["projects"] = projects
+                var projects = try map(root["projects"])
+                let projectKeys = MCPWorkspacePathIdentity.equivalentProjectKeys(
+                    in: projects,
+                    workspacePath: binding.identity.workspacePath
+                )
+                var removed = false
+                for key in projectKeys {
+                    var project = try map(projects[key])
+                    var servers = try map(project["mcpServers"])
+                    guard let raw = servers[name] else { continue }
+                    guard (raw as? [String: Any])?["url"] as? String == endpoint else { throw MCPManagementError.stale }
+                    servers.removeValue(forKey: name); project["mcpServers"] = servers
+                    projects[key] = project; removed = true
+                }
+                guard removed else { throw MCPManagementError.stale }
+                root["projects"] = projects
             } else {
                 var servers = try map(root["mcpServers"])
                 guard (servers[name] as? [String: Any])?["url"] as? String == endpoint else { throw MCPManagementError.stale }
